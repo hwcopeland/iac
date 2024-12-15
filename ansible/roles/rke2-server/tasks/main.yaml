@@ -1,0 +1,93 @@
+---
+
+- name: Install RKE2
+  become: true
+  shell: |
+    curl -sfL https://get.rke2.io | sh -
+  register: rke2_install_result
+  changed_when: rke2_install_result.rc == 0
+
+- name: Enable and start rke2-server service
+  become: true
+  ansible.builtin.systemd:
+    name: rke2-server
+    enabled: yes
+    state: started
+
+- name: Wait for Kubernetes API server to be ready
+  become: true
+  retries: 30
+  delay: 10
+  command: kubectl get nodes --kubeconfig /etc/rancher/rke2/rke2.yaml
+  register: result
+  until: result.rc == 0
+
+- name: Install Helm on control node
+  become: false
+  delegate_to: localhost
+  shell: |
+    curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+  args:
+    creates: /usr/local/bin/helm
+
+- name: Add kubectl and helm aliases and completions to bashrc
+  become: true
+  blockinfile:
+    path: "/home/{{ ansible_user }}/.bashrc"
+    marker: "# {mark} K8S CONFIGURATION BLOCK"
+    block: |
+      # Alias for kubectl
+      alias k=kubectl
+
+      # Set kubeconfig path
+      export KUBECONFIG=/home/{{ ansible_user }}/.kube/config
+
+      # Add kubectl and other tools to PATH
+      export PATH=$PATH:/usr/local/bin
+
+      # Enable kubectl and helm completion
+      source <(kubectl completion bash)
+      source <(helm completion bash)
+
+      # Completion for alias
+      complete -F __start_kubectl k
+
+
+- name: Reload bashrc to activate KUBECONFIG
+  become: true
+  shell: source /home/{{ ansible_user }}/.bashrc
+  args:
+    executable: /bin/bash
+
+- name: Taint the RKE2 server to prevent workloads
+  become: true
+  shell: |
+    kubectl taint nodes $(hostname) node-role.kubernetes.io/control-plane=:NoSchedule --kubeconfig /home/{{ ansible_user }}/.kube/config --overwrite
+  args:
+    executable: /bin/bash
+  register: result
+  retries: 5
+  delay: 5
+  until: result.rc == 0
+
+- name: Create Calico IP pool to resolve IP exhaustion issue
+  become: true
+  shell: |
+    cat <<EOF | kubectl apply -f - --kubeconfig /home/{{ ansible_user }}/.kube/config --validate=false
+    apiVersion: crd.projectcalico.org/v1
+    kind: IPPool
+    metadata:
+      name: default-ipv4-ippool
+    spec:
+      cidr: 10.43.0.0/16
+      blockSize: 26
+      ipipMode: Always
+      vxlanMode: Never
+      natOutgoing: true
+      nodeSelector: all()
+    EOF
+  args:
+    executable: /bin/bash
+
+
+

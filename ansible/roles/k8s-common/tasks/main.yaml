@@ -1,0 +1,143 @@
+## Validate Helm install
+- name: Check if Helm command is installed locally
+  ansible.builtin.shell: hash helm
+  delegate_to: 127.0.0.1
+  run_once: true
+  changed_when: false
+  args:
+    executable: "/bin/bash"
+
+## Cert-Manager Deployment
+- name: Ensure Cert-Manager namespace exists
+  community.kubernetes.k8s:
+    state: present
+    kind: Namespace
+    name: kube-system
+
+- name: Install Cert-Manager
+  become: true
+  community.kubernetes.helm:
+    name: cert-manager
+    chart_ref: jetstack/cert-manager
+    namespace: kube-system
+
+## MetalLB Deployment
+- name: Ensure MetalLB namespace exists
+  community.kubernetes.k8s:
+    state: present
+    kind: Namespace
+    name: metallb-system
+
+- name: Install MetalLB with configuration via Helm
+  community.kubernetes.helm:
+    name: metallb
+    chart_ref: metallb/metallb
+    namespace: metallb-system
+    values:
+      extraManifests:
+        - apiVersion: metallb.io/v1beta1
+          kind: IPAddressPool
+          metadata:
+            name: first-pool
+            namespace: metallb-system
+          spec:
+            addresses:
+              - 192.168.1.200-192.168.1.220
+        - apiVersion: metallb.io/v1beta1
+          kind: L2Advertisement
+          metadata:
+            name: l2-advertisement
+            namespace: metallb-system
+          spec:
+            ipAddressPools:
+              - first-pool
+
+## Longhorn Deployment
+- name: Ensure Longhorn namespace exists
+  community.kubernetes.k8s:
+    state: present
+    kind: Namespace
+    name: longhorn-system
+
+- name: Install Longhorn
+  community.kubernetes.helm:
+    name: longhorn
+    chart_ref: longhorn/longhorn
+    namespace: longhorn-system
+
+- name: Ensure Longhorn storage directories exist
+  file:
+    path: /mnt/longhorn-storage
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Create StorageClass for Longhorn
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: storage.k8s.io/v1
+      kind: StorageClass
+      metadata:
+        name: longhorn-storage
+      provisioner: driver.longhorn.io
+      parameters:
+        numberOfReplicas: "1"
+        staleReplicaTimeout: "30"
+      reclaimPolicy: Delete
+      allowVolumeExpansion: true
+      volumeBindingMode: Immediate
+
+# ## S3-CSI Deployment
+
+# # Step 1: Load the Vault variables for Cloudflare R2 credentials
+# - name: Include R2 credentials
+#   include_vars: r2-credentials.yml
+
+# # Step 2: Create Kubernetes Secret for Cloudflare R2 credentials
+# - name: Create Cloudflare R2 credentials Secret
+#   kubernetes.core.k8s:
+#     state: present
+#     definition:
+#       apiVersion: v1
+#       kind: Secret
+#       metadata:
+#         name: cloudflare-r2-credentials
+#         namespace: kube-system
+#       type: Opaque
+#       stringData:  # Use stringData for cleartext values (they get base64-encoded automatically)
+#         accessKeyID: "{{ r2_access_key }}"
+#         secretAccessKey: "{{ r2_secret_key }}"
+
+# # Step 3: Apply the CSI-S3 driver manifests from GitHub
+# - name: Apply CSI-S3 driver
+#   ansible.builtin.command:
+#     cmd: "kubectl apply -f https://raw.githubusercontent.com/ctrox/csi-s3/master/deploy/kubernetes/csi-s3.yaml"
+#   register: kubectl_apply
+#   changed_when: "'configured' in kubectl_apply.stdout or 'created' in kubectl_apply.stdout"
+
+# # Step 4: Create StorageClass for Cloudflare R2 with Secret credentials
+# - name: Create StorageClass for Cloudflare R2
+#   kubernetes.core.k8s:
+#     state: present
+#     definition:
+#       apiVersion: storage.k8s.io/v1
+#       kind: StorageClass
+#       metadata:
+#         name: cloudflare-r2-jupyter
+#       provisioner: ch.ctrox.csi.s3-driver  # Correct provisioner for CSI-S3
+#       parameters:
+#         bucket: "jupyternotebooks"  # Specify your bucket
+#         region: "us-east-1"  # Set to your Cloudflare R2 region
+#         endpoint: "https://d39a438e19ba2840e1ddb32ad09181ed.r2.cloudflarestorage.com"  # Cloudflare R2 endpoint
+#         sigVersion: "s3v4"  # S3 signature version 4 (used by Cloudflare R2)
+#         storageClass: "STANDARD"  # S3 storage class
+#         # Reference the access keys in the Kubernetes secret
+#         accessKeySecretName: "cloudflare-r2-credentials"
+#         accessKeySecretNamespace: "kube-system"
+#         secretKeySecretName: "cloudflare-r2-credentials"
+#         secretKeySecretNamespace: "kube-system"
+#       reclaimPolicy: Retain
+#       allowVolumeExpansion: true
+

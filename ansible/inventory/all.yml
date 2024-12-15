@@ -1,0 +1,12 @@
+autodock:
+  children:
+    k8s_hosts:
+      vars:
+        K8S_ANSIBLE_USER: k8s_user
+      hosts:
+        microedge:
+          #ansible_host: 192.168.1.105
+          ansible_connection: local
+          type: server
+          ansible_user: "{{K8S_ANSIBLE_USER}}"
+          rke2_node_token: ''
