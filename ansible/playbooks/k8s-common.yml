@@ -1,0 +1,6 @@
+# Play 2: Deploy Backend Components on Control Node
+- name: "Deploy Backend Components"
+  hosts: localhost
+  become_user: k8s_user
+  roles:
+    - k8s-common

@@ -1,0 +1,39 @@
+- name: Install RKE2 agent
+  become: true
+  shell: |
+    curl -sfL https://get.rke2.io | INSTALL_RKE2_TYPE="agent" sh -
+  register: rke2_install_result
+  changed_when: rke2_install_result.rc == 0
+
+- name: Ensure /etc/rancher/rke2 dir exists
+  become: true
+  file:
+    path: /etc/rancher/rke2
+    state: directory
+    mode: '0755'
+    owner: root
+    group: root
+
+- name: Configure RKE2 agent
+  template:
+    src: config.yaml.j2
+    dest: /etc/rancher/rke2/config.yaml
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Enable and start rke2-agent service
+  become: true
+  ansible.builtin.systemd:
+    name: rke2-agent
+    enabled: yes
+    state: started
+
+- name: Wait for node to join the cluster
+  shell: |
+    kubectl get nodes | grep {{ inventory_hostname }}
+  register: node_joined
+  retries: 10
+  delay: 15
+  until: node_joined.rc == 0
+  delegate_to: k8s00  # Master node

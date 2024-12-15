@@ -1,0 +1,10 @@
+# Install Curl on the remote nodes (if not already installed)
+- name: Install Curl
+  package:
+    name: curl
+    state: present
+
+- name: Install iptables
+  package:
+    name: iptables
+    state: present
