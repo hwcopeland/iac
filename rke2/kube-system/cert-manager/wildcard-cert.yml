@@ -1,0 +1,14 @@
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: cf-wildcard-cert
+  namespace: kube-system
+spec:
+  secretName: cf-wildcard-cert-secret
+  issuerRef:
+    name: cf-issuer
+    kind: ClusterIssuer
+  dnsNames:
+    - "*.hwcopeland.net"
+    - hwcopeland.net  # Include the root domain if needed
+

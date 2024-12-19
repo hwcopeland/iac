@@ -1,0 +1,20 @@
+apiVersion: metallb.io/v1beta1
+kind: IPAddressPool
+metadata:
+  name: first-pool
+  namespace: metallb-system
+spec:
+  addresses:
+  - 192.168.1.221-192.168.1.240
+
+---
+
+apiVersion: metallb.io/v1beta2
+kind: BGPPeer
+metadata:
+  name: bgp-peer
+  namespace: metallb-system
+spec:
+  myASN: 64500                # MetalLB's ASN
+  peerASN: 64501              # Router's ASN
+  peerAddress: 192.168.1.1       # Router's IP

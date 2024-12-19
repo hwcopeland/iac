@@ -1,0 +1,100 @@
+# The docker image information for the pms application
+image:
+  registry: index.docker.io
+  repository: plexinc/pms-docker
+  # If unset use "latest"
+  tag: "latest"
+  sha: ""
+  pullPolicy: IfNotPresent
+
+global:
+  # Allow parent charts to override registry hostname
+  imageRegistry: ""
+
+ingress:
+  enabled: false
+pms:
+  storageClassName: longhorn
+  # the volume size to provision for the PMS database
+  configStorage: 128Gi
+  gpu:
+    nvidia:
+      enabled: false
+
+  resources: {}
+initContainer:
+  image:
+    registry: index.docker.io
+    repository: alpine
+    tag: 3.18.0
+    sha: ""
+    pullPolicy: IfNotPresent
+
+  # A custom script that will be run in an init container to do any setup before the PMS service starts up
+  # This will be run everytime the pod starts, make sure that some mechanism is included to prevent
+  # this from running more than once if it should only be run on the first startup.
+  initContainer:
+    script: |-
+      #!/bin/sh
+      echo "waiting for pre-existing pms database to uploaded..."
+
+      if [ -d "/config/Library" ]; then
+        echo "PMS library already exists, exiting."
+        exit 0
+      fi
+
+      # wait for the database archive to be manually copied to the server
+      while [ ! -f /pms.tgz ]; do sleep 2; done;
+
+      tar -xvzf /pms.tgz -C /config
+      rm pms.tgz
+
+      echo "Done."
+# specify your own runtime class name eg use gpu
+runtimeClassName: ""
+
+serviceAccount:
+  # Specifies whether a service account should be created
+  create: false
+statefulSet:
+  # optional extra annotations to add to the service resource
+  annotations: {}
+  # optional extra annotations to add to the pods in the statefulset
+  podAnnotations: {}
+
+service:
+  type: ClusterIP
+  port: 32400
+  annotations: {}
+
+nodeSelector: {}
+
+tolerations: []
+
+affinity: {}
+
+priorityClassName: ""
+
+commonLabels: {}
+
+extraEnv: {}
+# extraEnv:
+  # This claim is optional, and is only used for the first startup of PMS
+  # The claim is obtained from https://www.plex.tv/claim/ is is only valid for a few minutes
+#   PLEX_CLAIM: "claim"
+#   HOSTNAME: "PlexServer"
+#   TZ: "Etc/UTC"
+#   PLEX_UPDATE_CHANNEL: "5"
+#   PLEX_UID: "uid of plex user"
+#   PLEX_GID: "group id of plex user"
+  # a list of CIDRs that can use the server without authentication
+  # this is only used for the first startup of PMS
+#   ALLOWED_NETWORKS: "0.0.0.0/0"
+extraVolumes:
+    - name: media-nfs
+      persistentVolumeClaim:
+        claimName: plex-media-pv
+extraVolumeMounts:
+    - name: media-nfs
+      mountPath: /media
+

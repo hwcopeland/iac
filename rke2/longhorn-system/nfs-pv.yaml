@@ -1,0 +1,29 @@
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: plex-media-pv
+  namespace: plex-system
+spec:
+  capacity:
+    storage: 20Ti
+  accessModes:
+    - ReadOnlyMany  # NFS allows multi-node read access
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: ""  # Explicitly specify as empty
+  nfs:
+    server: 192.168.1.118     # Replace with your NFS server IP
+    path: /mnt/Pallex/plexmedia      # Replace with your NFS export path
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: plex-media-pv
+  namespace: plex-system
+spec:
+  accessModes:
+    - ReadOnlyMany  # Match the PV's access mode
+  resources:
+    requests:
+      storage: 20Ti
+  volumeName: plex-media-pv  # Explicitly bind to the manual PV
+  storageClassName: ""       # Match the PV's storage class
