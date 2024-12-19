@@ -1,0 +1,36 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ingress-hwcopeland-web
+  namespace: kube-system
+  annotations:
+    cert-manager.io/issuer: "cf-issuer"
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: info.hwcopeland.net
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: hwcopeland-web-proxy
+                port:
+                  number: 3000
+  tls:
+    - hosts:
+        - "*.hwcopeland.net"
+      secretName: cf-wildcard-cert-secret
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: hwcopeland-web-proxy
+  namespace: kube-system
+spec:
+  type: ExternalName
+  externalName: hwcopeland-web.web-server.svc.cluster.local  # Backend service in another namespace
+  ports:
+    - port: 3000
+      targetPort: 3000

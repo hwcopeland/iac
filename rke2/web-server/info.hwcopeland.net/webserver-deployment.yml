@@ -1,0 +1,21 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hwcopeland-web
+  namespace: web-server
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: hwcopeland-web
+  template:
+    metadata:
+      labels:
+        app: hwcopeland-web
+    spec:
+      containers:
+        - name: hwcopeland-web
+          image: hwcopeland/hwcopeland-web:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 3000

@@ -1,0 +1,16 @@
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: cf-issuer
+spec:
+  acme:
+    email: hwc2e@mtmail.mtsu.edu
+    server: https://acme-v02.api.letsencrypt.org/directory  # Staging ACME server
+    privateKeySecretRef:
+      name: cf-issuer-key                  # Secret to store the ACME private key
+    solvers:
+    - dns01:
+        cloudflare:
+          apiTokenSecretRef:
+            name: cloudflare-api-token-secret     # Kubernetes Secret for Cloudflare API token
+            key: api-token                 # Key in the Secret
