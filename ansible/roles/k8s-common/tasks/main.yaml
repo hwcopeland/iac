@@ -46,10 +46,10 @@
     chart_ref: metallb/metallb
     namespace: metallb-system
 
-- name: Apply metallb config to k8s
-  kubernetes.core.k8s:
-    state: present
-    definition: "{{ lookup('file', '/home/k8s_user/iac/rke2/metallb-system/metallb-config.yml') }}"
+#- name: Apply metallb config to k8s
+#  kubernetes.core.k8s:
+#    state: present
+#    definition: "{{ lookup('file', '/home/k8s_user/iac/rke2/metallb-system/metallb-config.yml') }}"
 ## Longhorn Deployment
 - name: Ensure Longhorn repository is added to helm
   community.kubernetes.helm_repository:

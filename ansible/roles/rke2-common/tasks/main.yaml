@@ -1,4 +1,4 @@
-# Install Curl on the remote nodes (if not already installed)
+# apt packages
 - name: Install Curl
   package:
     name: curl
@@ -7,4 +7,9 @@
 - name: Install iptables
   package:
     name: iptables
+    state: present
+
+- name: Install nfs-common
+  package:
+    name: nfs-common
     state: present

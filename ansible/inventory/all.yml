@@ -5,7 +5,7 @@ autodock:
         K8S_ANSIBLE_USER: k8s_user
       hosts:
         microedge:
-          #ansible_host: 192.168.1.105
+          #ansible_host: 192.168.1.212
           ansible_connection: local
           type: server
           ansible_user: "{{K8S_ANSIBLE_USER}}"
