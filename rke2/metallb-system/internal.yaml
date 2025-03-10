@@ -1,0 +1,20 @@
+apiVersion: metallb.io/v1beta1
+kind: IPAddressPool
+metadata:
+  name: local-pool
+  namespace: metallb-system
+spec:
+  addresses:
+  - 192.168.1.221-192.168.1.240
+---
+apiVersion: metallb.io/v1beta1
+kind: L2Advertisement
+metadata:
+  name: local-adv
+  namespace: metallb-system
+spec:
+  ipAddressPools:
+  - local-pool
+  interfaces:
+  - wlp0s20f3
+

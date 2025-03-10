@@ -1,0 +1,24 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ingress-plex
+  namespace: plex-system
+  annotations:
+    cert-manager.io/issuer: "cf-issuer"
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: plex.hwcopeland.net
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: plex-plex-media-server
+                port:
+                  number: 32400
+  tls:
+    - hosts:
+        - "*.hwcopeland.net"
+      secretName: cf-wildcard-cert-secret
