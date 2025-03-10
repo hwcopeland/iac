@@ -1,17 +1,18 @@
-apiVersion: helm.cattle.io/v1
-kind: HelmChartConfig
+apiVersion: v1
+kind: Service
 metadata:
-  name: rke2-ingress-nginx
+  name: rke2-ingress-nginx-controller
   namespace: kube-system
+  annotations:
+    metallb.universe.tf/address-pool: "local-pool"
 spec:
-  valuesContent: |-
-    controller:
-      config:
-        use-forwarded-headers: "true"
-        enable-real-ip: "true"
-      publishService:
-        enabled: true
-      service:
-        enabled: true
-        type: LoadBalancer
-        externalTrafficPolicy: Local
+  type: LoadBalancer
+  selector:
+    app.kubernetes.io/name: rke2-ingress-nginx
+  ports:
+    - name: http
+      port: 80
+      targetPort: 80
+    - name: https
+      port: 443
+      targetPort: 443
