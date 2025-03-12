@@ -24,11 +24,13 @@ jobs:
       -
         name: Check out repository
         uses: actions/checkout@v3
+      - 
+        name: Go to Build Directory
+        run: cd ./rke2/web-server/info.hwcopeland.net
       -
-        name: Build and push
+        name: Build and Push
         uses: docker/build-push-action@v5
         with:
-          context: ./rke2/web-server/info.hwcopeland.net
           file: Dockerfile
           push: true
           tags: hwcopeland/web:latest
