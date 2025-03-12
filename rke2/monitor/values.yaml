@@ -6,3 +6,4 @@ grafana:
     annotations:
     type: LoadBalancer
     loadBalancerClass: tailscale
+

@@ -61,7 +61,7 @@ services:
 
   # Service for Minecraft client connections
   minecraft:
-    type: ClusterIP
+    type: LoadBalancer
     # Service port exposed within the cluster
     port: 25565
     annotations:
