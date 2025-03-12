@@ -1,0 +1,1 @@
+export interface simpleblogcard {  title: string,  description: string,  currentSlug: string, titleImage: any,}
