@@ -3,17 +3,17 @@ export const projects = [
     title: "TUMDock",
     subtitle: "The Unnamed Molecular Docking Project",
     description:
-      "TUMDock is a fork of a project I started in my Medicinal Chemistry course. It is meant to be a simple, easy to use, and free molecular docking tool. It is currently in development, and is not yet ready for use.",
+      "TUMDock is a fork of a project I started in my Medicinal Chemistry course. It is meant to be a simple, easy to use, and free molecular docking tool. It is now deprecated",
     image: "/Docked-7JRN.gif",
     link: "https://github.com/hwcopeland/TUMDock",
   },
   {
-    title: "HWCopeland.net",
-    subtitle: "Full Stack Web Portfolio",
+    title: "info.hwcopeland.net",
+    subtitle: "Personal Site",
     description:
-      "A full stack web portfolio with React, Next.js, Tailwind-CSS and Sanity. This project was started as a place to digitalize and display my work. This site is self-hosted from homelab servers and is open source.",
+      "A full stack web portfolio with React, Next.js, Tailwind-CSS and Sanity. This project was started as a place to digitalize and display my work. This site is self-hosted from my homelab.",
     image: "/web_vscode.png",
-    link: "https://github.com/hwcopeland/web",
+    link: "https://github.com/hwcopeland/iac/tree/main/rke2/web-server/info.hwcopeland.net",
   },
 ];
 

@@ -37,7 +37,7 @@ export default function Contact() {
             Let&apos;s Talk!
           </h2>
           <p className="leading-relaxed mb-5">
-            I&apos;m always open to make new connections. Feel free to inquire about my work, or just say hello! I prefer email, but I can also be reached on LinkedIn or by phone.
+            I&apos;m always open to make new connections. Feel free to inquire about my work, or just say hello! I prefer email, but I can also be reached on LinkedIn.
           </p>
         </form>
       </div>

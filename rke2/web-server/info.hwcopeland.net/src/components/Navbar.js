@@ -13,14 +13,8 @@ export default function Navbar() {
           </a>
         </a>
         <nav className="md:mr-auto md:ml-4 md:py-1 md:pl-4 md:border-l md:border-gray-700	flex flex-wrap items-center text-base justify-center">
-          <a href="/bio" className="mr-5 hover:text-white">
-            Who am I?
-          </a>
           <a href="https://github.com/hwcopeland" className="mr-5 hover:text-white">
-            Repositories
-          </a>
-          <a href="/blog" className="mr-5 hover:text-white">
-            Blog
+            Github
           </a>
           <a href="https://www.linkedin.com/in/hwcopeland" className="mr-5 hover:text-white">
             LinkedIn
