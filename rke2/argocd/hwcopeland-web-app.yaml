@@ -10,7 +10,7 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: 'https://github.com/hwcopeland/iac.git'
+    repoURL: 'git@github.com:hwcopeland/iac.git'
     path: rke2/web-server/info.hwcopeland.net/k8s
     targetRevision: HEAD
     kustomize: {}

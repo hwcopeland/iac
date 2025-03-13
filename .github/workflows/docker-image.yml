@@ -3,7 +3,8 @@ name: Docker Image CI
 on:
   push:
     branches: [ "main" ]
-
+    paths:
+      - rke2/webserver/info.hwcopeland.net/src/**
 jobs:
   docker:
     runs-on: ubuntu-latest
