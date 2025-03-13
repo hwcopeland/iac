@@ -31,6 +31,6 @@ jobs:
         name: Build and Push
         uses: docker/build-push-action@v5
         with:
-          file: Dockerfile
+          file: ./rke2/web-server/info.hwcopeland.net/Dockerfile
           push: true
           tags: hwcopeland/web:latest
