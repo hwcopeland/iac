@@ -3,6 +3,9 @@ kind: Deployment
 metadata:
   name: hwcopeland-web
   namespace: web-server
+  annotations:
+    argocd-image-updater.argoproj.io/image-list: "hwcopeland/web:latest"
+    argocd-image-updater.argoproj.io/update-strategy: digest
 spec:
   replicas: 1
   selector:
@@ -15,7 +18,7 @@ spec:
     spec:
       containers:
         - name: hwcopeland-web
-          image: "hwcopeland/web:latest"
+          image: "hwcopeland/web@sha256:4dd064060155"
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 3000
