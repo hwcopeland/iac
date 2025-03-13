@@ -18,7 +18,7 @@ spec:
     spec:
       containers:
         - name: hwcopeland-web
-          image: "hwcopeland/web@sha256:4dd064060155"
+          image: "sha256:4dd064060155fc9aa9be023d846ffb3e11f8d56a6667fd4420b2dc84a8ce4116"
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 3000
