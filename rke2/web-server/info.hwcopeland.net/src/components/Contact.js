@@ -26,9 +26,6 @@ export default function Contact() {
               <a className="text-indigo-400 leading-relaxed hover:underline leading-relaxed">
                 hwc2e@mtmail.mtsu.edu
               </a>
-              <h2 className="title-font font-semibold text-white tracking-widest text-xs mt-4">
-                PHONE
-              </h2>
             </div>
           </div>
         </div>
