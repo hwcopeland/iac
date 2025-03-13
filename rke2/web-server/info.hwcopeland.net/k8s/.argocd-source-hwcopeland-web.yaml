@@ -1,0 +1,3 @@
+kustomize:
+  images:
+  - hwcopeland/web:latest@sha256:d180655234aefd9961e62e44bc628a9177e81713b7d950bca378cb7731998c5b
