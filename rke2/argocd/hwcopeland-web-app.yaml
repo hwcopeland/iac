@@ -1,0 +1,21 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: hwcopeland-web
+  namespace: argocd
+  annotations:
+    argocd-image-updater.argoproj.io/write-back-method: git
+    argocd-image-updater.argoproj.io/image-list: "hwcopeland/web:latest"
+    argocd-image-updater.argoproj.io/update-strategy: digest
+spec:
+  project: default
+  source:
+    repoURL: 'https://github.com/hwcopeland/iac.git'
+    path: rke2/web-server/info.hwcopeland.net/k8s
+    targetRevision: HEAD
+    kustomize: {}
+  destination:
+    name: in-cluster
+    namespace: web-server
+  syncPolicy:
+    automated: {}
