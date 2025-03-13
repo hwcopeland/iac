@@ -32,3 +32,17 @@ jobs:
           file: ./rke2/web-server/info.hwcopeland.net/Dockerfile
           push: true
           tags: hwcopeland/web:latest
+      -
+        name: Update Image Tag Values
+        run: |
+          manifest_dir="./rke2/web-server/info.hwcopeland.net/k8s"
+          new_image_tag=${{ github.sha }}
+
+          sed -i "s/^ tag: .*/ tag: $new_image_tag/" "$manifest_dir/web-deployment.yaml"
+      -
+        name: Commit Changes
+        run: |
+          git config --global user.name 'hwcopeland'
+          git config --global user.email 'hwc2e@mtmail.mtsu.edu'
+          git commit -am "updating image tag"
+          git push
