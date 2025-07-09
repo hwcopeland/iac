@@ -4,7 +4,7 @@ metadata:
   name: atm9skies
   namespace: game-server
   annotations:
-    "mc-router.itzg.me/atm9skies-external":"atm9skies.hwcopeland.net"
+    mc-router.itzg.me/atm9skies-external: "atm9skies.hwcopeland.net"
 spec:
   replicas: 1
   serviceName: atm9skies-service

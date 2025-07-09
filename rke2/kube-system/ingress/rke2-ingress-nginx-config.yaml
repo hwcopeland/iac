@@ -4,7 +4,7 @@ metadata:
   name: rke2-ingress-nginx-controller
   namespace: kube-system
   annotations:
-    metallb.universe.tf/address-pool: "local-pool"
+    metallb.universe.tf/address-pool: "44pool"
 spec:
   type: LoadBalancer
   selector:
