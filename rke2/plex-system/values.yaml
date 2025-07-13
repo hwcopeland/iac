@@ -3,7 +3,7 @@ image:
   registry: index.docker.io
   repository: plexinc/pms-docker
   # If unset use "latest"
-  tag: "latest"
+  tag: "plexpass"
   sha: ""
   pullPolicy: IfNotPresent
 
@@ -63,7 +63,7 @@ statefulSet:
   podAnnotations: {}
 
 service:
-  type: ClusterIP
+  type: LoadBalancer
   port: 32400
   annotations: {}
 

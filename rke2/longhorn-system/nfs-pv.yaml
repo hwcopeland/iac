@@ -11,7 +11,7 @@ spec:
   persistentVolumeReclaimPolicy: Retain
   storageClassName: ""  # Explicitly specify as empty
   nfs:
-    server: 192.168.1.118     # Replace with your NFS server IP
+    server: 10.0.0.237     # Replace with your NFS server IP
     path: /mnt/Pallex/plexmedia      # Replace with your NFS export path
 ---
 apiVersion: v1
