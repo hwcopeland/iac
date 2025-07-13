@@ -1,0 +1,42 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mysql-cs2-pvc
+  namespace: game-server
+spec:
+  storageClassName: longhorn
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 20Gi
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: demo-storage-pv
+  namespace: game-server
+spec:
+  capacity:
+    storage: 1Ti
+  accessModes:
+    - ReadWriteMany  # NFS allows multi-node read access
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: ""  # Explicitly specify as empty
+  nfs:
+    server: 10.0.0.237     # Replace with your NFS server IP
+    path: /mnt/Pallex/plexmedia/demo_storage      # Replace with your NFS export path
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: demo-storage
+  namespace: game-server
+spec:
+  accessModes:
+    - ReadWriteMany  # Match the PV's access mode
+  storageClassName: ""
+  resources:
+    requests:
+      storage: 1Ti
+  volumeName: demo-storage-pv  # Explicitly bind to the manual PV
