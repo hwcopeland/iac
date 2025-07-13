@@ -5,7 +5,7 @@ metadata:
   namespace: metallb-system
 spec:
   addresses:
-  - 10.44.0.1-10.44.0.254
+  - 10.44.0.1-10.44.254.254
 ---
 apiVersion: metallb.io/v1beta1
 kind: BGPAdvertisement
