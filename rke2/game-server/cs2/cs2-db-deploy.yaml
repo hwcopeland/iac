@@ -1,0 +1,79 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: cs2-mysql
+  namespace: game-server
+spec:
+  ports:
+    - port: 3306
+      targetPort: 3306
+      protocol: TCP
+  selector:
+    app: cs2-mysql
+  type: LoadBalancer
+  loadBalancerIP: 10.44.44.44
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cs2-mysql
+  namespace: game-server
+spec:
+  selector:
+    matchLabels:
+      app: cs2-mysql
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: cs2-mysql
+    spec:
+      containers:
+      - image: mysql:9
+        name: mysql
+        args: [
+          "--skip-grant-tables",
+          "--bind-address=0.0.0.0",
+          "--port=3306",
+          "--skip-networking=0"
+        ]
+        env:
+        - name: MYSQL_ROOT_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: cs2-secret
+              key: MYSQL_ROOT_PASSWORD
+        ports:
+        - containerPort: 3306
+          name: mysql
+          protocol: TCP
+        volumeMounts:
+        - name: mysql-persistent-storage
+          mountPath: /var/lib/mysql
+        # Add readiness probe to ensure MySQL is ready before accepting connections
+        readinessProbe:
+          exec:
+            command:
+            - mysqladmin
+            - ping
+            - -h
+            - localhost
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+        # Add liveness probe to restart container if MySQL becomes unresponsive
+        livenessProbe:
+          exec:
+            command:
+            - mysqladmin
+            - ping
+            - -h
+            - localhost
+          initialDelaySeconds: 60
+          periodSeconds: 30
+          timeoutSeconds: 5
+      volumes:
+      - name: mysql-persistent-storage
+        persistentVolumeClaim:
+          claimName: mysql-cs2-pvc

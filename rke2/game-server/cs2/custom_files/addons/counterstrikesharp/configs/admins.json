@@ -1,0 +1,24 @@
+{
+  "Hamp": {
+    "identity": "76561198808592972",
+    "flags": ["@css/root"]
+  },
+  "Defacto": {
+    "identity": "76561198047424687",
+    "groups": [
+      "#css/moderator"
+    ]
+  },
+  "caYabo": {
+    "identity": "76561197987522730",
+    "groups": [
+      "#css/moderator"
+    ]
+  },
+  "Cam": {
+    "identity": "76561198795419638",
+    "groups": [
+      "#css/moderator"
+    ]
+  }
+}
