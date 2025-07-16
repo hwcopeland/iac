@@ -47,6 +47,16 @@ spec:
                 secretKeyRef:
                   name: cs2-secret
                   key: STEAM_ACCOUNT
+            - name: MYSQL_USER
+              valueFrom:
+                secretKeyRef:
+                  name: mysql-secret
+                  key: username
+            - name: MYSQL_PASS
+              valueFrom:
+                secretKeyRef:
+                  name: mysql-secret
+                  key: password
             - name: SERVER_NAME
               value: "CS2 Modded Server"
             - name: PORT

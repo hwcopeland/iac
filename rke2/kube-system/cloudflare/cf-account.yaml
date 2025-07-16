@@ -1,0 +1,49 @@
+apiVersion: cloudflare-operator.io/v1
+kind: Account
+metadata:
+  name: cloudflare-account
+spec:
+  apiToken:
+    secretRef:
+      name: cloudflare-api-token
+      namespace: kube-system
+---
+apiVersion: cloudflare-operator.io/v1
+kind: Zone
+metadata:
+  name: hwcopeland
+spec:
+  name: hwcopeland.net
+  prune: false # default value
+---
+apiVersion: cloudflare-operator.io/v1
+kind: IP
+metadata:
+  name: external-v4
+spec:
+  ipSources:
+    - requestMethod: GET
+      url: https://ifconfig.me/ip
+    - requestMethod: GET
+      url: https://ipecho.net/plain
+    - requestMethod: GET
+      url: https://myip.is/ip/
+    - requestMethod: GET
+      url: https://checkip.amazonaws.com
+    - requestMethod: GET
+      url: https://api.ipify.org
+  type: dynamic
+  interval: 5m0s
+---
+apiVersion: cloudflare-operator.io/v1
+kind: DNSRecord
+metadata:
+  name: hwcopeland-net
+  namespace: kube-system
+spec:
+  name: hwcopeland.net
+  ipRef:
+    name: external-v4 # reference to the IP object
+  proxied: true
+  ttl: 1
+  type: A

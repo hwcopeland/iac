@@ -1,0 +1,9 @@
+prometheus:
+  service:
+    type: ClusterIP
+grafana:
+  service:
+    annotations:
+    type: LoadBalancer
+    loadBalancerClass: tailscale
+

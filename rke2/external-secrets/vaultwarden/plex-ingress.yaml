@@ -4,7 +4,7 @@ metadata:
   name: ingress-plex
   namespace: plex-system
   annotations:
-    cert-manager.io/cluster-issuer: "cf-issuer"
+    cert-manager.io/issuer: "cf-issuer"
 spec:
   ingressClassName: nginx
   rules:

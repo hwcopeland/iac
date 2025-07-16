@@ -1,0 +1,10 @@
+{
+    "Host": "10.43.43.43",
+    "Database": "mysql",
+    "Username": "${MYSQL_USER}",
+    "Password": "${MYSQL_PASS}",
+    "TablePrefix": "",
+    "Port": 3306,
+    "Timeout": 30,
+    "SslMode": "Preferred"
+}

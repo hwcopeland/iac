@@ -1,8 +1,8 @@
 {
     "DatabaseType": "MySQL",
-    "MySqlHost": "10.44.44.44",
+    "MySqlHost": "10.43.43.43",
     "MySqlDatabase": "mysql",
-    "MySqlUsername": "root",
-    "MySqlPassword": "password",
+    "MySqlUsername": "${MYSQL_USER}",
+    "MySqlPassword": "${MYSQL_PASS}",
     "MySqlPort": 3306
 }
