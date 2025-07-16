@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: longhorn-frontend
+  namespace: longhorn-system
+spec:
+  type: LoadBalancer
+  selector:
+    app: longhorn-ui
+  ports:
+    - name: frontend
+      protocol: TCP
+      port: 8080
+      targetPort: 8000

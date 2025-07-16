@@ -1,0 +1,21 @@
+apiVersion: crd.projectcalico.org/v1
+kind: IPPool
+metadata:
+  annotations:
+    kubectl.kubernetes.io/last-applied-configuration: |
+      {"apiVersion":"crd.projectcalico.org/v1","kind":"IPPool","metadata":{"annotations":{},"name":"default-ipv4-ippool"},"spec":{"allowedUses":["Workload","Tunnel"],"blockSize":26,"cidr":"10.42.0.0/16","ipipMode":"Never","natOutgoing":true,"nodeSelector":"all()","vxlanMode":"Never"}}
+  creationTimestamp: "2025-07-12T02:30:12Z"
+  generation: 1
+  name: default-ipv4-ippool
+  resourceVersion: "67156753"
+  uid: 10028763-5dba-46f6-b9ff-b0017b312666
+spec:
+  allowedUses:
+  - Workload
+  - Tunnel
+  blockSize: 24
+  cidr: 10.42.0.0/16
+  ipipMode: Never
+  natOutgoing: true
+  nodeSelector: all()
+  vxlanMode: Never

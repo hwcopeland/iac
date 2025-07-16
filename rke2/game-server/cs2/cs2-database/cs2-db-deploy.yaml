@@ -12,6 +12,19 @@ spec:
     app: cs2-mysql
   type: LoadBalancer
   loadBalancerIP: 10.44.44.44
+  clusterIP: 10.43.43.43
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cs2-mysql-config
+  namespace: game-server
+data:
+  custom.cnf: |
+    [mysqld]
+    port = 3306
+    bind-address = 0.0.0.0
+    skip-networking = OFF
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -32,18 +45,22 @@ spec:
       containers:
       - image: mysql:9
         name: mysql
-        args: [
-          "--skip-grant-tables",
-          "--bind-address=0.0.0.0",
-          "--port=3306",
-          "--skip-networking=0"
-        ]
         env:
         - name: MYSQL_ROOT_PASSWORD
           valueFrom:
             secretKeyRef:
-              name: cs2-secret
-              key: MYSQL_ROOT_PASSWORD
+              name: mysql-secret
+              key: password
+        - name: MYSQL_USER
+          valueFrom:
+            secretKeyRef:
+              name: mysql-secret
+              key: username
+        - name: MYSQL_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: mysql-secret
+              key: password
         ports:
         - containerPort: 3306
           name: mysql
@@ -51,7 +68,10 @@ spec:
         volumeMounts:
         - name: mysql-persistent-storage
           mountPath: /var/lib/mysql
-        # Add readiness probe to ensure MySQL is ready before accepting connections
+        - name: mysql-config-volume
+          mountPath: /etc/mysql/conf.d/custom.cnf
+          subPath: custom.cnf
+
         readinessProbe:
           exec:
             command:
@@ -77,3 +97,6 @@ spec:
       - name: mysql-persistent-storage
         persistentVolumeClaim:
           claimName: mysql-cs2-pvc
+      - name: mysql-config-volume
+        configMap:
+          name: cs2-mysql-config
