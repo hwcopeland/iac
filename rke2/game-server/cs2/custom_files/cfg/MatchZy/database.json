@@ -1,8 +1,8 @@
 {
     "DatabaseType": "MySQL",
     "MySqlHost": "10.43.43.43",
-    "MySqlDatabase": "mysql",
-    "MySqlUsername": "${MYSQL_USER}",
-    "MySqlPassword": "${MYSQL_PASS}",
+    "MySqlDatabase": "sharptimer",
+    "MySqlUsername": "k8s_user",
+    "MySqlPassword": "i4Oe74Y1ennJ4A",
     "MySqlPort": 3306
 }

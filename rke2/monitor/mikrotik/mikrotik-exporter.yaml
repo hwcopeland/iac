@@ -1,0 +1,63 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mktxp-exporter
+  namespace: monitor
+spec:
+  selector:
+    matchLabels:
+      app: mktxp-exporter
+  template:
+    metadata:
+      labels:
+        app: mktxp-exporter
+    spec:
+      containers:
+      - name: mktxp-exporter
+        image: ghcr.io/akpw/mktxp:latest
+        args:
+          - --cfg-dir
+          - /mktxp_config # Point mktxp to the writable directory
+          - export
+        resources:
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        volumeMounts:
+          - name: mktxp-credentials # Mount the secret read-only for credentials
+            mountPath: /mktxp_config # A new path for credentials only
+            readOnly: false
+        ports:
+          - containerPort: 49090
+      volumes:
+        - name: mktxp-credentials # Define the secret volume
+          secret:
+            secretName: mktxp-credentials
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mktxp-exporter
+spec:
+  selector:
+    app: mktxp-exporter
+  ports:
+  - port: 49090
+    targetPort: 49090
+    name: http-metrics
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: mktxp-exporter
+  namespace: monitor
+  labels:
+    release: kube-prometheus-stack
+spec:
+  selector:
+    matchLabels:
+      app: mktxp-exporter
+  podMetricsEndpoints:
+  - targetPort: 49090
+    interval: 30s
+    path: /metrics
