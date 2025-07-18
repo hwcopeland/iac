@@ -4,9 +4,11 @@ metadata:
   name: ingress-grafana
   namespace: monitor
   annotations:
-    cert-manager.io/issuer: "cf-issuer"
+    cert-manager.io/cluster-issuer: "cf-issuer"
+    cloudflare-operator.io/type: CNAME
+    cloudflare-operator.io/content: hwcopeland.net
 spec:
-  ingressClassName: tailscale
+  ingressClassName: nginx
   rules:
     - host: grafana.hwcopeland.net
       http:
@@ -22,3 +24,4 @@ spec:
     - hosts:
         - "*.hwcopeland.net"
       secretName: cf-wildcard-cert-secret
+

@@ -5,5 +5,5 @@ grafana:
   service:
     annotations:
     type: LoadBalancer
-    loadBalancerClass: tailscale
-
+    loadBalancerClass: nginx
+  adminUser: hwcopeland
