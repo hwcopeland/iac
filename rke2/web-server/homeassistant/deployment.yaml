@@ -1,0 +1,79 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: home-assistant
+  namespace: web-server
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: home-assistant
+  template:
+    metadata:
+      labels:
+        app: home-assistant
+    spec:
+      securityContext:
+          fsGroup: 1000
+      containers:
+        - name: home-assistant-container
+          image: homeassistant/home-assistant # Using the official image
+          ports:
+            - name: https
+              containerPort: 8123
+            - name: sonos
+              containerPort: 1400
+          volumeMounts:
+            - name: ha-config-volume
+              mountPath: /config
+      volumes:
+        - name: ha-config-volume
+          persistentVolumeClaim:
+            claimName: home-assistant-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ha-service
+  namespace: web-server
+spec:
+  selector:
+    app: home-assistant
+  ports:
+    - name: https
+      protocol: TCP
+      port: 80
+      targetPort: 8123
+    - name: sonos
+      protocol: TCP
+      port: 1400
+      targetPort: 1400
+  type: LoadBalancer
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ingress-homeassistant
+  namespace: web-server
+  annotations:
+    cert-manager.io/cluster-issuer: "cf-issuer"
+    cloudflare-operator.io/type: CNAME
+    cloudflare-operator.io/content: hwcopeland.net
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: ha.hwcopeland.net
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: ha-service
+                port:
+                  number: 80
+  tls:
+    - hosts:
+        - "*.hwcopeland.net"
+      secretName: cf-wildcard-cert-secret
+
