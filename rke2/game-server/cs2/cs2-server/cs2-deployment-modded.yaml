@@ -61,18 +61,12 @@ spec:
               value: "CS2 Modded Server"
             - name: PORT
               value: "27015"
-            - name: MAXPLAYERS
-              value: "32"
-            - name: TICKRATE
-              value: "128"
             - name: GAME_MODE
               value: "competitive"
             - name: GAME_TYPE
               value: "0"
             - name: MAP
               value: "de_anubis"
-            - name: RCON_PASSWORD
-              value: "your_rcon_password"
             - name: CUSTOM_FOLDER
               value: "/home/cs2-modded-server/custom_files/"
           resources:
