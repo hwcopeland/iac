@@ -63,7 +63,7 @@ statefulSet:
   podAnnotations: {}
 
 service:
-  type: LoadBalancer
+  type: ClusterIP
   port: 32400
   annotations: {}
 
