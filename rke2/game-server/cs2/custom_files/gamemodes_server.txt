@@ -359,6 +359,7 @@
 				"workshop/3296258256/surf_whiteout"		""
 				"workshop/3079877518/surf_ski_2"		""
 				"workshop/3459997959/surf_ofsfice"              ""
+				"workshop/3451443545/surf_lt_omnific"           ""
 			}
 		}
 		"mg_minigames"
