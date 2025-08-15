@@ -1,0 +1,133 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cs2-modded-server
+  namespace: game-server
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: cs2-modded-server
+  template:
+    metadata:
+      labels:
+        app: cs2-modded-server
+    spec:
+      securityContext:
+        runAsUser: 1000
+        fsGroup: 1000
+      nodeSelector:
+        node-type: worker
+      containers:
+        - name: cs2-modded-server
+          #image: ghcr.io/kus/cs2-modded-server:latest
+          image: hwcopeland/cs2-testing
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 27015
+              protocol: TCP
+              name: tcp-game
+            - containerPort: 27015
+              protocol: UDP
+              name: udp-game
+            - containerPort: 27020
+              protocol: TCP
+              name: tcp-sourcetv
+            - containerPort: 27020
+              protocol: UDP
+              name: udp-sourcetv
+          env:
+            - name: API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: cs2-secret
+                  key: API_KEY
+            - name: STEAM_ACCOUNT
+              valueFrom:
+                secretKeyRef:
+                  name: cs2-secret
+                  key: STEAM_ACCOUNT
+            - name: MYSQL_USER
+              valueFrom:
+                secretKeyRef:
+                  name: mysql-secret
+                  key: username
+            - name: MYSQL_PASS
+              valueFrom:
+                secretKeyRef:
+                  name: mysql-secret
+                  key: password
+            - name: RCON_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: cs2-rcon
+                  key: password
+            - name: SERVER_NAME
+              value: "CS2 Modded Server"
+            - name: PORT
+              value: "27015"
+            - name: CUSTOM_FOLDER
+              value: "/home/cs2-modded-server/custom_files/"
+            - name: MAXPLAYERS
+              value: "32"
+            - name: TICKRATE
+              value: "64"
+            - name: GAME_MODE
+              value: "0"
+            - name: GAME_TYPE
+              value: "0"
+            - name: MAP
+              value: "de_anubis"
+          resources:
+            requests:
+              cpu: 2000m
+              memory: 8Gi
+            limits:
+              cpu: 6000m
+              memory: 16Gi
+          volumeMounts:
+            - name: cs2-data
+              mountPath: /home/steam/cs2
+            - name: custom
+              mountPath: /home/cs2-modded-server/custom_files
+            #- name: demo-storage
+            #  mountPath: /home/steam/game/csgo/MatchZy_demos
+      volumes:
+        - name: cs2-data
+          persistentVolumeClaim:
+            claimName: cs2-modded-claim
+        - name: custom
+          hostPath:
+            path: /home/k8s_user/iac/rke2/game-server/cs2/custom_files
+            type: Directory
+        #- name: demo-storage
+        #  persistentVolumeClaim:
+        #    claimName: demo-storage
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cs2-modded-service
+  namespace: game-server
+spec:
+  selector:
+    app: cs2-modded-server
+  ports:
+    - name: tcp-27015
+      protocol: TCP
+      port: 27015
+      targetPort: 27015
+    - name: udp-27015
+      protocol: UDP
+      port: 27015
+      targetPort: 27015
+    - name: tcp-27020
+      protocol: TCP
+      port: 27020
+      targetPort: 27020
+    - name: udp-27020
+      protocol: UDP
+      port: 27020
+      targetPort: 27020
+  type: LoadBalancer
+  loadBalancerIP: 10.44.0.2
