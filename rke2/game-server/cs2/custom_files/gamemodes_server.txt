@@ -365,6 +365,7 @@
 				"workshop/3165517928/surf_astra"		""
 				"workshop/3125360522/surf_mesa_aether"		""
 				"workshop/3426610799/surf_siren"		""
+				"workshop/3404193171/surf_cuboid"		""
 			}
 		}
 		"mg_minigames"
