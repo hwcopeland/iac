@@ -1,2 +1,14 @@
 rke2/kube-system/cert-manager/token.yml
 rke2/monitor/template.conf
+rke2/agent-system/.env
+rke2/chemistry/autodock-vina-job.yaml
+rke2/chemistry/busybox.yaml
+rke2/chemistry/chembl-db.yaml
+rke2/chemistry/chembl-mysql-dns.yaml
+rke2/chemistry/prep-receptor.yaml
+rke2/chemistry/pvc-autodock.yaml
+rke2/chemistry/relativistic-cronjob.yaml
+rke2/chemistry/relativistic-job.yaml
+rke2/chemistry/relativistic-README.md
+rke2/external-secrets/bitwarden-cli/secret.yaml
+rke2/monitor/mikrotik/secret.yaml
