@@ -90,7 +90,7 @@ helm install kube-prometheus-stack -f rke2/monitor/values.yaml
 
 - Review [Ansible Documentation](ansible/TODO.md) for configuration details
 - Check [RKE2 Documentation](rke2/README.md) for application deployment guides
-- See [CHANGELOG](CHANGELOG.md) for recent updates and TODO items
+- See [CHANGELOG](docs/CHANGELOG.md) for recent updates and TODO items
 
 ## Troubleshooting
 
