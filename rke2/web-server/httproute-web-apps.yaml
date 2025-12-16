@@ -1,0 +1,44 @@
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: homeassistant
+  namespace: web-server
+  annotations:
+    cloudflare-operator.io/content: "ha.hwcopeland.net"
+    cloudflare-operator.io/type: "CNAME"
+    cloudflare-operator.io/proxied: "true"
+    cert-manager.io/cluster-issuer: cf-issuer
+spec:
+  parentRefs:
+    - name: hwcopeland-gateway
+      namespace: kube-system
+      sectionName: https
+  hostnames:
+    - "ha.hwcopeland.net"
+  rules:
+    - backendRefs:
+        - name: ha-service
+          port: 80
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: hwcopeland-web
+  namespace: web-server
+  annotations:
+    cloudflare-operator.io/content: "info.hwcopeland.net"
+    cloudflare-operator.io/type: "CNAME"
+    cloudflare-operator.io/proxied: "true"
+    cert-manager.io/cluster-issuer: cf-issuer
+spec:
+  parentRefs:
+    - name: hwcopeland-gateway
+      namespace: kube-system
+      sectionName: https
+  hostnames:
+    - "info.hwcopeland.net"
+  rules:
+    - backendRefs:
+        - name: hwcopeland-web
+          port: 3000
