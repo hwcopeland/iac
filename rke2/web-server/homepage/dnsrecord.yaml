@@ -1,0 +1,13 @@
+---
+apiVersion: cloudflare-operator.io/v1
+kind: DNSRecord
+metadata:
+  name: homepage
+  namespace: web-server
+spec:
+  name: home.hwcopeland.net
+  type: CNAME
+  content: hwcopeland.net
+  proxied: true
+  ttl: 1
+  interval: 5m
