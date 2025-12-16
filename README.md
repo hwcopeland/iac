@@ -32,6 +32,11 @@ This repository contains everything needed to deploy and manage a homelab Kubern
   - Web applications
   - Game servers
   - Secrets management
+- **[Authentik Integration Guide](docs/rke2/AUTHENTIK_INTEGRATION.md)** - Centralized authentication
+  - OAuth/OIDC configuration for services
+  - Group-based access control
+  - [Setup Checklist](docs/rke2/AUTHENTIK_SETUP_CHECKLIST.md)
+  - [Implementation Summary](docs/rke2/IMPLEMENTATION_SUMMARY.md)
 
 ### Operations
 - **[Troubleshooting Guide](docs/TROUBLESHOOTING.md)** - Common issues and solutions
@@ -68,10 +73,12 @@ This repository contains everything needed to deploy and manage a homelab Kubern
 - **Automated Infrastructure**: Ansible playbooks for repeatable, idempotent deployments
 - **RKE2 Kubernetes**: Lightweight, secure Kubernetes distribution
 - **GitOps Ready**: ArgoCD integration for declarative deployments
+- **Centralized Authentication**: Authentik OAuth/OIDC for SSO across services
 - **Comprehensive Monitoring**: Prometheus and Grafana for observability
+- **Network Observability**: Hubble UI for Cilium network visibility
 - **Persistent Storage**: Longhorn for distributed block storage
 - **Load Balancing**: MetalLB for bare-metal load balancing
-- **Secrets Management**: External Secrets Operator integration
+- **Secrets Management**: External Secrets Operator with Bitwarden integration
 - **SSL/TLS**: Automated certificate management with cert-manager
 
 ## Sources
