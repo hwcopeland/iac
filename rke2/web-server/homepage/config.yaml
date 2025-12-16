@@ -42,6 +42,16 @@ data:
             href: https://longhorn.hwcopeland.net
             description: Cloud-Native Storage
             siteMonitor: https://longhorn.hwcopeland.net
+        - Hubble:
+            icon: cilium.png
+            href: https://hubble.hwcopeland.net
+            description: Network Observability
+            siteMonitor: https://hubble.hwcopeland.net
+        - Authentik:
+            icon: authentik.png
+            href: https://auth.hwcopeland.net
+            description: Identity & SSO Provider
+            siteMonitor: https://auth.hwcopeland.net
         - Vaultwarden:
             icon: bitwarden.png
             href: https://vault.hwcopeland.net
@@ -119,7 +129,7 @@ data:
     layout:
       Infrastructure:
         style: row
-        columns: 4
+        columns: 6
       Automation:
         style: row
         columns: 2
