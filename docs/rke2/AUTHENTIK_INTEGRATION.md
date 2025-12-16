@@ -98,32 +98,61 @@ Hubble UI (Cilium network observability) uses Authentik's forward auth (proxy pr
 
 **Credentials Secret**: `hubble-oidc-secret` in `kube-system` namespace
 
-### 5. ArgoCD (New)
+### 5. Home Assistant (New)
 
-ArgoCD uses OIDC for authentication with group-based role mapping.
+Home Assistant uses Authentik's forward auth (proxy provider) for authentication.
 
-**Configuration Location**: `rke2/argocd/` (ConfigMap modifications required)
+**Configuration Location**: `rke2/web-server/homeassistant/homeassistant-oidc-secret.yaml`, `rke2/web-server/httproute-web-apps.yaml`
 
 **Required Authentik Setup**:
-1. Create OAuth2/OIDC Provider in Authentik:
-   - Name: `ArgoCD`
-   - Client Type: Confidential
-   - Redirect URIs: `https://argocd.hwcopeland.net/auth/callback`
-   - Scopes: `openid`, `profile`, `email`, `groups`
+1. Create Proxy Provider in Authentik:
+   - Name: `Home Assistant`
+   - Authorization Flow: default-provider-authorization-implicit-consent
+   - External Host: `https://ha.hwcopeland.net`
+   - Mode: Forward auth (single application)
 
-2. Store credentials in Bitwarden:
-   - Item name: `argocd-oidc-authentik`
-   - Username: Client ID from Authentik
-   - Password: Client Secret from Authentik
+2. Create Application in Authentik:
+   - Name: `Home Assistant`
+   - Slug: `homeassistant`
+   - Provider: Select the proxy provider created above
+   - Policy Bindings: Add groups that should have access (e.g., `Home Users`, `Infrastructure Team`)
 
-3. Update ArgoCD ConfigMap (see `rke2/argocd/README.md` for details)
+3. Use the same Outpost as Longhorn/Hubble:
+   - Add Home Assistant application to the existing `embedded-outpost`
 
-**Credentials Secret**: `argocd-oidc-secret` in `argocd` namespace
+4. Store outpost token in Bitwarden:
+   - Item name: `homeassistant-authentik-token`
+   - Password: Outpost token from Authentik (can reuse same token)
 
-**Role Mapping**:
-- Members of `ArgoCD Admins` group → Admin role
-- Members of `Infrastructure Team` group → Read-only role
-- All other authenticated users → Read-only role
+**Credentials Secret**: `homeassistant-oidc-secret` in `web-server` namespace
+
+### 6. Homepage (New)
+
+Homepage uses Authentik's forward auth (proxy provider) for authentication.
+
+**Configuration Location**: `rke2/web-server/homepage/homepage-oidc-secret.yaml`, `rke2/web-server/homepage/httproute.yaml`
+
+**Required Authentik Setup**:
+1. Create Proxy Provider in Authentik:
+   - Name: `Homepage`
+   - Authorization Flow: default-provider-authorization-implicit-consent
+   - External Host: `https://home.hwcopeland.net`
+   - Mode: Forward auth (single application)
+
+2. Create Application in Authentik:
+   - Name: `Homepage`
+   - Slug: `homepage`
+   - Provider: Select the proxy provider created above
+   - Policy Bindings: Add groups that should have access (e.g., `Home Users`, `Infrastructure Team`)
+
+3. Use the same Outpost as Longhorn/Hubble:
+   - Add Homepage application to the existing `embedded-outpost`
+
+4. Store outpost token in Bitwarden:
+   - Item name: `homepage-authentik-token`
+   - Password: Outpost token from Authentik (can reuse same token)
+
+**Credentials Secret**: `homepage-oidc-secret` in `web-server` namespace
 
 ## Group-Based Access Control
 
@@ -132,10 +161,10 @@ ArgoCD uses OIDC for authentication with group-based role mapping.
 1. Navigate to Directory → Groups
 2. Create groups as needed:
    - `Grafana Admins` - Full admin access to Grafana
-   - `ArgoCD Admins` - Full admin access to ArgoCD
    - `n8n Users` - Access to n8n automation platform
    - `Longhorn Admins` - Access to Longhorn storage UI
    - `Hubble Admins` - Access to Hubble network observability UI
+   - `Home Users` - Access to Home Assistant and Homepage
    - `Infrastructure Team` - Access to all infrastructure services (read-only for most)
 
 ### Assigning Users to Groups
@@ -151,9 +180,10 @@ All OIDC credentials are stored in Bitwarden and synchronized to Kubernetes usin
 
 **Required Bitwarden Items**:
 - `n8n-oidc-authentik` (Login type)
-- `argocd-oidc-authentik` (Login type)
 - `longhorn-authentik-token` (Login type)
 - `hubble-authentik-token` (Login type)
+- `homeassistant-authentik-token` (Login type)
+- `homepage-authentik-token` (Login type)
 - `grafana-oidc-secret` (Login type) - Already exists
 
 ## Testing Authentication
@@ -182,11 +212,17 @@ All OIDC credentials are stored in Bitwarden and synchronized to Kubernetes usin
 3. Authenticate with Authentik credentials
 4. Verify access to Hubble network observability UI
 
-### ArgoCD
-1. Navigate to `https://argocd.hwcopeland.net`
-2. Click "Log in via Authentik"
+### Home Assistant
+1. Navigate to `https://ha.hwcopeland.net`
+2. Authentik forward auth will automatically redirect to login
 3. Authenticate with Authentik credentials
-4. Verify role assignment based on group membership
+4. Verify access to Home Assistant
+
+### Homepage
+1. Navigate to `https://home.hwcopeland.net`
+2. Authentik forward auth will automatically redirect to login
+3. Authenticate with Authentik credentials
+4. Verify access to Homepage dashboard
 
 ## Troubleshooting
 
@@ -196,9 +232,10 @@ All OIDC credentials are stored in Bitwarden and synchronized to Kubernetes usin
 # Check if secrets are syncing properly
 kubectl get externalsecret -n monitor grafana-oidc-secret
 kubectl get externalsecret -n agent-system n8n-oidc-secret
-kubectl get externalsecret -n argocd argocd-oidc-secret
 kubectl get externalsecret -n longhorn-system longhorn-oidc-secret
 kubectl get externalsecret -n kube-system hubble-oidc-secret
+kubectl get externalsecret -n web-server homeassistant-oidc-secret
+kubectl get externalsecret -n web-server homepage-oidc-secret
 
 # View secret details
 kubectl describe externalsecret -n agent-system n8n-oidc-secret
