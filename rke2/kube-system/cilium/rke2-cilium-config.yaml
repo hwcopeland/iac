@@ -1,0 +1,164 @@
+---
+# Cilium CNI Configuration for RKE2
+# This replaces Canal (Calico+Flannel) with Cilium
+# Place this file in: /var/lib/rancher/rke2/server/manifests/rke2-cilium-config.yaml
+apiVersion: helm.cattle.io/v1
+kind: HelmChart
+metadata:
+  name: cilium
+  namespace: kube-system
+spec:
+  repo: https://helm.cilium.io/
+  chart: cilium
+  version: 1.18.0  # Upgraded for better Gateway API support
+  targetNamespace: kube-system
+  valuesContent: |-
+    # ========================================
+    # Core CNI Settings
+    # ========================================
+    
+    # Replace kube-proxy with eBPF implementation
+    kubeProxyReplacement: true
+    
+    # RKE2 API Server endpoint
+    # For single-node or accessing via localhost
+    k8sServiceHost: "127.0.0.1"
+    k8sServicePort: "6443"
+    
+    # CNI Configuration
+    cni:
+      install: true
+      chainingMode: none
+    
+    # ========================================
+    # Networking Mode
+    # ========================================
+    
+    # Native routing for better performance
+    routingMode: native
+    
+    # Pod CIDR
+    ipv4NativeRoutingCIDR: "10.42.0.0/16"
+    
+    # Auto-detect MTU
+    autoDirectNodeRoutes: true
+    
+    # Auto-detect devices (works for multi-node clusters)
+    # Cilium will auto-detect the interface with default route
+    # devices: ""  # Empty = auto-detect
+    
+    # Enable IPv4
+    ipam:
+      mode: kubernetes
+    
+    # ========================================
+    # Gateway API & Ingress
+    # ========================================
+    
+    # Enable Gateway API support
+    gatewayAPI:
+      enabled: true
+    
+    # Enable Ingress Controller (for legacy Ingress resources)
+    ingressController:
+      enabled: false
+      default: false
+    
+    # ========================================
+    # Service Load Balancing
+    # ========================================
+    
+    # Load balancer mode for services
+    loadBalancer:
+      algorithm: maglev  # Consistent hashing
+      mode: snat         # SNAT mode (can change to dsr for Direct Server Return)
+    
+    # ========================================
+    # Observability - Hubble
+    # ========================================
+    
+    hubble:
+      enabled: true
+      
+      relay:
+        enabled: true
+        replicas: 1
+      
+      ui:
+        enabled: true
+        replicas: 1
+        ingress:
+          enabled: true
+          
+      metrics:
+        enabled:
+          - dns:query
+          - drop
+          - tcp
+          - flow
+          - icmp
+          - http
+    
+    # ========================================
+    # Local Redirect Policy
+    # ========================================
+    
+    # Enable for NodeLocal DNS Cache support
+    localRedirectPolicy: true
+    
+    # ========================================
+    # BPF Features
+    # ========================================
+    
+    # Enable BPF masquerading (better than iptables)
+    bpf:
+      masquerade: true
+      tproxy: true
+    
+    # Enable host routing
+    enableHostPort: true
+    
+    # ========================================
+    # Operator Settings
+    # ========================================
+    
+    operator:
+      replicas: 1  # Single node cluster
+      
+    # ========================================
+    # Security & Policy
+    # ========================================
+    
+    # Enable network policies
+    policyEnforcementMode: default
+    
+    # ========================================
+    # MTU Settings
+    # ========================================
+    
+    # Let Cilium auto-detect MTU
+    # Your interface shows MTU 1500, pods will use 1450 with overhead
+    mtu: 0  # Auto-detect
+    
+    # ========================================
+    # L2 Announcements (optional)
+    # ========================================
+    
+    # Enable if you want Cilium to handle LoadBalancer IPs
+    # (like MetalLB functionality)
+    l2announcements:
+      enabled: false  # Enable later if needed
+    
+    # ========================================
+    # Debug & Monitoring
+    # ========================================
+    
+    # Enable Prometheus metrics
+    prometheus:
+      enabled: true
+      serviceMonitor:
+        enabled: true  # Enable if you have Prometheus Operator
+    
+    # Debug mode (set to false in production)
+    debug:
+      enabled: false

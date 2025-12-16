@@ -1,0 +1,13 @@
+---
+apiVersion: cloudflare-operator.io/v1
+kind: DNSRecord
+metadata:
+  name: plex
+  namespace: plex-system
+spec:
+  name: plex.hwcopeland.net
+  type: CNAME
+  content: hwcopeland.net
+  proxied: true
+  ttl: 1
+  interval: 5m

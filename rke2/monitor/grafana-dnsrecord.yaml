@@ -1,0 +1,13 @@
+---
+apiVersion: cloudflare-operator.io/v1
+kind: DNSRecord
+metadata:
+  name: grafana
+  namespace: monitor
+spec:
+  name: grafana.hwcopeland.net
+  type: CNAME
+  content: hwcopeland.net
+  proxied: true
+  ttl: 1
+  interval: 5m
