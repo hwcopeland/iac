@@ -33,14 +33,23 @@ This implementation adds Authentik OAuth/OIDC integration for multiple infrastru
   - `rke2/kube-system/cilium/hubble-oidc-secret.yaml` - Outpost token secret
 - **Group Access**: `Hubble Admins`, `Infrastructure Team` groups
 
-### 4. ArgoCD GitOps
-- **Type**: OIDC Integration
-- **URL**: https://argocd.hwcopeland.net
-- **Authentication Method**: OAuth2/OIDC with Authentik
+### 4. Home Assistant
+- **Type**: Forward Auth (Proxy Provider)
+- **URL**: https://ha.hwcopeland.net
+- **Authentication Method**: Authentik forward authentication
 - **Files Created**:
-  - `rke2/argocd/argocd-oidc-secret.yaml` - External secret for credentials
-  - `rke2/argocd/README.md` - Detailed setup instructions
-- **Group Access**: `ArgoCD Admins` (admin), `Infrastructure Team` (read-only)
+  - `rke2/web-server/homeassistant/homeassistant-oidc-secret.yaml` - Outpost token secret
+  - `rke2/web-server/httproute-web-apps.yaml` - Updated with forward auth
+- **Group Access**: `Home Users`, `Infrastructure Team` groups
+
+### 5. Homepage Dashboard
+- **Type**: Forward Auth (Proxy Provider)
+- **URL**: https://home.hwcopeland.net
+- **Authentication Method**: Authentik forward authentication
+- **Files Created**:
+  - `rke2/web-server/homepage/homepage-oidc-secret.yaml` - Outpost token secret
+  - `rke2/web-server/homepage/httproute.yaml` - Updated with forward auth
+- **Group Access**: `Home Users`, `Infrastructure Team` groups
 
 ## Homepage Updates
 
@@ -60,12 +69,12 @@ All OAuth/OIDC credentials are managed using:
 
 ### Authentication Flow
 
-#### OIDC Services (n8n, ArgoCD):
+#### OIDC Services (n8n):
 ```
 User → Service → Authentik Login → Group Check → Access Granted/Denied
 ```
 
-#### Forward Auth Services (Longhorn, Hubble):
+#### Forward Auth Services (Longhorn, Hubble, Home Assistant, Homepage):
 ```
 User → HTTPRoute → Authentik Proxy → Group Check → Backend Service
 ```
@@ -77,10 +86,10 @@ User → HTTPRoute → Authentik Proxy → Group Check → Backend Service
 | Group Name | Purpose | Services |
 |------------|---------|----------|
 | `Grafana Admins` | Full Grafana admin access | Grafana |
-| `ArgoCD Admins` | Full ArgoCD admin access | ArgoCD |
 | `n8n Users` | Access to automation platform | n8n |
 | `Longhorn Admins` | Storage management | Longhorn |
 | `Hubble Admins` | Network observability | Hubble |
+| `Home Users` | Home automation and dashboard | Home Assistant, Homepage |
 | `Infrastructure Team` | Read-only infrastructure access | All services |
 
 ## Documentation Created
@@ -97,10 +106,10 @@ User → HTTPRoute → Authentik Proxy → Group Check → Backend Service
    - Kubernetes deployment commands
    - Verification procedures
 
-3. **`rke2/argocd/README.md`**
-   - ArgoCD-specific setup guide
-   - ConfigMap configuration examples
-   - RBAC policy configuration
+3. **`docs/rke2/IMPLEMENTATION_SUMMARY.md`**
+   - Implementation overview
+   - Architecture details
+   - Testing checklist
 
 ## Deployment Prerequisites
 
@@ -108,13 +117,14 @@ Before deploying these changes:
 
 1. **Bitwarden Items Required**:
    - `n8n-oidc-authentik` (Client ID and Secret)
-   - `argocd-oidc-authentik` (Client ID and Secret)
    - `longhorn-authentik-token` (Outpost token)
    - `hubble-authentik-token` (Outpost token)
+   - `homeassistant-authentik-token` (Outpost token)
+   - `homepage-authentik-token` (Outpost token)
 
 2. **Authentik Configuration**:
-   - OAuth providers created for n8n and ArgoCD
-   - Proxy providers created for Longhorn and Hubble
+   - OAuth providers created for n8n
+   - Proxy providers created for Longhorn, Hubble, Home Assistant, and Homepage
    - Applications created and linked to providers
    - Outpost configured for forward auth services
    - User groups created and configured
@@ -131,8 +141,10 @@ After deployment, verify each service:
 
 - [ ] n8n displays "Sign in with Authentik" option
 - [ ] n8n successfully authenticates via Authentik
-- [ ] ArgoCD displays "Log in via Authentik" option
-- [ ] ArgoCD successfully authenticates with role assignment
+- [ ] Home Assistant redirects to Authentik for authentication
+- [ ] Home Assistant grants access after authentication
+- [ ] Homepage redirects to Authentik for authentication
+- [ ] Homepage grants access after authentication
 - [ ] Longhorn redirects to Authentik for authentication
 - [ ] Longhorn grants access after authentication
 - [ ] Hubble redirects to Authentik for authentication
@@ -151,14 +163,13 @@ After deployment, verify each service:
 
 ## Limitations
 
-1. **ArgoCD ConfigMap**: Requires manual ConfigMap updates (not managed via Helm values)
-2. **Forward Auth Services**: Require Authentik outpost to be running
-3. **Bitwarden Dependency**: All services depend on Bitwarden being accessible
-4. **Initial Setup**: Requires manual configuration in Authentik UI
+1. **Forward Auth Services**: Require Authentik outpost to be running
+2. **Bitwarden Dependency**: All services depend on Bitwarden being accessible
+3. **Initial Setup**: Requires manual configuration in Authentik UI
 
 ## Future Enhancements
 
-1. Add Authentik integration for additional services (Home Assistant, etc.)
+1. Add Authentik integration for additional services
 2. Implement automated Authentik provider configuration via Terraform
 3. Add Grafana dashboards for authentication metrics
 4. Set up alerts for authentication failures
@@ -176,5 +187,4 @@ For issues or questions:
 
 - [Authentik Documentation](https://docs.goauthentik.io/)
 - [n8n OIDC Configuration](https://docs.n8n.io/hosting/configuration/environment-variables/oidc/)
-- [ArgoCD OIDC Configuration](https://argo-cd.readthedocs.io/en/stable/operator-manual/user-management/#existing-oidc-provider)
 - [External Secrets Operator](https://external-secrets.io/)
