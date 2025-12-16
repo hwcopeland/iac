@@ -37,7 +37,7 @@ spec:
     # Native routing for better performance
     routingMode: native
     
-    # Your detected pod CIDR
+    # Pod CIDR
     ipv4NativeRoutingCIDR: "10.42.0.0/16"
     
     # Auto-detect MTU
@@ -61,9 +61,8 @@ spec:
     
     # Enable Ingress Controller (for legacy Ingress resources)
     ingressController:
-      enabled: true
-      default: true
-      loadbalancerMode: dedicated
+      enabled: false
+      default: false
     
     # ========================================
     # Service Load Balancing
@@ -89,8 +88,8 @@ spec:
         enabled: true
         replicas: 1
         ingress:
-          enabled: false  # Enable later if you want to expose via HTTPRoute
-      
+          enabled: true
+          
       metrics:
         enabled:
           - dns:query
@@ -158,7 +157,7 @@ spec:
     prometheus:
       enabled: true
       serviceMonitor:
-        enabled: false  # Enable if you have Prometheus Operator
+        enabled: true  # Enable if you have Prometheus Operator
     
     # Debug mode (set to false in production)
     debug:
