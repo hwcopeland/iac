@@ -144,10 +144,9 @@ The connection to the server localhost:8080 was refused
    export KUBECONFIG=/etc/rancher/rke2/rke2.yaml
    ```
 
-2. **Fix permissions**:
+2. **Fix permissions (securely)**:
    ```bash
-   sudo chmod 644 /etc/rancher/rke2/rke2.yaml
-   ```
+   sudo chmod 600 /etc/rancher/rke2/rke2.yaml
 
 3. **Copy config to user directory**:
    ```bash
