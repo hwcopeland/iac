@@ -9,6 +9,8 @@ metadata:
     cloudflare-operator.io/type: "CNAME"
     cloudflare-operator.io/proxied: "true"
     cert-manager.io/cluster-issuer: cf-issuer
+    # Authentik forward auth integration
+    authentik.home.arpa/enabled: "true"
 spec:
   parentRefs:
     - name: hwcopeland-gateway
