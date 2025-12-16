@@ -1,48 +1,46 @@
+global:
+  env:
+    - name: AUTHENTIK_SECRET_KEY
+      valueFrom:
+        secretKeyRef:
+          name: authentik-secret
+          key: secret-key
+    - name: AUTHENTIK_POSTGRESQL__PASSWORD
+      valueFrom:
+        secretKeyRef:
+          name: authentik-secret
+          key: postgresql-password
+
 authentik:
-    secret_key: "PleaseGenerateASecureKey"
-    # This sends anonymous usage-data, stack traces on errors and
-    # performance data to sentry.io, and is fully opt-in
     error_reporting:
-        enabled: true
-    postgresql:
-        password: "ThisIsNotASecurePassword"
+        enabled: false
 
 server:
+    replicas: 1
     ingress:
-        # Specify kubernetes ingress controller class name
-        ingressClassName: nginx
-        enabled: true
-        hosts:
-            - authentik.hwcopeland.net
-        annotations:
-            cloudflare-operator.io/type: CNAME
-            cloudflare-operator.io/content: hwcopeland.net
+        enabled: false
+    service:
+        type: ClusterIP
+
+worker:
+    replicas: 1
+
 postgresql:
     enabled: true
     auth:
-        password: "ThisIsNotASecurePassword"
+        username: authentik
+        database: authentik
+        password: "hRDNmhBWz1MILO4QqAlo+FwL81PyLZ3c"
+    primary:
+      persistence:
+        enabled: true
+        storageClass: longhorn
+        size: 8Gi
+
 redis:
     enabled: true
-email:
-    # -- SMTP Server emails are sent from, fully optional
-    host: "smtp.gmail.com"
-    port: 587
-    # -- SMTP credentials. When left empty, no authentication will be done.
-    username:
-        valueFrom:
-            secretKeyRef:
-              name: smtp-secret
-              key: username
-    password:
-        valueFrom:
-            secretKeyRef:
-              name: smtp-secret
-              key: password
-    # -- Enable either use_tls or use_ssl. They can't be enabled at the same time.
-    use_tls: false
-    # -- Enable either use_tls or use_ssl. They can't be enabled at the same time.
-    use_ssl: false
-    # -- Connection timeout in seconds
-    timeout: 30
-    # -- Email 'from' address can either be in the format "foo@bar.baz" or "authentik <foo@bar.baz>"
-    from: ""
+    master:
+      persistence:
+        enabled: true
+        storageClass: longhorn
+        size: 2Gi

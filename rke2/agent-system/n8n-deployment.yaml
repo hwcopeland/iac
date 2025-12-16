@@ -50,11 +50,13 @@ spec:
                   name: postgres-secret
                   key: POSTGRES_NON_ROOT_PASSWORD
             - name: N8N_PROTOCOL
-              value: http
+              value: https
+            - name: N8N_HOST
+              value: n8n.hwcopeland.net
             - name: N8N_PORT
               value: "5678"
             - name: N8N_SECURE_COOKIE
-              value: "false"
+              value: "true"
             - name: N8N_EMAIL_MODE
               value: smtp
             - name: N8N_SMTP_HOST
@@ -69,6 +71,32 @@ spec:
                 secretKeyRef:
                   name: smtp-secret
                   key: password
+            - name: N8N_SSO_LOGIN_ENABLED
+              value: "true"
+            - name: N8N_SSO_OIDC_ENABLED
+              value: "true"
+            - name: N8N_SSO_OIDC_CONFIG_NAME
+              value: "Authentik"
+            - name: N8N_SSO_OIDC_ISSUER
+              value: "https://auth.hwcopeland.net/application/o/n8n/"
+            - name: N8N_SSO_OIDC_AUTHORIZATION_URL
+              value: "https://auth.hwcopeland.net/application/o/authorize/"
+            - name: N8N_SSO_OIDC_TOKEN_URL
+              value: "https://auth.hwcopeland.net/application/o/token/"
+            - name: N8N_SSO_OIDC_USERINFO_URL
+              value: "https://auth.hwcopeland.net/application/o/userinfo/"
+            - name: N8N_SSO_OIDC_SCOPE
+              value: "openid email profile groups"
+            - name: N8N_SSO_OIDC_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: n8n-oidc-secret
+                  key: client-id
+            - name: N8N_SSO_OIDC_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: n8n-oidc-secret
+                  key: client-secret
           image: n8nio/n8n
           name: n8n
           ports:
