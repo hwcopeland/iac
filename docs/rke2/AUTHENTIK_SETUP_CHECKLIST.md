@@ -51,48 +51,85 @@ kubectl apply -f rke2/agent-system/n8n-deployment.yaml
 kubectl rollout restart deployment/n8n -n agent-system
 ```
 
-### 2. Setup ArgoCD OIDC Integration
+### 2. Setup Home Assistant Forward Auth
 
 **In Authentik:**
 1. Navigate to **Applications → Providers → Create**
-2. Select **OAuth2/OpenID Provider**
+2. Select **Proxy Provider**
 3. Configure:
-   - Name: `ArgoCD`
+   - Name: `Home Assistant`
    - Authorization flow: `default-provider-authorization-implicit-consent`
-   - Client Type: **Confidential**
-   - Client ID: (auto-generated, save this)
-   - Client Secret: (auto-generated, save this)
-   - Redirect URIs: `https://argocd.hwcopeland.net/auth/callback`
-   - Scopes: `openid`, `profile`, `email`, `groups`
-   - Subject mode: `Based on the User's Email`
+   - Type: **Forward auth (single application)**
+   - External host: `https://ha.hwcopeland.net`
 4. Click **Finish**
-
-**In Bitwarden:**
-1. Create new **Login** item
-2. Name: `argocd-oidc-authentik`
-3. Username: (Client ID from Authentik)
-4. Password: (Client Secret from Authentik)
-5. Save
 
 **In Authentik (Create Application):**
 1. Navigate to **Applications → Applications → Create**
 2. Configure:
-   - Name: `ArgoCD`
-   - Slug: `argocd`
-   - Provider: Select the `ArgoCD` provider created above
+   - Name: `Home Assistant`
+   - Slug: `homeassistant`
+   - Provider: Select the `Home Assistant` provider created above
+   - Policy bindings: Bind to groups that should have access (e.g., `Home Users`, `Infrastructure Team`)
 3. Click **Create**
+
+**In Authentik (Update Outpost):**
+1. Navigate to **Applications → Outposts**
+2. Edit `embedded-outpost` (or create if it doesn't exist)
+3. Add `Home Assistant` to the Applications list
+4. Save
+
+**In Bitwarden:**
+1. Create new **Login** item (or reuse existing outpost token)
+2. Name: `homeassistant-authentik-token`
+3. Password: (Outpost token from Authentik)
+4. Save
 
 **In Kubernetes:**
 ```bash
-kubectl apply -f rke2/argocd/argocd-oidc-secret.yaml
-
-# Follow the instructions in rke2/argocd/README.md to:
-# 1. Update argocd-cm ConfigMap with OIDC configuration
-# 2. Update argocd-rbac-cm ConfigMap with group-based policies
-# 3. Restart ArgoCD server
+kubectl apply -f rke2/web-server/homeassistant/homeassistant-oidc-secret.yaml
+# HTTPRoute will be updated to include forward auth annotation
 ```
 
-### 3. Setup Longhorn Forward Auth
+### 3. Setup Homepage Forward Auth
+
+**In Authentik:**
+1. Navigate to **Applications → Providers → Create**
+2. Select **Proxy Provider**
+3. Configure:
+   - Name: `Homepage`
+   - Authorization flow: `default-provider-authorization-implicit-consent`
+   - Type: **Forward auth (single application)**
+   - External host: `https://home.hwcopeland.net`
+4. Click **Finish**
+
+**In Authentik (Create Application):**
+1. Navigate to **Applications → Applications → Create**
+2. Configure:
+   - Name: `Homepage`
+   - Slug: `homepage`
+   - Provider: Select the `Homepage` provider created above
+   - Policy bindings: Bind to groups that should have access (e.g., `Home Users`, `Infrastructure Team`)
+3. Click **Create**
+
+**In Authentik (Update Outpost):**
+1. Navigate to **Applications → Outposts**
+2. Edit `embedded-outpost`
+3. Add `Homepage` to the Applications list
+4. Save
+
+**In Bitwarden:**
+1. Create new **Login** item (or reuse existing outpost token)
+2. Name: `homepage-authentik-token`
+3. Password: (Outpost token from Authentik)
+4. Save
+
+**In Kubernetes:**
+```bash
+kubectl apply -f rke2/web-server/homepage/homepage-oidc-secret.yaml
+kubectl apply -f rke2/web-server/homepage/httproute.yaml
+```
+
+### 4. Setup Longhorn Forward Auth
 
 **In Authentik:**
 1. Navigate to **Applications → Providers → Create**
@@ -135,7 +172,7 @@ kubectl apply -f rke2/longhorn-system/authentik-outpost-secret.yaml
 kubectl apply -f rke2/longhorn-system/httproute-longhorn.yaml
 ```
 
-### 4. Setup Hubble Forward Auth
+### 5. Setup Hubble Forward Auth
 
 **In Authentik:**
 1. Navigate to **Applications → Providers → Create**
@@ -174,19 +211,19 @@ kubectl apply -f rke2/kube-system/cilium/hubble-oidc-secret.yaml
 kubectl apply -f rke2/kube-system/cilium/httproute-hubble.yaml
 ```
 
-### 5. Create User Groups
+### 6. Create User Groups
 
 **In Authentik:**
 1. Navigate to **Directory → Groups**
 2. Create the following groups:
    - `Grafana Admins` - For full Grafana admin access
-   - `ArgoCD Admins` - For full ArgoCD admin access
    - `n8n Users` - For n8n access
    - `Longhorn Admins` - For Longhorn UI access
    - `Hubble Admins` - For Hubble UI access
+   - `Home Users` - For Home Assistant and Homepage access
    - `Infrastructure Team` - For read-only access to infrastructure services
 
-### 6. Assign Users to Groups
+### 7. Assign Users to Groups
 
 **In Authentik:**
 1. Navigate to **Directory → Users**
@@ -197,7 +234,7 @@ kubectl apply -f rke2/kube-system/cilium/httproute-hubble.yaml
    - Select appropriate groups
    - Save
 
-### 7. Update Homepage
+### 8. Update Homepage
 
 The homepage has already been updated to include the new services. No additional action needed.
 
@@ -219,14 +256,24 @@ open https://n8n.hwcopeland.net
 # Should successfully log in
 ```
 
-### Test ArgoCD
+### Test Home Assistant
 ```bash
 # Open in browser
-open https://argocd.hwcopeland.net
+open https://ha.hwcopeland.net
 
-# Should show "Log in via Authentik" button
-# Click and authenticate
-# Should successfully log in with appropriate role
+# Should automatically redirect to Authentik login
+# Authenticate
+# Should redirect back to Home Assistant
+```
+
+### Test Homepage
+```bash
+# Open in browser
+open https://home.hwcopeland.net
+
+# Should automatically redirect to Authentik login
+# Authenticate
+# Should redirect back to Homepage dashboard
 ```
 
 ### Test Longhorn
@@ -283,8 +330,11 @@ kubectl describe externalsecret <secret-name> -n <namespace>
 # For n8n
 kubectl logs -n agent-system deployment/n8n -f
 
-# For ArgoCD
-kubectl logs -n argocd deployment/argocd-server -f
+# For Home Assistant
+kubectl logs -n web-server deployment/home-assistant -f
+
+# For Homepage
+kubectl logs -n web-server deployment/homepage -f
 
 # For Authentik
 kubectl logs -n authentik deployment/authentik-server -f
@@ -303,5 +353,4 @@ After completing all integrations:
 ## Reference Documentation
 
 - Main Integration Guide: `docs/rke2/AUTHENTIK_INTEGRATION.md`
-- ArgoCD Specific Setup: `rke2/argocd/README.md`
 - Authentik Documentation: https://docs.goauthentik.io/
