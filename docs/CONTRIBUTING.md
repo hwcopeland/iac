@@ -210,7 +210,7 @@ How were these changes tested?
 
 ### High Priority
 
-See [docs/ansible/TODO.md](ansible/TODO.md) for current TODO items:
+See [docs/ansible/TODO.md](docs/ansible/TODO.md) for current TODO items:
 - Automate k8s_user creation
 - Remove hard-coded values in roles
 - Consolidate playbook structure
