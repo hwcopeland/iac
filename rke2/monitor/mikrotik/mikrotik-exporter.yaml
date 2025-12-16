@@ -21,8 +21,8 @@ spec:
           - export
         resources:
           limits:
-            memory: "512Mi"
-            cpu: "500m"
+            memory: "1024Mi"
+            cpu: "1"
         volumeMounts:
           - name: mktxp-credentials # Mount the secret read-only for credentials
             mountPath: /mktxp_config # A new path for credentials only

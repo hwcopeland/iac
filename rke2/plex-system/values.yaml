@@ -90,11 +90,11 @@ extraEnv: {}
   # a list of CIDRs that can use the server without authentication
   # this is only used for the first startup of PMS
 #   ALLOWED_NETWORKS: "0.0.0.0/0"
-extraVolumes:
-    - name: media-nfs
-      persistentVolumeClaim:
-        claimName: plex-media-pv
-extraVolumeMounts:
-    - name: media-nfs
-      mountPath: /media
+#extraVolumes:
+#    - name: media-nfs
+#      persistentVolumeClaim:
+#        claimName: plex-media-pv
+#extraVolumeMounts:
+#    - name: media-nfs
+#      mountPath: /media
 

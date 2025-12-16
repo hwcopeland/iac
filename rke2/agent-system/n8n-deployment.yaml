@@ -1,0 +1,255 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    service: n8n
+  name: n8n
+  namespace: agent-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      service: n8n
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        service: n8n
+    spec:
+      initContainers:
+        - name: volume-permissions
+          image: busybox:1.36
+          command: ["sh", "-c", "chown 1000:1000 /data"]
+          volumeMounts:
+            - name: n8n-claim0
+              mountPath: /data
+      containers:
+        - command:
+            - /bin/sh
+          args:
+            - -c
+            - sleep 5; n8n start
+          env:
+            - name: DB_TYPE
+              value: postgresdb
+            - name: DB_POSTGRESDB_HOST
+              value: postgres-service.agent-system.svc.cluster.local
+            - name: DB_POSTGRESDB_PORT
+              value: "5432"
+            - name: DB_POSTGRESDB_DATABASE
+              value: n8n
+            - name: DB_POSTGRESDB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-secret
+                  key: POSTGRES_NON_ROOT_USER
+            - name: DB_POSTGRESDB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-secret
+                  key: POSTGRES_NON_ROOT_PASSWORD
+            - name: N8N_PROTOCOL
+              value: http
+            - name: N8N_PORT
+              value: "5678"
+            - name: N8N_SECURE_COOKIE
+              value: "false"
+            - name: N8N_EMAIL_MODE
+              value: smtp
+            - name: N8N_SMTP_HOST
+              value: smtp.gmail.com
+            - name: N8N_SMTP_USER
+              valueFrom:
+                secretKeyRef:
+                  name: smtp-secret
+                  key: username
+            - name: N8N_SMTP_PASS
+              valueFrom:
+                secretKeyRef:
+                  name: smtp-secret
+                  key: password
+          image: n8nio/n8n
+          name: n8n
+          ports:
+            - containerPort: 5678
+          resources:
+            requests:
+              memory: "250Mi"
+            limits:
+              memory: "500Mi"
+          volumeMounts:
+            - mountPath: /home/node/.n8n
+              name: n8n-claim0
+      restartPolicy: Always
+      volumes:
+        - name: n8n-claim0
+          persistentVolumeClaim:
+            claimName: n8n-claim0
+        - name: n8n-secret
+          secret:
+            secretName: n8n-secret
+        - name: postgres-secret
+          secret:
+            secretName: postgres-secret
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    service: n8n
+  name: n8n
+  namespace: agent-system
+spec:
+  type: ClusterIP
+  ports:
+    - name: "5678"
+      port: 5678
+      targetPort: 5678
+      protocol: TCP
+  selector:
+    service: n8n
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ingress-n8n
+  namespace: agent-system
+  annotations:
+    cert-manager.io/cluster-issuer: "cf-issuer"
+    cloudflare-operator.io/type: CNAME
+    cloudflare-operator.io/content: hwcopeland.net
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: n8n.hwcopeland.net
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: n8n
+                port:
+                  number: 5678
+  tls:
+    - hosts:
+        - "*.hwcopeland.net"
+      secretName: cf-wildcard-cert-secret
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    service: postgres-n8n
+  name: postgres
+  namespace: agent-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      service: postgres-n8n
+  strategy:
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 1
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        service: postgres-n8n
+    spec:
+      containers:
+        - image: postgres:11
+          name: postgres
+          resources:
+            limits:
+              cpu: "4"
+              memory: 4Gi
+            requests:
+              cpu: "1"
+              memory: 2Gi
+          ports:
+            - containerPort: 5432
+          volumeMounts:
+            - name: postgresql-pv
+              mountPath: /var/lib/postgresql/data
+            - name: init-data
+              mountPath: /docker-entrypoint-initdb.d/init-n8n-user.sh
+              subPath: init-data.sh
+          env:
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata      
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-secret
+                  key: POSTGRES_USER
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-secret
+                  key: POSTGRES_PASSWORD
+            - name: POSTGRES_DB
+              value: n8n
+            - name: POSTGRES_NON_ROOT_USER
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-secret
+                  key: POSTGRES_NON_ROOT_USER
+            - name: POSTGRES_NON_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-secret
+                  key: POSTGRES_NON_ROOT_PASSWORD
+            - name:   POSTGRES_HOST
+              value: postgres-service
+            - name: POSTGRES_PORT
+              value: '5432'
+      restartPolicy: Always
+      volumes:
+        - name: postgresql-pv
+          persistentVolumeClaim:
+            claimName: postgresql-pv
+        - name: postgres-secret
+          secret:
+            secretName: postgres-secret
+        - name: init-data
+          configMap:
+            name: init-data
+            defaultMode: 0744
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    service: postgres-n8n
+  name: postgres-service
+  namespace: agent-system
+spec:
+  clusterIP: None
+  ports:
+    - name: "5432"
+      port: 5432
+      targetPort: 5432
+      protocol: TCP
+  selector:
+    service: postgres-n8n
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: init-data
+  namespace: agent-system
+data:
+  init-data.sh: |
+    #!/bin/bash
+    set -e;
+    if [ -n "${POSTGRES_NON_ROOT_USER:-}" ] && [ -n "${POSTGRES_NON_ROOT_PASSWORD:-}" ]; then
+    	psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" <<-EOSQL
+    		CREATE USER "${POSTGRES_NON_ROOT_USER}" WITH PASSWORD '${POSTGRES_NON_ROOT_PASSWORD}';
+    		GRANT ALL PRIVILEGES ON DATABASE ${POSTGRES_DB} TO "${POSTGRES_NON_ROOT_USER}";
+    	EOSQL
+    else
+    	echo "SETUP INFO: No Environment variables given!"
+    fi

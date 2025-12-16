@@ -3,7 +3,5 @@ prometheus:
     type: ClusterIP
 grafana:
   service:
-    annotations:
     type: LoadBalancer
-    loadBalancerClass: nginx
   adminUser: hwcopeland
