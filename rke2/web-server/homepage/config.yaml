@@ -1,0 +1,176 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: homepage-config
+  namespace: web-server
+  labels:
+    app.kubernetes.io/name: homepage
+data:
+  bookmarks.yaml: |
+    ---
+    - Developer:
+        - GitHub:
+            - abbr: GH
+              href: https://github.com/hwcopeland
+        - Cloudflare:
+            - abbr: CF
+              href: https://dash.cloudflare.com
+
+  docker.yaml: |
+    ---
+
+  kubernetes.yaml: |
+    ---
+    mode: cluster
+
+  services.yaml: |
+    ---
+    - Infrastructure:
+        - Grafana:
+            icon: grafana.png
+            href: https://grafana.hwcopeland.net
+            description: Monitoring & Dashboards
+            siteMonitor: https://grafana.hwcopeland.net
+        - ArgoCD:
+            icon: argocd.png
+            href: https://argocd.hwcopeland.net
+            description: GitOps Continuous Delivery
+            siteMonitor: https://argocd.hwcopeland.net
+        - Longhorn:
+            icon: longhorn.png
+            href: https://longhorn.hwcopeland.net
+            description: Cloud-Native Storage
+            siteMonitor: https://longhorn.hwcopeland.net
+        - Vaultwarden:
+            icon: bitwarden.png
+            href: https://vault.hwcopeland.net
+            description: Password Manager
+            siteMonitor: https://vault.hwcopeland.net
+
+    - Automation:
+        - n8n:
+            icon: n8n.png
+            href: https://n8n.hwcopeland.net
+            description: Workflow Automation
+            siteMonitor: https://n8n.hwcopeland.net
+        - Home Assistant:
+            icon: home-assistant.png
+            href: https://ha.hwcopeland.net
+            description: Home Automation
+            siteMonitor: https://ha.hwcopeland.net
+
+    - Media:
+        - Plex:
+            icon: plex.png
+            href: https://plex.hwcopeland.net
+            description: Media Server
+            siteMonitor: https://plex.hwcopeland.net
+        - SpotDL:
+            icon: spotify.png
+            href: http://10.44.0.4:8080
+            description: Spotify Downloader
+
+    - Web & Apps:
+        - Personal Site:
+            icon: globe.png
+            href: https://info.hwcopeland.net
+            description: hwcopeland.net
+            siteMonitor: https://info.hwcopeland.net
+        - Excalidraw:
+            icon: excalidraw.png
+            href: http://10.44.0.9:80
+            description: Virtual Whiteboard
+        - Vert App:
+            icon: mdi-application
+            href: http://10.44.0.10:80
+            description: Vert Application
+
+    - Machine Learning:
+        - TensorBoard:
+            icon: tensorflow.png
+            href: http://10.44.0.3:6006
+            description: ML Training Visualization
+
+    - Game Servers:
+        - CS2 Server:
+            icon: counter-strike-2.png
+            href: steam://connect/10.44.0.2:27015
+            description: Counter-Strike 2 Modded
+        - Minecraft (ATM9 Skies):
+            icon: minecraft.png
+            description: All The Mods 9 Skies
+
+    - Databases:
+        - ChEMBL MySQL:
+            icon: mysql.png
+            description: Chemistry Database
+        - CS2 MySQL:
+            icon: mysql.png
+            description: Game Server Database
+
+  settings.yaml: |
+    ---
+    title: hwcopeland Homelab
+    favicon: https://raw.githubusercontent.com/gethomepage/homepage/main/public/homepage.png
+    theme: dark
+    color: slate
+    headerStyle: clean
+    layout:
+      Infrastructure:
+        style: row
+        columns: 4
+      Automation:
+        style: row
+        columns: 2
+      Media:
+        style: row
+        columns: 2
+      Web & Apps:
+        style: row
+        columns: 3
+      Machine Learning:
+        style: row
+        columns: 1
+      Game Servers:
+        style: row
+        columns: 2
+      Databases:
+        style: row
+        columns: 2
+    showStats: true
+    providers:
+      longhorn:
+        url: http://longhorn-frontend.longhorn-system.svc.cluster.local
+
+  widgets.yaml: |
+    ---
+    - kubernetes:
+        cluster:
+          show: true
+          cpu: true
+          memory: true
+          showLabel: true
+          label: "Cluster"
+        nodes:
+          show: true
+          cpu: true
+          memory: true
+          showLabel: true
+
+    - search:
+        provider: google
+        target: _blank
+
+    - datetime:
+        text_size: xl
+        format:
+          dateStyle: long
+          timeStyle: short
+          hourCycle: h23
+
+  custom.css: |
+    /* Custom CSS */
+
+  custom.js: |
+    /* Custom JS */
