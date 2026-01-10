@@ -5,7 +5,6 @@ metadata:
   name: hubble-ui
   namespace: kube-system
   annotations:
-    # Authentik forward auth integration
     authentik.home.arpa/enabled: "true"
 spec:
   parentRefs:

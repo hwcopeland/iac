@@ -2,10 +2,10 @@
 apiVersion: cloudflare-operator.io/v1
 kind: DNSRecord
 metadata:
-  name: grafana
-  namespace: monitor
+  name: excalidraw
+  namespace: web-server
 spec:
-  name: grafana.hwcopeland.net
+  name: draw.hwcopeland.net
   type: CNAME
   content: hwcopeland.net
   proxied: true

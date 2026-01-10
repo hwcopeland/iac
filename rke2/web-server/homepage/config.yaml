@@ -23,7 +23,7 @@ data:
   kubernetes.yaml: |
     ---
     mode: cluster
-
+    gateway: true
   services.yaml: |
     ---
     - Infrastructure:
@@ -32,11 +32,6 @@ data:
             href: https://grafana.hwcopeland.net
             description: Monitoring & Dashboards
             siteMonitor: https://grafana.hwcopeland.net
-        - ArgoCD:
-            icon: argocd.png
-            href: https://argocd.hwcopeland.net
-            description: GitOps Continuous Delivery
-            siteMonitor: https://argocd.hwcopeland.net
         - Longhorn:
             icon: longhorn.png
             href: https://longhorn.hwcopeland.net
@@ -85,22 +80,12 @@ data:
         - Personal Site:
             icon: globe.png
             href: https://info.hwcopeland.net
-            description: hwcopeland.net
             siteMonitor: https://info.hwcopeland.net
         - Excalidraw:
             icon: excalidraw.png
-            href: http://10.44.0.9:80
+            href: https://draw.hwcopeland.net
             description: Virtual Whiteboard
-        - Vert App:
-            icon: mdi-application
-            href: http://10.44.0.10:80
-            description: Vert Application
-
-    - Machine Learning:
-        - TensorBoard:
-            icon: tensorflow.png
-            href: http://10.44.0.3:6006
-            description: ML Training Visualization
+            siteMonitor: https://draw.hwcopeland.net
 
     - Game Servers:
         - CS2 Server:
