@@ -1,0 +1,72 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: octoprint
+  namespace: iot
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: octoprint
+  template:
+    metadata:
+      labels:
+        app: octoprint
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: microedge2
+      containers:
+      - name: octoprint
+        image: octoprint/octoprint:latest
+        ports:
+        - containerPort: 5000
+          name: octo-ui
+        - containerPort: 8080
+          name: mjpg-stream
+        securityContext:
+          privileged: true 
+        env:
+        - name: ENABLE_MJPG_STREAMER
+          value: "true"
+        - name: MJPG_STREAMER_INPUT
+          value: "-n -r 640x480 -f 10 -y"
+        - name: CAMERA_DEV
+          value: "/dev/video0"
+        volumeMounts:
+        - name: data
+          mountPath: /octoprint
+        - name: printer
+          mountPath: /dev/ttyUSB0
+        - name: webcam-device
+          mountPath: /dev/video0
+      volumes:
+      - name: data
+        persistentVolumeClaim:
+          claimName: octoprint-data
+      - name: printer
+        hostPath:
+          path: /dev/serial/by-id/usb-1a86_USB_Serial-if00-port0
+          type: CharDevice
+      - name: webcam-device
+        hostPath:
+          path: /dev/video0
+          type: CharDevice
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: octoprint-service
+  namespace: iot
+spec:
+  type: ClusterIP
+  selector:
+    app: octoprint
+  ports:
+    - name: ui
+      protocol: TCP
+      port: 5000
+      targetPort: 5000
+    - name: stream
+      protocol: TCP
+      port: 8080
+      targetPort: 8080

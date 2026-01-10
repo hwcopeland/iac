@@ -1,0 +1,64 @@
+replicaCount: 1
+image:
+  repository: ghcr.io/project-zot/zot
+  pullPolicy: IfNotPresent
+  tag: "v2.1.13"
+namespace: tooling
+serviceAccount:
+  # Specifies whether a service account should be created
+  create: false
+  # Annotations to add to the service account
+  annotations: {}
+  # The name of the service account to use.
+  # If not set and create is true, a name is generated using the fullname template
+  name: ""
+service:
+  type: ClusterIP
+  port: 5000
+  annotations: {}
+ingress:
+  enabled: false
+httpGet:
+  scheme: HTTP
+  port: 5000
+startupProbe:
+  initialDelaySeconds: 5
+  periodSeconds: 10
+  failureThreshold: 3
+
+
+
+
+persistence: true
+# PVC data, only used if persistence is 'true'
+pvc:
+  create: true
+  accessModes: ["ReadWriteOnce"]
+  storage: 8Gi
+  storageClassName: longhorn
+
+strategy:
+  type: RollingUpdate
+
+
+# Extra args to pass to the deployment's container
+extraArgs: []
+podAnnotations: {}
+podLabels: {}
+deploymentAnnotations: {}
+priorityClassName: ""
+dnsConfig: {}
+dnsPolicy: "ClusterFirst"
+# Metrics configuration
+# NOTE: need enable metric extension in config.json
+metrics:
+  # Start a prometheus exporter
+  enabled: true
+  # Prometheus Operator ServiceMonitor configuration
+  serviceMonitor:
+    # Start a ServiceMonitor for Prometheus Operator
+    enabled: true
+    # Specify the interval at which metrics should be scraped
+    interval: "30s"
+    # Specify the path to scrape metrics from
+    path: "/metrics"
