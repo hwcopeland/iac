@@ -1,0 +1,16 @@
+# RKE2 Agent Configuration
+# https://docs.rke2.io/install/configuration
+
+# Server to join
+# server: https://<control-plane-or-lb>:9345
+
+# Cluster token - must match server
+# token: "your-shared-secret-token"
+
+# Optional: node labels
+# node-label:
+#   - "node-type=worker"
+
+# Optional: node taints
+# node-taint:
+#   - "key=value:NoSchedule"
