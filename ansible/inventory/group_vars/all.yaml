@@ -1,0 +1,4 @@
+---
+# Global Ansible variables
+ansible_user: k8s_user
+ansible_become: true

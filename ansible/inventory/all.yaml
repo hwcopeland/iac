@@ -1,0 +1,20 @@
+---
+all:
+  children:
+    control_plane:
+      hosts:
+        # Add control plane nodes here (3 recommended for HA)
+        # cp01:
+        #   ansible_host: 192.168.1.101
+        # cp02:
+        #   ansible_host: 192.168.1.102
+        # cp03:
+        #   ansible_host: 192.168.1.103
+
+    workers:
+      hosts:
+        # Add worker nodes here
+        # worker01:
+        #   ansible_host: 192.168.1.111
+        # worker02:
+        #   ansible_host: 192.168.1.112
