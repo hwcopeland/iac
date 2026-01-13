@@ -4,7 +4,7 @@
 write-kubeconfig-mode: "0644"
 
 # Cluster token - all nodes must share this
-# token: "your-shared-secret-token"
+ token: "{{RKE2_TOKEN}}"
 
 # TLS SANs for HA - add load balancer IP/hostname
 tls-san:
@@ -12,9 +12,8 @@ tls-san:
   # - "192.168.1.100"
 
 # Disable default CNI (using Cilium instead)
-disable:
-  - rke2-canal
-  - rke2-kube-proxy
+ingress-controller: none
+disable-kube-proxy: true
 
 cni: cilium
 

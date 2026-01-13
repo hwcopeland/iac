@@ -1,4 +1,14 @@
 ---
+# Prerequisites
+- name: Install required packages
+  package:
+    name:
+      - curl
+      - iptables
+      - nfs-common
+      - keepalived
+    state: present
+
 - name: Ensure /etc/rancher/rke2 directory exists
   file:
     path: /etc/rancher/rke2
@@ -7,13 +17,37 @@
     owner: root
     group: root
 
-- name: Copy RKE2 server config
-  copy:
-    src: config.yaml
+- name: Template RKE2 server config
+  template:
+    src: config.yaml.j2
     dest: /etc/rancher/rke2/config.yaml
     owner: root
     group: root
     mode: '0644'
+
+# Keepalived for HA VIP
+- name: Copy API server health check script
+  copy:
+    src: check_apiserver.sh
+    dest: /usr/local/bin/check_apiserver.sh
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Configure keepalived
+  template:
+    src: keepalived.conf.j2
+    dest: /etc/keepalived/keepalived.conf
+    owner: root
+    group: root
+    mode: '0644'
+  notify: Restart keepalived
+
+- name: Enable and start keepalived
+  systemd:
+    name: keepalived
+    enabled: true
+    state: started
 
 - name: Install RKE2 server
   shell: curl -sfL https://get.rke2.io | sh -
@@ -34,19 +68,4 @@
   until: result.rc == 0
   changed_when: false
 
-- name: Create .kube directory for user
-  file:
-    path: "/home/{{ ansible_user }}/.kube"
-    state: directory
-    owner: "{{ ansible_user }}"
-    group: "{{ ansible_user }}"
-    mode: '0755'
 
-- name: Copy kubeconfig to user's home
-  copy:
-    src: /etc/rancher/rke2/rke2.yaml
-    dest: "/home/{{ ansible_user }}/.kube/config"
-    remote_src: true
-    owner: "{{ ansible_user }}"
-    group: "{{ ansible_user }}"
-    mode: '0600'
