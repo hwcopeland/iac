@@ -6,18 +6,10 @@
   hosts: control_plane
   become: true
   roles:
-    - rke2-common
     - rke2-server
 
 - name: Deploy RKE2 Workers
   hosts: workers
   become: true
   roles:
-    - rke2-common
     - rke2-agent
-
-- name: Deploy Cluster Components
-  hosts: control_plane[0]
-  become: true
-  roles:
-    - k8s-common
