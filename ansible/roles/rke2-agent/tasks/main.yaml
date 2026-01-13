@@ -1,4 +1,13 @@
 ---
+# Prerequisites
+- name: Install required packages
+  package:
+    name:
+      - curl
+      - iptables
+      - nfs-common
+    state: present
+
 - name: Ensure /etc/rancher/rke2 directory exists
   file:
     path: /etc/rancher/rke2

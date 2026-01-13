@@ -2,3 +2,7 @@
 # Global Ansible variables
 ansible_user: k8s_user
 ansible_become: true
+
+# RKE2 Configuration
+# Generate a secure token with: openssl rand -hex 32
+rke2_token: "CHANGE_ME_TO_A_SECURE_TOKEN"
