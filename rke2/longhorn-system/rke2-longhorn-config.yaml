@@ -1,0 +1,96 @@
+---
+# Longhorn Distributed Storage Configuration for RKE2
+# Deploy via: Copy to /var/lib/rancher/rke2/server/manifests/ on control plane nodes
+# Or apply directly: kubectl apply -f rke2-longhorn-config.yaml
+apiVersion: helm.cattle.io/v1
+kind: HelmChart
+metadata:
+  name: longhorn
+  namespace: kube-system
+spec:
+  repo: https://charts.longhorn.io
+  chart: longhorn
+  version: 1.7.2
+  targetNamespace: longhorn-system
+  createNamespace: true
+  valuesContent: |-
+    defaultSettings:
+      defaultReplicaCount: 2
+
+      # Storage reservation
+      storageMinimalAvailablePercentage: 15
+      storageOverProvisioningPercentage: 100
+
+      backupTarget: ""
+      backupTargetCredentialSecret: ""
+
+      # Auto-delete workload pod when volume is detached unexpectedly
+      autoDeletePodWhenVolumeDetachedUnexpectedly: true
+
+      # Node drain policy
+      nodeDrainPolicy: block-if-contains-last-replica
+
+      # Replica auto-balance
+      replicaAutoBalance: best-effort
+
+      # Guaranteed instance manager CPU (millicores)
+      guaranteedInstanceManagerCPU: 12
+
+    # ========================================
+    # Persistence Settings
+    # ========================================
+    persistence:
+      # Default storage class replica count
+      defaultClassReplicaCount: 2
+
+      # Set as default storage class
+      defaultClass: true
+
+      # RWX support via NFS
+      defaultFsType: ext4
+
+      # Reclaim policy
+      reclaimPolicy: Delete
+
+    # ========================================
+    # CSI Settings
+    # ========================================
+    csi:
+      attacherReplicaCount: 2
+      provisionerReplicaCount: 2
+      resizerReplicaCount: 2
+      snapshotterReplicaCount: 2
+
+    # ========================================
+    # Longhorn Manager
+    # ========================================
+    longhornManager:
+      priorityClass: ~
+      tolerations: []
+      nodeSelector: {}
+
+    # ========================================
+    # Longhorn UI
+    # ========================================
+    longhornUI:
+      replicas: 1
+      priorityClass: ~
+
+    # ========================================
+    # Ingress (disabled - using Gateway API HTTPRoute)
+    # ========================================
+    ingress:
+      enabled: false
+
+    # ========================================
+    # Service Account
+    # ========================================
+    serviceAccount:
+      create: true
+
+    # ========================================
+    # Prometheus Metrics
+    # ========================================
+    metrics:
+      serviceMonitor:
+        enabled: false

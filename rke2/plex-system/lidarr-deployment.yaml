@@ -1,0 +1,90 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: lidarr
+  namespace: plex-system
+  labels:
+    app: lidarr
+spec:
+  replicas: 1
+  revisionHistoryLimit: 1
+  selector:
+    matchLabels:
+      app: lidarr
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: lidarr
+    spec:
+      securityContext:
+        fsGroup: 1000
+        fsGroupChangePolicy: OnRootMismatch
+      initContainers:
+        - name: init-config
+          image: alpine:3.18.0
+          command:
+            - sh
+            - -c
+            - |
+              if [ ! -f /config/config.xml ]; then
+                cp /configmap/config.xml /config/config.xml
+                echo "Seeded config.xml from ConfigMap"
+              else
+                echo "config.xml already exists, skipping"
+              fi
+          volumeMounts:
+            - name: config
+              mountPath: /config
+            - name: configmap
+              mountPath: /configmap
+      containers:
+        - name: lidarr
+          image: linuxserver/lidarr:latest
+          ports:
+            - name: http
+              containerPort: 8686
+          env:
+            - name: PUID
+              value: "1000"
+            - name: PGID
+              value: "1000"
+            - name: TZ
+              value: America/New_York
+          volumeMounts:
+            - name: config
+              mountPath: /config
+            - name: downloads
+              mountPath: /downloads
+            - name: media
+              mountPath: /media
+      volumes:
+        - name: config
+          persistentVolumeClaim:
+            claimName: lidarr-config
+        - name: configmap
+          configMap:
+            name: lidarr-config-xml
+        - name: downloads
+          persistentVolumeClaim:
+            claimName: servarr-downloads
+        - name: media
+          persistentVolumeClaim:
+            claimName: plex-media
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: lidarr
+  namespace: plex-system
+spec:
+  selector:
+    app: lidarr
+  ports:
+    - name: http
+      protocol: TCP
+      port: 8686
+      targetPort: 8686
+  type: LoadBalancer
+  loadBalancerIP: 10.44.0.11

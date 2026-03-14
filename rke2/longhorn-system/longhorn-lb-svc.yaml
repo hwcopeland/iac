@@ -1,0 +1,19 @@
+---
+# Longhorn UI LoadBalancer Service
+# Exposes Longhorn UI via Cilium BGP LoadBalancer
+apiVersion: v1
+kind: Service
+metadata:
+  name: longhorn-frontend-lb
+  namespace: longhorn-system
+  labels:
+    app: longhorn-ui
+spec:
+  type: LoadBalancer
+  selector:
+    app: longhorn-ui
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8000
+      protocol: TCP

@@ -1,0 +1,24 @@
+---
+# L2 Announcement Policy for LoadBalancer IP Binding
+# This binds LoadBalancer IPs to node interfaces without ARP/NDP announcements
+# Used in conjunction with BGP for routing
+apiVersion: cilium.io/v2alpha1
+kind: CiliumL2AnnouncementPolicy
+metadata:
+  name: bgp-lb-policy
+spec:
+  # Don't send gratuitous ARP - rely on BGP routing
+  externalIPs: false
+  loadBalancerIPs: true
+  # Select all LoadBalancer services
+  serviceSelector:
+    matchLabels: {}
+  # Select all nodes to bind IPs
+  nodeSelector:
+    matchLabels:
+      kubernetes.io/os: linux
+  # Bind to primary interface
+  interfaces:
+    - ^enp.*
+    - ^eth.*
+    - ^ens.*

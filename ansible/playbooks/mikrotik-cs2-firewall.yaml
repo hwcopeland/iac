@@ -1,0 +1,77 @@
+---
+# Configures MikroTik firewall and NAT rules for CS2 server port forwarding
+# CS2 LB IP: 10.44.0.2
+# Ports: 27015 (game), 27020 (SourceTV)
+#
+# Usage: ansible-playbook playbooks/mikrotik-cs2-firewall.yaml
+# Requires: ansible-galaxy collection install community.routeros
+
+- name: Configure CS2 port forwarding on MikroTik
+  hosts: tik
+  gather_facts: false
+
+  vars:
+    cs2_lb_ip: "10.44.0.2"
+    cs2_ports:
+      - { port: "27015", comment_suffix: "game" }
+      - { port: "27020", comment_suffix: "sourcetv" }
+
+  tasks:
+    - name: Remove existing CS2 NAT rules (idempotent)
+      community.routeros.command:
+        commands:
+          - /ip firewall nat remove [find comment~"CS2"]
+
+    - name: Remove existing CS2 filter rules (idempotent)
+      community.routeros.command:
+        commands:
+          - /ip firewall filter remove [find comment~"CS2"]
+
+    - name: Add NAT dst-nat rules for CS2
+      community.routeros.command:
+        commands:
+          - >
+            /ip firewall nat add
+            chain=dstnat
+            protocol={{ item[1] }}
+            dst-port={{ item[0].port }}
+            in-interface-list=WAN
+            action=dst-nat
+            to-addresses={{ cs2_lb_ip }}
+            to-ports={{ item[0].port }}
+            comment="CS2 {{ item[0].comment_suffix }} {{ item[1] }}"
+      loop: "{{ cs2_ports | product(['tcp', 'udp']) | list }}"
+
+    - name: Add firewall filter rules to allow CS2 traffic
+      community.routeros.command:
+        commands:
+          - >
+            /ip firewall filter add
+            chain=forward
+            protocol={{ item[1] }}
+            dst-address={{ cs2_lb_ip }}
+            dst-port={{ item[0].port }}
+            action=accept
+            comment="CS2 {{ item[0].comment_suffix }} {{ item[1] }}"
+            place-before=[find where chain=forward action=drop]
+      loop: "{{ cs2_ports | product(['tcp', 'udp']) | list }}"
+
+    - name: Show applied NAT rules
+      community.routeros.command:
+        commands:
+          - /ip firewall nat print where comment~"CS2"
+      register: nat_rules
+
+    - name: Show applied filter rules
+      community.routeros.command:
+        commands:
+          - /ip firewall filter print where comment~"CS2"
+      register: filter_rules
+
+    - name: Print NAT rules
+      ansible.builtin.debug:
+        var: nat_rules.stdout_lines
+
+    - name: Print filter rules
+      ansible.builtin.debug:
+        var: filter_rules.stdout_lines

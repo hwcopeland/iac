@@ -7,7 +7,30 @@
       - iptables
       - nfs-common
       - keepalived
+      - open-iscsi
+      - multipath-tools
     state: present
+
+- name: Enable and start iscsid
+  systemd:
+    name: iscsid
+    enabled: true
+    state: started
+
+- name: Configure multipath blacklist
+  copy:
+    src: multipath.conf
+    dest: /etc/multipath.conf
+    owner: root
+    group: root
+    mode: '0644'
+  notify: Restart multipathd
+
+- name: Enable and start multipathd
+  systemd:
+    name: multipathd
+    enabled: true
+    state: started
 
 - name: Ensure /etc/rancher/rke2 directory exists
   file:
@@ -67,5 +90,14 @@
   delay: 10
   until: result.rc == 0
   changed_when: false
+
+- name: Copy Cilium HelmChartConfig
+  copy:
+    src: rke2-cilium-config.yaml
+    dest: /var/lib/rancher/rke2/server/manifests/rke2-cilium-config.yaml
+    owner: root
+    group: root
+    mode: '0644'
+  run_once: true
 
 

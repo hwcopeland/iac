@@ -5,6 +5,9 @@ write-kubeconfig-mode: "0644"
 
 token: "{{ rke2_token }}"
 
+node-taint:
+  - "node-role.kubernetes.io/control-plane=true:NoSchedule"
+
 # TLS SANs for HA - VIP address
 tls-san:
   - "10.41.0.100"
@@ -12,6 +15,7 @@ tls-san:
 disable:
   - rke2-canal
   - rke2-kube-proxy
+  - rke2-ingress-nginx
 
 cni: cilium
 

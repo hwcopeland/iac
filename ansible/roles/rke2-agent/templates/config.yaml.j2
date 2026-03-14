@@ -1,0 +1,8 @@
+# RKE2 Agent Configuration
+# https://docs.rke2.io/install/configuration
+
+# Join cluster via VIP
+server: https://10.41.0.100:9345
+
+# Cluster token - must match server
+token: "{{ rke2_token }}"

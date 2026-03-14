@@ -1,0 +1,63 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ytdl
+  namespace: plex-system
+  labels:
+    app: ytdl
+spec:
+  replicas: 1
+  revisionHistoryLimit: 1
+  selector:
+    matchLabels:
+      app: ytdl
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: ytdl
+    spec:
+      securityContext:
+        fsGroup: 1000
+      containers:
+        - name: ytdl
+          image: tzahi12345/youtubedl-material:latest
+          ports:
+            - name: http
+              containerPort: 17442
+          env:
+            - name: UID
+              value: "1000"
+            - name: GID
+              value: "1000"
+            - name: TZ
+              value: America/New_York
+          volumeMounts:
+            - name: config
+              mountPath: /app/appdata
+            - name: media
+              mountPath: /media
+      volumes:
+        - name: config
+          persistentVolumeClaim:
+            claimName: ytdl-config
+        - name: media
+          persistentVolumeClaim:
+            claimName: plex-media
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ytdl
+  namespace: plex-system
+spec:
+  selector:
+    app: ytdl
+  ports:
+    - name: http
+      protocol: TCP
+      port: 17442
+      targetPort: 17442
+  type: LoadBalancer
+  loadBalancerIP: 10.44.0.14

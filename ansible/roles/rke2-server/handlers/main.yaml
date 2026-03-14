@@ -3,3 +3,8 @@
   systemd:
     name: keepalived
     state: restarted
+
+- name: Restart multipathd
+  systemd:
+    name: multipathd
+    state: restarted
