@@ -1,0 +1,90 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sonarr
+  namespace: plex-system
+  labels:
+    app: sonarr
+spec:
+  replicas: 1
+  revisionHistoryLimit: 1
+  selector:
+    matchLabels:
+      app: sonarr
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: sonarr
+    spec:
+      securityContext:
+        fsGroup: 1000
+        fsGroupChangePolicy: OnRootMismatch
+      initContainers:
+        - name: init-config
+          image: alpine:3.18.0
+          command:
+            - sh
+            - -c
+            - |
+              if [ ! -f /config/config.xml ]; then
+                cp /configmap/config.xml /config/config.xml
+                echo "Seeded config.xml from ConfigMap"
+              else
+                echo "config.xml already exists, skipping"
+              fi
+          volumeMounts:
+            - name: config
+              mountPath: /config
+            - name: configmap
+              mountPath: /configmap
+      containers:
+        - name: sonarr
+          image: linuxserver/sonarr:latest
+          ports:
+            - name: http
+              containerPort: 8989
+          env:
+            - name: PUID
+              value: "1000"
+            - name: PGID
+              value: "1000"
+            - name: TZ
+              value: America/New_York
+          volumeMounts:
+            - name: config
+              mountPath: /config
+            - name: downloads
+              mountPath: /downloads
+            - name: media
+              mountPath: /media
+      volumes:
+        - name: config
+          persistentVolumeClaim:
+            claimName: sonarr-config
+        - name: configmap
+          configMap:
+            name: sonarr-config-xml
+        - name: downloads
+          persistentVolumeClaim:
+            claimName: servarr-downloads
+        - name: media
+          persistentVolumeClaim:
+            claimName: plex-media
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sonarr
+  namespace: plex-system
+spec:
+  selector:
+    app: sonarr
+  ports:
+    - name: http
+      protocol: TCP
+      port: 8989
+      targetPort: 8989
+  type: LoadBalancer
+  loadBalancerIP: 10.44.0.9

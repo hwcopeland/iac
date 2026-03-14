@@ -3,8 +3,6 @@ kind: StatefulSet
 metadata:
   name: atm9skies
   namespace: game-server
-  annotations:
-    mc-router.itzg.me/atm9skies-external: "atm9skies.hwcopeland.net"
 spec:
   replicas: 1
   serviceName: atm9skies-service
@@ -18,7 +16,7 @@ spec:
     spec:
       containers:
         - name: atm9skies-server
-          image: itzg/minecraft-server
+          image: itzg/minecraft-server:java21-alpine
           ports:
             - containerPort: 25565
           env:
@@ -33,15 +31,22 @@ spec:
                   key: CF_API_KEY
             - name: CF_SLUG
               value: "all-the-mods-9-to-the-sky"
+            - name: CF_EXCLUDE_MODS
+              value: "particle-effects-reforged"
             - name: MEMORY
               value: "10G"
           volumeMounts:
             - name: mc-data
               mountPath: /data
-      volumes:
-        - name: mc-data
-          persistentVolumeClaim:
-            claimName: mc-data-pvc
+  volumeClaimTemplates:
+    - metadata:
+        name: mc-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: longhorn
+        resources:
+          requests:
+            storage: 50Gi
 ---
 apiVersion: v1
 kind: Service
@@ -65,14 +70,13 @@ metadata:
   name: atm9skies-local
   namespace: game-server
 spec:
-  type: NodePort
+  type: LoadBalancer
   selector:
     app: atm9skies
   ports:
     - protocol: TCP
       port: 25565
       targetPort: 25565
-      nodePort: 31337
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
@@ -85,15 +89,3 @@ rules:
   - apiGroups: ["apps"]
     resources: ["statefulsets", "statefulsets/scale"]
     verbs: ["watch", "list", "get", "update"]
----
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: mc-data-pvc
-  namespace: game-server
-spec:
-  accessModes:
-    - ReadWriteOnce
-  resources:
-    requests:
-      storage: 20Gi

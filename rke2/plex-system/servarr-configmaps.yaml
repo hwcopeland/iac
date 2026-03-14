@@ -1,0 +1,98 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sonarr-config-xml
+  namespace: plex-system
+data:
+  config.xml: |
+    <Config>
+      <LogLevel>info</LogLevel>
+      <UrlBase></UrlBase>
+      <Port>8989</Port>
+      <BindAddress>*</BindAddress>
+      <ApiKey>sonarr0apikey0placeholder000000001</ApiKey>
+      <AuthenticationMethod>Forms</AuthenticationMethod>
+      <AuthenticationRequired>DisabledForLocalAddresses</AuthenticationRequired>
+      <LaunchBrowser>False</LaunchBrowser>
+    </Config>
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: radarr-config-xml
+  namespace: plex-system
+data:
+  config.xml: |
+    <Config>
+      <LogLevel>info</LogLevel>
+      <UrlBase></UrlBase>
+      <Port>7878</Port>
+      <BindAddress>*</BindAddress>
+      <ApiKey>radarr0apikey0placeholder000000001</ApiKey>
+      <AuthenticationMethod>Forms</AuthenticationMethod>
+      <AuthenticationRequired>DisabledForLocalAddresses</AuthenticationRequired>
+      <LaunchBrowser>False</LaunchBrowser>
+    </Config>
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: lidarr-config-xml
+  namespace: plex-system
+data:
+  config.xml: |
+    <Config>
+      <LogLevel>info</LogLevel>
+      <UrlBase></UrlBase>
+      <Port>8686</Port>
+      <BindAddress>*</BindAddress>
+      <ApiKey>lidarr0apikey0placeholder000000001</ApiKey>
+      <AuthenticationMethod>Forms</AuthenticationMethod>
+      <AuthenticationRequired>DisabledForLocalAddresses</AuthenticationRequired>
+      <LaunchBrowser>False</LaunchBrowser>
+    </Config>
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prowlarr-config-xml
+  namespace: plex-system
+data:
+  config.xml: |
+    <Config>
+      <LogLevel>info</LogLevel>
+      <UrlBase></UrlBase>
+      <Port>9696</Port>
+      <BindAddress>*</BindAddress>
+      <ApiKey>prowlarr0apikey0placeholder0000001</ApiKey>
+      <AuthenticationMethod>Forms</AuthenticationMethod>
+      <AuthenticationRequired>DisabledForLocalAddresses</AuthenticationRequired>
+      <LaunchBrowser>False</LaunchBrowser>
+    </Config>
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sabnzbd-config-ini
+  namespace: plex-system
+data:
+  sabnzbd.ini: |
+    [misc]
+    host = 0.0.0.0
+    port = 8080
+    api_key = sabnzbd0apikey0placeholder0000001
+    nzb_key = sabnzbd0nzbkey0placeholder0000001
+
+    [categories]
+    [[tv]]
+    name = tv
+    dir = /downloads/usenet/complete/tv
+
+    [[movies]]
+    name = movies
+    dir = /downloads/usenet/complete/movies
+
+    [[music]]
+    name = music
+    dir = /downloads/usenet/complete/music

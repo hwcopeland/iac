@@ -1,0 +1,25 @@
+---
+# Selects the latest image tag matching ^sha-<run_number>-<sha> format.
+# Runner should tag images as: sha-${GITHUB_RUN_NUMBER}-${GITHUB_SHA::7}
+# e.g. sha-42-a1b2c3d
+# The run number is extracted and used for numerical ordering (newest = highest).
+#
+# If your runner only pushes sha-<sha> (no run number), change policy to:
+#   policy:
+#     alphabetical:
+#       order: asc
+# but note SHA alphabetical order does not guarantee chronological order.
+apiVersion: image.toolkit.fluxcd.io/v1beta2
+kind: ImagePolicy
+metadata:
+  name: u4u-engine
+  namespace: tooling
+spec:
+  imageRepositoryRef:
+    name: u4u-engine
+  filterTags:
+    pattern: '^sha-(?P<ts>[0-9]+)-[a-f0-9]+'
+    extract: '$ts'
+  policy:
+    numerical:
+      order: asc
