@@ -1,0 +1,43 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: u4u-engine-frontend
+  namespace: theswamp
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: u4u-engine-frontend
+  template:
+    metadata:
+      labels:
+        app: u4u-engine-frontend
+    spec:
+      imagePullSecrets:
+        - name: zot-pull-secret
+      containers:
+        - name: u4u-engine-frontend
+          image: zot.hwcopeland.net/florida-man-bioscience/u4u-engine-frontend:sha-0000000 # {"$imagepolicy": "tooling:u4u-engine-frontend"}
+          ports:
+            - containerPort: 3000
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 3000
+            initialDelaySeconds: 15
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 3000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "50m"
+            limits:
+              memory: "256Mi"
+              cpu: "250m"

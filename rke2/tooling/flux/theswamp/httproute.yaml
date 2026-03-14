@@ -25,3 +25,10 @@ spec:
       backendRefs:
         - name: u4u-engine
           port: 8000
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: u4u-engine-frontend
+          port: 3000

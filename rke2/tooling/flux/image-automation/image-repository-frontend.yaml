@@ -1,0 +1,11 @@
+---
+apiVersion: image.toolkit.fluxcd.io/v1beta2
+kind: ImageRepository
+metadata:
+  name: u4u-engine-frontend
+  namespace: tooling
+spec:
+  image: zot.hwcopeland.net/florida-man-bioscience/u4u-engine-frontend
+  interval: 1m0s
+  secretRef:
+    name: zot-pull-secret
