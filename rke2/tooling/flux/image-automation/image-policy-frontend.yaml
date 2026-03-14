@@ -1,0 +1,16 @@
+---
+# Selects the latest image tag matching ^sha-<sha> format.
+# Matches tags produced by the build-and-push-frontend workflow (sha-<short-sha>).
+apiVersion: image.toolkit.fluxcd.io/v1beta2
+kind: ImagePolicy
+metadata:
+  name: u4u-engine-frontend
+  namespace: tooling
+spec:
+  imageRepositoryRef:
+    name: u4u-engine-frontend
+  filterTags:
+    pattern: '^sha-[a-f0-9]+'
+  policy:
+    alphabetical:
+      order: asc
