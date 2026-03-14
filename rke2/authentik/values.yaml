@@ -34,13 +34,11 @@ postgresql:
     primary:
       persistence:
         enabled: true
-        storageClass: longhorn
-        size: 8Gi
+        existingClaim: data-authentik-postgresql-0
 
 redis:
     enabled: true
     master:
       persistence:
         enabled: true
-        storageClass: longhorn
-        size: 2Gi
+        existingClaim: redis-data-authentik-redis-master-0

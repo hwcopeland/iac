@@ -16,12 +16,9 @@ spec:
       securityContext:
         runAsUser: 1000
         fsGroup: 1000
-      nodeSelector:
-        node-type: worker
       containers:
         - name: cs2-modded-server
-          #image: ghcr.io/kus/cs2-modded-server:latest
-          image: hwcopeland/cs2-testing
+          image: ghcr.io/kus/cs2-modded-server:latest
           imagePullPolicy: Always
           ports:
             - containerPort: 27015
@@ -97,9 +94,8 @@ spec:
           persistentVolumeClaim:
             claimName: cs2-modded-claim
         - name: custom
-          hostPath:
-            path: /home/k8s_user/iac/rke2/game-server/cs2/custom_files
-            type: Directory
+          persistentVolumeClaim:
+            claimName: cs2-custom-files
         #- name: demo-storage
         #  persistentVolumeClaim:
         #    claimName: demo-storage
@@ -109,6 +105,8 @@ kind: Service
 metadata:
   name: cs2-modded-service
   namespace: game-server
+  annotations:
+    io.cilium/lb-ipam-ips: "10.44.0.2"
 spec:
   selector:
     app: cs2-modded-server
@@ -130,4 +128,3 @@ spec:
       port: 27020
       targetPort: 27020
   type: LoadBalancer
-  loadBalancerIP: 10.44.0.2
