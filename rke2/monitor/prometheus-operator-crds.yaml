@@ -1,0 +1,14 @@
+---
+# Prometheus Operator CRDs
+# Install these BEFORE kube-prometheus-stack or any chart that creates ServiceMonitors
+# Deploy via: Copy to /var/lib/rancher/rke2/server/manifests/ on control plane nodes
+apiVersion: helm.cattle.io/v1
+kind: HelmChart
+metadata:
+  name: prometheus-operator-crds
+  namespace: kube-system
+spec:
+  repo: https://prometheus-community.github.io/helm-charts
+  chart: prometheus-operator-crds
+  version: 17.0.2
+  targetNamespace: kube-system

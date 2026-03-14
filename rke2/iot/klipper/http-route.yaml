@@ -1,0 +1,57 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: klipper-route
+  namespace: iot
+spec:
+  parentRefs:
+  - name: hwcopeland-gateway
+    namespace: kube-system
+  hostnames:
+  - "klipper.hwcopeland.net"
+  rules:
+  # Moonraker API and WebSocket
+  - matches:
+    - path:
+        type: PathPrefix
+        value: /websocket
+    - path:
+        type: PathPrefix
+        value: /printer
+    - path:
+        type: PathPrefix
+        value: /api
+    - path:
+        type: PathPrefix
+        value: /access
+    - path:
+        type: PathPrefix
+        value: /machine
+    - path:
+        type: PathPrefix
+        value: /server
+    backendRefs:
+    - name: klipper-service
+      port: 7125
+  # Webcam stream
+  - matches:
+    - path:
+        type: PathPrefix
+        value: /webcam
+    filters:
+    - type: URLRewrite
+      urlRewrite:
+        path:
+          type: ReplacePrefixMatch
+          replacePrefixMatch: /
+    backendRefs:
+    - name: klipper-service
+      port: 8080
+  # Mainsail UI (default)
+  - matches:
+    - path:
+        type: PathPrefix
+        value: /
+    backendRefs:
+    - name: klipper-service
+      port: 80

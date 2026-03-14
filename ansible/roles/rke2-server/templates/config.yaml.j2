@@ -1,2 +1,29 @@
+# RKE2 Server Configuration
+# https://docs.rke2.io/install/configuration
+
 write-kubeconfig-mode: "0644"
 
+token: "{{ rke2_token }}"
+
+node-taint:
+  - "node-role.kubernetes.io/control-plane=true:NoSchedule"
+
+# TLS SANs for HA - VIP address
+tls-san:
+  - "10.41.0.100"
+
+disable:
+  - rke2-canal
+  - rke2-kube-proxy
+  - rke2-ingress-nginx
+
+cni: cilium
+
+# Network CIDRs
+cluster-cidr: "10.42.0.0/16"
+service-cidr: "10.43.0.0/16"
+
+{% if not rke2_bootstrap | default(false) %}
+# Join existing cluster via VIP
+server: https://10.41.0.100:9345
+{% endif %}

@@ -1,0 +1,58 @@
+---
+# Cilium GatewayClass
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: cilium
+spec:
+  controllerName: io.cilium/gateway-controller
+---
+# Main Gateway for hwcopeland.net services
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: hwcopeland-gateway
+  namespace: kube-system
+  annotations:
+    io.cilium/lb-ipam-ips: "10.44.0.1"
+spec:
+  gatewayClassName: cilium
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 80
+      hostname: "*.hwcopeland.net"
+      allowedRoutes:
+        namespaces:
+          from: All
+    - name: https
+      protocol: HTTPS
+      port: 443
+      hostname: "*.hwcopeland.net"
+      allowedRoutes:
+        namespaces:
+          from: All
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - name: cf-wildcard-cert-secret
+            namespace: kube-system
+    - name: flmanbiosci-http
+      protocol: HTTP
+      port: 80
+      hostname: "*.flmanbiosci.net"
+      allowedRoutes:
+        namespaces:
+          from: All
+    - name: flmanbiosci-https
+      protocol: HTTPS
+      port: 443
+      hostname: "*.flmanbiosci.net"
+      allowedRoutes:
+        namespaces:
+          from: All
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - name: cf-flmanbiosci-wildcard-cert-secret
+            namespace: kube-system

@@ -1,0 +1,76 @@
+---
+# Cilium BGP Configuration (v2 API)
+# Replaces MetalLB BGP functionality
+# Apply with: kubectl apply -f cilium-bgp-config.yaml
+
+# ========================================
+# IP Address Pool for LoadBalancer Services
+# ========================================
+apiVersion: cilium.io/v2alpha1
+kind: CiliumLoadBalancerIPPool
+metadata:
+  name: bgp-pool
+spec:
+  blocks:
+    - cidr: 10.44.0.0/16
+---
+# ========================================
+# BGP Peer Configuration
+# ========================================
+apiVersion: cilium.io/v2
+kind: CiliumBGPPeerConfig
+metadata:
+  name: mikrotik-peer
+spec:
+  timers:
+    connectRetryTimeSeconds: 120
+    holdTimeSeconds: 90
+    keepAliveTimeSeconds: 30
+  gracefulRestart:
+    enabled: true
+    restartTimeSeconds: 120
+  families:
+    - afi: ipv4
+      safi: unicast
+      advertisements:
+        matchLabels:
+          advertise: "bgp"
+---
+# ========================================
+# BGP Advertisement Configuration
+# ========================================
+apiVersion: cilium.io/v2
+kind: CiliumBGPAdvertisement
+metadata:
+  name: bgp-advertisements
+  labels:
+    advertise: bgp
+spec:
+  advertisements:
+    - advertisementType: "Service"
+      service:
+        addresses:
+          - LoadBalancerIP
+      selector:
+        matchLabels: {}
+---
+# ========================================
+# BGP Cluster Configuration
+# ========================================
+apiVersion: cilium.io/v2
+kind: CiliumBGPClusterConfig
+metadata:
+  name: cilium-bgp
+spec:
+  nodeSelector:
+    matchLabels:
+      kubernetes.io/os: linux
+  bgpInstances:
+    - name: mikrotik-instance
+      localASN: 65551
+      peers:
+        - name: mikrotik-peer
+          peerAddress: 10.0.0.1
+          peerASN: 65551
+          peerConfigRef:
+            name: mikrotik-peer

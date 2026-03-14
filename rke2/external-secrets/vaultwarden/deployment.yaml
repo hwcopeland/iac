@@ -37,7 +37,7 @@ spec:
       volumes:
       - name: data
         persistentVolumeClaim:
-          claimName: vault-warden-data
+          claimName: vaultwarden-data
           readOnly: false
 ---
 kind: PersistentVolumeClaim

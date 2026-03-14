@@ -1,0 +1,79 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prowlarr
+  namespace: plex-system
+  labels:
+    app: prowlarr
+spec:
+  replicas: 1
+  revisionHistoryLimit: 1
+  selector:
+    matchLabels:
+      app: prowlarr
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: prowlarr
+    spec:
+      securityContext:
+        fsGroup: 1000
+      initContainers:
+        - name: init-config
+          image: alpine:3.18.0
+          command:
+            - sh
+            - -c
+            - |
+              if [ ! -f /config/config.xml ]; then
+                cp /configmap/config.xml /config/config.xml
+                echo "Seeded config.xml from ConfigMap"
+              else
+                echo "config.xml already exists, skipping"
+              fi
+          volumeMounts:
+            - name: config
+              mountPath: /config
+            - name: configmap
+              mountPath: /configmap
+      containers:
+        - name: prowlarr
+          image: linuxserver/prowlarr:latest
+          ports:
+            - name: http
+              containerPort: 9696
+          env:
+            - name: PUID
+              value: "1000"
+            - name: PGID
+              value: "1000"
+            - name: TZ
+              value: America/New_York
+          volumeMounts:
+            - name: config
+              mountPath: /config
+      volumes:
+        - name: config
+          persistentVolumeClaim:
+            claimName: prowlarr-config
+        - name: configmap
+          configMap:
+            name: prowlarr-config-xml
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: prowlarr
+  namespace: plex-system
+spec:
+  selector:
+    app: prowlarr
+  ports:
+    - name: http
+      protocol: TCP
+      port: 9696
+      targetPort: 9696
+  type: LoadBalancer
+  loadBalancerIP: 10.44.0.12

@@ -1,0 +1,94 @@
+replicaCount: 1
+image:
+  repository: ghcr.io/project-zot/zot
+  pullPolicy: IfNotPresent
+  tag: "v2.1.13"
+namespace: tooling
+serviceAccount:
+  create: false
+  annotations: {}
+  name: ""
+service:
+  type: LoadBalancer
+  port: 5000
+  annotations: {}
+ingress:
+  enabled: false
+httpGet:
+  scheme: HTTP
+  port: 5000
+startupProbe:
+  initialDelaySeconds: 5
+  periodSeconds: 10
+  failureThreshold: 3
+
+mountConfig: true
+configFiles:
+  config.json: |-
+    {
+      "storage": { "rootDirectory": "/var/lib/registry" },
+      "http": {
+        "address": "0.0.0.0",
+        "port": "5000",
+        "externalUrl": "https://zot.hwcopeland.net",
+        "auth": {
+          "openid": {
+            "providers": {
+              "oidc": {
+                "credentialsFile": "/secrets/zot-oidc/credentials.json",
+                "issuer": "https://auth.hwcopeland.net/application/o/zot/",
+                "scopes": ["openid", "profile", "email", "groups"]
+              }
+            }
+          }
+        },
+        "accessControl": {
+          "repositories": {
+            "**": {
+              "defaultPolicy": ["read", "create", "update", "delete"]
+            }
+          },
+          "adminPolicy": {
+            "users": ["admin"],
+            "actions": ["read", "create", "update", "delete"]
+          }
+        }
+      },
+      "log": { "level": "info" },
+      "extensions": {
+        "metrics": {
+          "enable": true,
+          "prometheus": { "path": "/metrics" }
+        },
+        "search": { "enable": true },
+        "ui": { "enable": true }
+      }
+    }
+
+externalSecrets:
+  - secretName: "zot-oidc-secret"
+    mountPath: "/secrets/zot-oidc"
+
+persistence: true
+pvc:
+  create: true
+  accessModes: ["ReadWriteOnce"]
+  storage: 248Gi
+  storageClassName: longhorn
+
+strategy:
+  type: RollingUpdate
+
+extraArgs: []
+podAnnotations: {}
+podLabels: {}
+deploymentAnnotations: {}
+priorityClassName: ""
+dnsConfig: {}
+dnsPolicy: "ClusterFirst"
+metrics:
+  enabled: true
+  serviceMonitor:
+    enabled: true
+    interval: "30s"
+    path: "/metrics"
