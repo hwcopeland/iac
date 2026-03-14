@@ -5,3 +5,6 @@ resources:
   - image-repository.yaml
   - image-policy.yaml
   - image-update-automation.yaml
+  - image-repository-frontend.yaml
+  - image-policy-frontend.yaml
+  - image-update-automation-frontend.yaml
