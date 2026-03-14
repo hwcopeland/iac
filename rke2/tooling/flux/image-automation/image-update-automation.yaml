@@ -1,0 +1,27 @@
+---
+apiVersion: image.toolkit.fluxcd.io/v1beta2
+kind: ImageUpdateAutomation
+metadata:
+  name: u4u-engine
+  namespace: tooling
+spec:
+  interval: 1m0s
+  sourceRef:
+    kind: GitRepository
+    name: tooling
+    namespace: tooling
+  git:
+    checkout:
+      ref:
+        branch: main
+    commit:
+      author:
+        email: fluxcdbot@users.noreply.github.com
+        name: fluxcdbot
+      messageTemplate: |
+        [ci skip] auto-update u4u-engine -> {{ range .Updated.Images }}{{ .NewRef }}{{ end }}
+    push:
+      branch: main
+  update:
+    path: ./rke2/tooling/flux/theswamp
+    strategy: Setters
