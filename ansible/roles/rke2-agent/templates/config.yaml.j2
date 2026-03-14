@@ -1,5 +1,8 @@
-write-kubeconfig-mode: "0644"
+# RKE2 Agent Configuration
+# https://docs.rke2.io/install/configuration
 
-# config.yaml.j2
-server: https://192.168.1.105:9345
-token: "K105d9b5156d910c3b7c7e122803eab427c6699ca22973c911336c24d2522bed2b9::server:1e979178aa26ef4f379ce14fd7fd8007"
+# Join cluster via VIP
+server: https://10.41.0.100:9345
+
+# Cluster token - must match server
+token: "{{ rke2_token }}"

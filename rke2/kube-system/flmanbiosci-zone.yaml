@@ -1,0 +1,12 @@
+---
+apiVersion: cloudflare-operator.io/v1
+kind: Zone
+metadata:
+  name: flmanbiosci
+spec:
+  name: flmanbiosci.net
+  interval: 5m
+  prune: false
+  ignoredRecords:
+    TXT:
+      - _acme-challenge

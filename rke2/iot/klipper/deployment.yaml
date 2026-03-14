@@ -1,0 +1,402 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: klipper-config
+  namespace: iot
+data:
+  printer.cfg: |
+    # Creality Ender 5 S1 (HW version: CR4NS200141C13)
+    # printer_size: 220x220x280
+    # See docs/Config_Reference.md for a description of parameters.
+
+    [stepper_x]
+    step_pin: PC2
+    dir_pin: !PB9
+    enable_pin: !PC3
+    rotation_distance: 40
+    microsteps: 16
+    endstop_pin: !PA5
+    position_endstop: 220
+    position_max: 222
+    homing_speed: 80
+
+    [stepper_y]
+    step_pin: PB8
+    dir_pin: !PB7
+    enable_pin: !PC3
+    rotation_distance: 40
+    microsteps: 16
+    endstop_pin: !PA6
+    position_endstop: 220
+    position_max: 220
+    homing_speed: 80
+
+    [stepper_z]
+    step_pin: PB6
+    dir_pin: PB5
+    enable_pin: !PC3
+    rotation_distance: 8
+    microsteps: 16
+    endstop_pin: probe:z_virtual_endstop
+    position_max: 280
+    homing_speed: 20
+    second_homing_speed: 1
+    homing_retract_dist: 2.0
+
+    [extruder]
+    step_pin: PB4
+    dir_pin: PB3
+    enable_pin: !PC3
+    rotation_distance: 7.5
+    microsteps: 16
+    nozzle_diameter: 0.400
+    filament_diameter: 1.750
+    heater_pin: PA1
+    sensor_type: EPCOS 100K B57560G104F
+    sensor_pin: PC5
+    control: pid
+    pid_kp: 20.749
+    pid_ki: 1.064
+    pid_kd: 101.153
+    min_temp: 0
+    max_temp: 305
+
+    [heater_bed]
+    heater_pin: PA7
+    sensor_type: EPCOS 100K B57560G104F
+    sensor_pin: PC4
+    control: pid
+    pid_kp: 66.566
+    pid_ki: 0.958
+    pid_kd: 1155.761
+    min_temp: 0
+    max_temp: 110
+
+    [fan]
+    pin: PA0
+    kick_start_time: 0.5
+
+    [heater_fan heatbreak_fan]
+    pin: PC0
+    heater: extruder
+    heater_temp: 60
+    fan_speed: 0.8
+
+    [filament_switch_sensor filament_sensor]
+    pause_on_runout: true
+    switch_pin: ^!PC15
+
+    [bltouch]
+    sensor_pin: ^PC14
+    control_pin: PC13
+    x_offset: -13
+    y_offset: 27
+    z_offset: 2.0
+    speed: 10
+    stow_on_each_sample: true
+    samples: 4
+    sample_retract_dist: 2
+    samples_result: average
+    probe_with_touch_mode: true
+
+    [bed_mesh]
+    speed: 150
+    mesh_min: 3,28
+    mesh_max: 205,218
+    mesh_pps: 3
+    probe_count: 6,6
+    fade_start: 1
+    fade_end: 10
+    fade_target: 0
+
+    [mcu]
+    serial: /dev/ttyUSB0
+    restart_method: command
+
+    [safe_z_home]
+    home_xy_position: 123,83
+    speed: 200
+    z_hop: 10
+    z_hop_speed: 10
+
+    [axis_twist_compensation]
+    calibrate_start_x: 3
+    calibrate_end_x: 207
+    calibrate_y: 110
+
+    [screws_tilt_adjust]
+    screw1: 38,6
+    screw1_name: Front Left Screw
+    screw2: 215,6
+    screw2_name: Front Right Screw
+    screw3: 215,175
+    screw3_name: Rear Right Screw
+    screw4: 38,175
+    screw4_name: Rear Left Screw
+    horizontal_move_z: 5
+    speed: 100
+    screw_thread: CW-M4
+
+    [bed_screws]
+    screw1: 25,25
+    screw1_name: Front Left Screw
+    screw2: 195,25
+    screw2_name: Front Right Screw
+    screw3: 195,195
+    screw3_name: Rear Right Screw
+    screw4: 25,195
+    screw4_name: Rear Left Screw
+
+    [printer]
+    kinematics: cartesian
+    max_velocity: 300
+    max_accel: 5000
+    max_z_velocity: 5
+    max_z_accel: 100
+    square_corner_velocity: 5.0
+
+    # Mainsail/Moonraker requirements
+    [virtual_sdcard]
+    path: /opt/printer_data/gcodes
+
+    [display_status]
+
+    [pause_resume]
+
+    [gcode_macro PAUSE]
+    rename_existing: BASE_PAUSE
+    gcode:
+      SAVE_GCODE_STATE NAME=PAUSE_state
+      BASE_PAUSE
+
+    [gcode_macro RESUME]
+    rename_existing: BASE_RESUME
+    gcode:
+      RESTORE_GCODE_STATE NAME=PAUSE_state
+      BASE_RESUME
+
+    [gcode_macro CANCEL_PRINT]
+    rename_existing: BASE_CANCEL_PRINT
+    gcode:
+      TURN_OFF_HEATERS
+      CLEAR_PAUSE
+      SDCARD_RESET_FILE
+      BASE_CANCEL_PRINT
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: moonraker-config
+  namespace: iot
+data:
+  moonraker.conf: |
+    [server]
+    host: 0.0.0.0
+    port: 7125
+    klippy_uds_address: /opt/printer_data/run/klipper.sock
+
+    [authorization]
+    trusted_clients:
+      10.0.0.0/8
+      127.0.0.0/8
+      169.254.0.0/16
+      172.16.0.0/12
+      192.168.0.0/16
+      FE80::/10
+      ::1/128
+    cors_domains:
+      *
+
+    [octoprint_compat]
+
+    [history]
+
+    [file_manager]
+    enable_object_processing: True
+
+    [announcements]
+    subscriptions:
+      mainsail
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: klipper
+  namespace: iot
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: klipper
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: klipper
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: microedge2
+      securityContext:
+        fsGroup: 1000
+      initContainers:
+      - name: copy-config
+        image: busybox:latest
+        command: ['sh', '-c']
+        args:
+        - |
+          set -e
+          echo "Starting config copy..."
+          # Only copy if printer.cfg doesn't exist (preserve runtime changes)
+          if [ ! -f /opt/printer_data/config/printer.cfg ]; then
+            cp /config-source/printer.cfg /opt/printer_data/config/printer.cfg
+            echo "Copied initial printer.cfg from ConfigMap"
+          else
+            echo "printer.cfg already exists, skipping copy"
+          fi
+          # Always update moonraker.conf from ConfigMap
+          cp /config-source/moonraker.conf /opt/printer_data/config/moonraker.conf
+          echo "Copied moonraker.conf from ConfigMap"
+          ls -la /opt/printer_data/config/
+        volumeMounts:
+        - name: printer-data
+          mountPath: /opt/printer_data
+        - name: printer-data
+          mountPath: /opt/printer_data/config
+          subPath: config
+        - name: klipper-config
+          mountPath: /config-source/printer.cfg
+          subPath: printer.cfg
+        - name: moonraker-config
+          mountPath: /config-source/moonraker.conf
+          subPath: moonraker.conf
+      - name: fix-permissions
+        image: busybox:latest
+        command: ['sh', '-c', 'chown -R 1000:1000 /opt/printer_data && chmod -R 775 /opt/printer_data && ls -la /opt/printer_data/config/']
+        volumeMounts:
+        - name: printer-data
+          mountPath: /opt/printer_data
+        - name: printer-data
+          mountPath: /opt/printer_data/config
+          subPath: config
+        - name: printer-data
+          mountPath: /opt/printer_data/logs
+          subPath: logs
+        - name: gcode-files
+          mountPath: /opt/printer_data/gcodes
+      containers:
+      # Klipper - firmware host
+      - name: klipper
+        image: mkuf/klipper:latest
+        securityContext:
+          privileged: true
+        volumeMounts:
+        - name: printer-data
+          mountPath: /opt/printer_data
+        - name: gcode-files
+          mountPath: /opt/printer_data/gcodes
+        - name: printer
+          mountPath: /dev/ttyUSB0
+        - name: run
+          mountPath: /opt/printer_data/run
+        - name: printer-data
+          mountPath: /opt/printer_data/config
+          subPath: config
+        - name: printer-data
+          mountPath: /opt/printer_data/logs
+          subPath: logs
+
+      # Moonraker - API server
+      - name: moonraker
+        image: mkuf/moonraker:latest
+        ports:
+        - containerPort: 7125
+          name: moonraker-api
+        volumeMounts:
+        - name: printer-data
+          mountPath: /opt/printer_data
+        - name: gcode-files
+          mountPath: /opt/printer_data/gcodes
+        - name: run
+          mountPath: /opt/printer_data/run
+        - name: printer-data
+          mountPath: /opt/printer_data/config
+          subPath: config
+        - name: printer-data
+          mountPath: /opt/printer_data/logs
+          subPath: logs
+
+      # Mainsail - Web UI
+      - name: mainsail
+        image: ghcr.io/mainsail-crew/mainsail:latest
+        ports:
+        - containerPort: 80
+          name: mainsail-ui
+        env:
+        - name: MOONRAKER_URL
+          value: "http://localhost:7125"
+
+      # Optional: Webcam streamer
+      - name: webcam
+        image: mkuf/ustreamer:latest
+        ports:
+        - containerPort: 8080
+          name: webcam-stream
+        securityContext:
+          privileged: true
+        command: ["/bin/sh", "-c"]
+        args:
+        - |
+          v4l2-ctl -d /dev/video0 -c focus_automatic_continuous=0 2>/dev/null || true
+          v4l2-ctl -d /dev/video0 -c focus_auto=0 2>/dev/null || true
+          exec /opt/ustreamer --device=/dev/video0 --host=0.0.0.0 --port=8080 --resolution=1920x1080 --desired-fps=30 --format=MJPEG
+        volumeMounts:
+        - name: webcam-device
+          mountPath: /dev/video0
+
+      volumes:
+      - name: printer-data
+        persistentVolumeClaim:
+          claimName: klipper-data
+      - name: gcode-files
+        persistentVolumeClaim:
+          claimName: klipper-gcode
+      - name: klipper-config
+        configMap:
+          name: klipper-config
+      - name: moonraker-config
+        configMap:
+          name: moonraker-config
+      - name: printer
+        hostPath:
+          path: /dev/serial/by-id/usb-1a86_USB_Serial-if00-port0
+          type: CharDevice
+      - name: webcam-device
+        hostPath:
+          path: /dev/video0
+          type: CharDevice
+      - name: run
+        emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: klipper-service
+  namespace: iot
+spec:
+  type: ClusterIP
+  selector:
+    app: klipper
+  ports:
+    - name: mainsail
+      protocol: TCP
+      port: 80
+      targetPort: 80
+    - name: moonraker
+      protocol: TCP
+      port: 7125
+      targetPort: 7125
+    - name: webcam
+      protocol: TCP
+      port: 8080
+      targetPort: 8080

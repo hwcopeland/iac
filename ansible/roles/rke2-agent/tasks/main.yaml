@@ -1,12 +1,37 @@
-- name: Install RKE2 agent
-  become: true
-  shell: |
-    curl -sfL https://get.rke2.io | INSTALL_RKE2_TYPE="agent" sh -
-  register: rke2_install_result
-  changed_when: rke2_install_result.rc == 0
+---
+# Prerequisites
+- name: Install required packages
+  package:
+    name:
+      - curl
+      - iptables
+      - nfs-common
+      - open-iscsi
+      - multipath-tools
+    state: present
 
-- name: Ensure /etc/rancher/rke2 dir exists
-  become: true
+- name: Enable and start iscsid
+  systemd:
+    name: iscsid
+    enabled: true
+    state: started
+
+- name: Configure multipath blacklist
+  copy:
+    src: multipath.conf
+    dest: /etc/multipath.conf
+    owner: root
+    group: root
+    mode: '0644'
+  notify: Restart multipathd
+
+- name: Enable and start multipathd
+  systemd:
+    name: multipathd
+    enabled: true
+    state: started
+
+- name: Ensure /etc/rancher/rke2 directory exists
   file:
     path: /etc/rancher/rke2
     state: directory
@@ -14,7 +39,7 @@
     owner: root
     group: root
 
-- name: Configure RKE2 agent
+- name: Template RKE2 agent config
   template:
     src: config.yaml.j2
     dest: /etc/rancher/rke2/config.yaml
@@ -22,18 +47,13 @@
     group: root
     mode: '0644'
 
-- name: Enable and start rke2-agent service
-  become: true
-  ansible.builtin.systemd:
-    name: rke2-agent
-    enabled: yes
-    state: started
+- name: Install RKE2 agent
+  shell: curl -sfL https://get.rke2.io | INSTALL_RKE2_TYPE="agent" sh -
+  args:
+    creates: /usr/local/bin/rke2
 
-- name: Wait for node to join the cluster
-  shell: |
-    kubectl get nodes | grep {{ inventory_hostname }}
-  register: node_joined
-  retries: 10
-  delay: 15
-  until: node_joined.rc == 0
-  delegate_to: k8s00  # Master node
+- name: Enable and start rke2-agent service
+  systemd:
+    name: rke2-agent
+    enabled: true
+    state: started

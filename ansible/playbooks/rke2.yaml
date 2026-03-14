@@ -1,0 +1,15 @@
+---
+# RKE2 Cluster Deployment
+# Usage: ansible-playbook playbooks/kubernetes.yaml
+
+- name: Deploy RKE2 Control Plane
+  hosts: control_plane
+  become: true
+  roles:
+    - rke2-server
+
+- name: Deploy RKE2 Workers
+  hosts: workers
+  become: true
+  roles:
+    - rke2-agent

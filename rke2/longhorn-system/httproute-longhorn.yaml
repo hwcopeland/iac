@@ -5,8 +5,6 @@ metadata:
   name: longhorn
   namespace: longhorn-system
   annotations:
-    # Authentik forward auth integration
-    authentik.home.arpa/enabled: "true"
 spec:
   parentRefs:
     - name: hwcopeland-gateway

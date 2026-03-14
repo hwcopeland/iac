@@ -1,0 +1,13 @@
+---
+clients:
+  - host: 10.41.0.200
+    port: 5000
+    https: false
+    username: ${SYNO_USERNAME}
+    password: ${SYNO_PASSWORD}
+
+#host:                      # ipv4 address or domain of the DSM
+#port:                      # port for connecting to the DSM
+#https:                     # set this true to use https. you need to specify the port to DSM HTTPS port as well
+#username:                  # username
+#password:                  # password
