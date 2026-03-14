@@ -19,7 +19,7 @@ spec:
         email: fluxcdbot@users.noreply.github.com
         name: fluxcdbot
       messageTemplate: |
-        [ci skip] auto-update u4u-engine -> {{ range .Updated.Images }}{{ .NewRef }}{{ end }}
+        [ci skip] auto-update u4u-engine -> {{ range .Changed.Changes }}{{ .NewRef }}{{ end }}
     push:
       branch: main
   update:
