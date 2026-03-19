@@ -1,0 +1,12 @@
+apiVersion: cloudflare-operator.io/v1
+kind: DNSRecord
+metadata:
+  name: openclaw
+  namespace: agent-system
+spec:
+  name: claw.hwcopeland.net
+  type: CNAME
+  content: hwcopeland.net
+  proxied: true
+  ttl: 1
+  interval: 5m

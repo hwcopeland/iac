@@ -1,6 +1,6 @@
 ---
 # Configures MikroTik firewall and NAT rules for CS2 server port forwarding
-# CS2 LB IP: 10.44.0.2
+# CS2 LB IP: 10.44.0.32
 # Ports: 27015 (game), 27020 (SourceTV)
 #
 # Usage: ansible-playbook playbooks/mikrotik-cs2-firewall.yaml
@@ -11,7 +11,7 @@
   gather_facts: false
 
   vars:
-    cs2_lb_ip: "10.44.0.2"
+    cs2_lb_ip: "10.44.0.32"
     cs2_ports:
       - { port: "27015", comment_suffix: "game" }
       - { port: "27020", comment_suffix: "sourcetv" }

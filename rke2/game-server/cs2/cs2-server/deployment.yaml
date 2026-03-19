@@ -13,13 +13,13 @@ spec:
       labels:
         app: cs2-modded-server
     spec:
-      securityContext:
-        runAsUser: 1000
-        fsGroup: 1000
       containers:
         - name: cs2-modded-server
           image: ghcr.io/kus/cs2-modded-server:latest
           imagePullPolicy: Always
+          securityContext:
+            capabilities:
+              add: ["SYS_PTRACE"]
           ports:
             - containerPort: 27015
               protocol: TCP
@@ -64,7 +64,7 @@ spec:
             - name: PORT
               value: "27015"
             - name: CUSTOM_FOLDER
-              value: "/home/cs2-modded-server/custom_files/"
+              value: "/home/custom_files/"
             - name: MAXPLAYERS
               value: "32"
             - name: TICKRATE
@@ -86,7 +86,7 @@ spec:
             - name: cs2-data
               mountPath: /home/steam/cs2
             - name: custom
-              mountPath: /home/cs2-modded-server/custom_files
+              mountPath: /home/custom_files
             #- name: demo-storage
             #  mountPath: /home/steam/game/csgo/MatchZy_demos
       volumes:
@@ -106,7 +106,7 @@ metadata:
   name: cs2-modded-service
   namespace: game-server
   annotations:
-    io.cilium/lb-ipam-ips: "10.44.0.2"
+    io.cilium/lb-ipam-ips: "10.44.0.32"
 spec:
   selector:
     app: cs2-modded-server
