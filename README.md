@@ -7,21 +7,13 @@ This repository contains everything needed to deploy and manage a homelab Kubern
 ## Quick Links
 
 - **[Getting Started](docs/GETTING_STARTED.md)** - New to this project? Start here!
-- **[Troubleshooting](docs/TROUBLESHOOTING.md)** - Having issues? Check common solutions
 - **[Contributing](docs/CONTRIBUTING.md)** - Want to contribute? Read the guidelines
-
-## Documentation
-
-### Core Documentation
-- **[Getting Started Guide](docs/GETTING_STARTED.md)** - Step-by-step setup instructions
-- **[Changelog](docs/CHANGELOG.md)** - Project changelog and recent updates
 
 ### Infrastructure
 - **[Ansible Setup Guide](docs/ansible/README.md)** - Comprehensive Ansible documentation
   - Inventory configuration
   - Playbook usage
   - Role documentation
-  - [TODO List](docs/ansible/TODO.md) - Planned improvements
 - **[RKE2 Overview](docs/rke2/README.md)** - Kubernetes cluster overview
   - Namespace organization
   - Directory structure
@@ -32,22 +24,6 @@ This repository contains everything needed to deploy and manage a homelab Kubern
   - Web applications
   - Game servers
   - Secrets management
-- **[Authentik Integration Guide](docs/rke2/AUTHENTIK_INTEGRATION.md)** - Centralized authentication
-  - OAuth/OIDC configuration for services
-  - Group-based access control
-  - [Setup Checklist](docs/rke2/AUTHENTIK_SETUP_CHECKLIST.md)
-  - [Implementation Summary](docs/rke2/IMPLEMENTATION_SUMMARY.md)
-
-### Operations
-- **[Troubleshooting Guide](docs/TROUBLESHOOTING.md)** - Common issues and solutions
-  - Ansible issues
-  - RKE2 cluster issues
-  - Networking problems
-  - Storage problems
-  - Application issues
-
-### Contributing
-- **[Contributing Guide](docs/CONTRIBUTING.md)** - How to contribute to this project
 
 ## Project Structure
 
@@ -83,4 +59,4 @@ This repository contains everything needed to deploy and manage a homelab Kubern
 
 ## Sources
 
-The main inspiration for this comes from https://github.com/chkpwd/iac. Brian has helped me a great deal in understanding the concepts provided in this repo. So to him a great deal of credit is owed. I have used his repo as a reference for moving my homelab to k8s.
+The main inspiration for this comes from https://github.com/chkpwd/iac. Brian has helped me a great deal in understanding the concepts provided in this repo. So to him a great deal of credit is owed. I have used his repo as a reference for moving my homelab to k8s. Special shout outs to Acelink, Senk0 and other k8s friends of the r/Homelab discord for always providing interesting tools, etc.
