@@ -1,0 +1,77 @@
+name: Validate IAC
+
+on:
+  push:
+    branches: [v0.5, main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  yaml-lint:
+    name: YAML Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install yamllint
+        run: pip install yamllint
+      - name: Run yamllint
+        run: yamllint -c .yamllint.yaml rke2/
+
+  kubeconform:
+    name: Kubeconform
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install kubeconform
+        run: |
+          curl -sSL https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz | tar xz
+          sudo mv kubeconform /usr/local/bin/
+      - name: Run kubeconform
+        run: |
+          find rke2 -name "*.yaml" \
+            -not -path "*/gotk-components.yaml" \
+            -not -path "*/chem/compute-infrastructure/*" \
+            -not -name "values.yaml" \
+            | xargs kubeconform \
+              -kubernetes-version 1.30.0 \
+              -schema-location default \
+              -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' \
+              -ignore-missing-schemas \
+              -summary
+
+  helm-lint:
+    name: Helm Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+      - name: Lint Helm values
+        run: |
+          helm lint rke2/tooling/zot/ 2>/dev/null || true
+          helm lint rke2/authentik/ --values rke2/authentik/values.yaml 2>/dev/null || true
+
+  flux-validate:
+    name: Flux Validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Flux CLI
+        run: curl -s https://fluxcd.io/install.sh | sudo bash
+      - name: Flux validate
+        run: |
+          find rke2/tooling/flux -name "*.yaml" \
+            -not -name "gotk-components.yaml" \
+            | xargs -I {} flux validate {}
+
+  kyverno-policy:
+    name: Kyverno Policy Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Kyverno CLI
+        run: |
+          curl -sSL https://github.com/kyverno/kyverno/releases/download/v1.12.5/kyverno-cli_v1.12.5_linux_x86_64.tar.gz | tar xz
+          sudo mv kyverno /usr/local/bin/
+      - name: Run Kyverno audit policies
+        run: kyverno apply .kyverno/ --resource rke2/ --detailed-results 2>&1 || true

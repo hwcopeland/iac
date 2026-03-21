@@ -1,0 +1,23 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - namespace.yaml
+  # n8n
+  - n8n/external-secret.yaml
+  - n8n/n8n-deployment.yaml
+  - n8n/n8n-dnsrecord.yaml
+  - n8n/n8n-oidc-secret.yaml
+  - n8n/n8n-pvcs.yaml
+  # ollama — model-pull-job.yaml is intentionally excluded:
+  # Jobs re-applied by Flux on each reconcile cause restarts.
+  # Run manually: kubectl apply -f rke2/agent-system/ollama/model-pull-job.yaml
+  - ollama/deployment.yaml
+  - ollama/pvc.yaml
+  # openhands
+  - openhands/deployment.yaml
+  - openhands/dnsrecord.yaml
+  - openhands/external-secrets.yaml
+  - openhands/httproute.yaml
+  - openhands/pvc.yaml
+  - openhands/rbac.yaml
+  - openhands/services.yaml

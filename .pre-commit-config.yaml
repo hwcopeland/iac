@@ -1,0 +1,40 @@
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: check-yaml
+        args: [--unsafe]
+        exclude: |
+          (?x)^(
+            rke2/tooling/flux/tooling/gotk-components\.yaml|
+            rke2/chem/compute-infrastructure/.*
+          )$
+      - id: end-of-file-fixer
+        exclude: rke2/chem/compute-infrastructure/
+      - id: trailing-whitespace
+        exclude: rke2/chem/compute-infrastructure/
+
+  - repo: https://github.com/adrienverge/yamllint
+    rev: v1.35.1
+    hooks:
+      - id: yamllint
+        args: [-c, .yamllint.yaml]
+        exclude: |
+          (?x)^(
+            rke2/tooling/flux/tooling/gotk-components\.yaml|
+            rke2/chem/compute-infrastructure/.*
+          )$
+
+  - repo: local
+    hooks:
+      - id: kubeconform
+        name: kubeconform
+        language: system
+        entry: bash -c 'find rke2 -name "*.yaml" -not -path "*/gotk-components.yaml" -not -path "*/chem/compute-infrastructure/*" -not -name "values.yaml" | xargs kubeconform -kubernetes-version 1.30.0 -schema-location default -schema-location "https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json" -ignore-missing-schemas -summary'
+        pass_filenames: false
+
+      - id: kyverno
+        name: kyverno policy check
+        language: system
+        entry: bash -c 'kyverno apply .kyverno/ --resource rke2/ --detailed-results 2>&1 || true'
+        pass_filenames: false

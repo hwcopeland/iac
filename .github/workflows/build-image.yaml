@@ -1,0 +1,71 @@
+name: Build and Push Container Image
+
+on:
+  workflow_call:
+    inputs:
+      context:
+        description: Build context path
+        type: string
+        required: true
+      image_name:
+        description: Full image name (e.g., zot.hwcopeland.net/myorg/myimage)
+        type: string
+        required: true
+      dockerfile:
+        description: Path to Dockerfile
+        type: string
+        required: false
+        default: Dockerfile
+      push:
+        description: Whether to push the image
+        type: boolean
+        required: false
+        default: true
+    secrets:
+      ZOT_USERNAME:
+        required: true
+      ZOT_API_KEY:
+        required: true
+
+jobs:
+  build-push:
+    name: Build and Push
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Zot registry
+        uses: docker/login-action@v3
+        with:
+          registry: zot.hwcopeland.net
+          username: ${{ secrets.ZOT_USERNAME }}
+          password: ${{ secrets.ZOT_API_KEY }}
+
+      - name: Extract image metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ inputs.image_name }}
+          tags: |
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,format=short
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ inputs.context }}
+          file: ${{ inputs.dockerfile }}
+          push: ${{ inputs.push }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=registry,ref=${{ inputs.image_name }}:cache
+          cache-to: type=registry,ref=${{ inputs.image_name }}:cache,mode=max

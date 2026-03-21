@@ -1,0 +1,33 @@
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: require-namespace
+  annotations:
+    policies.kyverno.io/title: Require Namespace
+    policies.kyverno.io/category: Best Practices
+    policies.kyverno.io/severity: low
+    policies.kyverno.io/description: >-
+      Workload resources must declare a namespace to ensure they are
+      deployed to the intended namespace.
+spec:
+  validationFailureAction: Audit
+  background: true
+  rules:
+    - name: check-namespace
+      match:
+        any:
+          - resources:
+              kinds:
+                - Deployment
+                - StatefulSet
+                - DaemonSet
+                - Job
+                - CronJob
+      validate:
+        message: "Resource {{ request.object.metadata.name }} must declare metadata.namespace"
+        deny:
+          conditions:
+            any:
+              - key: "{{ request.object.metadata.namespace || '' }}"
+                operator: Equals
+                value: ""

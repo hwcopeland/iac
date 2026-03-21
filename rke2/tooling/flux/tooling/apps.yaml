@@ -26,3 +26,78 @@ spec:
     kind: GitRepository
     name: tooling
     namespace: tooling
+---
+# Agent A: ARC Actions Runner Controller
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: arc-system
+  namespace: tooling
+spec:
+  interval: 5m
+  path: ./rke2/tooling/flux/arc-system
+  prune: true
+  sourceRef:
+    kind: GitRepository
+    name: tooling
+    namespace: tooling
+---
+# Agent C: agent-system (n8n, ollama, openhands)
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: agent-system
+  namespace: tooling
+spec:
+  interval: 5m
+  path: ./rke2/agent-system
+  prune: true
+  sourceRef:
+    kind: GitRepository
+    name: tooling
+    namespace: tooling
+---
+# Agent C: monitor namespace (adds tempo)
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: monitor-extended
+  namespace: tooling
+spec:
+  interval: 5m
+  path: ./rke2/monitor
+  prune: true
+  sourceRef:
+    kind: GitRepository
+    name: tooling
+    namespace: tooling
+---
+# Agent C: chem namespace
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: chem
+  namespace: tooling
+spec:
+  interval: 5m
+  path: ./rke2/chem
+  prune: true
+  sourceRef:
+    kind: GitRepository
+    name: tooling
+    namespace: tooling
+---
+# Agent C: authentik namespace
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: authentik
+  namespace: tooling
+spec:
+  interval: 5m
+  path: ./rke2/authentik
+  prune: true
+  sourceRef:
+    kind: GitRepository
+    name: tooling
+    namespace: tooling

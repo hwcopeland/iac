@@ -63,11 +63,11 @@ data:
             href: https://n8n.hwcopeland.net
             description: Workflow Automation
             siteMonitor: https://n8n.hwcopeland.net
-        - Openclaw:
+        - OpenHands:
             icon: https://raw.githubusercontent.com/phosphor-icons/core/main/assets/regular/robot.svg
-            href: https://claw.hwcopeland.net
+            href: https://ai.hwcopeland.net
             description: AI Agent System
-            siteMonitor: https://claw.hwcopeland.net
+            siteMonitor: https://ai.hwcopeland.net
         - Home Assistant:
             icon: home-assistant.png
             href: https://ha.hwcopeland.net

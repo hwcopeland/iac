@@ -1,0 +1,19 @@
+---
+# OCIRepository source for Flux — receives IAC bundle pushed from CI on main.
+# See .github/workflows/push-flux-bundle.yaml for the push workflow.
+# ⚠ Bootstrap order: manually push the first OCI artifact BEFORE Flux reconciles
+# this source, otherwise Flux will stall with "artifact not found".
+#   flux push artifact oci://zot.hwcopeland.net/iac/flux-bundle:latest \
+#     --path ./rke2 --source <repo-url> --revision <sha>
+apiVersion: source.toolkit.fluxcd.io/v1beta2
+kind: OCIRepository
+metadata:
+  name: tooling-oci
+  namespace: tooling
+spec:
+  interval: 1m0s
+  url: oci://zot.hwcopeland.net/iac/flux-bundle
+  ref:
+    tag: latest
+  secretRef:
+    name: zot-pull-secret

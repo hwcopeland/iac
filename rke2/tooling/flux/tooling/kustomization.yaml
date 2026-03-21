@@ -1,5 +1,21 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources:
-- gotk-components.yaml
-- gotk-sync.yaml
+  - gotk-components.yaml
+  - gotk-sync.yaml
+  - oci-source.yaml
+
+patches:
+  # Switch the root Kustomization/tooling sourceRef from GitRepository to OCIRepository
+  # once oci-source.yaml is reconciled. Bootstrap: push OCI artifact manually first.
+  - patch: |
+      - op: replace
+        path: /spec/sourceRef/kind
+        value: OCIRepository
+      - op: replace
+        path: /spec/sourceRef/name
+        value: tooling-oci
+    target:
+      kind: Kustomization
+      name: tooling
+      namespace: tooling

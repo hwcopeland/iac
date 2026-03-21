@@ -1,0 +1,13 @@
+extends: default
+
+rules:
+  line-length:
+    max: 200
+    level: warning
+  truthy:
+    allowed-values: ['true', 'false']
+    check-keys: false
+
+ignore: |
+  rke2/tooling/flux/tooling/gotk-components.yaml
+  rke2/chem/compute-infrastructure/

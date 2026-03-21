@@ -1,0 +1,37 @@
+name: Push Flux OCI Bundle
+
+on:
+  push:
+    branches: [main]  # ← ONLY main — never v0.5 or other branches
+
+jobs:
+  push-bundle:
+    name: Push Flux bundle to Zot OCI registry
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Flux CLI
+        run: curl -s https://fluxcd.io/install.sh | sudo bash
+
+      - name: Log in to Zot registry
+        uses: docker/login-action@v3
+        with:
+          registry: zot.hwcopeland.net
+          username: ${{ secrets.ZOT_USERNAME }}
+          password: ${{ secrets.ZOT_API_KEY }}
+
+      - name: Push Flux bundle
+        run: |
+          flux push artifact oci://zot.hwcopeland.net/iac/flux-bundle:latest \
+            --path ./rke2 \
+            --source "$(git config --get remote.origin.url)" \
+            --revision "$(git rev-parse --short HEAD)"
+
+      - name: Tag with commit SHA
+        run: |
+          flux tag artifact oci://zot.hwcopeland.net/iac/flux-bundle:latest \
+            --tag "$(git rev-parse --short HEAD)"
