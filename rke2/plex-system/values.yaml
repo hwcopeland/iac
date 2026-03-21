@@ -63,9 +63,10 @@ statefulSet:
   podAnnotations: {}
 
 service:
-  type: ClusterIP
+  type: LoadBalancer
   port: 32400
-  annotations: {}
+  annotations:
+    io.cilium/lb-ipam-ips: "10.44.0.3"
 
 nodeSelector:
   kubernetes.io/hostname: microedge2
