@@ -22,18 +22,40 @@ data:
       },
       "tools": {
         "exec": {
-          "host": "gateway"
+          "host": "gateway",
+          "ask": "off",
+          "security": "full"
         },
         "agentToAgent": {
           "enabled": true,
           "allow": ["planner", "coder", "reviewer"]
         }
       },
+      "models": {
+        "providers": {
+          "xai": {
+            "baseUrl": "https://api.x.ai/v1",
+            "apiKey": "${XAI_API_KEY}",
+            "api": "openai-completions",
+            "models": [
+              {
+                "id": "grok-4-1-fast-reasoning",
+                "name": "Grok 4-1 Fast Reasoning",
+                "reasoning": true,
+                "input": ["text"],
+                "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
+                "contextWindow": 131072,
+                "maxTokens": 16384
+              }
+            ]
+          }
+        }
+      },
       "agents": {
         "defaults": {
           "model": {
-            "primary": "groq/meta-llama/llama-4-scout-17b-16e-instruct",
-            "fallbacks": ["gemini/gemini-2.0-flash"]
+            "primary": "xai/grok-4-1-fast-reasoning",
+            "fallbacks": []
           },
           "elevatedDefault": "on"
         },
@@ -80,10 +102,16 @@ data:
     ### When given a GitHub issue or task:
     1. Use `gh issue view <number> --repo <owner/repo>` to read the full issue
     2. Identify: what files change, what the acceptance criteria are, any edge cases
-    3. Write a clear implementation spec
-    4. Delegate to `coder` with the full spec: repo URL, issue number, branch name, and what to implement
-    5. Once `coder` reports a PR URL, delegate to `reviewer` with the PR URL and acceptance criteria
-    6. Report the PR URL and review outcome to the user
+    3. Choose a branch name: `feat/<short-description>`, `fix/<short-description>`, or `chore/<short-description>`
+    4. Write a clear implementation spec including the branch name
+    5. Delegate to `coder` with the full spec: repo URL, issue number, branch name, and what to implement
+    6. Once `coder` reports a PR URL, delegate to `reviewer` with the PR URL and acceptance criteria
+    7. Report the PR URL and review outcome to the user
+
+    ### When asked to deploy something to Kubernetes:
+    - Target namespace: `agent-system`
+    - The `coder` agent has `kubectl` and full RBAC over `agent-system` (Deployments, Services, ConfigMaps, Jobs, HTTPRoutes, RBAC)
+    - Delegate deploy tasks to `coder` with the manifest or helm chart details
 
     ## Tools Available
     - **exec/shell**: Run shell commands
@@ -92,6 +120,7 @@ data:
 
     ## Behavior
     - Always read the issue before planning — do not guess requirements
+    - Always specify the branch name when delegating to coder
     - Give coder complete context so it can work without coming back to ask questions
     - If coder or reviewer report a blocker, diagnose and re-delegate with updated instructions
     - Do not implement code yourself — delegate to `coder`
@@ -106,6 +135,7 @@ data:
     - **exec/shell**: Run any shell command. Clone repos, run tests, inspect files.
     - **gh**: GitHub CLI, authenticated. Create branches, PRs, request reviews.
     - **git**: Full git access — clone, branch, commit, push.
+    - **kubectl**: Kubernetes CLI — deploy to `agent-system` namespace (see K8s section below).
     - **jq**: JSON processing.
     - **rg**: Fast file search (ripgrep).
     - **curl**: HTTP requests.
@@ -114,14 +144,32 @@ data:
     ## Working Directory
     Your workspace is `/home/node/.openclaw/workspace-coder`. Clone repos here.
 
-    ## Workflow for Each Task
-    1. Clone the repo (or pull if already cloned): `git clone <url>` or `git pull`
-    2. Create a feature branch: `git checkout -b <branch-name>`
+    ## Git Branch Workflow
+    1. Clone the repo (or pull if already cloned): `git clone <url>` or `cd <repo> && git pull`
+    2. **Always create a feature branch** — never commit directly to main/master:
+       `git checkout -b <branch-name>` (branch name is provided by the planner)
     3. Implement the changes — read existing code first, understand context before editing
-    4. Commit with a clear message referencing the issue: `git commit -m "fix: ... (closes #N)"`
+    4. Stage and commit: `git add -p` (prefer specific files over `git add .`)
+       Commit message format: `type: short description (closes #N)`
     5. Push the branch: `git push -u origin <branch-name>`
-    6. Open a PR via `gh pr create` with a description of what changed and why
+    6. Open a PR: `gh pr create --title "..." --body "..."`
     7. Report the PR URL back to the planner
+
+    ## Kubernetes Deployment
+    You are running as ServiceAccount `openclaw` in namespace `agent-system`.
+    Your RBAC grants full control over `agent-system` only:
+    - **Deployments, StatefulSets, DaemonSets, ReplicaSets** (apps)
+    - **Jobs, CronJobs** (batch)
+    - **Services, ConfigMaps, PVCs** (core)
+    - **Secrets** (read-only)
+    - **ServiceAccounts, Roles, RoleBindings** (rbac.authorization.k8s.io)
+    - **HTTPRoutes** (gateway.networking.k8s.io)
+
+    ### Deploy workflow:
+    1. Apply manifests: `kubectl apply -f <file> -n agent-system`
+    2. Watch rollout: `kubectl rollout status deployment/<name> -n agent-system`
+    3. Check logs if failing: `kubectl logs -n agent-system deploy/<name>`
+    4. Report deploy status back to planner
 
     ## Behavior
     - Start immediately — clone, branch, implement, push, PR
@@ -129,6 +177,7 @@ data:
     - If a command fails, debug and retry with a different approach
     - Write clean, minimal changes — only touch what the task requires
     - Always run existing tests if present before opening a PR
+    - Never commit secrets or credentials
 
   REVIEWER_AGENTS.md: |
     # Code Reviewer
