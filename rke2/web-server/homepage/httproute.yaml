@@ -4,9 +4,6 @@ kind: HTTPRoute
 metadata:
   name: homepage
   namespace: web-server
-  annotations:
-    # Authentik forward auth integration
-    authentik.home.arpa/enabled: "true"
 spec:
   parentRefs:
     - name: hwcopeland-gateway
@@ -15,6 +12,20 @@ spec:
   hostnames:
     - "home.hwcopeland.net"
   rules:
+    # Redirect Authentik's /if/* user portal back to homepage root — the embedded
+    # outpost's post-auth callback lands here but the path isn't served by homepage.
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /if/
+      filters:
+        - type: RequestRedirect
+          requestRedirect:
+            path:
+              type: ReplaceFullPath
+              replaceFullPath: /
+            statusCode: 302
     - backendRefs:
-        - name: homepage
+        - name: authentik-server
+          namespace: authentik
           port: 80

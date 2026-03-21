@@ -1,0 +1,40 @@
+version: 1
+metadata:
+  name: Embedded Outpost
+entries:
+- attrs:
+    config:
+      authentik_host: https://auth.hwcopeland.net
+      authentik_host_browser: ''
+      authentik_host_insecure: false
+      container_image: null
+      docker_labels: null
+      docker_map_ports: true
+      docker_network: null
+      kubernetes_disabled_components: []
+      kubernetes_httproute_annotations: {}
+      kubernetes_httproute_parent_refs: []
+      kubernetes_image_pull_secrets: []
+      kubernetes_ingress_annotations: {}
+      kubernetes_ingress_class_name: null
+      kubernetes_ingress_path_type: null
+      kubernetes_ingress_secret_name: authentik-outpost-tls
+      kubernetes_json_patches: null
+      kubernetes_namespace: authentik
+      kubernetes_replicas: 1
+      kubernetes_service_type: ClusterIP
+      log_level: info
+      object_naming_template: ak-outpost-%(name)s
+      refresh_interval: minutes=5
+    managed: goauthentik.io/outposts/embedded
+    name: authentik Embedded Outpost
+    providers:
+    - !Find [authentik_providers_proxy.proxyprovider, [name, Provider for Hubble]]
+    - !Find [authentik_providers_proxy.proxyprovider, [name, Provider for Homepage]]
+    type: proxy
+  conditions: []
+  identifiers:
+    pk: 3061d63d-44ae-456e-9239-6c3f999087e3
+  model: authentik_outposts.outpost
+  permissions: []
+  state: present

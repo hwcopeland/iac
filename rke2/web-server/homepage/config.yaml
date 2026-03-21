@@ -47,6 +47,10 @@ data:
             href: https://auth.hwcopeland.net
             description: Identity & SSO Provider
             siteMonitor: https://auth.hwcopeland.net
+            widget:
+              type: authentik
+              url: https://auth.hwcopeland.net
+              key: "{{HOMEPAGE_VAR_AUTHENTIK_TOKEN}}"
         - Vaultwarden:
             icon: bitwarden.png
             href: https://vault.hwcopeland.net
@@ -59,6 +63,11 @@ data:
             href: https://n8n.hwcopeland.net
             description: Workflow Automation
             siteMonitor: https://n8n.hwcopeland.net
+        - Openclaw:
+            icon: https://raw.githubusercontent.com/phosphor-icons/core/main/assets/regular/robot.svg
+            href: https://claw.hwcopeland.net
+            description: AI Agent System
+            siteMonitor: https://claw.hwcopeland.net
         - Home Assistant:
             icon: home-assistant.png
             href: https://ha.hwcopeland.net
@@ -71,11 +80,11 @@ data:
             href: https://plex.hwcopeland.net
             description: Media Server
             siteMonitor: https://plex.hwcopeland.net
-        - SpotDL:
-            icon: spotify.png
-            href: http://10.44.0.4:8080
-            description: Spotify Downloader
-
+        - Overseerr:
+            icon: overseerr.png
+            href: https://seerr.hwcopeland.net
+            description: Media Requests
+            siteMonitor: https://seerr.hwcopeland.net
     - Web & Apps:
         - Personal Site:
             icon: globe.png
@@ -86,6 +95,11 @@ data:
             href: https://draw.hwcopeland.net
             description: Virtual Whiteboard
             siteMonitor: https://draw.hwcopeland.net
+        - Jupyter:
+            icon: jupyter.png
+            href: https://jupyter.hwcopeland.net
+            description: Chemistry Notebooks
+            siteMonitor: https://jupyter.hwcopeland.net
 
     - Game Servers:
         - CS2 Server:
@@ -96,13 +110,42 @@ data:
             icon: minecraft.png
             description: All The Mods 9 Skies
 
-    - Databases:
-        - ChEMBL MySQL:
-            icon: mysql.png
-            description: Chemistry Database
-        - CS2 MySQL:
-            icon: mysql.png
-            description: Game Server Database
+    - LB Services:
+        - Sonarr:
+            icon: sonarr.png
+            href: http://10.44.0.9:8989
+            description: TV Series
+            siteMonitor: http://10.44.0.9:8989
+        - Radarr:
+            icon: radarr.png
+            href: http://10.44.0.10:7878
+            description: Movies
+            siteMonitor: http://10.44.0.10:7878
+        - Lidarr:
+            icon: lidarr.png
+            href: http://10.44.0.11:8686
+            description: Music
+            siteMonitor: http://10.44.0.11:8686
+        - Prowlarr:
+            icon: prowlarr.png
+            href: http://10.44.0.12:9696
+            description: Indexer Manager
+            siteMonitor: http://10.44.0.12:9696
+        - SABnzbd:
+            icon: sabnzbd.png
+            href: http://10.44.0.13:8080
+            description: Usenet Downloader
+            siteMonitor: http://10.44.0.13:8080
+        - YTDL:
+            icon: ytdl.png
+            href: http://10.44.0.14:17442
+            description: YouTube Downloader
+            siteMonitor: http://10.44.0.14:17442
+        - SpotDL:
+            icon: spotify.png
+            href: http://10.44.0.4:8080
+            description: Spotify Downloader
+            siteMonitor: http://10.44.0.4:8080
 
   settings.yaml: |
     ---
@@ -117,22 +160,19 @@ data:
         columns: 6
       Automation:
         style: row
-        columns: 2
+        columns: 3
       Media:
         style: row
-        columns: 2
+        columns: 3
       Web & Apps:
         style: row
         columns: 3
-      Machine Learning:
-        style: row
-        columns: 1
       Game Servers:
         style: row
         columns: 2
-      Databases:
+      LB Services:
         style: row
-        columns: 2
+        columns: 4
     showStats: true
     providers:
       longhorn:
@@ -148,10 +188,7 @@ data:
           showLabel: true
           label: "Cluster"
         nodes:
-          show: true
-          cpu: true
-          memory: true
-          showLabel: true
+          show: false
 
     - search:
         provider: google

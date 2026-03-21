@@ -37,6 +37,18 @@ spec:
         certificateRefs:
           - name: cf-wildcard-cert-secret
             namespace: kube-system
+    - name: https-5001
+      protocol: HTTPS
+      port: 5001
+      hostname: "*.hwcopeland.net"
+      allowedRoutes:
+        namespaces:
+          from: All
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - name: cf-wildcard-cert-secret
+            namespace: kube-system
     - name: flmanbiosci-http
       protocol: HTTP
       port: 80

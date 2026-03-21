@@ -10,10 +10,29 @@ global:
         secretKeyRef:
           name: authentik-secret
           key: postgresql-password
+    - name: AUTHENTIK_EMAIL__USERNAME
+      valueFrom:
+        secretKeyRef:
+          name: smtp-secret
+          key: username
+    - name: AUTHENTIK_EMAIL__FROM
+      valueFrom:
+        secretKeyRef:
+          name: smtp-secret
+          key: username
+    - name: AUTHENTIK_EMAIL__PASSWORD
+      valueFrom:
+        secretKeyRef:
+          name: smtp-secret
+          key: password
 
 authentik:
     error_reporting:
         enabled: false
+    email:
+        host: smtp.gmail.com
+        port: 587
+        use_tls: true
 
 server:
     replicas: 1
@@ -21,9 +40,23 @@ server:
         enabled: false
     service:
         type: ClusterIP
+    volumes:
+        - name: blueprints
+          configMap:
+              name: authentik-blueprints
+    volumeMounts:
+        - name: blueprints
+          mountPath: /blueprints/custom
 
 worker:
     replicas: 1
+    volumes:
+        - name: blueprints
+          configMap:
+              name: authentik-blueprints
+    volumeMounts:
+        - name: blueprints
+          mountPath: /blueprints/custom
 
 postgresql:
     enabled: true
