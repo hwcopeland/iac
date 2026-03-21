@@ -1,0 +1,583 @@
+apiVersion: v1
+data:
+  flows-enrollment.yaml: |
+    version: 1
+    metadata:
+      name: Enrollment Flows
+    entries:
+    # --- Stages ---
+    - attrs:
+        case_insensitive_matching: true
+        name: github-identification
+        pretend_user_exists: true
+        show_matched_user: true
+        sources:
+        - !Find [authentik_sources_oauth.oauthsource, [slug, github]]
+        user_fields:
+        - email
+        - username
+      conditions: []
+      identifiers:
+        pk: 3b820eaf-e804-4a24-b94d-d4f82f799651
+      model: authentik_stages_identification.identificationstage
+      permissions: []
+      state: present
+
+    - attrs:
+        name: create-user
+        user_creation_mode: create_when_required
+        user_type: external
+        create_users_as_inactive: true
+      conditions: []
+      identifiers:
+        pk: fbc63257-e39a-4f97-a49b-111968448306
+      model: authentik_stages_user_write.userwritestage
+      permissions: []
+      state: present
+
+    - attrs:
+        deny_message: Your account is pending approval. You will be notified once access is granted.
+        name: enrollment-pending-message
+      conditions: []
+      identifiers:
+        name: enrollment-pending-message
+      model: authentik_stages_deny.denystage
+      permissions: []
+      state: present
+
+    # --- Flow ---
+    - attrs:
+        authentication: require_unauthenticated
+        denied_action: message_continue
+        designation: enrollment
+        layout: content_left
+        name: github-invite-enrollment
+        policy_engine_mode: any
+        slug: github-invite-enrollment
+        title: Sign up with GitHub
+      conditions: []
+      identifiers:
+        pk: 1b84309f-7d5b-46b1-9063-a99108484f5b
+      model: authentik_flows.flow
+      permissions: []
+      state: present
+
+    # --- Stage bindings ---
+    # Remove github-identification from enrollment flow — GitHub OAuth source already routes
+    # new users here; having an IdentificationStage causes an infinite OAuth redirect loop.
+    - conditions: []
+      identifiers:
+        pk: ec3d7f5b-65f2-4a0d-a6cb-821788c398be
+      model: authentik_flows.flowstagebinding
+      permissions: []
+      state: absent
+
+    - attrs:
+        invalid_response_action: retry
+        order: 10
+        policy_engine_mode: any
+        re_evaluate_policies: true
+        stage: !Find [authentik_stages_user_write.userwritestage, [name, create-user]]
+        target: !Find [authentik_flows.flow, [slug, github-invite-enrollment]]
+      conditions: []
+      identifiers:
+        pk: f6ea7df0-48b6-444e-bd0b-e7b3c16a8e72
+      model: authentik_flows.flowstagebinding
+      permissions: []
+      state: present
+
+    - attrs:
+        invalid_response_action: retry
+        order: 20
+        policy_engine_mode: any
+        re_evaluate_policies: true
+        stage: !Find [authentik_stages_deny.denystage, [name, enrollment-pending-message]]
+        target: !Find [authentik_flows.flow, [slug, github-invite-enrollment]]
+      conditions: []
+      identifiers:
+        pk: df6b6d80-c90a-4e1a-a72c-71035d99f7d7
+      model: authentik_flows.flowstagebinding
+      permissions: []
+      state: present
+
+    # Ensure GitHub source is shown on the login page but no "Register" button —
+    # new GitHub users are automatically routed to the enrollment flow by the source.
+    - attrs:
+        name: default-authentication-identification
+        sources:
+        - !Find [authentik_sources_oauth.oauthsource, [slug, github]]
+        user_fields:
+        - email
+        - username
+      conditions: []
+      identifiers:
+        name: default-authentication-identification
+      model: authentik_stages_identification.identificationstage
+      permissions: []
+      state: present
+
+    # Remove old invitation stage binding
+    - conditions: []
+      identifiers:
+        pk: f34837f2-f91e-4f7a-b272-35636bd73b18
+      model: authentik_flows.flowstagebinding
+      permissions: []
+      state: absent
+  groups.yaml: |
+    version: 1
+    metadata:
+      name: Custom Groups
+    entries:
+    - attrs:
+        attributes: {}
+        name: Grafana Admins
+      conditions: []
+      identifiers:
+        pk: 6f6183d7-3bbd-450b-93b3-0766899ae762
+      model: authentik_core.group
+      permissions: []
+      state: present
+    - attrs:
+        attributes: {}
+        name: Infrastructure
+        users:
+        - !Find [authentik_core.user, [username, hwcopeland]]
+      conditions: []
+      identifiers:
+        pk: adaaf0fd-0329-4353-9c55-0e105ab70451
+      model: authentik_core.group
+      permissions: []
+      state: present
+  notifications.yaml: |
+    version: 1
+    metadata:
+      name: Notification Rules
+    entries:
+    # Email transport using Authentik's configured SMTP
+    - attrs:
+        host: localhost
+        name: email-transport
+        use_global_settings: true
+      conditions: []
+      identifiers:
+        name: email-transport
+      model: authentik_events.notificationtransport
+      permissions: []
+      state: present
+
+    # Notify admin when a new user completes enrollment (is created as inactive)
+    - attrs:
+        actions:
+        - model_created
+        enabled: true
+        name: new-enrollment-notification
+        transports:
+        - !Find [authentik_events.notificationtransport, [name, email-transport]]
+        severity: notice
+      conditions: []
+      identifiers:
+        name: new-enrollment-notification
+      model: authentik_events.notificationrule
+      permissions: []
+      state: present
+  outpost.yaml: |
+    version: 1
+    metadata:
+      name: Embedded Outpost
+    entries:
+    - attrs:
+        config:
+          authentik_host: https://auth.hwcopeland.net
+          authentik_host_browser: ''
+          authentik_host_insecure: false
+          container_image: null
+          docker_labels: null
+          docker_map_ports: true
+          docker_network: null
+          kubernetes_disabled_components: []
+          kubernetes_httproute_annotations: {}
+          kubernetes_httproute_parent_refs: []
+          kubernetes_image_pull_secrets: []
+          kubernetes_ingress_annotations: {}
+          kubernetes_ingress_class_name: null
+          kubernetes_ingress_path_type: null
+          kubernetes_ingress_secret_name: authentik-outpost-tls
+          kubernetes_json_patches: null
+          kubernetes_namespace: authentik
+          kubernetes_replicas: 1
+          kubernetes_service_type: ClusterIP
+          log_level: info
+          object_naming_template: ak-outpost-%(name)s
+          refresh_interval: minutes=5
+        managed: goauthentik.io/outposts/embedded
+        name: authentik Embedded Outpost
+        providers:
+        - !Find [authentik_providers_proxy.proxyprovider, [name, Provider for Hubble]]
+        - !Find [authentik_providers_proxy.proxyprovider, [name, Provider for Homepage]]
+        type: proxy
+      conditions: []
+      identifiers:
+        pk: 3061d63d-44ae-456e-9239-6c3f999087e3
+      model: authentik_outposts.outpost
+      permissions: []
+      state: present
+  providers-grafana.yaml: |
+    version: 1
+    metadata:
+      name: Grafana Provider and Application
+    entries:
+    - attrs:
+        access_code_validity: minutes=1
+        access_token_validity: minutes=5
+        authorization_flow: !Find [authentik_flows.flow, [slug, default-provider-authorization-implicit-consent]]
+        client_id: grafana
+        client_type: confidential
+        include_claims_in_id_token: true
+        invalidation_flow: !Find [authentik_flows.flow, [slug, default-provider-invalidation-flow]]
+        issuer_mode: per_provider
+        logout_method: backchannel
+        name: Grafana
+        property_mappings:
+        - !Find [authentik_providers_oauth2.scopemapping, [scope_name, groups]]
+        - !Find [authentik_providers_oauth2.scopemapping, [scope_name, email]]
+        - !Find [authentik_providers_oauth2.scopemapping, [scope_name, profile]]
+        - !Find [authentik_providers_oauth2.scopemapping, [scope_name, offline_access]]
+        - !Find [authentik_providers_oauth2.scopemapping, [scope_name, openid]]
+        redirect_uris:
+        - matching_mode: strict
+          url: https://grafana.hwcopeland.net/login/generic_oauth
+        refresh_token_threshold: hours=1
+        refresh_token_validity: days=30
+        signing_key: !Find [authentik_crypto.certificatekeypair, [name, authentik Self-signed Certificate]]
+        sub_mode: hashed_user_id
+      conditions: []
+      identifiers:
+        pk: 1
+      model: authentik_providers_oauth2.oauth2provider
+      permissions: []
+      state: present
+    - attrs:
+        meta_launch_url: https://grafana.hwcopeland.net
+        name: Grafana
+        policy_engine_mode: any
+        provider: !Find [authentik_providers_oauth2.oauth2provider, [name, Grafana]]
+        slug: grafana
+      conditions: []
+      identifiers:
+        pk: 5076e58e-bb6b-49c3-9688-15dc96a73951
+      model: authentik_core.application
+      permissions: []
+      state: present
+  providers-homepage.yaml: |
+    version: 1
+    metadata:
+      name: Homepage Provider and Application
+    entries:
+    - attrs:
+        authorization_flow: !Find [authentik_flows.flow, [slug, default-provider-authorization-implicit-consent]]
+        invalidation_flow: !Find [authentik_flows.flow, [slug, default-provider-invalidation-flow]]
+        external_host: https://home.hwcopeland.net
+        internal_host: http://homepage.web-server.svc.cluster.local
+        internal_host_ssl_validation: false
+        mode: proxy
+        name: Provider for Homepage
+      conditions: []
+      identifiers:
+        name: Provider for Homepage
+      model: authentik_providers_proxy.proxyprovider
+      permissions: []
+      state: present
+    - attrs:
+        meta_launch_url: https://home.hwcopeland.net
+        name: Homepage
+        provider: !Find [authentik_providers_proxy.proxyprovider, [name, Provider for Homepage]]
+        slug: homepage
+      conditions: []
+      identifiers:
+        slug: homepage
+      model: authentik_core.application
+      permissions: []
+      state: present
+  providers-hubble.yaml: |
+    version: 1
+    metadata:
+      name: Hubble Provider and Application
+    entries:
+    - attrs:
+        access_token_validity: hours=24
+        authorization_flow: !Find [authentik_flows.flow, [slug, default-provider-authorization-implicit-consent]]
+        external_host: http://hubble.hwcopeland.net
+        intercept_header_auth: true
+        internal_host_ssl_validation: true
+        invalidation_flow: !Find [authentik_flows.flow, [slug, default-provider-invalidation-flow]]
+        mode: forward_single
+        name: Provider for Hubble
+        property_mappings:
+        - !Find [authentik_providers_oauth2.scopemapping, [scope_name, email]]
+        - !Find [authentik_providers_oauth2.scopemapping, [scope_name, profile]]
+        - !Find [authentik_providers_oauth2.scopemapping, [scope_name, entitlements]]
+        - !Find [authentik_providers_oauth2.scopemapping, [scope_name, openid]]
+        - !Find [authentik_providers_oauth2.scopemapping, [scope_name, ak_proxy]]
+        refresh_token_validity: days=30
+      conditions: []
+      identifiers:
+        pk: 4
+      model: authentik_providers_proxy.proxyprovider
+      permissions: []
+      state: present
+    - attrs:
+        name: Hubble
+        policy_engine_mode: any
+        provider: !Find [authentik_providers_proxy.proxyprovider, [name, Provider for Hubble]]
+        slug: hubble
+      conditions: []
+      identifiers:
+        pk: b1864a0a-8ae2-436a-8998-34a2daa53423
+      model: authentik_core.application
+      permissions: []
+      state: present
+    # Policy binding: restrict Hubble access to Infrastructure group
+    - attrs:
+        enabled: true
+        group: !Find [authentik_core.group, [name, Infrastructure]]
+        order: 0
+        target: !Find [authentik_core.application, [slug, hubble]]
+        timeout: 30
+      conditions: []
+      identifiers:
+        pk: 8cc7c477-aa25-4646-a9f0-8e40cfce278b
+      model: authentik_policies.policybinding
+      permissions: []
+      state: present
+  providers-n8n.yaml: |
+    version: 1
+    metadata:
+      name: n8n Provider and Application
+    entries:
+    - attrs:
+        authorization_flow: !Find [authentik_flows.flow, [slug, default-provider-authorization-implicit-consent]]
+        invalidation_flow: !Find [authentik_flows.flow, [slug, default-provider-invalidation-flow]]
+        name: n8n
+        redirect_uris:
+        - matching_mode: strict
+          url: https://n8n.hwcopeland.net/rest/sso/oidc/callback
+        signing_key: !Find [authentik_crypto.certificatekeypair, [name, authentik Self-signed Certificate]]
+        sub_mode: hashed_user_id
+      conditions: []
+      identifiers:
+        name: n8n
+      model: authentik_providers_oauth2.oauth2provider
+      permissions: []
+      state: present
+    - attrs:
+        meta_launch_url: https://n8n.hwcopeland.net
+        name: n8n
+        provider: !Find [authentik_providers_oauth2.oauth2provider, [name, n8n]]
+        slug: n8n
+      conditions: []
+      identifiers:
+        slug: n8n
+      model: authentik_core.application
+      permissions: []
+      state: present
+  providers-openhands.yaml: |
+    version: 1
+    metadata:
+      name: openhands Provider and Application
+    entries:
+    - attrs:
+        access_code_validity: minutes=1
+        access_token_validity: hours=1
+        authorization_flow: !Find [authentik_flows.flow, [slug, default-provider-authorization-implicit-consent]]
+        client_id: iTAYH0YUUhpd8iQFTI2GZTObGKs9UyvlPqJlL5YY
+        client_type: confidential
+        include_claims_in_id_token: true
+        invalidation_flow: !Find [authentik_flows.flow, [slug, default-provider-invalidation-flow]]
+        issuer_mode: per_provider
+        logout_method: backchannel
+        name: openhands
+        property_mappings:
+        - !Find [authentik_providers_oauth2.scopemapping, [scope_name, email]]
+        - !Find [authentik_providers_oauth2.scopemapping, [scope_name, profile]]
+        - !Find [authentik_providers_oauth2.scopemapping, [scope_name, openid]]
+        redirect_uris:
+        - matching_mode: strict
+          url: https://ai.hwcopeland.net/oauth2/callback
+        refresh_token_threshold: seconds=0
+        refresh_token_validity: days=30
+        signing_key: !Find [authentik_crypto.certificatekeypair, [name, authentik Self-signed Certificate]]
+        sub_mode: hashed_user_id
+      conditions: []
+      identifiers:
+        pk: 8
+      model: authentik_providers_oauth2.oauth2provider
+      permissions: []
+      state: present
+    - attrs:
+        meta_description: OpenHands AI Agent
+        meta_launch_url: https://ai.hwcopeland.net
+        name: openhands
+        policy_engine_mode: any
+        provider: !Find [authentik_providers_oauth2.oauth2provider, [name, openhands]]
+        slug: openhands
+      conditions: []
+      identifiers:
+        pk: de53fcd0-f4da-46c1-889f-c9648d906e57
+      model: authentik_core.application
+      permissions: []
+      state: present
+  providers-zot.yaml: |
+    version: 1
+    metadata:
+      name: zot Provider and Application
+    entries:
+    - attrs:
+        access_code_validity: minutes=1
+        access_token_validity: minutes=5
+        authorization_flow: !Find [authentik_flows.flow, [slug, default-provider-authorization-explicit-consent]]
+        client_id: CukCym6kqaMpSjO8KqSISQKW5SSFIgWdGA1odES3
+        client_type: confidential
+        include_claims_in_id_token: true
+        invalidation_flow: !Find [authentik_flows.flow, [slug, default-provider-invalidation-flow]]
+        issuer_mode: per_provider
+        logout_method: backchannel
+        name: zot
+        property_mappings:
+        - !Find [authentik_providers_oauth2.scopemapping, [scope_name, email]]
+        - !Find [authentik_providers_oauth2.scopemapping, [scope_name, profile]]
+        - !Find [authentik_providers_oauth2.scopemapping, [scope_name, openid]]
+        redirect_uris:
+        - matching_mode: strict
+          url: https://zot.hwcopeland.net/zot/auth/callback/oidc
+        refresh_token_threshold: hours=1
+        refresh_token_validity: days=30
+        signing_key: !Find [authentik_crypto.certificatekeypair, [name, authentik Self-signed Certificate]]
+        sub_mode: hashed_user_id
+      conditions: []
+      identifiers:
+        pk: 7
+      model: authentik_providers_oauth2.oauth2provider
+      permissions: []
+      state: present
+    - attrs:
+        name: zot
+        policy_engine_mode: any
+        provider: !Find [authentik_providers_oauth2.oauth2provider, [name, zot]]
+        slug: zot
+      conditions: []
+      identifiers:
+        pk: a93c2597-771e-4604-bc8a-3954e7ceb1a6
+      model: authentik_core.application
+      permissions: []
+      state: present
+  scope-mappings.yaml: |
+    version: 1
+    metadata:
+      name: Custom Scope Mappings
+    entries:
+    - attrs:
+        description: ""
+        expression: "return {\n    \"groups\": [group.name for group in request.user.ak_groups.all()]\n\
+          }"
+        managed: null
+        name: groups
+        scope_name: groups
+      conditions: []
+      identifiers:
+        pk: baa341ea-7363-42f5-8b98-a9bb1e4e3692
+      model: authentik_providers_oauth2.scopemapping
+      permissions: []
+      state: present
+  sources.yaml: |
+    version: 1
+    metadata:
+      name: OAuth Sources
+    entries:
+    - attrs:
+        access_token_url: https://github.com/login/oauth/access_token
+        authentication_flow: !Find [authentik_flows.flow, [slug, default-source-authentication]]
+        authorization_code_auth_method: basic_auth
+        authorization_url: https://github.com/login/oauth/authorize
+        consumer_key: Ov23liUJDvik3n3n02Zy
+        enabled: true
+        enrollment_flow: !Find [authentik_flows.flow, [slug, github-invite-enrollment]]
+        group_matching_mode: identifier
+        icon: /static/authentik/sources/github.svg
+        name: Github
+        oidc_jwks_url: https://token.actions.githubusercontent.com/.well-known/jwks
+        oidc_well_known_url: https://token.actions.githubusercontent.com/.well-known/openid-configuration
+        pkce: none
+        policy_engine_mode: any
+        profile_url: https://api.github.com/user
+        provider_type: github
+        request_token_url: null
+        slug: github
+        user_matching_mode: email_link
+        user_path_template: goauthentik.io/sources/%(slug)s
+      conditions: []
+      identifiers:
+        pk: d4f6910c-c234-4a1f-a926-f9915fed4a89
+      model: authentik_sources_oauth.oauthsource
+      permissions: []
+      state: present
+  providers-synology.yaml: |
+    version: 1
+    metadata:
+      name: Synology NAS Provider and Application
+    entries:
+    - attrs:
+        access_code_validity: minutes=1
+        access_token_validity: hours=1
+        authorization_flow: !Find [authentik_flows.flow, [slug, default-provider-authorization-implicit-consent]]
+        invalidation_flow: !Find [authentik_flows.flow, [slug, default-provider-invalidation-flow]]
+        client_id: synology-nas
+        client_type: confidential
+        include_claims_in_id_token: true
+        issuer_mode: per_provider
+        logout_method: backchannel
+        name: Synology NAS
+        property_mappings:
+        - !Find [authentik_providers_oauth2.scopemapping, [scope_name, email]]
+        - !Find [authentik_providers_oauth2.scopemapping, [scope_name, profile]]
+        - !Find [authentik_providers_oauth2.scopemapping, [scope_name, openid]]
+        redirect_uris:
+        - matching_mode: regex
+          url: "https://nas\\.hwcopeland\\.net/webman/sso/SSOIFrame\\.cgi.*"
+        refresh_token_threshold: hours=1
+        refresh_token_validity: days=30
+        signing_key: !Find [authentik_crypto.certificatekeypair, [name, authentik Self-signed Certificate]]
+        sub_mode: hashed_user_id
+      conditions: []
+      identifiers:
+        name: Synology NAS
+      model: authentik_providers_oauth2.oauth2provider
+      permissions: []
+      state: present
+    - attrs:
+        meta_launch_url: https://nas.hwcopeland.net
+        name: Synology NAS
+        provider: !Find [authentik_providers_oauth2.oauth2provider, [name, Synology NAS]]
+        slug: synology-nas
+      conditions: []
+      identifiers:
+        slug: synology-nas
+      model: authentik_core.application
+      permissions: []
+      state: present
+    - attrs:
+        enabled: true
+        group: !Find [authentik_core.group, [name, Infrastructure]]
+        order: 0
+        target: !Find [authentik_core.application, [slug, synology-nas]]
+        timeout: 30
+      conditions: []
+      identifiers:
+        pk: a1b2c3d4-e5f6-7890-abcd-ef1234567890
+      model: authentik_policies.policybinding
+      permissions: []
+      state: present
+kind: ConfigMap
+metadata:
+  creationTimestamp: null
+  name: authentik-blueprints
+  namespace: authentik

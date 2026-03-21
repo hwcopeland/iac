@@ -1,0 +1,24 @@
+version: 1
+metadata:
+  name: Custom Groups
+entries:
+- attrs:
+    attributes: {}
+    name: Grafana Admins
+  conditions: []
+  identifiers:
+    pk: 6f6183d7-3bbd-450b-93b3-0766899ae762
+  model: authentik_core.group
+  permissions: []
+  state: present
+- attrs:
+    attributes: {}
+    name: Infrastructure
+    users:
+    - !Find [authentik_core.user, [username, hwcopeland]]
+  conditions: []
+  identifiers:
+    pk: adaaf0fd-0329-4353-9c55-0e105ab70451
+  model: authentik_core.group
+  permissions: []
+  state: present

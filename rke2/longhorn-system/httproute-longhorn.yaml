@@ -4,7 +4,6 @@ kind: HTTPRoute
 metadata:
   name: longhorn
   namespace: longhorn-system
-  annotations:
 spec:
   parentRefs:
     - name: hwcopeland-gateway
@@ -13,9 +12,21 @@ spec:
   hostnames:
     - "longhorn.hwcopeland.net"
   rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /if/
+      filters:
+        - type: RequestRedirect
+          requestRedirect:
+            path:
+              type: ReplaceFullPath
+              replaceFullPath: /
+            statusCode: 302
     - backendRefs:
-        - name: longhorn-frontend
-          port: 8080
+        - name: authentik-server
+          namespace: authentik
+          port: 80
 ---
 apiVersion: cloudflare-operator.io/v1
 kind: DNSRecord

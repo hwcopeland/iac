@@ -1,0 +1,32 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ollama-pull-qwen25-7b
+  namespace: agent-system
+spec:
+  ttlSecondsAfterFinished: 300
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: pull
+          image: curlimages/curl:latest
+          command:
+            - sh
+            - -c
+            - |
+              echo "Waiting for Ollama to be ready..."
+              until curl -sf http://ollama:11434/; do sleep 5; done
+              echo "Pulling qwen2.5:7b..."
+              curl -sf -X POST http://ollama:11434/api/pull \
+                -H "Content-Type: application/json" \
+                -d '{"name":"qwen2.5:7b","stream":false}' \
+                --max-time 600
+              echo "Done."
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 100m
+              memory: 128Mi

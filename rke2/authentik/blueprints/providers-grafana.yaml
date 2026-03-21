@@ -1,0 +1,46 @@
+version: 1
+metadata:
+  name: Grafana Provider and Application
+entries:
+- attrs:
+    access_code_validity: minutes=1
+    access_token_validity: minutes=5
+    authorization_flow: !Find [authentik_flows.flow, [slug, default-provider-authorization-implicit-consent]]
+    client_id: grafana
+    client_type: confidential
+    include_claims_in_id_token: true
+    invalidation_flow: !Find [authentik_flows.flow, [slug, default-provider-invalidation-flow]]
+    issuer_mode: per_provider
+    logout_method: backchannel
+    name: Grafana
+    property_mappings:
+    - !Find [authentik_providers_oauth2.scopemapping, [scope_name, groups]]
+    - !Find [authentik_providers_oauth2.scopemapping, [scope_name, email]]
+    - !Find [authentik_providers_oauth2.scopemapping, [scope_name, profile]]
+    - !Find [authentik_providers_oauth2.scopemapping, [scope_name, offline_access]]
+    - !Find [authentik_providers_oauth2.scopemapping, [scope_name, openid]]
+    redirect_uris:
+    - matching_mode: strict
+      url: https://grafana.hwcopeland.net/login/generic_oauth
+    refresh_token_threshold: hours=1
+    refresh_token_validity: days=30
+    signing_key: !Find [authentik_crypto.certificatekeypair, [name, authentik Self-signed Certificate]]
+    sub_mode: hashed_user_id
+  conditions: []
+  identifiers:
+    pk: 1
+  model: authentik_providers_oauth2.oauth2provider
+  permissions: []
+  state: present
+- attrs:
+    meta_launch_url: https://grafana.hwcopeland.net
+    name: Grafana
+    policy_engine_mode: any
+    provider: !Find [authentik_providers_oauth2.oauth2provider, [name, Grafana]]
+    slug: grafana
+  conditions: []
+  identifiers:
+    pk: 5076e58e-bb6b-49c3-9688-15dc96a73951
+  model: authentik_core.application
+  permissions: []
+  state: present
