@@ -1,0 +1,31 @@
+version: 1
+metadata:
+  name: OAuth Sources
+entries:
+- attrs:
+    access_token_url: https://github.com/login/oauth/access_token
+    authentication_flow: !Find [authentik_flows.flow, [slug, default-source-authentication]]
+    authorization_code_auth_method: basic_auth
+    authorization_url: https://github.com/login/oauth/authorize
+    consumer_key: Ov23liUJDvik3n3n02Zy
+    enabled: true
+    enrollment_flow: !Find [authentik_flows.flow, [slug, github-invite-enrollment]]
+    group_matching_mode: identifier
+    icon: /static/authentik/sources/github.svg
+    name: Github
+    oidc_jwks_url: https://token.actions.githubusercontent.com/.well-known/jwks
+    oidc_well_known_url: https://token.actions.githubusercontent.com/.well-known/openid-configuration
+    pkce: none
+    policy_engine_mode: any
+    profile_url: https://api.github.com/user
+    provider_type: github
+    request_token_url: null
+    slug: github
+    user_matching_mode: email_link
+    user_path_template: goauthentik.io/sources/%(slug)s
+  conditions: []
+  identifiers:
+    pk: d4f6910c-c234-4a1f-a926-f9915fed4a89
+  model: authentik_sources_oauth.oauthsource
+  permissions: []
+  state: present

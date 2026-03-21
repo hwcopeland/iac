@@ -133,6 +133,12 @@ spec:
           env:
             - name: HOMEPAGE_ALLOWED_HOSTS
               value: "home.hwcopeland.net,homepage.web-server.svc.cluster.local"
+            - name: HOMEPAGE_VAR_AUTHENTIK_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: homepage-oidc-secret
+                  key: token
+                  optional: true
           ports:
             - name: http
               containerPort: 3000

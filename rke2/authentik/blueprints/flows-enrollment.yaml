@@ -1,0 +1,122 @@
+version: 1
+metadata:
+  name: Enrollment Flows
+entries:
+# --- Stages ---
+- attrs:
+    case_insensitive_matching: true
+    name: github-identification
+    pretend_user_exists: true
+    show_matched_user: true
+    sources:
+    - !Find [authentik_sources_oauth.oauthsource, [slug, github]]
+    user_fields:
+    - email
+    - username
+  conditions: []
+  identifiers:
+    pk: 3b820eaf-e804-4a24-b94d-d4f82f799651
+  model: authentik_stages_identification.identificationstage
+  permissions: []
+  state: present
+
+- attrs:
+    name: create-user
+    user_creation_mode: create_when_required
+    user_type: external
+    create_users_as_inactive: true
+  conditions: []
+  identifiers:
+    pk: fbc63257-e39a-4f97-a49b-111968448306
+  model: authentik_stages_user_write.userwritestage
+  permissions: []
+  state: present
+
+- attrs:
+    deny_message: Your account is pending approval. You will be notified once access is granted.
+    name: enrollment-pending-message
+  conditions: []
+  identifiers:
+    name: enrollment-pending-message
+  model: authentik_stages_deny.denystage
+  permissions: []
+  state: present
+
+# --- Flow ---
+- attrs:
+    authentication: require_unauthenticated
+    denied_action: message_continue
+    designation: enrollment
+    layout: content_left
+    name: github-invite-enrollment
+    policy_engine_mode: any
+    slug: github-invite-enrollment
+    title: Sign up with GitHub
+  conditions: []
+  identifiers:
+    pk: 1b84309f-7d5b-46b1-9063-a99108484f5b
+  model: authentik_flows.flow
+  permissions: []
+  state: present
+
+# --- Stage bindings ---
+# Remove github-identification from enrollment flow — GitHub OAuth source already routes
+# new users here; having an IdentificationStage causes an infinite OAuth redirect loop.
+- conditions: []
+  identifiers:
+    pk: ec3d7f5b-65f2-4a0d-a6cb-821788c398be
+  model: authentik_flows.flowstagebinding
+  permissions: []
+  state: absent
+
+- attrs:
+    invalid_response_action: retry
+    order: 10
+    policy_engine_mode: any
+    re_evaluate_policies: true
+    stage: !Find [authentik_stages_user_write.userwritestage, [name, create-user]]
+    target: !Find [authentik_flows.flow, [slug, github-invite-enrollment]]
+  conditions: []
+  identifiers:
+    pk: f6ea7df0-48b6-444e-bd0b-e7b3c16a8e72
+  model: authentik_flows.flowstagebinding
+  permissions: []
+  state: present
+
+- attrs:
+    invalid_response_action: retry
+    order: 20
+    policy_engine_mode: any
+    re_evaluate_policies: true
+    stage: !Find [authentik_stages_deny.denystage, [name, enrollment-pending-message]]
+    target: !Find [authentik_flows.flow, [slug, github-invite-enrollment]]
+  conditions: []
+  identifiers:
+    pk: df6b6d80-c90a-4e1a-a72c-71035d99f7d7
+  model: authentik_flows.flowstagebinding
+  permissions: []
+  state: present
+
+# Ensure GitHub source is shown on the login page but no "Register" button —
+# new GitHub users are automatically routed to the enrollment flow by the source.
+- attrs:
+    name: default-authentication-identification
+    sources:
+    - !Find [authentik_sources_oauth.oauthsource, [slug, github]]
+    user_fields:
+    - email
+    - username
+  conditions: []
+  identifiers:
+    name: default-authentication-identification
+  model: authentik_stages_identification.identificationstage
+  permissions: []
+  state: present
+
+# Remove old invitation stage binding
+- conditions: []
+  identifiers:
+    pk: f34837f2-f91e-4f7a-b272-35636bd73b18
+  model: authentik_flows.flowstagebinding
+  permissions: []
+  state: absent

@@ -1,0 +1,48 @@
+---
+# Allows HTTPRoutes in longhorn-system to use authentik-server as a backend
+apiVersion: gateway.networking.k8s.io/v1beta1
+kind: ReferenceGrant
+metadata:
+  name: longhorn-to-authentik
+  namespace: authentik
+spec:
+  from:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      namespace: longhorn-system
+  to:
+    - group: ""
+      kind: Service
+      name: authentik-server
+---
+# Allows HTTPRoutes in web-server to use authentik-server as a backend
+apiVersion: gateway.networking.k8s.io/v1beta1
+kind: ReferenceGrant
+metadata:
+  name: web-server-to-authentik
+  namespace: authentik
+spec:
+  from:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      namespace: web-server
+  to:
+    - group: ""
+      kind: Service
+      name: authentik-server
+---
+# Allows HTTPRoutes in kube-system to use authentik-server as a backend
+apiVersion: gateway.networking.k8s.io/v1beta1
+kind: ReferenceGrant
+metadata:
+  name: kube-system-to-authentik
+  namespace: authentik
+spec:
+  from:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      namespace: kube-system
+  to:
+    - group: ""
+      kind: Service
+      name: authentik-server

@@ -1,0 +1,31 @@
+version: 1
+metadata:
+  name: Notification Rules
+entries:
+# Email transport using Authentik's configured SMTP
+- attrs:
+    host: localhost
+    name: email-transport
+    use_global_settings: true
+  conditions: []
+  identifiers:
+    name: email-transport
+  model: authentik_events.notificationtransport
+  permissions: []
+  state: present
+
+# Notify admin when a new user completes enrollment (is created as inactive)
+- attrs:
+    actions:
+    - model_created
+    enabled: true
+    name: new-enrollment-notification
+    transports:
+    - !Find [authentik_events.notificationtransport, [name, email-transport]]
+    severity: notice
+  conditions: []
+  identifiers:
+    name: new-enrollment-notification
+  model: authentik_events.notificationrule
+  permissions: []
+  state: present

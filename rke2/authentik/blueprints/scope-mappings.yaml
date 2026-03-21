@@ -1,0 +1,17 @@
+version: 1
+metadata:
+  name: Custom Scope Mappings
+entries:
+- attrs:
+    description: ""
+    expression: "return {\n    \"groups\": [group.name for group in request.user.ak_groups.all()]\n\
+      }"
+    managed: null
+    name: groups
+    scope_name: groups
+  conditions: []
+  identifiers:
+    pk: baa341ea-7363-42f5-8b98-a9bb1e4e3692
+  model: authentik_providers_oauth2.scopemapping
+  permissions: []
+  state: present

@@ -15,7 +15,8 @@ spec:
     - "hubble.hwcopeland.net"
   rules:
     - backendRefs:
-        - name: hubble-ui
+        - name: authentik-server
+          namespace: authentik
           port: 80
 ---
 apiVersion: cloudflare-operator.io/v1

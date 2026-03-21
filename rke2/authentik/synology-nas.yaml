@@ -1,0 +1,104 @@
+---
+# nginx proxy: bridges HTTP (from Cilium gateway) → HTTPS (DSM port 5001)
+# DSM's SSO endpoint only works over native TLS; this avoids needing BackendTLSPolicy CRD
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: synology-proxy-conf
+  namespace: authentik
+data:
+  nginx.conf: |
+    events {}
+    http {
+      server {
+        listen 80;
+        server_name nas.hwcopeland.net;
+        location / {
+          proxy_pass https://10.41.0.200:443;
+          proxy_ssl_verify off;
+          proxy_ssl_server_name on;
+          proxy_http_version 1.1;
+          proxy_set_header Host $host;
+          proxy_set_header X-Real-IP $remote_addr;
+          proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+          proxy_set_header X-Forwarded-Proto https;
+          proxy_set_header X-Forwarded-Port 443;
+          proxy_read_timeout 300s;
+          proxy_connect_timeout 10s;
+        }
+      }
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: synology-proxy
+  namespace: authentik
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: synology-proxy
+  template:
+    metadata:
+      labels:
+        app: synology-proxy
+    spec:
+      containers:
+        - name: nginx
+          image: nginx:alpine
+          ports:
+            - containerPort: 80
+          volumeMounts:
+            - name: conf
+              mountPath: /etc/nginx/nginx.conf
+              subPath: nginx.conf
+      volumes:
+        - name: conf
+          configMap:
+            name: synology-proxy-conf
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: synology-proxy
+  namespace: authentik
+spec:
+  selector:
+    app: synology-proxy
+  ports:
+    - port: 80
+      targetPort: 80
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: synology-nas
+  namespace: authentik
+spec:
+  parentRefs:
+    - name: hwcopeland-gateway
+      namespace: kube-system
+      sectionName: https
+    - name: hwcopeland-gateway
+      namespace: kube-system
+      sectionName: https-5001
+  hostnames:
+    - "nas.hwcopeland.net"
+  rules:
+    - backendRefs:
+        - name: synology-proxy
+          port: 80
+---
+apiVersion: cloudflare-operator.io/v1
+kind: DNSRecord
+metadata:
+  name: synology-nas
+  namespace: authentik
+spec:
+  name: nas.hwcopeland.net
+  type: CNAME
+  content: hwcopeland.net
+  proxied: false
+  ttl: 1
+  interval: 5m

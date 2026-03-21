@@ -1,11 +1,11 @@
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
-  name: openclaw
+  name: openhands
   namespace: agent-system
 spec:
   hostnames:
-    - claw.hwcopeland.net
+    - ai.hwcopeland.net
   parentRefs:
     - name: hwcopeland-gateway
       namespace: kube-system

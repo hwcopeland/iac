@@ -1,0 +1,100 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: tempo-storage
+  namespace: monitor
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: longhorn
+  resources:
+    requests:
+      storage: 20Gi
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: tempo
+  namespace: monitor
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: tempo
+  serviceName: tempo
+  template:
+    metadata:
+      labels:
+        app: tempo
+    spec:
+      securityContext:
+        fsGroup: 10001
+        runAsUser: 10001
+        runAsGroup: 10001
+      initContainers:
+        - name: fix-perms
+          image: busybox:1.37
+          securityContext:
+            runAsUser: 0
+          command: ["sh", "-c", "mkdir -p /var/tempo/traces /var/tempo/wal && chown -R 10001:10001 /var/tempo"]
+          volumeMounts:
+            - name: storage
+              mountPath: /var/tempo
+      containers:
+        - name: tempo
+          image: grafana/tempo:2.6.1
+          imagePullPolicy: IfNotPresent
+          args:
+            - -config.file=/etc/tempo/tempo.yaml
+          ports:
+            - name: http
+              containerPort: 3200
+            - name: otlp-grpc
+              containerPort: 4317
+            - name: otlp-http
+              containerPort: 4318
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 1Gi
+          volumeMounts:
+            - name: config
+              mountPath: /etc/tempo
+            - name: storage
+              mountPath: /var/tempo
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 3200
+            initialDelaySeconds: 10
+            periodSeconds: 10
+      volumes:
+        - name: config
+          configMap:
+            name: tempo-config
+        - name: storage
+          persistentVolumeClaim:
+            claimName: tempo-storage
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: tempo
+  namespace: monitor
+spec:
+  selector:
+    app: tempo
+  ports:
+    - name: http
+      port: 3200
+      targetPort: 3200
+    - name: otlp-grpc
+      port: 4317
+      targetPort: 4317
+    - name: otlp-http
+      port: 4318
+      targetPort: 4318
+  type: ClusterIP
