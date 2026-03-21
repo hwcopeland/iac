@@ -36,6 +36,8 @@ kind: Service
 metadata:
   name: ha-service
   namespace: web-server
+  annotations:
+    io.cilium/lb-ipam-ips: "10.44.0.16"
 spec:
   selector:
     app: home-assistant
