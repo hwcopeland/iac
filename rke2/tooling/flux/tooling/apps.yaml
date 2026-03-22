@@ -42,7 +42,22 @@ spec:
     name: tooling
     namespace: tooling
 ---
-# Agent C: agent-system (n8n, ollama, openhands)
+# OpenHands Enterprise (Helm chart via openhands namespace)
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: openhands-enterprise
+  namespace: tooling
+spec:
+  interval: 5m
+  path: ./rke2/tooling/flux/openhands
+  prune: true
+  sourceRef:
+    kind: GitRepository
+    name: tooling
+    namespace: tooling
+---
+# Agent C: agent-system (n8n, ollama)
 apiVersion: kustomize.toolkit.fluxcd.io/v1
 kind: Kustomization
 metadata:
@@ -81,6 +96,21 @@ metadata:
 spec:
   interval: 5m
   path: ./rke2/chem
+  prune: true
+  sourceRef:
+    kind: GitRepository
+    name: tooling
+    namespace: tooling
+---
+# chem compute-infrastructure: docking controller, CRD, RBAC
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: chem-compute
+  namespace: tooling
+spec:
+  interval: 5m
+  path: ./rke2/chem/compute-infrastructure/k8s-jobs
   prune: true
   sourceRef:
     kind: GitRepository

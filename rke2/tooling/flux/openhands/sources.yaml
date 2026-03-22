@@ -1,0 +1,27 @@
+---
+# Flux Kustomization: reconciles raw openhands namespace manifests
+# (namespace, external-secrets, dnsrecords, httproutes)
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: openhands
+  namespace: tooling
+spec:
+  interval: 5m
+  path: ./rke2/openhands
+  prune: true
+  sourceRef:
+    kind: GitRepository
+    name: tooling
+    namespace: tooling
+---
+# OCI HelmRepository source for OpenHands Enterprise chart
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: HelmRepository
+metadata:
+  name: openhands-enterprise
+  namespace: tooling
+spec:
+  interval: 1h
+  url: oci://ghcr.io/all-hands-ai/helm-charts
+  type: oci

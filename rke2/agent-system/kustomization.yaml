@@ -13,11 +13,4 @@ resources:
   # Run manually: kubectl apply -f rke2/agent-system/ollama/model-pull-job.yaml
   - ollama/deployment.yaml
   - ollama/pvc.yaml
-  # openhands
-  - openhands/deployment.yaml
-  - openhands/dnsrecord.yaml
-  - openhands/external-secrets.yaml
-  - openhands/httproute.yaml
-  - openhands/pvc.yaml
-  - openhands/rbac.yaml
-  - openhands/services.yaml
+  # openhands: migrated to rke2/openhands/ (enterprise Helm chart)

@@ -1,0 +1,114 @@
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: openhands
+  namespace: openhands
+spec:
+  interval: 10m
+  timeout: 20m
+  chart:
+    spec:
+      chart: openhands
+      version: "0.2.15"
+      sourceRef:
+        kind: HelmRepository
+        name: openhands-enterprise
+        namespace: tooling
+      interval: 1h
+  install:
+    crds: CreateReplace
+    remediation:
+      retries: 3
+  upgrade:
+    crds: CreateReplace
+    remediation:
+      retries: 3
+  values:
+    env:
+      LITELLM_DEFAULT_MODEL: "litellm_proxy/prod/grok-4-reasoning"
+      KEYCLOAK_EXTERNAL_URL: "https://ai-auth.hwcopeland.net"
+      LITE_LLM_API_URL: "http://openhands-litellm:4000"
+
+    # All ingresses disabled — HTTPRoutes in rke2/openhands/httproutes.yaml handle routing
+    ingress:
+      enabled: false
+      host: "ai.hwcopeland.net"
+
+    tls:
+      enabled: false
+
+    github:
+      enabled: false
+    gitlab:
+      enabled: false
+    bitbucket:
+      enabled: false
+
+    keycloak:
+      enabled: true
+      # Internal URL used by init container to configure Keycloak realm
+      # External URL (https://ai-auth.hwcopeland.net) is set separately via env
+      url: "http://keycloak"
+      ingress:
+        enabled: false
+        hostname: "ai-auth.hwcopeland.net"
+      auth:
+        adminPassword: ""
+        existingSecret: keycloak-admin
+        passwordSecretKey: admin-password
+      postgresql:
+        auth:
+          existingSecret: postgres-password
+          secretKeys:
+            adminPasswordKey: postgres-password
+            userPasswordKey: password
+
+    postgresql:
+      enabled: true
+      auth:
+        existingSecret: postgres-password
+        secretKeys:
+          adminPasswordKey: postgres-password
+          userPasswordKey: password
+
+    redis:
+      enabled: true
+      auth:
+        existingSecret: redis
+        existingSecretPasswordKey: redis-password
+
+    litellm:
+      enabled: true
+      # Internal URL used by init container to configure LiteLLM
+      url: "http://openhands-litellm:4000"
+
+    litellm-helm:
+      enabled: true
+      ingress:
+        enabled: false
+      envSecrets:
+        - litellm-env-secrets
+      proxy_config:
+        environment_variables:
+          OR_APP_NAME: "OpenHands"
+          OR_SITE_URL: "https://docs.all-hands.dev"
+        model_list:
+          - model_name: "prod/grok-4-reasoning"
+            litellm_params:
+              model: "xai/grok-4.20-0309-reasoning"
+              api_key: "os.environ/XAI_API_KEY"
+
+    runtime-api:
+      enabled: true
+      ingress:
+        enabled: false
+        host: "ai-runtimes.hwcopeland.net"
+      env:
+        RUNTIME_BASE_URL: "ai-runtimes.hwcopeland.net"
+        STORAGE_CLASS: "longhorn"
+
+    sandbox:
+      apiHostname: "https://ai-runtimes.hwcopeland.net"
+
+    filestore:
+      ephemeral: true
