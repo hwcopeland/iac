@@ -359,7 +359,7 @@
 				"workshop/3296258256/surf_whiteout"		""
 				"workshop/3079877518/surf_ski_2"		""
 				"workshop/3459997959/surf_ofsfice"              ""
-				"workshop/3451443545/surf_lt_omnific"           ""
+				"workshop/3660894345/surf_lt_omnific"           ""
 				"workshop/3404344161/surf_sundown_njv"          ""
 				"workshop/3255589335/surf_aquaflow"		""
 				"workshop/3165517928/surf_astra"		""
