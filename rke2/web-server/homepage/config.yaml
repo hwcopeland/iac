@@ -182,13 +182,12 @@ data:
     ---
     - kubernetes:
         cluster:
+          show: false
+        nodes:
           show: true
           cpu: true
           memory: true
           showLabel: true
-          label: "Cluster"
-        nodes:
-          show: false
 
     - search:
         provider: google
