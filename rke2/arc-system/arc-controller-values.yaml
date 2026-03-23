@@ -1,0 +1,77 @@
+# Helm values for the Actions Runner Controller (ARC) v2 controller.
+#
+# Chart: oci://ghcr.io/actions/actions-runner-controller-charts/gha-runner-scale-set-controller
+# Namespace: arc-system
+#
+# The controller manages AutoScalingRunnerSet lifecycle and communicates with the
+# GitHub API via a GitHub App credential stored in Kubernetes Secrets (see arc-setup.md).
+#
+# These values are consumed by the HelmRelease or manual helm install described in
+# docs/tdd/arc-setup.md.
+#
+# Full chart defaults: https://github.com/actions/actions-runner-controller/blob/main/charts/gha-runner-scale-set-controller/values.yaml
+
+# Replica count: 1 is sufficient for a single-cluster lab environment.
+replicaCount: 1
+
+image:
+  repository: ghcr.io/actions/gha-runner-scale-set-controller
+  pullPolicy: IfNotPresent
+  # Pin to a specific release. Update this value when upgrading ARC.
+  # Check releases at: https://github.com/actions/actions-runner-controller/releases
+  tag: "0.10.1"
+
+# Resource limits for the controller pod.
+# The controller is lightweight — it only watches Kubernetes resources and GitHub API.
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+
+# Flags passed to the controller manager binary.
+flags:
+  # Log level: info in production, debug when troubleshooting.
+  logLevel: info
+  # Log format: json for structured logging (easier to query in Loki/Grafana).
+  logFormat: json
+  # Update strategy: RollingUpdate with 0 maxUnavailable ensures no controller downtime.
+  updateStrategy:
+    type: RollingUpdate
+
+# Metrics server for Prometheus scraping.
+metrics:
+  controllerManagerAddr: ":8080"
+  listenerAddr: ":8080"
+  listenerEndpoint: "/metrics"
+
+# Pod-level security: run as non-root.
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  fsGroup: 1000
+
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+  readOnlyRootFilesystem: true
+
+# Liveness/readiness probes for the controller.
+# The controller exposes a health endpoint on the metrics port.
+livenessProbe:
+  httpGet:
+    path: /healthz
+    port: 8080
+  initialDelaySeconds: 15
+  periodSeconds: 20
+
+readinessProbe:
+  httpGet:
+    path: /readyz
+    port: 8080
+  initialDelaySeconds: 5
+  periodSeconds: 10
