@@ -1,0 +1,28 @@
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: chem
+  namespace: chem
+spec:
+  interval: 5m
+  path: ./rke2/chem/flux/k8s-jobs
+  prune: true
+  sourceRef:
+    kind: GitRepository
+    name: tooling
+    namespace: tooling
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: chem-image-automation
+  namespace: chem
+spec:
+  interval: 5m
+  path: ./rke2/chem/flux/image-automation
+  prune: true
+  sourceRef:
+    kind: GitRepository
+    name: tooling
+    namespace: tooling
