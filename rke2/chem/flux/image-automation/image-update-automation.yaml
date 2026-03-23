@@ -1,0 +1,27 @@
+---
+apiVersion: image.toolkit.fluxcd.io/v1beta2
+kind: ImageUpdateAutomation
+metadata:
+  name: chem
+  namespace: chem
+spec:
+  interval: 5m
+  sourceRef:
+    kind: GitRepository
+    name: tooling
+    namespace: tooling
+  git:
+    checkout:
+      ref:
+        branch: main
+    commit:
+      author:
+        email: fluxcdbot@users.noreply.github.com
+        name: fluxcdbot
+      messageTemplate: |
+        [ci skip] auto-update chem
+    push:
+      branch: main
+  update:
+    path: ./rke2/chem/flux/k8s-jobs
+    strategy: Setters

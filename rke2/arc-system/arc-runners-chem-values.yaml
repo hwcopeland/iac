@@ -1,0 +1,90 @@
+# Helm values for the ARC runner scale-set targeting Khemiatic-Energistics/compute-infrastructure.
+#
+# Chart: oci://ghcr.io/actions/actions-runner-controller-charts/gha-runner-scale-set
+# Namespace: arc-system
+# Scale-set name (= runner label in workflow): arc-chem
+#
+# This scale-set registers runners to the compute-infrastructure repository using
+# a GitHub App credential. Workflow jobs that specify:
+#   runs-on: [self-hosted, arc-chem]
+# will be routed to these runner pods.
+#
+# Runner pod design: host Docker socket mount (/var/run/docker.sock).
+# This is the simpler option for a lab environment. Pods share the node Docker daemon,
+# which is acceptable when all workloads on the cluster are trusted.
+# Alternative: DinD sidecar (requires privileged pod — more complex, better isolation).
+# Revisit if security posture requires stronger build isolation.
+#
+# See docs/tdd/arc-setup.md for the full installation runbook.
+
+# The GitHub repository this scale-set registers to.
+# Format: https://github.com/<org>/<repo>
+githubConfigUrl: "https://github.com/Khemiatic-Energistics/compute-infrastructure"
+
+# Reference to the Kubernetes Secret containing GitHub App credentials.
+# This secret is created by the ExternalSecret defined in arc-setup.md.
+# Secret must contain keys: github_app_id, github_app_installation_id, github_app_private_key
+githubConfigSecret: arc-github-app-secret
+
+# Scale-set name. This becomes the runner label used in workflow `runs-on:`.
+# Must match the label used in .github/workflows/build-and-push.yml: arc-chem
+runnerScaleSetName: "arc-chem"
+
+# Scaling: minimum 0 runners when idle (no cost), scale to max 4 for parallel matrix jobs.
+# The build-and-push.yml matrix has 4 parallel jobs (one per image).
+minRunners: 0
+maxRunners: 4
+
+# Runner pod template.
+# This is the pod spec for each ephemeral runner pod.
+template:
+  spec:
+    # Run as root is required for Docker socket access.
+    # The Docker daemon socket is owned by root on RKE2 nodes.
+    securityContext: {}
+
+    # Init container: runner initialization (managed by ARC).
+    # The ARC chart injects the runner binary and token automatically.
+
+    containers:
+      - name: runner
+        image: ghcr.io/actions/actions-runner:2.323.0
+        # Pin to a specific runner version. The runner version must be compatible
+        # with the controller version (0.10.1). Check compatibility matrix at:
+        # https://github.com/actions/actions-runner-controller/blob/main/docs/gha-runner-scale-set-controller/README.md#software-stack-version-matrix
+        imagePullPolicy: IfNotPresent
+
+        # Mount the host Docker socket so the runner pod can run docker build/push.
+        # This shares the node Docker daemon — acceptable for a trusted lab cluster.
+        volumeMounts:
+          - name: docker-sock
+            mountPath: /var/run/docker.sock
+
+        # Resource limits for runner pods during builds.
+        # autodock builds are CPU-intensive (cmake, compilation). jupyter builds are
+        # network-intensive (Miniconda download). Sizes are conservative for a lab cluster.
+        resources:
+          requests:
+            cpu: 500m
+            memory: 512Mi
+          limits:
+            cpu: 4000m
+            memory: 4Gi
+
+    volumes:
+      - name: docker-sock
+        hostPath:
+          # Docker socket path on RKE2 nodes with the default containerd runtime.
+          # RKE2 uses containerd internally, but also installs a docker shim that
+          # exposes /var/run/docker.sock if the docker runtime is enabled.
+          # If the node only has containerd (no Docker), use a DinD sidecar instead.
+          # Verify socket exists: ssh <node> stat /var/run/docker.sock
+          path: /var/run/docker.sock
+          type: Socket
+
+# Controller deployment namespace.
+# The controller must be installed in the same namespace as the scale-set when
+# using the per-namespace controller mode (default in ARC v2).
+controllerServiceAccount:
+  namespace: arc-system
+  name: arc-gha-runner-scale-set-controller
