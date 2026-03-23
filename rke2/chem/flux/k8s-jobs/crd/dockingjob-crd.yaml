@@ -1,0 +1,93 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: dockingjobs.docking.khemia.io
+  labels:
+    app: docking-controller
+spec:
+  group: docking.khemia.io
+  names:
+    kind: DockingJob
+    listKind: DockingJobList
+    plural: dockingjobs
+    singular: dockingjob
+    shortNames:
+      - dj
+  scope: Namespaced
+  versions:
+    - name: v1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              properties:
+                pdbid:
+                  type: string
+                  default: "7jrn"
+                ligandDb:
+                  type: string
+                  default: "ChEBI_complete"
+                jupyterUser:
+                  type: string
+                  default: "jovyan"
+                nativeLigand:
+                  type: string
+                  default: "TTT"
+                ligandsChunkSize:
+                  type: integer
+                  default: 10000
+                image:
+                  type: string
+                  default: "hwcopeland/auto-docker:latest"
+                autodockPvc:
+                  type: string
+                  default: "pvc-autodock"
+                userPvcPrefix:
+                  type: string
+                  default: "claim-"
+                mountPath:
+                  type: string
+                  default: "/data"
+              required:
+                - pdbid
+                - ligandDb
+            status:
+              type: object
+              properties:
+                phase:
+                  type: string
+                  enum:
+                    - Pending
+                    - Running
+                    - Completed
+                    - Failed
+                  default: Pending
+                batchCount:
+                  type: integer
+                completedBatches:
+                  type: integer
+                message:
+                  type: string
+                startTime:
+                  type: string
+                  format: date-time
+                completionTime:
+                  format: date-time
+                  type: string
+      additionalPrinterColumns:
+        - name: Phase
+          type: string
+          jsonPath: .status.phase
+        - name: PDB ID
+          type: string
+          jsonPath: .spec.pdbid
+        - name: Ligand DB
+          type: string
+          jsonPath: .spec.ligandDb
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
