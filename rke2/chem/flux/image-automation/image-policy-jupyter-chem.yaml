@@ -1,0 +1,18 @@
+---
+# Selects the latest image tag matching ^sha-[a-f0-9]+ format.
+# Matches tags produced by the CI workflow (sha-<short-sha>).
+# Alphabetical ordering on sha- prefixed hex strings provides consistent selection.
+apiVersion: image.toolkit.fluxcd.io/v1beta2
+kind: ImagePolicy
+metadata:
+  name: jupyter-chem
+  namespace: chem
+spec:
+  imageRepositoryRef:
+    name: jupyter-chem
+  filterTags:
+    pattern: '^sha-[a-f0-9]+'
+    extract: "$0"
+  policy:
+    alphabetical:
+      order: asc
