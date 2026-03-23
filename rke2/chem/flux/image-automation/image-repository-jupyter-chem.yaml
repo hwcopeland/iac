@@ -1,0 +1,11 @@
+---
+apiVersion: image.toolkit.fluxcd.io/v1beta2
+kind: ImageRepository
+metadata:
+  name: jupyter-chem
+  namespace: chem
+spec:
+  image: zot.hwcopeland.net/chem/jupyter-chem
+  interval: 5m
+  secretRef:
+    name: zot-pull-secret

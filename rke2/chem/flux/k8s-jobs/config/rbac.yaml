@@ -1,0 +1,36 @@
+# RBAC Configuration for Docking Job Controller
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: docking-controller
+  namespace: chem
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: docking-controller
+  namespace: chem
+rules:
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["get", "list", "create", "delete", "watch", "update", "patch"]
+  - apiGroups: [""]
+    resources: ["pods", "pods/log", "configmaps"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get", "list", "create", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: docking-controller
+  namespace: chem
+subjects:
+  - kind: ServiceAccount
+    name: docking-controller
+    namespace: chem
+roleRef:
+  kind: Role
+  name: docking-controller
+  apiGroup: rbac.authorization.k8s.io
