@@ -26,7 +26,7 @@ on:
       - 'rke2/chem/compute-infrastructure/k8s-jobs/controller/**'
       - 'rke2/chem/compute-infrastructure/docker/autodock4/**'
       - 'rke2/chem/compute-infrastructure/docker/autodock-vina/**'
-      - 'rke2/chem/compute-infrastructure/rke2/jupyter/docker/**'
+
       - '.github/workflows/build-chem-images.yml'
   workflow_dispatch:
 
@@ -55,10 +55,6 @@ jobs:
             dockerfile: rke2/chem/compute-infrastructure/docker/autodock-vina/Dockerfile
             context: rke2/chem/compute-infrastructure/docker/autodock-vina/
 
-          - name: jupyter-chem
-            image: zot.hwcopeland.net/chem/jupyter-chem
-            dockerfile: rke2/chem/compute-infrastructure/rke2/jupyter/docker/Dockerfile
-            context: rke2/chem/compute-infrastructure/rke2/jupyter/docker/
 
     steps:
       - name: Checkout repository
