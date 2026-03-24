@@ -112,6 +112,29 @@ jobs:
           echo "TIMEOUT: job did not complete within 45 minutes"
           exit 1
 
+      - name: Verify MySQL export
+        run: |
+          JOB_NAME="${{ steps.submit.outputs.job_name }}"
+          echo "Checking MySQL for workflow $JOB_NAME..."
+          MYSQL_POD=$(kubectl get pod -n chem -l app=docking-mysql \
+            -o jsonpath='{.items[0].metadata.name}')
+          MYSQL_PWD=$(kubectl get secret docking-mysql-secret -n chem \
+            -o jsonpath='{.data.root-password}' | base64 -d)
+          for i in $(seq 1 12); do
+            COUNT=$(kubectl exec -n chem "$MYSQL_POD" -- \
+              mysql -u root -p"$MYSQL_PWD" docking -sN \
+              -e "SELECT COUNT(*) FROM docking_results WHERE workflow_name='$JOB_NAME';" \
+              2>/dev/null || echo 0)
+            if [ "${COUNT:-0}" -gt 0 ]; then
+              echo "SUCCESS: $COUNT ligand energy rows in MySQL for workflow $JOB_NAME"
+              exit 0
+            fi
+            echo "[$i/12] count=$COUNT, retrying in 5s..."
+            sleep 5
+          done
+          echo "ERROR: no MySQL rows found for workflow $JOB_NAME after 60s"
+          exit 1
+
       - name: Cleanup
         if: always()
         run: |
