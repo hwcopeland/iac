@@ -1,7 +1,8 @@
 ---
-# Selects the latest image tag matching ^sha-[a-f0-9]+ format.
-# Matches tags produced by the CI workflow (sha-<short-sha>).
-# Alphabetical ordering on sha- prefixed hex strings provides consistent selection.
+# Selects the latest image tag matching ^build-[0-9]+ format.
+# Tags are produced by CI as build-<NNNNNN>-<sha7> where NNNNNN is the
+# zero-padded GitHub Actions run_number. This ensures alphabetical order ==
+# chronological order, so the newest build is always selected.
 apiVersion: image.toolkit.fluxcd.io/v1beta2
 kind: ImagePolicy
 metadata:
@@ -11,7 +12,7 @@ spec:
   imageRepositoryRef:
     name: autodock-vina
   filterTags:
-    pattern: '^sha-[a-f0-9]+'
+    pattern: '^build-[0-9]+'
     extract: "$0"
   policy:
     alphabetical:
