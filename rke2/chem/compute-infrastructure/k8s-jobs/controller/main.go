@@ -50,6 +50,11 @@ type DockingJobController struct {
 	// Populated immediately after the postprocessing job succeeds so the result
 	// is readable even after the pod's 5-minute TTL expires.
 	results sync.Map
+	// jobStatuses tracks in-memory workflow state (jobName → DockingJobStatus).
+	// This is the authoritative source for GetJob — it avoids false "Completed"
+	// responses caused by stale K8s Job objects from previous runs that were
+	// not cleaned up (e.g. when TTLSecondsAfterFinished is not enforced).
+	jobStatuses sync.Map
 }
 
 // DockingJob represents the custom resource
@@ -197,6 +202,7 @@ func (c *DockingJobController) processDockingJob(job DockingJob) {
 	now := time.Now()
 	job.Status.Phase = "Running"
 	job.Status.StartTime = &now
+	c.jobStatuses.Store(job.Name, job.Status)
 
 	log.Printf("[%s] Step 1/5: copy-ligand-db", job.Name)
 	if err := c.createCopyLigandDbJob(job); err != nil {
@@ -229,6 +235,7 @@ func (c *DockingJobController) processDockingJob(job DockingJob) {
 	}
 
 	job.Status.BatchCount = batchCount
+	c.jobStatuses.Store(job.Name, job.Status)
 	log.Printf("[%s] Step 4/5: processing %d batch(es)", job.Name, batchCount)
 
 	for i := 0; i < batchCount; i++ {
@@ -261,6 +268,7 @@ func (c *DockingJobController) processDockingJob(job DockingJob) {
 		}
 
 		job.Status.CompletedBatches = i + 1
+		c.jobStatuses.Store(job.Name, job.Status)
 		log.Printf("[%s] Batch %d/%d complete", job.Name, i+1, batchCount)
 	}
 
@@ -295,14 +303,25 @@ func (c *DockingJobController) processDockingJob(job DockingJob) {
 	completionTime := time.Now()
 	job.Status.Phase = "Completed"
 	job.Status.CompletionTime = &completionTime
-	job.Status.Message = "All steps completed successfully"
+	if result != "" {
+		job.Status.Message = result
+	} else {
+		job.Status.Message = "All steps completed successfully"
+	}
+	c.jobStatuses.Store(job.Name, job.Status)
 
 	log.Printf("Docking job %s completed successfully", job.Name)
 }
 
 func (c *DockingJobController) failJob(job DockingJob, message string) {
-	job.Status.Phase = "Failed"
-	job.Status.Message = message
+	status := DockingJobStatus{
+		Phase:            "Failed",
+		Message:          message,
+		BatchCount:       job.Status.BatchCount,
+		CompletedBatches: job.Status.CompletedBatches,
+		StartTime:        job.Status.StartTime,
+	}
+	c.jobStatuses.Store(job.Name, status)
 	log.Printf("Docking job %s failed: %s", job.Name, message)
 }
 
