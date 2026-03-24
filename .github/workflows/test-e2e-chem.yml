@@ -58,6 +58,16 @@ jobs:
       - name: Verify controller health
         run: curl -sf http://docking-controller.chem.svc.cluster.local/health
 
+      - name: Dump existing workflows (pre-run state)
+        run: |
+          echo "=== existing docking workflows ==="
+          curl -sf http://docking-controller.chem.svc.cluster.local/api/v1/dockingjobs \
+            2>/dev/null || echo "(list failed)"
+          echo ""
+          echo "=== controller health + time ==="
+          curl -sf http://docking-controller.chem.svc.cluster.local/health \
+            2>/dev/null || echo "(health failed)"
+
       - name: Submit test DockingJob
         id: submit
         run: |
