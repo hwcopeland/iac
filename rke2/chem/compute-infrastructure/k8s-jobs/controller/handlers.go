@@ -203,6 +203,8 @@ func (h *APIHandler) GetJob(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	log.Printf("[GetJob] %s: status=%s total_k8s_jobs=%d completed=%d message=%q",
+		jobName, status, total, completed, message)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(DockingJobResponse{
 		Name:             jobName,
@@ -215,10 +217,12 @@ func (h *APIHandler) GetJob(w http.ResponseWriter, r *http.Request) {
 
 // postprocessingResult fetches the "Best energy: ..." line from postprocessing pod logs.
 func (h *APIHandler) postprocessingResult(ctx context.Context, jobName string) string {
+	log.Printf("[postprocessingResult] fetching logs from job %s", jobName)
 	pods, err := h.client.CoreV1().Pods(h.namespace).List(ctx, metav1.ListOptions{
 		LabelSelector: fmt.Sprintf("job-name=%s", jobName),
 	})
 	if err != nil || len(pods.Items) == 0 {
+		log.Printf("[postprocessingResult] no pods found for job %s: err=%v", jobName, err)
 		return ""
 	}
 	raw, err := h.client.CoreV1().Pods(h.namespace).GetLogs(pods.Items[0].Name, &corev1.PodLogOptions{}).
