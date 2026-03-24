@@ -29,14 +29,25 @@ on:
     paths:
       - 'rke2/chem/compute-infrastructure/k8s-jobs/controller/**'
       - 'rke2/chem/compute-infrastructure/docker/autodock-vina/**'
-
+      - 'rke2/chem/compute-infrastructure/test/autodock/**'
       - '.github/workflows/build-chem-images.yml'
   workflow_dispatch:
 
 jobs:
+  test-autodock-vina:
+    name: Test autodock-vina MySQL export
+    runs-on: [self-hosted, arc-chem]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+
+      - name: Run autodock-vina MySQL export test
+        run: bash rke2/chem/compute-infrastructure/test/autodock/run_test.sh
+
   build-and-push:
     name: Build ${{ matrix.name }}
     runs-on: [self-hosted, arc-chem]
+    needs: test-autodock-vina
     strategy:
       fail-fast: false
       matrix:
