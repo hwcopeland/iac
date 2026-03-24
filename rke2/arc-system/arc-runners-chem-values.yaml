@@ -19,7 +19,7 @@
 
 # The GitHub repository this scale-set registers to.
 # Format: https://github.com/<org>/<repo>
-githubConfigUrl: "https://github.com/Khemiatic-Energistics/compute-infrastructure"
+githubConfigUrl: "https://github.com/hwcopeland/iac"
 
 # Reference to the Kubernetes Secret containing GitHub App credentials.
 # This secret is created by the ExternalSecret defined in arc-setup.md.

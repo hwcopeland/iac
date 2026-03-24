@@ -25,5 +25,5 @@ BEGIN { i = n; j = -1; }
     if(j != 0) next;
 }
 { print > out }
-END { print j } 
+END { print j+1 }
 ' $db_label.sdf 

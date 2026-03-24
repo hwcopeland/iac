@@ -4,10 +4,13 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -208,8 +211,18 @@ func (c *DockingJobController) processDockingJob(job DockingJob) {
 			c.failJob(job, fmt.Sprintf("prepare ligands batch %d failed: %v", i, err))
 			return
 		}
+		prepareName := fmt.Sprintf("%s-prepare-ligands-%s", job.Name, batchLabel)
+		if err := c.waitForJobCompletion(prepareName); err != nil {
+			c.failJob(job, fmt.Sprintf("prepare ligands batch %d failed: %v", i, err))
+			return
+		}
 
 		if err := c.createDockingJobExecution(job, batchLabel); err != nil {
+			c.failJob(job, fmt.Sprintf("docking batch %d failed: %v", i, err))
+			return
+		}
+		dockingName := fmt.Sprintf("%s-docking-%s", job.Name, batchLabel)
+		if err := c.waitForJobCompletion(dockingName); err != nil {
 			c.failJob(job, fmt.Sprintf("docking batch %d failed: %v", i, err))
 			return
 		}
@@ -272,8 +285,11 @@ func (c *DockingJobController) createCopyLigandDbJob(job DockingJob) error {
 		},
 	}
 
-	_, err := c.jobClient.Create(context.TODO(), j, metav1.CreateOptions{})
-	return err
+	created, err := c.jobClient.Create(context.TODO(), j, metav1.CreateOptions{})
+	if err != nil {
+		return err
+	}
+	return c.waitForJobCompletion(created.Name)
 }
 
 func (c *DockingJobController) createPrepareReceptorJob(job DockingJob) error {
@@ -362,7 +378,7 @@ func (c *DockingJobController) createSplitSdfJob(job DockingJob) (int, error) {
 		return 0, err
 	}
 
-	return 5, nil
+	return c.parseBatchCountFromLogs(created.Name)
 }
 
 func (c *DockingJobController) createPrepareLigandsJob(job DockingJob, batchLabel string) error {
@@ -483,6 +499,49 @@ func (c *DockingJobController) createPostProcessingJob(job DockingJob) error {
 
 	_, err := c.jobClient.Create(context.TODO(), j, metav1.CreateOptions{})
 	return err
+}
+
+// parseBatchCountFromLogs reads the completed split-sdf pod's logs and parses
+// the batch count printed by split_sdf.sh as its last stdout line.
+func (c *DockingJobController) parseBatchCountFromLogs(jobName string) (int, error) {
+	pods, err := c.client.CoreV1().Pods(c.namespace).List(context.TODO(), metav1.ListOptions{
+		LabelSelector: fmt.Sprintf("job-name=%s", jobName),
+	})
+	if err != nil {
+		return 0, fmt.Errorf("listing pods for job %s: %w", jobName, err)
+	}
+	if len(pods.Items) == 0 {
+		return 0, fmt.Errorf("no pods found for job %s", jobName)
+	}
+
+	podName := pods.Items[0].Name
+	req := c.client.CoreV1().Pods(c.namespace).GetLogs(podName, &corev1.PodLogOptions{})
+	stream, err := req.Stream(context.TODO())
+	if err != nil {
+		return 0, fmt.Errorf("getting logs for pod %s: %w", podName, err)
+	}
+	defer stream.Close()
+
+	buf, err := io.ReadAll(stream)
+	if err != nil {
+		return 0, fmt.Errorf("reading logs from pod %s: %w", podName, err)
+	}
+
+	lines := strings.Split(strings.TrimSpace(string(buf)), "\n")
+	if len(lines) == 0 {
+		return 0, fmt.Errorf("empty logs from split-sdf pod %s", podName)
+	}
+
+	lastLine := strings.TrimSpace(lines[len(lines)-1])
+	count, err := strconv.Atoi(lastLine)
+	if err != nil {
+		return 0, fmt.Errorf("parsing batch count (last log line %q): %w", lastLine, err)
+	}
+	if count <= 0 {
+		return 0, fmt.Errorf("invalid batch count %d from split-sdf job %s", count, jobName)
+	}
+
+	return count, nil
 }
 
 func (c *DockingJobController) waitForJobCompletion(jobName string) error {
