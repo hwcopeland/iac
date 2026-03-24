@@ -20,7 +20,7 @@ def run_command(command):
 def download_protein(protein_id):
     """Download the protein PDB file using wget."""
     filename = f'{protein_id}.pdb'
-    url = f'https://files.rcsb.org/download/{filename}'  
+    url = f'https://files.rcsb.org/download/{filename}'
     try:
         subprocess.run(['wget','-O', filename, url], check=True)
         if os.path.exists(filename):
@@ -109,6 +109,15 @@ def main():
     ligand_id = args.ligand_id
     receptor_pdb = f"{pdb_id}.pdb"
     receptor_pdb_clean = f"{pdb_id}.pdb"
+    receptor_pdbqt = f"{pdb_id}.pdbqt"
+
+    # If both output files already exist from a previous run, skip all steps.
+    # The downloaded PDB is cleaned in-place (ligand removed), so re-running
+    # download + calculate_grid_center on the cleaned file would fail because
+    # the native ligand is no longer present.
+    if os.path.exists(receptor_pdbqt) and os.path.exists('grid_center.txt'):
+        print(f"Receptor {receptor_pdbqt} and grid_center.txt already exist, skipping preparation.")
+        return
 
     # Step 1: Download the protein PDB file
     download_protein(pdb_id)
