@@ -30,7 +30,7 @@ spec:
     spec:
       containers:
         - name: runner
-          image: ghcr.io/actions/actions-runner:2.323.0
+          image: ghcr.io/actions/actions-runner:2.333.0
           imagePullPolicy: IfNotPresent
           env:
             - name: GITHUB_PAT
@@ -71,7 +71,9 @@ spec:
                 --name "arc-chem-$(hostname)" \
                 --labels "arc-chem,self-hosted,linux,x64" \
                 --unattended \
-                --ephemeral
+                --ephemeral \
+                --disableupdate \
+                --replace
               echo "Runner configured. Starting..."
               ./run.sh
           volumeMounts:
