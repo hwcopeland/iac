@@ -13,7 +13,11 @@
 # Cache strategy: registry-based layer cache (type=registry) with mode=max.
 # type=gha (GitHub Actions cache) does not work from on-cluster runners.
 #
-# Image tag format: sha-<7-char-sha> (Flux ImagePolicy compatible).
+# Image tag format: build-<NNNNNN>-<sha7>
+# Zero-padded run number prefix guarantees lexicographic == chronological order,
+# which is required for Flux ImagePolicy alphabetical selection to pick the newest
+# build. Pure sha-<sha7> tags fail because hex digits are not monotonic
+# (e.g. sha-e063a72 beats sha-2398b71 alphabetically even though it is older).
 # Additionally pushes :latest for backward compatibility.
 
 name: Build and Push Chem Images
@@ -68,9 +72,10 @@ jobs:
         id: tags
         run: |
           SHORT_SHA="${GITHUB_SHA::7}"
-          SHA_TAG="sha-${SHORT_SHA}"
-          echo "sha_tag=${SHA_TAG}" >> "$GITHUB_OUTPUT"
-          echo "Building ${{ matrix.name }} with tag: ${SHA_TAG}"
+          RUN_NUM=$(printf '%06d' "${{ github.run_number }}")
+          BUILD_TAG="build-${RUN_NUM}-${SHORT_SHA}"
+          echo "build_tag=${BUILD_TAG}" >> "$GITHUB_OUTPUT"
+          echo "Building ${{ matrix.name }} with tag: ${BUILD_TAG}"
 
       - name: Build and push ${{ matrix.name }}
         uses: docker/build-push-action@14487ce63c7a62a4a324b0bfb37086795e31c6c1  # v6.16.0
@@ -80,7 +85,7 @@ jobs:
           platforms: linux/amd64
           push: true
           tags: |
-            ${{ matrix.image }}:${{ steps.tags.outputs.sha_tag }}
+            ${{ matrix.image }}:${{ steps.tags.outputs.build_tag }}
             ${{ matrix.image }}:latest
           # Registry-based layer cache with mode=max caches all intermediate layers.
           # mode=max is required to cache multi-stage builder layers.
