@@ -24,7 +24,6 @@ on:
       - main
     paths:
       - 'rke2/chem/compute-infrastructure/k8s-jobs/controller/**'
-      - 'rke2/chem/compute-infrastructure/docker/autodock4/**'
       - 'rke2/chem/compute-infrastructure/docker/autodock-vina/**'
 
       - '.github/workflows/build-chem-images.yml'
@@ -44,11 +43,6 @@ jobs:
             # Build context MUST be k8s-jobs/ (not k8s-jobs/controller/) because
             # the Dockerfile uses: COPY controller/go.mod controller/go.sum ./
             context: rke2/chem/compute-infrastructure/k8s-jobs/
-
-          - name: autodock4
-            image: zot.hwcopeland.net/chem/autodock4
-            dockerfile: rke2/chem/compute-infrastructure/docker/autodock4/Dockerfile
-            context: rke2/chem/compute-infrastructure/docker/autodock4/
 
           - name: autodock-vina
             image: zot.hwcopeland.net/chem/autodock-vina
@@ -89,7 +83,6 @@ jobs:
             ${{ matrix.image }}:${{ steps.tags.outputs.sha_tag }}
             ${{ matrix.image }}:latest
           # Registry-based layer cache with mode=max caches all intermediate layers.
-          # Critical for autodock builds which have large ubuntu:20.04 base layers.
           # mode=max is required to cache multi-stage builder layers.
           cache-from: type=registry,ref=${{ matrix.image }}:cache
           cache-to: type=registry,ref=${{ matrix.image }}:cache,mode=max
