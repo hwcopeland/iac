@@ -3,13 +3,16 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
+	_ "github.com/go-sql-driver/mysql"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
@@ -319,6 +322,80 @@ func (h *APIHandler) GetLogs(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "text/plain")
 	w.Write(logs)
+}
+
+// DockingResultsResponse holds aggregated MySQL stats for a workflow
+type DockingResultsResponse struct {
+	WorkflowName        string  `json:"workflow_name"`
+	ResultCount         int     `json:"result_count"`
+	BestAffinityKcalMol float64 `json:"best_affinity_kcal_mol,omitempty"`
+	WorstAffinityKcalMol float64 `json:"worst_affinity_kcal_mol,omitempty"`
+	AvgAffinityKcalMol  float64 `json:"avg_affinity_kcal_mol,omitempty"`
+}
+
+// mysqlDSN builds a DSN from the standard MYSQL_* env vars injected into the controller pod.
+func mysqlDSN() string {
+	host := os.Getenv("MYSQL_HOST")
+	if host == "" {
+		host = "docking-mysql.chem.svc.cluster.local"
+	}
+	port := os.Getenv("MYSQL_PORT")
+	if port == "" {
+		port = "3306"
+	}
+	user := os.Getenv("MYSQL_USER")
+	if user == "" {
+		user = "root"
+	}
+	password := os.Getenv("MYSQL_PASSWORD")
+	dbName := os.Getenv("MYSQL_DATABASE")
+	if dbName == "" {
+		dbName = "docking"
+	}
+	return fmt.Sprintf("%s:%s@tcp(%s:%s)/%s", user, password, host, port, dbName)
+}
+
+// GetResults handles GET /api/v1/dockingjobs/{name}/results
+// Returns aggregated docking affinity stats from MySQL for the given workflow.
+func (h *APIHandler) GetResults(w http.ResponseWriter, r *http.Request) {
+	trimmed := strings.TrimPrefix(r.URL.Path, "/api/v1/dockingjobs/")
+	jobName := strings.TrimSuffix(trimmed, "/results")
+	if jobName == "" {
+		writeError(w, "job name required", http.StatusBadRequest)
+		return
+	}
+
+	db, err := sql.Open("mysql", mysqlDSN())
+	if err != nil {
+		writeError(w, fmt.Sprintf("db open error: %v", err), http.StatusInternalServerError)
+		return
+	}
+	defer db.Close()
+
+	var count int
+	var best, worst, avg sql.NullFloat64
+	row := db.QueryRowContext(r.Context(),
+		`SELECT COUNT(*), MIN(affinity_kcal_mol), MAX(affinity_kcal_mol), AVG(affinity_kcal_mol)
+		   FROM docking_results WHERE workflow_name = ?`, jobName)
+	if err := row.Scan(&count, &best, &worst, &avg); err != nil {
+		writeError(w, fmt.Sprintf("query error: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	resp := DockingResultsResponse{
+		WorkflowName: jobName,
+		ResultCount:  count,
+	}
+	if best.Valid {
+		resp.BestAffinityKcalMol = best.Float64
+		resp.WorstAffinityKcalMol = worst.Float64
+		resp.AvgAffinityKcalMol = avg.Float64
+	}
+
+	log.Printf("[GetResults] %s: count=%d best=%.2f worst=%.2f avg=%.2f",
+		jobName, count, resp.BestAffinityKcalMol, resp.WorstAffinityKcalMol, resp.AvgAffinityKcalMol)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
 }
 
 // HealthCheck handles GET /health
