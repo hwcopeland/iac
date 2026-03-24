@@ -18,7 +18,7 @@ This repository contains everything needed to deploy and manage a homelab Kubern
   - Namespace organization
   - Directory structure
 - **[Application Deployment Guide](docs/rke2/APPLICATIONS.md)** - Deploy and manage applications
-  - Core infrastructure (cert-manager, ingress, MetalLB, Longhorn)
+  - Core infrastructure (Cert-manager, Longhorn)
   - Monitoring and observability
   - Media services
   - Web applications
@@ -46,17 +46,23 @@ This repository contains everything needed to deploy and manage a homelab Kubern
 
 ## Features
 
-- **Automated Infrastructure**: Ansible playbooks for repeatable, idempotent deployments
-- **RKE2 Kubernetes**: Lightweight, secure Kubernetes distribution
-- **GitOps Ready**: ArgoCD integration for declarative deployments
+- **Automated Infrastructure**: Ansible playbooks for os enviorment
+- **RKE2 Kubernetes**: Rancher's Kubernetes Engine 2
+  - Cilium: container networking & gateway controller
+  - Longhorn: distributed block store
+- **CI/CD**: Continuous Integration / Continuous Delivery
+  - Flux: Automated cluster-repo reconcile (push-to-prod)
+  - ARC: Automated container builds and testing
+  - ZOT: Local OCI Image repos 
 - **Centralized Authentication**: Authentik OAuth/OIDC for SSO across services
 - **Comprehensive Monitoring**: Prometheus and Grafana for observability
-- **Network Observability**: Hubble UI for Cilium network visibility
-- **Persistent Storage**: Longhorn for distributed block storage
-- **Load Balancing**: MetalLB for bare-metal load balancing
 - **Secrets Management**: External Secrets Operator with Bitwarden integration
 - **SSL/TLS**: Automated certificate management with cert-manager
 
 ## Sources
 
 The main inspiration for this comes from https://github.com/chkpwd/iac. Brian has helped me a great deal in understanding the concepts provided in this repo. So to him a great deal of credit is owed. I have used his repo as a reference for moving my homelab to k8s. Special shout outs to Acelink, Senk0 and other k8s friends of the r/Homelab discord for always providing interesting tools, etc.
+
+## AI Disclosure & Usage
+
+A significant portion of the code in this repository is AI-generated. While this has streamlined the development of my infrastructure, I recognize that it may not always align with traditional "best practices" or manual coding standards. This repository serves primarily as a personal lab environment for experimentation. As such, it is provided as-is and is not intended to be a definitive guide for production-grade software development.
