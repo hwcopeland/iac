@@ -65,7 +65,7 @@ jobs:
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@b5ca514318bd6ebac0fb2aed5f5c2f7c0c84a1b  # v3.10.0
+        uses: docker/setup-buildx-action@b5ca514318bd6ebac0fb2aedd5d36ec1b5c232a2  # v3.10.0
 
       - name: Log in to Zot registry
         uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772  # v3.4.0
@@ -83,7 +83,7 @@ jobs:
           echo "Building ${{ matrix.name }} with tag: ${SHA_TAG}"
 
       - name: Build and push ${{ matrix.name }}
-        uses: docker/build-push-action@14487ce63c7a62a4a324b0bfb37086795e31c6c  # v6.16.0
+        uses: docker/build-push-action@14487ce63c7a62a4a324b0bfb37086795e31c6c1  # v6.16.0
         with:
           context: ${{ matrix.context }}
           file: ${{ matrix.dockerfile }}
