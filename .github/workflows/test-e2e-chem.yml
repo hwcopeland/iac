@@ -109,6 +109,19 @@ jobs:
           echo "TIMEOUT: job did not complete within 45 minutes"
           exit 1
 
+      - name: Dump pipeline logs
+        if: always()
+        run: |
+          JOB_NAME="${{ steps.submit.outputs.job_name }}"
+          [ -z "$JOB_NAME" ] && exit 0
+          BASE="http://docking-controller.chem.svc.cluster.local/api/v1/dockingjobs/$JOB_NAME"
+          for TASK in split-sdf prepare-ligands docking postprocessing export-mysql; do
+            echo "=== logs: $TASK ==="
+            curl -sf "$BASE/logs?task=$TASK" 2>/dev/null || echo "(no logs or job gone)"
+          done
+          echo "=== job status ==="
+          curl -sf "$BASE" 2>/dev/null || true
+
       - name: Verify MySQL export
         run: |
           JOB_NAME="${{ steps.submit.outputs.job_name }}"
