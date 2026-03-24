@@ -1,0 +1,224 @@
+# Standalone Job Templates
+# These can be used independently or managed by the controller
+
+---
+# Job 1: Copy Ligand Database
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: copy-ligand-db-{{ .WorkflowName }}
+  labels:
+    docking.k8s.io/job-type: copy-ligand-db
+    docking.k8s.io/workflow: {{ .WorkflowName }}
+spec:
+  ttlSecondsAfterFinished: 300
+  template:
+    metadata:
+      labels:
+        docking.k8s.io/job-type: copy-ligand-db
+        docking.k8s.io/workflow: {{ .WorkflowName }}
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: copy
+          image: alpine:latest
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              cp {{ .MountPath }}/{{ .UserPvc }}/{{ .LigandDb }}.sdf {{ .MountPath }}/{{ .LigandDb }}.sdf
+          volumeMounts:
+            - name: autodock-pvc
+              mountPath: {{ .MountPath }}
+      volumes:
+        - name: autodock-pvc
+          persistentVolumeClaim:
+            claimName: {{ .AutodockPvc }}
+
+---
+# Job 2: Prepare Receptor
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: prepare-receptor-{{ .WorkflowName }}
+  labels:
+    docking.k8s.io/job-type: prepare-receptor
+    docking.k8s.io/workflow: {{ .WorkflowName }}
+spec:
+  ttlSecondsAfterFinished: 300
+  template:
+    metadata:
+      labels:
+        docking.k8s.io/job-type: prepare-receptor
+        docking.k8s.io/workflow: {{ .WorkflowName }}
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: prepare
+          image: {{ .Image }}
+          imagePullPolicy: Always
+          workingDir: {{ .MountPath }}
+          command: ["python3", "/autodock/scripts/proteinprepv2.py"]
+          args:
+            - "--protein_id"
+            - {{ .PdbId }}
+            - "--ligand_id"
+            - {{ .NativeLigand }}
+          volumeMounts:
+            - name: autodock-pvc
+              mountPath: {{ .MountPath }}
+      volumes:
+        - name: autodock-pvc
+          persistentVolumeClaim:
+            claimName: {{ .AutodockPvc }}
+
+---
+# Job 3: Split SDF
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: split-sdf-{{ .WorkflowName }}
+  labels:
+    docking.k8s.io/job-type: split-sdf
+    docking.k8s.io/workflow: {{ .WorkflowName }}
+spec:
+  ttlSecondsAfterFinished: 300
+  template:
+    metadata:
+      labels:
+        docking.k8s.io/job-type: split-sdf
+        docking.k8s.io/workflow: {{ .WorkflowName }}
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: split
+          image: {{ .Image }}
+          imagePullPolicy: Always
+          workingDir: {{ .MountPath }}
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              /autodock/scripts/split_sdf.sh {{ .LigandsChunkSize }} {{ .LigandDb }}
+          env:
+            - name: MOUNT_PATH_AUTODOCK
+              value: {{ .MountPath }}
+          volumeMounts:
+            - name: autodock-pvc
+              mountPath: {{ .MountPath }}
+      volumes:
+        - name: autodock-pvc
+          persistentVolumeClaim:
+            claimName: {{ .AutodockPvc }}
+
+---
+# Job 4: Prepare Ligands (for each batch)
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: prepare-ligands-{{ .WorkflowName }}-{{ .BatchLabel }}
+  labels:
+    docking.k8s.io/job-type: prepare-ligands
+    docking.k8s.io/workflow: {{ .WorkflowName }}
+    docking.k8s.io/batch: {{ .BatchLabel }}
+spec:
+  ttlSecondsAfterFinished: 300
+  template:
+    metadata:
+      labels:
+        docking.k8s.io/job-type: prepare-ligands
+        docking.k8s.io/workflow: {{ .WorkflowName }}
+        docking.k8s.io/batch: {{ .BatchLabel }}
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: prepare
+          image: {{ .Image }}
+          imagePullPolicy: Always
+          workingDir: {{ .MountPath }}
+          command: ["python3", "/autodock/scripts/ligandprepv2.py"]
+          args:
+            - {{ .BatchLabel }}.sdf
+            - {{ .MountPath }}/output
+            - "--format"
+            - "pdb"
+          env:
+            - name: MOUNT_PATH_AUTODOCK
+              value: {{ .MountPath }}
+          volumeMounts:
+            - name: autodock-pvc
+              mountPath: {{ .MountPath }}
+      volumes:
+        - name: autodock-pvc
+          persistentVolumeClaim:
+            claimName: {{ .AutodockPvc }}
+
+---
+# Job 5: Perform Docking (for each batch)
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: docking-{{ .WorkflowName }}-{{ .BatchLabel }}
+  labels:
+    docking.k8s.io/job-type: docking
+    docking.k8s.io/workflow: {{ .WorkflowName }}
+    docking.k8s.io/batch: {{ .BatchLabel }}
+spec:
+  ttlSecondsAfterFinished: 300
+  template:
+    metadata:
+      labels:
+        docking.k8s.io/job-type: docking
+        docking.k8s.io/workflow: {{ .WorkflowName }}
+        docking.k8s.io/batch: {{ .BatchLabel }}
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: docking
+          image: {{ .Image }}
+          imagePullPolicy: Always
+          workingDir: {{ .MountPath }}
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              /autodock/scripts/dockingv2.sh {{ .PdbId }} {{ .BatchLabel }}
+          volumeMounts:
+            - name: autodock-pvc
+              mountPath: {{ .MountPath }}
+      volumes:
+        - name: autodock-pvc
+          persistentVolumeClaim:
+            claimName: {{ .AutodockPvc }}
+
+---
+# Job 6: Postprocessing
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: postprocessing-{{ .WorkflowName }}
+  labels:
+    docking.k8s.io/job-type: postprocessing
+    docking.k8s.io/workflow: {{ .WorkflowName }}
+spec:
+  ttlSecondsAfterFinished: 300
+  template:
+    metadata:
+      labels:
+        docking.k8s.io/job-type: postprocessing
+        docking.k8s.io/workflow: {{ .WorkflowName }}
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: postprocess
+          image: {{ .Image }}
+          imagePullPolicy: Always
+          workingDir: {{ .MountPath }}
+          command: ["/autodock/scripts/3_post_processing.sh"]
+          args:
+            - {{ .PdbId }}
+            - {{ .LigandDb }}
+          volumeMounts:
+            - name: autodock-pvc
+              mountPath: {{ .MountPath }}
+      volumes:
+        - name: autodock-pvc
+          persistentVolumeClaim:
+            claimName: {{ .AutodockPvc }}

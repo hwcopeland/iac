@@ -1,0 +1,105 @@
+---
+# Build and push all four chem Docker images to zot.hwcopeland.net/chem/.
+#
+# Runner requirement: self-hosted ARC scale-set labeled arc-chem.
+# The runner pod runs inside the cluster LAN and therefore has direct network
+# access to zot.hwcopeland.net — this is the solution to the private registry
+# network boundary (GitHub cloud runners cannot reach zot.hwcopeland.net).
+#
+# Registry credentials are stored as GitHub Actions encrypted repository secrets:
+#   ZOT_USERNAME — username for zot.hwcopeland.net (from Bitwarden 766ec5c7-...)
+#   ZOT_PASSWORD — password for zot.hwcopeland.net (from Bitwarden 766ec5c7-...)
+#
+# Cache strategy: registry-based layer cache (type=registry) with mode=max.
+# type=gha (GitHub Actions cache) does not work from on-cluster runners.
+#
+# Image tag format: sha-<7-char-sha> (Flux ImagePolicy compatible).
+# Additionally pushes :latest for backward compatibility.
+#
+# See docs/tdd/github-actions-ci.md for full design rationale.
+
+name: Build and Push Images
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'k8s-jobs/controller/**'
+      - 'docker/autodock4/**'
+      - 'docker/autodock-vina/**'
+      - 'rke2/jupyter/docker/**'
+      - '.github/workflows/build-and-push.yml'
+  workflow_dispatch:
+
+jobs:
+  build-and-push:
+    name: Build ${{ matrix.name }}
+    runs-on: arc-chem
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: docking-controller
+            image: zot.hwcopeland.net/chem/docking-controller
+            dockerfile: k8s-jobs/controller/Dockerfile
+            # Build context MUST be k8s-jobs/ (not k8s-jobs/controller/) because
+            # the Dockerfile uses: COPY controller/go.mod controller/go.sum ./
+            context: k8s-jobs/
+
+          - name: autodock4
+            image: zot.hwcopeland.net/chem/autodock4
+            dockerfile: docker/autodock4/Dockerfile
+            # Downloads autodocksuite binary from autodock.scripps.edu via ADD.
+            # First build after cache eviction will make outbound HTTP requests.
+            context: docker/autodock4/
+
+          - name: autodock-vina
+            image: zot.hwcopeland.net/chem/autodock-vina
+            dockerfile: docker/autodock-vina/Dockerfile
+            # Downloads vina binary from vina.scripps.edu via ADD.
+            context: docker/autodock-vina/
+
+          - name: jupyter-chem
+            image: zot.hwcopeland.net/chem/jupyter-chem
+            dockerfile: rke2/jupyter/docker/Dockerfile
+            # Installs Miniconda via wget from repo.anaconda.com.
+            context: rke2/jupyter/docker/
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@b5ca514318bd6ebac0fb2aed5f5c2f7c0c84a1b  # v3.10.0
+
+      - name: Log in to Zot registry
+        uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772  # v3.4.0
+        with:
+          registry: zot.hwcopeland.net
+          username: ${{ secrets.ZOT_USERNAME }}
+          password: ${{ secrets.ZOT_PASSWORD }}
+
+      - name: Compute image tags
+        id: tags
+        run: |
+          SHORT_SHA="${GITHUB_SHA::7}"
+          SHA_TAG="sha-${SHORT_SHA}"
+          echo "sha_tag=${SHA_TAG}" >> "$GITHUB_OUTPUT"
+          echo "Building ${{ matrix.name }} with tag: ${SHA_TAG}"
+
+      - name: Build and push ${{ matrix.name }}
+        uses: docker/build-push-action@14487ce63c7a62a4a324b0bfb37086795e31c6c  # v6.16.0
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ matrix.image }}:${{ steps.tags.outputs.sha_tag }}
+            ${{ matrix.image }}:latest
+          # Registry-based layer cache with mode=max caches all intermediate layers.
+          # Critical for autodock builds which have large ubuntu:20.04 base layers.
+          # mode=max is required to cache multi-stage builder layers.
+          cache-from: type=registry,ref=${{ matrix.image }}:cache
+          cache-to: type=registry,ref=${{ matrix.image }}:cache,mode=max
