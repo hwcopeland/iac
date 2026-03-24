@@ -4,8 +4,9 @@
 Designed to run as a one-shot kubectl pod inside the cluster so it can
 reach docking-mysql.chem.svc.cluster.local directly.
 
-Required env vars: MYSQL_HOST, MYSQL_PORT, MYSQL_USER, MYSQL_PASSWORD,
+Required env vars: MYSQL_HOST, MYSQL_USER, MYSQL_PASSWORD,
                    MYSQL_DATABASE, WORKFLOW_NAME
+Optional env vars: MYSQL_PORT (defaults to 3306 if unset)
 """
 
 import os
@@ -49,11 +50,12 @@ for path in sorted(__import__("glob").glob(f"{base}/ligands_batch*/docked/*.log"
     parts = path.split(os.sep)
     batch = parts[-3]
     ligand = os.path.splitext(parts[-1])[0]
-    for line in open(path):
-        m = mode1.match(line)
-        if m:
-            rows.append((WORKFLOW, "7jrn", batch, ligand, float(m.group(1))))
-            break
+    with open(path) as f:
+        for line in f:
+            m = mode1.match(line)
+            if m:
+                rows.append((WORKFLOW, "7jrn", batch, ligand, float(m.group(1))))
+                break
 print(f"Parsed {len(rows)} results")
 
 # ── 3. Export to MySQL ────────────────────────────────────────────────────────
@@ -73,7 +75,9 @@ cur.execute("""CREATE TABLE IF NOT EXISTS docking_results (
     ligand_name VARCHAR(255) NOT NULL,
     affinity_kcal_mol FLOAT NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    INDEX idx_workflow (workflow_name)
+    INDEX idx_workflow (workflow_name),
+    INDEX idx_pdbid (pdb_id),
+    INDEX idx_affinity (affinity_kcal_mol)
 )""")
 cur.executemany(
     "INSERT INTO docking_results (workflow_name,pdb_id,batch_label,ligand_name,affinity_kcal_mol)"

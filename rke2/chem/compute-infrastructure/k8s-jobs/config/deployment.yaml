@@ -30,6 +30,19 @@ spec:
           env:
             - name: NAMESPACE
               value: "chem"
+            - name: MYSQL_HOST
+              value: "docking-mysql.chem.svc.cluster.local"
+            - name: MYSQL_PORT
+              value: "3306"
+            - name: MYSQL_USER
+              value: "root"
+            - name: MYSQL_DATABASE
+              value: "docking"
+            - name: MYSQL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: docking-mysql-secret
+                  key: root-password
           resources:
             requests:
               cpu: 100m
