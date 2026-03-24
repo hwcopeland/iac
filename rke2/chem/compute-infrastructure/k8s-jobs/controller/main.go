@@ -180,38 +180,45 @@ func hasLogsSuffix(path string) bool {
 }
 
 func (c *DockingJobController) processDockingJob(job DockingJob) {
-	log.Printf("Processing docking job: %s", job.Name)
+	log.Printf("[%s] Starting pipeline: pdbid=%s ligand_db=%s image=%s chunk_size=%d",
+		job.Name, job.Spec.PDBID, job.Spec.LigandDb, job.Spec.Image, job.Spec.LigandsChunkSize)
 
 	now := time.Now()
 	job.Status.Phase = "Running"
 	job.Status.StartTime = &now
 
+	log.Printf("[%s] Step 1/5: copy-ligand-db", job.Name)
 	if err := c.createCopyLigandDbJob(job); err != nil {
 		c.failJob(job, fmt.Sprintf("copy ligand DB failed: %v", err))
 		return
 	}
 
+	log.Printf("[%s] Step 2/5: prepare-receptor (concurrent with split-sdf)", job.Name)
 	if err := c.createPrepareReceptorJob(job); err != nil {
 		c.failJob(job, fmt.Sprintf("prepare receptor failed: %v", err))
 		return
 	}
 
+	log.Printf("[%s] Step 3/5: split-sdf", job.Name)
 	batchCount, err := c.createSplitSdfJob(job)
 	if err != nil {
 		c.failJob(job, fmt.Sprintf("split SDF failed: %v", err))
 		return
 	}
 
+	log.Printf("[%s] split-sdf complete: %d batches", job.Name, batchCount)
 	// prepare-receptor was started concurrently with split-sdf (both are
 	// independent of each other). Ensure it has finished before docking
 	// starts, since docking needs the PDBQT receptor file on the PVC.
 	receptorJobName := fmt.Sprintf("%s-prepare-receptor", job.Name)
+	log.Printf("[%s] Waiting for prepare-receptor to finish...", job.Name)
 	if err := c.waitForJobCompletion(receptorJobName); err != nil {
 		c.failJob(job, fmt.Sprintf("prepare receptor failed: %v", err))
 		return
 	}
 
 	job.Status.BatchCount = batchCount
+	log.Printf("[%s] Step 4/5: processing %d batch(es)", job.Name, batchCount)
 
 	for i := 0; i < batchCount; i++ {
 		// batchLabel is the filesystem label used in script args and filenames.
@@ -219,6 +226,7 @@ func (c *DockingJobController) processDockingJob(job DockingJob) {
 		// valid in Kubernetes resource names (RFC 1123 subdomain).
 		batchLabel := fmt.Sprintf("%s_batch%d", job.Spec.LigandDb, i)
 		k8sLabel := strings.ReplaceAll(batchLabel, "_", "-")
+		log.Printf("[%s] Batch %d/%d: prepare-ligands batchLabel=%s", job.Name, i+1, batchCount, batchLabel)
 
 		if err := c.createPrepareLigandsJob(job, batchLabel, k8sLabel); err != nil {
 			c.failJob(job, fmt.Sprintf("prepare ligands batch %d failed: %v", i, err))
@@ -230,6 +238,7 @@ func (c *DockingJobController) processDockingJob(job DockingJob) {
 			return
 		}
 
+		log.Printf("[%s] Batch %d/%d: docking pdbid=%s batchLabel=%s", job.Name, i+1, batchCount, job.Spec.PDBID, batchLabel)
 		if err := c.createDockingJobExecution(job, batchLabel, k8sLabel); err != nil {
 			c.failJob(job, fmt.Sprintf("docking batch %d failed: %v", i, err))
 			return
@@ -241,8 +250,10 @@ func (c *DockingJobController) processDockingJob(job DockingJob) {
 		}
 
 		job.Status.CompletedBatches = i + 1
+		log.Printf("[%s] Batch %d/%d complete", job.Name, i+1, batchCount)
 	}
 
+	log.Printf("[%s] Step 5/5: postprocessing", job.Name)
 	if err := c.createPostProcessingJob(job); err != nil {
 		c.failJob(job, fmt.Sprintf("postprocessing failed: %v", err))
 		return
@@ -253,6 +264,7 @@ func (c *DockingJobController) processDockingJob(job DockingJob) {
 		return
 	}
 
+	log.Printf("[%s] Postprocessing complete", job.Name)
 	completionTime := time.Now()
 	job.Status.Phase = "Completed"
 	job.Status.CompletionTime = &completionTime
@@ -568,23 +580,34 @@ func (c *DockingJobController) waitForJobCompletion(jobName string) error {
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 	timeout := time.After(10 * time.Minute)
+	pollCount := 0
 
 	for {
 		select {
 		case <-timeout:
 			return fmt.Errorf("timeout waiting for job %s", jobName)
 		case <-ticker.C:
+			pollCount++
 			job, err := c.jobClient.Get(context.TODO(), jobName, metav1.GetOptions{})
 			if err != nil {
 				if errors.IsNotFound(err) {
+					if pollCount == 1 || pollCount%12 == 0 {
+						log.Printf("[wait] %s: not found yet (poll %d)", jobName, pollCount)
+					}
 					continue
 				}
 				return err
 			}
+			if pollCount%12 == 0 {
+				log.Printf("[wait] %s: active=%d succeeded=%d failed=%d (poll %d)",
+					jobName, job.Status.Active, job.Status.Succeeded, job.Status.Failed, pollCount)
+			}
 			if job.Status.Succeeded > 0 {
+				log.Printf("[wait] %s: succeeded after %d polls", jobName, pollCount)
 				return nil
 			}
 			if job.Status.Failed > 0 {
+				log.Printf("[wait] %s: FAILED after %d polls (active=%d)", jobName, pollCount, job.Status.Active)
 				return fmt.Errorf("job %s failed", jobName)
 			}
 		}
