@@ -162,7 +162,9 @@ func (c *DockingJobController) startAPIServer() error {
 	mux.HandleFunc("/api/v1/dockingjobs/", func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:
-			if hasLogsSuffix(r.URL.Path) {
+			if hasResultsSuffix(r.URL.Path) {
+				handler.GetResults(w, r)
+			} else if hasLogsSuffix(r.URL.Path) {
 				handler.GetLogs(w, r)
 			} else {
 				handler.GetJob(w, r)
@@ -182,6 +184,10 @@ func (c *DockingJobController) startAPIServer() error {
 
 func hasLogsSuffix(path string) bool {
 	return len(path) > 6 && path[len(path)-5:] == "/logs"
+}
+
+func hasResultsSuffix(path string) bool {
+	return len(path) > 9 && path[len(path)-8:] == "/results"
 }
 
 func (c *DockingJobController) processDockingJob(job DockingJob) {
