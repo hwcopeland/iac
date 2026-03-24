@@ -1,0 +1,31 @@
+# Copy Ligand DB Job Template
+# Copies ligand database from user PVC to autodock PVC
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: copy-ligand-db
+  labels:
+    docking.k8s.io/job-type: copy-ligand-db
+    docking.k8s.io/workflow: "{{ .WorkflowName }}"
+spec:
+  ttlSecondsAfterFinished: 300
+  template:
+    metadata:
+      labels:
+        docking.k8s.io/job-type: copy-ligand-db
+        docking.k8s.io/workflow: "{{ .WorkflowName }}"
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: copy
+          image: alpine:latest
+          command: ["/bin/sh", "-c"]
+          args:
+            - cp {{ .MountPath }}/{{ .UserPvcPath }}/{{ .LigandDb }}.sdf {{ .MountPath }}/{{ .LigandDb }}.sdf
+          volumeMounts:
+            - name: autodock-pvc
+              mountPath: {{ .MountPath }}
+      volumes:
+        - name: autodock-pvc
+          persistentVolumeClaim:
+            claimName: {{ .AutodockPvc }}
