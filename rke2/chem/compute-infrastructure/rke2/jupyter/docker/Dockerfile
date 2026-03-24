@@ -7,9 +7,13 @@ USER root
 # Add Conda to the PATH environment variable
 ENV PATH="/opt/conda/bin:$PATH"
 
-# Install Miniconda
-RUN wget -qO- https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh | bash -b -p /opt/conda && \
-    /opt/conda/bin/conda init
+# Install Miniconda — download script first, then run it
+# Avoids pipe-to-bash issues with pipefail and base images that may not have wget.
+RUN apt-get update --yes && apt-get install --yes --no-install-recommends wget && \
+    wget -q https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O /tmp/miniconda.sh && \
+    bash /tmp/miniconda.sh -b -p /opt/conda && \
+    rm /tmp/miniconda.sh && \
+    /opt/conda/bin/conda init bash || true
 
 # Ensure Conda is properly sourced in all shell sessions
 RUN echo ". /opt/conda/etc/profile.d/conda.sh" >> /etc/profile.d/conda.sh && \

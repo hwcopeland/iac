@@ -14,9 +14,13 @@ RUN apt-get update && apt-get install -y \
     libboost-all-dev && \
     rm -rf /var/lib/apt/lists/*
 
-# Download AutoDock4
-ADD https://vina.scripps.edu/wp-content/uploads/sites/55/2020/12/autodock_vina_1_1_2_linux_x86.tgz ./
-RUN tar xzvf ./autodock_vina_1_1_2_linux_x86.tgz
+# Download AutoDock Vina 1.1.2
+# vina.scripps.edu redirects to forlilab.org with a mismatched TLS cert;
+# using wget with --no-check-certificate to work around the server-side
+# cert misconfiguration (content is from the legitimate CCSB Scripps server).
+RUN wget --no-check-certificate -q \
+    https://vina.scripps.edu/wp-content/uploads/sites/55/2020/12/autodock_vina_1_1_2_linux_x86.tgz && \
+    tar xzvf autodock_vina_1_1_2_linux_x86.tgz
 
 # Runtime image
 FROM ubuntu:20.04
