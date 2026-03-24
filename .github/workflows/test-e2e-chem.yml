@@ -5,9 +5,9 @@
 # Direct ClusterIP access to docking-controller — no kubectl, no kubeconfig needed.
 #
 # Prerequisites (one-time setup, not per-run):
-#   pvc-autodock must exist with test_tiny.sdf at /data/claim-jovyan/test_tiny.sdf.
+#   pvc-autodock must exist with test-tiny.sdf at /data/claim-jovyan/test-tiny.sdf.
 #   Run: kubectl apply -f k8s-jobs/config/pvc-autodock.yaml
-#   Seed: see k8s-jobs/tests/fixtures/README.md
+#   Seed: see rke2/chem/compute-infrastructure/k8s-jobs/tests/fixtures/README.md
 #
 # Triggers:
 #   workflow_run — fires automatically after Build and Push Chem Images succeeds.
@@ -68,7 +68,16 @@ jobs:
               | sed -n 's/.*"status"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
               | tr -d '\r\n')
             echo "[$i/90] $STATUS"
-            [ "$STATUS" = "Completed" ] && echo "SUCCESS" && exit 0
+            if [ "$STATUS" = "Completed" ]; then
+              MSG=$(echo "$RESP" \
+                | sed -n 's/.*"message"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
+                | tr -d '\r\n')
+              echo "Result: $MSG"
+              echo "$MSG" | grep -q "Best energy:" \
+                || { echo "ERROR: no docking energy in result (full response below)"; echo "$RESP"; exit 1; }
+              echo "SUCCESS: $MSG"
+              exit 0
+            fi
             if [ "$STATUS" = "Failed" ]; then
               MSG=$(echo "$RESP" \
                 | sed -n 's/.*"message"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
