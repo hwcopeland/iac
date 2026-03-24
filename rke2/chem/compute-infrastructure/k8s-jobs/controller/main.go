@@ -783,7 +783,7 @@ func ptrInt32(i int32) *int32 {
 }
 
 func main() {
-	log.Println("Docking Job Controller starting...")
+	log.Println("Docking Job Controller starting (build 2026-03-24)...")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
