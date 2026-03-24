@@ -14,9 +14,11 @@ RUN apt-get update && apt-get install -y \
     libboost-all-dev && \
     rm -rf /var/lib/apt/lists/*
 
-# Download AutoDock4
-ADD https://autodock.scripps.edu/wp-content/uploads/sites/56/2021/10/autodocksuite-4.2.6-x86_64Linux2.tar ./
-RUN tar xf autodocksuite-4.2.6-x86_64Linux2.tar
+# Download AutoDock4 — scripps.edu may have TLS cert issues; using wget
+# with --no-check-certificate as a workaround for server-side cert misconfiguration.
+RUN wget --no-check-certificate -q \
+    https://autodock.scripps.edu/wp-content/uploads/sites/56/2021/10/autodocksuite-4.2.6-x86_64Linux2.tar && \
+    tar xf autodocksuite-4.2.6-x86_64Linux2.tar
 
 # Runtime image
 FROM ubuntu:20.04
