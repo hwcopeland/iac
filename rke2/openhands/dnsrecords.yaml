@@ -1,0 +1,51 @@
+apiVersion: cloudflare-operator.io/v1
+kind: DNSRecord
+metadata:
+  name: openhands-app
+  namespace: openhands
+spec:
+  name: ai.hwcopeland.net
+  type: CNAME
+  content: hwcopeland.net
+  proxied: true
+  ttl: 1
+  interval: 5m
+---
+apiVersion: cloudflare-operator.io/v1
+kind: DNSRecord
+metadata:
+  name: openhands-auth
+  namespace: openhands
+spec:
+  name: aiauth.hwcopeland.net
+  type: CNAME
+  content: hwcopeland.net
+  proxied: true
+  ttl: 1
+  interval: 5m
+---
+apiVersion: cloudflare-operator.io/v1
+kind: DNSRecord
+metadata:
+  name: openhands-runtimes
+  namespace: openhands
+spec:
+  name: ai-runtimes.hwcopeland.net
+  type: CNAME
+  content: hwcopeland.net
+  proxied: true
+  ttl: 1
+  interval: 5m
+---
+apiVersion: cloudflare-operator.io/v1
+kind: DNSRecord
+metadata:
+  name: openhands-llm
+  namespace: openhands
+spec:
+  name: ai-llm.hwcopeland.net
+  type: CNAME
+  content: hwcopeland.net
+  proxied: true
+  ttl: 1
+  interval: 5m
