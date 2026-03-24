@@ -198,7 +198,15 @@ func (h *APIHandler) GetJob(w http.ResponseWriter, r *http.Request) {
 			completed++
 			if job.Labels["docking.khemia.io/job-type"] == "postprocessing" {
 				status = "Completed"
-				message = h.postprocessingResult(r.Context(), job.Name)
+				// Prefer the in-memory cache populated at pipeline completion time
+				// (avoids races with the job's 5-minute TTL cleanup).
+				if cached, ok := h.controller.results.Load(jobName); ok {
+					message = cached.(string)
+					log.Printf("[GetJob] %s: using cached result: %q", jobName, message)
+				} else {
+					log.Printf("[GetJob] %s: no cached result, fetching from pod logs", jobName)
+					message = h.postprocessingResult(r.Context(), job.Name)
+				}
 			}
 		}
 	}
@@ -216,6 +224,8 @@ func (h *APIHandler) GetJob(w http.ResponseWriter, r *http.Request) {
 }
 
 // postprocessingResult fetches the "Best energy: ..." line from postprocessing pod logs.
+// This is the fallback path used when the in-memory cache is unavailable (e.g. after
+// a controller restart). Prefer the cache when possible.
 func (h *APIHandler) postprocessingResult(ctx context.Context, jobName string) string {
 	log.Printf("[postprocessingResult] fetching logs from job %s", jobName)
 	pods, err := h.client.CoreV1().Pods(h.namespace).List(ctx, metav1.ListOptions{
@@ -225,13 +235,18 @@ func (h *APIHandler) postprocessingResult(ctx context.Context, jobName string) s
 		log.Printf("[postprocessingResult] no pods found for job %s: err=%v", jobName, err)
 		return ""
 	}
-	raw, err := h.client.CoreV1().Pods(h.namespace).GetLogs(pods.Items[0].Name, &corev1.PodLogOptions{}).
+	podName := pods.Items[0].Name
+	log.Printf("[postprocessingResult] reading logs from pod %s", podName)
+	raw, err := h.client.CoreV1().Pods(h.namespace).GetLogs(podName, &corev1.PodLogOptions{}).
 		Do(ctx).Raw()
 	if err != nil {
+		log.Printf("[postprocessingResult] GetLogs error for pod %s: %v", podName, err)
 		return ""
 	}
+	log.Printf("[postprocessingResult] pod %s logs (%d bytes):\n%s", podName, len(raw), strings.TrimSpace(string(raw)))
 	for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
 		if strings.HasPrefix(line, "Best energy:") {
+			log.Printf("[postprocessingResult] found result: %s", line)
 			return strings.TrimSpace(line)
 		}
 	}
