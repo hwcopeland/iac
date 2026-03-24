@@ -41,40 +41,22 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
 
-      - name: Install Python deps
-        run: pip install mysql-connector-python --quiet
-
-      - name: Generate 1000 mock docking results
+      - name: Run MySQL export test in cluster pod
         run: |
-          python3 rke2/chem/compute-infrastructure/test/autodock/generate_mock_data.py \
-            --output-dir /tmp/vina-test-${{ github.run_id }} \
-            --count 1000 \
-            --batches 5 \
-            --db-label ligands
-
-      - name: Export to cluster MySQL and verify
-        run: |
-          WORKFLOW="ci-${{ github.run_id }}"
-          MYSQL_PASSWORD=$(kubectl get secret docking-mysql-secret -n chem \
+          MYSQL_PWD=$(kubectl get secret docking-mysql-secret -n chem \
             -o jsonpath='{.data.root-password}' | base64 -d)
-          MYSQL_HOST=docking-mysql.chem.svc.cluster.local \
-          MYSQL_PORT=3306 \
-          MYSQL_USER=root \
-          MYSQL_PASSWORD="$MYSQL_PASSWORD" \
-          MYSQL_DATABASE=docking \
-          python3 rke2/chem/compute-infrastructure/docker/autodock-vina/scripts/export_energies_mysql.py \
-            --workflow "$WORKFLOW" \
-            --pdbid 7jrn \
-            --db-label ligands \
-            --base-dir /tmp/vina-test-${{ github.run_id }}
-          MYSQL_HOST=docking-mysql.chem.svc.cluster.local \
-          MYSQL_PORT=3306 \
-          MYSQL_USER=root \
-          MYSQL_PASSWORD="$MYSQL_PASSWORD" \
-          MYSQL_DATABASE=docking \
-          python3 rke2/chem/compute-infrastructure/test/autodock/verify_mysql.py \
-            --expected 1000 \
-            --workflow "$WORKFLOW"
+          kubectl run "vina-test-${{ github.run_id }}" -n chem \
+            --image=python:3.11-slim \
+            --restart=Never \
+            --rm -i \
+            --env="MYSQL_HOST=docking-mysql" \
+            --env="MYSQL_PORT=3306" \
+            --env="MYSQL_USER=root" \
+            --env="MYSQL_PASSWORD=$MYSQL_PWD" \
+            --env="MYSQL_DATABASE=docking" \
+            --env="WORKFLOW_NAME=ci-${{ github.run_id }}" \
+            --command -- bash -c 'pip install mysql-connector-python -q && python3 -' \
+            < rke2/chem/compute-infrastructure/test/autodock/ci_test.py
 
   build-and-push:
     name: Build ${{ matrix.name }}
