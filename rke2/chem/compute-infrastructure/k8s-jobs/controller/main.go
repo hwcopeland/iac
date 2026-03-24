@@ -205,23 +205,27 @@ func (c *DockingJobController) processDockingJob(job DockingJob) {
 	job.Status.BatchCount = batchCount
 
 	for i := 0; i < batchCount; i++ {
+		// batchLabel is the filesystem label used in script args and filenames.
+		// k8sLabel is batchLabel with underscores replaced by hyphens so it is
+		// valid in Kubernetes resource names (RFC 1123 subdomain).
 		batchLabel := fmt.Sprintf("%s_batch%d", job.Spec.LigandDb, i)
+		k8sLabel := strings.ReplaceAll(batchLabel, "_", "-")
 
-		if err := c.createPrepareLigandsJob(job, batchLabel); err != nil {
+		if err := c.createPrepareLigandsJob(job, batchLabel, k8sLabel); err != nil {
 			c.failJob(job, fmt.Sprintf("prepare ligands batch %d failed: %v", i, err))
 			return
 		}
-		prepareName := fmt.Sprintf("%s-prepare-ligands-%s", job.Name, batchLabel)
+		prepareName := fmt.Sprintf("%s-prepare-ligands-%s", job.Name, k8sLabel)
 		if err := c.waitForJobCompletion(prepareName); err != nil {
 			c.failJob(job, fmt.Sprintf("prepare ligands batch %d failed: %v", i, err))
 			return
 		}
 
-		if err := c.createDockingJobExecution(job, batchLabel); err != nil {
+		if err := c.createDockingJobExecution(job, batchLabel, k8sLabel); err != nil {
 			c.failJob(job, fmt.Sprintf("docking batch %d failed: %v", i, err))
 			return
 		}
-		dockingName := fmt.Sprintf("%s-docking-%s", job.Name, batchLabel)
+		dockingName := fmt.Sprintf("%s-docking-%s", job.Name, k8sLabel)
 		if err := c.waitForJobCompletion(dockingName); err != nil {
 			c.failJob(job, fmt.Sprintf("docking batch %d failed: %v", i, err))
 			return
@@ -381,14 +385,14 @@ func (c *DockingJobController) createSplitSdfJob(job DockingJob) (int, error) {
 	return c.parseBatchCountFromLogs(created.Name)
 }
 
-func (c *DockingJobController) createPrepareLigandsJob(job DockingJob, batchLabel string) error {
+func (c *DockingJobController) createPrepareLigandsJob(job DockingJob, batchLabel, k8sLabel string) error {
 	j := &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: fmt.Sprintf("%s-prepare-ligands-%s", job.Name, batchLabel),
+			Name: fmt.Sprintf("%s-prepare-ligands-%s", job.Name, k8sLabel),
 			Labels: map[string]string{
 				"docking.khemia.io/workflow":   job.Name,
 				"docking.khemia.io/job-type":   "prepare-ligands",
-				"docking.khemia.io/batch":      batchLabel,
+				"docking.khemia.io/batch":      k8sLabel,
 				"docking.khemia.io/parent-job": job.Name,
 			},
 		},
@@ -425,14 +429,14 @@ func (c *DockingJobController) createPrepareLigandsJob(job DockingJob, batchLabe
 	return err
 }
 
-func (c *DockingJobController) createDockingJobExecution(job DockingJob, batchLabel string) error {
+func (c *DockingJobController) createDockingJobExecution(job DockingJob, batchLabel, k8sLabel string) error {
 	j := &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: fmt.Sprintf("%s-docking-%s", job.Name, batchLabel),
+			Name: fmt.Sprintf("%s-docking-%s", job.Name, k8sLabel),
 			Labels: map[string]string{
 				"docking.khemia.io/workflow":   job.Name,
 				"docking.khemia.io/job-type":   "docking",
-				"docking.khemia.io/batch":      batchLabel,
+				"docking.khemia.io/batch":      k8sLabel,
 				"docking.khemia.io/parent-job": job.Name,
 			},
 		},
