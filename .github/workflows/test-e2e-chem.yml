@@ -1,24 +1,17 @@
 ---
 # End-to-end test for the docking-controller job cycle.
 #
-# Runner: same self-hosted arc-chem runner that runs inside the RKE2 cluster,
-# giving direct network access to docking-controller.chem.svc.cluster.local.
+# Runner: self-hosted arc-chem runner inside the RKE2 cluster.
+# Direct ClusterIP access to docking-controller — no kubectl, no kubeconfig needed.
 #
-# Prerequisites:
-#   KUBECONFIG_BASE64 — base64-encoded RKE2 kubeconfig (GitHub repo secret).
-#   Generate with: cat ~/.kube/config | base64 | tr -d '\n'
+# Prerequisites (one-time setup, not per-run):
+#   pvc-autodock must exist with test_tiny.sdf at /data/claim-jovyan/test_tiny.sdf.
+#   Run: kubectl apply -f k8s-jobs/config/pvc-autodock.yaml
+#   Seed: see k8s-jobs/tests/fixtures/README.md
 #
-# Test strategy (Option B — fixture SDF):
-#   1. Write k8s-jobs/tests/fixtures/test_tiny.sdf to pvc-autodock via a
-#      setup Job. This bypasses the real ChEBI_complete ligand database so
-#      the test completes in minutes rather than hours.
-#   2. Submit a DockingJob via the controller REST API.
-#   3. Poll /api/v1/dockingjobs/{name} until Completed or Failed (45m timeout).
-#   4. Clean up: delete the DockingJob and test fixture files.
-#
-# The test runs automatically after a successful build (workflow_run trigger)
-# so the Flux reconcile window is baked into the gap between build and test.
-# workflow_dispatch allows manual on-demand runs.
+# Triggers:
+#   workflow_run — fires automatically after Build and Push Chem Images succeeds.
+#   workflow_dispatch — manual on-demand run.
 
 name: E2E Test — Chem Job Cycle
 
@@ -32,7 +25,6 @@ on:
 jobs:
   e2e-test:
     name: Job cycle smoke test
-    # Only run after a successful build (workflow_run) or on manual dispatch.
     if: >
       github.event_name == 'workflow_dispatch' ||
       github.event.workflow_run.conclusion == 'success'
@@ -40,71 +32,8 @@ jobs:
     timeout-minutes: 45
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
-
-      - name: Install kubectl
-        run: |
-          curl -sSL "https://dl.k8s.io/release/v1.29.0/bin/linux/amd64/kubectl" \
-            -o /usr/local/bin/kubectl
-          chmod +x /usr/local/bin/kubectl
-          kubectl version --client
-
-      - name: Configure kubeconfig
-        run: |
-          echo "${{ secrets.KUBECONFIG_BASE64 }}" | base64 -d > /tmp/kubeconfig
-          echo "KUBECONFIG=/tmp/kubeconfig" >> "$GITHUB_ENV"
-
-      - name: Wait for docking-controller rollout
-        run: |
-          kubectl rollout status deployment/docking-controller -n chem --timeout=10m
-
       - name: Verify controller health
-        run: |
-          curl -sf http://docking-controller.chem.svc.cluster.local/health
-          echo "Controller is healthy"
-
-      - name: Write test fixture to PVC
-        run: |
-          # Load the fixture into a ConfigMap, then copy it to pvc-autodock
-          # under claim-jovyan/ so the copy-ligand job can find it.
-          kubectl create configmap ci-test-sdf \
-            --from-file=test_tiny.sdf=rke2/chem/compute-infrastructure/k8s-jobs/tests/fixtures/test_tiny.sdf \
-            -n chem --dry-run=client -o yaml | kubectl apply -f -
-
-          kubectl apply -f - <<'EOF'
-          apiVersion: batch/v1
-          kind: Job
-          metadata:
-            name: ci-fixture-copy
-            namespace: chem
-          spec:
-            ttlSecondsAfterFinished: 120
-            template:
-              spec:
-                restartPolicy: Never
-                containers:
-                  - name: copy
-                    image: alpine:latest
-                    command: ["/bin/sh", "-c"]
-                    args:
-                      - mkdir -p /data/claim-jovyan && cp /fixture/test_tiny.sdf /data/claim-jovyan/test_tiny.sdf
-                    volumeMounts:
-                      - name: pvc
-                        mountPath: /data
-                      - name: fixture
-                        mountPath: /fixture
-                volumes:
-                  - name: pvc
-                    persistentVolumeClaim:
-                      claimName: pvc-autodock
-                  - name: fixture
-                    configMap:
-                      name: ci-test-sdf
-          EOF
-
-          kubectl wait --for=condition=complete job/ci-fixture-copy -n chem --timeout=60s
-          echo "Test fixture written to pvc-autodock/claim-jovyan/test_tiny.sdf"
+        run: curl -sf http://docking-controller.chem.svc.cluster.local/health
 
       - name: Submit test DockingJob
         id: submit
@@ -119,21 +48,18 @@ jobs:
               "ligands_chunk_size": 100,
               "jupyter_user":       "jovyan"
             }')
-          echo "Response: $RESPONSE"
+          echo "$RESPONSE"
           JOB_NAME=$(echo "$RESPONSE" \
             | sed -n 's/.*"name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
             | tr -d '\r\n')
-          if [ -z "$JOB_NAME" ]; then
-            echo "ERROR: could not parse job name from response"
-            exit 1
-          fi
+          [ -z "$JOB_NAME" ] && echo "ERROR: no job name in response" && exit 1
+          echo "Submitted: $JOB_NAME"
           echo "job_name=$JOB_NAME" >> "$GITHUB_OUTPUT"
-          echo "Submitted DockingJob: $JOB_NAME"
 
       - name: Poll until Completed or Failed
         run: |
           JOB_NAME="${{ steps.submit.outputs.job_name }}"
-          echo "Polling job $JOB_NAME (30s interval, 45m max)..."
+          echo "Polling $JOB_NAME every 30s (45m max)..."
           for i in $(seq 1 90); do
             RESP=$(curl -sf \
               "http://docking-controller.chem.svc.cluster.local/api/v1/dockingjobs/$JOB_NAME" \
@@ -141,14 +67,12 @@ jobs:
             STATUS=$(echo "$RESP" \
               | sed -n 's/.*"status"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
               | tr -d '\r\n')
-            echo "[$i/90] status=$STATUS"
-            if [ "$STATUS" = "Completed" ]; then
-              echo "SUCCESS: DockingJob completed"
-              exit 0
-            fi
+            echo "[$i/90] $STATUS"
+            [ "$STATUS" = "Completed" ] && echo "SUCCESS" && exit 0
             if [ "$STATUS" = "Failed" ]; then
-              MSG=$(echo "$RESP" | sed -n 's/.*"message"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
-              echo "FAILURE: DockingJob failed — $MSG"
+              MSG=$(echo "$RESP" \
+                | sed -n 's/.*"message"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+              echo "FAILED: $MSG"
               exit 1
             fi
             sleep 30
@@ -156,14 +80,11 @@ jobs:
           echo "TIMEOUT: job did not complete within 45 minutes"
           exit 1
 
-      - name: Cleanup — delete test job and fixture
+      - name: Cleanup
         if: always()
         run: |
           JOB_NAME="${{ steps.submit.outputs.job_name }}"
-          if [ -n "$JOB_NAME" ]; then
+          [ -n "$JOB_NAME" ] && \
             curl -sf -X DELETE \
               "http://docking-controller.chem.svc.cluster.local/api/v1/dockingjobs/$JOB_NAME" \
-              && echo "Deleted DockingJob $JOB_NAME" || true
-          fi
-          kubectl delete configmap ci-test-sdf -n chem --ignore-not-found
-          kubectl delete job ci-fixture-copy -n chem --ignore-not-found
+            && echo "Deleted $JOB_NAME" || true

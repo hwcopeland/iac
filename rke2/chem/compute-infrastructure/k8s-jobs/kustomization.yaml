@@ -4,4 +4,5 @@ resources:
   - crd/dockingjob-crd.yaml
   - config/rbac.yaml
   - config/deployment.yaml
+  - config/pvc-autodock.yaml
   - zot-pull-secret.yaml
