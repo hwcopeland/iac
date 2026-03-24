@@ -136,13 +136,17 @@ func (h *APIHandler) CreateJob(w http.ResponseWriter, r *http.Request) {
 		Status: DockingJobStatus{Phase: "Pending"},
 	}
 
+	// Seed in-memory state before the goroutine starts so GetJob immediately
+	// returns "Running" instead of deriving status from stale K8s jobs.
+	h.controller.jobStatuses.Store(jobName, DockingJobStatus{Phase: "Running"})
+
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
 	json.NewEncoder(w).Encode(DockingJobResponse{
 		Name:      jobName,
 		PDBID:     req.PDBID,
 		LigandDb:  req.LigandDb,
-		Status:    "Pending",
+		Status:    "Running",
 		CreatedAt: time.Now(),
 	})
 
@@ -151,14 +155,12 @@ func (h *APIHandler) CreateJob(w http.ResponseWriter, r *http.Request) {
 
 // GetJob handles GET /api/v1/dockingjobs/{name}
 //
-// Status is derived from child K8s jobs:
-//   - "Pending"   – no child jobs exist yet
-//   - "Running"   – child jobs exist but postprocessing has not succeeded
-//   - "Failed"    – any child job has a failed pod
-//   - "Completed" – the postprocessing job has succeeded (terminal step)
-//
-// The message field on Completed contains the best-energy result from
-// postprocessing logs (e.g. "Best energy: -8.45").
+// Status is returned from the in-memory jobStatuses map when available
+// (set by CreateJob and updated throughout processDockingJob). This is the
+// authoritative source and avoids false "Completed" responses from stale K8s
+// Job objects left by previous runs when TTLSecondsAfterFinished is not
+// enforced by the cluster. Falls back to K8s-derived status only after a
+// controller restart when the in-memory map is empty.
 func (h *APIHandler) GetJob(w http.ResponseWriter, r *http.Request) {
 	jobName := strings.TrimPrefix(r.URL.Path, "/api/v1/dockingjobs/")
 	if jobName == "" {
@@ -166,6 +168,26 @@ func (h *APIHandler) GetJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// In-memory state is authoritative when present.
+	if val, ok := h.controller.jobStatuses.Load(jobName); ok {
+		s := val.(DockingJobStatus)
+		resp := DockingJobResponse{
+			Name:             jobName,
+			Status:           s.Phase,
+			Message:          s.Message,
+			BatchCount:       s.BatchCount,
+			CompletedBatches: s.CompletedBatches,
+			StartTime:        s.StartTime,
+			CompletionTime:   s.CompletionTime,
+		}
+		log.Printf("[GetJob] %s: in-memory status=%s batch=%d completed=%d",
+			jobName, s.Phase, s.BatchCount, s.CompletedBatches)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+		return
+	}
+
+	// Fallback: derive status from K8s jobs (used after controller restart).
 	jobs, err := h.client.BatchV1().Jobs(h.namespace).List(r.Context(), metav1.ListOptions{
 		LabelSelector: fmt.Sprintf("docking.khemia.io/parent-job=%s", jobName),
 	})
@@ -201,21 +223,17 @@ func (h *APIHandler) GetJob(w http.ResponseWriter, r *http.Request) {
 			completed++
 			if job.Labels["docking.khemia.io/job-type"] == "postprocessing" {
 				status = "Completed"
-				// Prefer the in-memory cache populated at pipeline completion time
-				// (avoids races with the job's 5-minute TTL cleanup).
 				if cached, ok := h.controller.results.Load(jobName); ok {
 					message = cached.(string)
-					log.Printf("[GetJob] %s: using cached result: %q", jobName, message)
 				} else {
-					log.Printf("[GetJob] %s: no cached result, fetching from pod logs", jobName)
 					message = h.postprocessingResult(r.Context(), job.Name)
 				}
 			}
 		}
 	}
 
-	log.Printf("[GetJob] %s: status=%s total_k8s_jobs=%d completed=%d message=%q",
-		jobName, status, total, completed, message)
+	log.Printf("[GetJob] %s: k8s-fallback status=%s total=%d completed=%d",
+		jobName, status, total, completed)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(DockingJobResponse{
 		Name:             jobName,
@@ -278,6 +296,8 @@ func (h *APIHandler) DeleteJob(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	h.controller.jobStatuses.Delete(jobName)
+	h.controller.results.Delete(jobName)
 	w.WriteHeader(http.StatusNoContent)
 }
 
