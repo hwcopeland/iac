@@ -36,33 +36,28 @@ minRunners: 0
 maxRunners: 4
 
 # Runner pod template.
-# This is the pod spec for each ephemeral runner pod.
+# Uses Docker-in-Docker (DinD) sidecar because RKE2 nodes use containerd
+# and do not expose /var/run/docker.sock.
 template:
   spec:
-    # Run as root is required for Docker socket access.
-    # The Docker daemon socket is owned by root on RKE2 nodes.
-    securityContext: {}
-
-    # Init container: runner initialization (managed by ARC).
-    # The ARC chart injects the runner binary and token automatically.
-
     containers:
       - name: runner
         image: ghcr.io/actions/actions-runner:2.323.0
-        # Pin to a specific runner version. The runner version must be compatible
-        # with the controller version (0.10.1). Check compatibility matrix at:
-        # https://github.com/actions/actions-runner-controller/blob/main/docs/gha-runner-scale-set-controller/README.md#software-stack-version-matrix
         imagePullPolicy: IfNotPresent
-
-        # Mount the host Docker socket so the runner pod can run docker build/push.
-        # This shares the node Docker daemon — acceptable for a trusted lab cluster.
+        env:
+          # Point Docker client to the DinD sidecar.
+          - name: DOCKER_HOST
+            value: tcp://localhost:2376
+          - name: DOCKER_TLS_VERIFY
+            value: "1"
+          - name: DOCKER_CERT_PATH
+            value: /certs/client
         volumeMounts:
-          - name: docker-sock
-            mountPath: /var/run/docker.sock
-
-        # Resource limits for runner pods during builds.
-        # autodock builds are CPU-intensive (cmake, compilation). jupyter builds are
-        # network-intensive (Miniconda download). Sizes are conservative for a lab cluster.
+          - name: work
+            mountPath: /home/runner/_work
+          - name: dind-cert
+            mountPath: /certs/client
+            readOnly: true
         resources:
           requests:
             cpu: 500m
@@ -71,16 +66,31 @@ template:
             cpu: 4000m
             memory: 4Gi
 
+      - name: dind
+        image: docker:dind
+        securityContext:
+          privileged: true
+        env:
+          - name: DOCKER_TLS_CERTDIR
+            value: /certs
+        volumeMounts:
+          - name: work
+            mountPath: /home/runner/_work
+          - name: dind-cert
+            mountPath: /certs
+        resources:
+          requests:
+            cpu: 200m
+            memory: 256Mi
+          limits:
+            cpu: 2000m
+            memory: 2Gi
+
     volumes:
-      - name: docker-sock
-        hostPath:
-          # Docker socket path on RKE2 nodes with the default containerd runtime.
-          # RKE2 uses containerd internally, but also installs a docker shim that
-          # exposes /var/run/docker.sock if the docker runtime is enabled.
-          # If the node only has containerd (no Docker), use a DinD sidecar instead.
-          # Verify socket exists: ssh <node> stat /var/run/docker.sock
-          path: /var/run/docker.sock
-          type: Socket
+      - name: work
+        emptyDir: {}
+      - name: dind-cert
+        emptyDir: {}
 
 # Controller deployment namespace.
 # The controller must be installed in the same namespace as the scale-set when

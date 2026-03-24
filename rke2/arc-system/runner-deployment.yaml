@@ -1,0 +1,115 @@
+---
+# Persistent self-hosted GitHub Actions runner for hwcopeland/iac.
+#
+# Uses Docker-in-Docker (DinD) sidecar because RKE2 nodes use containerd
+# and do not expose /var/run/docker.sock.
+#
+# Runner label: arc-chem (matches runs-on: [self-hosted, arc-chem] in workflows).
+# Workflow file: .github/workflows/build-chem-images.yml
+#
+# The runner fetches a fresh GitHub registration token on every container start
+# (not just pod start) so CrashLoopBackOff restarts always get a valid token.
+# Registration tokens expire after ~1 hour; fetching in the main container
+# command ensures each retry gets a fresh one.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: arc-chem-runner
+  namespace: arc-system
+  labels:
+    app.kubernetes.io/name: arc-chem-runner
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: arc-chem-runner
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: arc-chem-runner
+    spec:
+      containers:
+        - name: runner
+          image: ghcr.io/actions/actions-runner:2.323.0
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: GITHUB_PAT
+              valueFrom:
+                secretKeyRef:
+                  name: github-pat
+                  key: token
+            - name: DOCKER_HOST
+              value: tcp://localhost:2376
+            - name: DOCKER_TLS_VERIFY
+              value: "1"
+            - name: DOCKER_CERT_PATH
+              value: /certs/client
+          command:
+            - sh
+            - -c
+            - |
+              set -e
+              # Wait for DinD TLS certs to be ready
+              until [ -f /certs/client/cert.pem ]; do
+                echo "Waiting for DinD TLS certs..."
+                sleep 2
+              done
+              echo "DinD certs ready. Fetching registration token..."
+              REG_TOKEN=$(curl -sf -X POST \
+                -H "Authorization: token $GITHUB_PAT" \
+                -H "Accept: application/vnd.github+json" \
+                https://api.github.com/repos/hwcopeland/iac/actions/runners/registration-token \
+                | sed -n 's/.*"token"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | tr -d '\r\n')
+              if [ -z "$REG_TOKEN" ]; then
+                echo "ERROR: Failed to get registration token"
+                exit 1
+              fi
+              echo "Token fetched. Configuring runner..."
+              ./config.sh \
+                --url https://github.com/hwcopeland/iac \
+                --token "$REG_TOKEN" \
+                --name "arc-chem-$(hostname)" \
+                --labels "arc-chem,self-hosted,linux,x64" \
+                --unattended \
+                --ephemeral
+              echo "Runner configured. Starting..."
+              ./run.sh
+          volumeMounts:
+            - name: work
+              mountPath: /home/runner/_work
+            - name: dind-cert
+              mountPath: /certs
+              readOnly: true
+          resources:
+            requests:
+              cpu: 200m
+              memory: 256Mi
+            limits:
+              cpu: 4000m
+              memory: 4Gi
+
+        - name: dind
+          image: docker:dind
+          securityContext:
+            privileged: true
+          env:
+            - name: DOCKER_TLS_CERTDIR
+              value: /certs
+          volumeMounts:
+            - name: work
+              mountPath: /home/runner/_work
+            - name: dind-cert
+              mountPath: /certs
+          resources:
+            requests:
+              cpu: 200m
+              memory: 256Mi
+            limits:
+              cpu: 2000m
+              memory: 2Gi
+
+      volumes:
+        - name: work
+          emptyDir: {}
+        - name: dind-cert
+          emptyDir: {}
