@@ -32,6 +32,29 @@ jobs:
     timeout-minutes: 45
 
     steps:
+      - name: Wait for Flux rollout
+        # When triggered by workflow_run (automatic after a build), Flux needs time to
+        # detect the new image in Zot (5m poll interval), commit the tag update, and
+        # roll out the new pod. We sleep 7 minutes to cover this window.
+        # workflow_dispatch (manual) skips the wait — the user controls timing.
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_run" ]; then
+            echo "Auto-triggered: sleeping 7 minutes for Flux to deploy new image..."
+            sleep 420
+          else
+            echo "Manual dispatch: skipping Flux rollout wait"
+          fi
+          echo "Verifying controller health..."
+          for i in $(seq 1 24); do
+            if curl -sf http://docking-controller.chem.svc.cluster.local/health > /dev/null 2>&1; then
+              echo "Controller healthy"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "ERROR: controller not healthy"
+          exit 1
+
       - name: Verify controller health
         run: curl -sf http://docking-controller.chem.svc.cluster.local/health
 
