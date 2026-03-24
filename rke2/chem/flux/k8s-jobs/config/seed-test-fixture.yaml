@@ -95,8 +95,8 @@ spec:
           args:
             - |
               mkdir -p /data/claim-jovyan
-              if [ -s /data/claim-jovyan/test-tiny.sdf ]; then
-                echo "test-tiny.sdf already exists and is non-empty, skipping"
+              if grep -qF '$$$$' /data/claim-jovyan/test-tiny.sdf 2>/dev/null; then
+                echo "test-tiny.sdf already contains valid SDF records, skipping"
               else
                 cp /fixture/test-tiny.sdf /data/claim-jovyan/test-tiny.sdf
                 echo "Seeded test-tiny.sdf ($(wc -c < /data/claim-jovyan/test-tiny.sdf) bytes)"
