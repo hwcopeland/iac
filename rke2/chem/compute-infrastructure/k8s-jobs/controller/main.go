@@ -25,7 +25,7 @@ import (
 )
 
 const (
-	DefaultImage            = "hwcopeland/auto-docker:latest"
+	DefaultImage            = "zot.hwcopeland.net/chem/autodock-vina:latest"
 	DefaultAutodockPvc      = "pvc-autodock"
 	DefaultUserPvcPrefix    = "claim-"
 	DefaultMountPath        = "/data"
@@ -325,6 +325,7 @@ func (c *DockingJobController) createPrepareReceptorJob(job DockingJob) error {
 			Template: corev1.PodTemplateSpec{
 				Spec: corev1.PodSpec{
 					RestartPolicy: corev1.RestartPolicyOnFailure,
+					ImagePullSecrets: []corev1.LocalObjectReference{{Name: "zot-pull-secret"}},
 					Containers: []corev1.Container{
 						{
 							Name:            "prepare",
@@ -364,6 +365,7 @@ func (c *DockingJobController) createSplitSdfJob(job DockingJob) (int, error) {
 			Template: corev1.PodTemplateSpec{
 				Spec: corev1.PodSpec{
 					RestartPolicy: corev1.RestartPolicyOnFailure,
+					ImagePullSecrets: []corev1.LocalObjectReference{{Name: "zot-pull-secret"}},
 					Containers: []corev1.Container{
 						{
 							Name:            "split",
@@ -415,6 +417,7 @@ func (c *DockingJobController) createPrepareLigandsJob(job DockingJob, batchLabe
 			Template: corev1.PodTemplateSpec{
 				Spec: corev1.PodSpec{
 					RestartPolicy: corev1.RestartPolicyOnFailure,
+					ImagePullSecrets: []corev1.LocalObjectReference{{Name: "zot-pull-secret"}},
 					Containers: []corev1.Container{
 						{
 							Name:            "prepare",
@@ -424,7 +427,7 @@ func (c *DockingJobController) createPrepareLigandsJob(job DockingJob, batchLabe
 							Command:         []string{"python3", "/autodock/scripts/ligandprepv2.py"},
 							Args: []string{
 								fmt.Sprintf("%s.sdf", batchLabel),
-								fmt.Sprintf("%s/output", job.Spec.MountPath),
+								batchLabel,
 								"--format", "pdb",
 							},
 							Env: []corev1.EnvVar{
@@ -459,17 +462,15 @@ func (c *DockingJobController) createDockingJobExecution(job DockingJob, batchLa
 			Template: corev1.PodTemplateSpec{
 				Spec: corev1.PodSpec{
 					RestartPolicy: corev1.RestartPolicyOnFailure,
+					ImagePullSecrets: []corev1.LocalObjectReference{{Name: "zot-pull-secret"}},
 					Containers: []corev1.Container{
 						{
 							Name:            "docking",
 							Image:           job.Spec.Image,
 							ImagePullPolicy: corev1.PullAlways,
 							WorkingDir:      job.Spec.MountPath,
-							Command:         []string{"/bin/sh", "-c"},
-							Args: []string{
-								fmt.Sprintf("/autodock/scripts/dockingv2.sh %s %s",
-									job.Spec.PDBID, batchLabel),
-							},
+							Command:         []string{"python3", "/autodock/scripts/dockingv2.py"},
+							Args: []string{job.Spec.PDBID, batchLabel},
 							VolumeMounts: []corev1.VolumeMount{pvcMount("autodock-pvc", job.Spec.MountPath)},
 						},
 					},
@@ -498,6 +499,7 @@ func (c *DockingJobController) createPostProcessingJob(job DockingJob) error {
 			Template: corev1.PodTemplateSpec{
 				Spec: corev1.PodSpec{
 					RestartPolicy: corev1.RestartPolicyOnFailure,
+					ImagePullSecrets: []corev1.LocalObjectReference{{Name: "zot-pull-secret"}},
 					Containers: []corev1.Container{
 						{
 							Name:            "postprocess",
