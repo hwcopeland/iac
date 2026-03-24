@@ -7,3 +7,4 @@ resources:
   - config/pvc-autodock.yaml
   - config/mysql.yaml
   - zot-pull-secret.yaml
+  - config/seed-test-fixture.yaml
