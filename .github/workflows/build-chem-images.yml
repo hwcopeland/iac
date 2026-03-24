@@ -41,8 +41,40 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
 
-      - name: Run autodock-vina MySQL export test
-        run: bash rke2/chem/compute-infrastructure/test/autodock/run_test.sh
+      - name: Install Python deps
+        run: pip install mysql-connector-python --quiet
+
+      - name: Generate 1000 mock docking results
+        run: |
+          python3 rke2/chem/compute-infrastructure/test/autodock/generate_mock_data.py \
+            --output-dir /tmp/vina-test-${{ github.run_id }} \
+            --count 1000 \
+            --batches 5 \
+            --db-label ligands
+
+      - name: Export to cluster MySQL and verify
+        run: |
+          WORKFLOW="ci-${{ github.run_id }}"
+          MYSQL_PASSWORD=$(kubectl get secret docking-mysql-secret -n chem \
+            -o jsonpath='{.data.root-password}' | base64 -d)
+          MYSQL_HOST=docking-mysql.chem.svc.cluster.local \
+          MYSQL_PORT=3306 \
+          MYSQL_USER=root \
+          MYSQL_PASSWORD="$MYSQL_PASSWORD" \
+          MYSQL_DATABASE=docking \
+          python3 rke2/chem/compute-infrastructure/docker/autodock-vina/scripts/export_energies_mysql.py \
+            --workflow "$WORKFLOW" \
+            --pdbid 7jrn \
+            --db-label ligands \
+            --base-dir /tmp/vina-test-${{ github.run_id }}
+          MYSQL_HOST=docking-mysql.chem.svc.cluster.local \
+          MYSQL_PORT=3306 \
+          MYSQL_USER=root \
+          MYSQL_PASSWORD="$MYSQL_PASSWORD" \
+          MYSQL_DATABASE=docking \
+          python3 rke2/chem/compute-infrastructure/test/autodock/verify_mysql.py \
+            --expected 1000 \
+            --workflow "$WORKFLOW"
 
   build-and-push:
     name: Build ${{ matrix.name }}
