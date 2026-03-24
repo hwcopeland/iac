@@ -34,7 +34,6 @@ This repository contains everything needed to deploy and manage a homelab Kubern
 │   ├── playbooks/    # Ansible playbooks
 │   └── roles/        # Ansible roles
 ├── rke2/             # Kubernetes manifests and Helm values
-│   ├── argocd/       # GitOps configurations
 │   ├── kube-system/  # Core K8s components
 │   ├── monitor/      # Monitoring stack
 │   ├── web-server/   # Web applications
