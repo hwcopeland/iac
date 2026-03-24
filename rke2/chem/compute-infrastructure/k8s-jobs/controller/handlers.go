@@ -2,6 +2,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -146,6 +147,15 @@ func (h *APIHandler) CreateJob(w http.ResponseWriter, r *http.Request) {
 }
 
 // GetJob handles GET /api/v1/dockingjobs/{name}
+//
+// Status is derived from child K8s jobs:
+//   - "Pending"   – no child jobs exist yet
+//   - "Running"   – child jobs exist but postprocessing has not succeeded
+//   - "Failed"    – any child job has a failed pod
+//   - "Completed" – the postprocessing job has succeeded (terminal step)
+//
+// The message field on Completed contains the best-energy result from
+// postprocessing logs (e.g. "Best energy: -8.45").
 func (h *APIHandler) GetJob(w http.ResponseWriter, r *http.Request) {
 	jobName := strings.TrimPrefix(r.URL.Path, "/api/v1/dockingjobs/")
 	if jobName == "" {
@@ -161,23 +171,36 @@ func (h *APIHandler) GetJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	status := "Pending"
-	completed := 0
 	total := len(jobs.Items)
-
-	for _, job := range jobs.Items {
-		if job.Status.Succeeded > 0 {
-			completed++
-		} else if job.Status.Failed > 0 {
-			status = "Failed"
-			break
-		}
+	if total == 0 {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(DockingJobResponse{Name: jobName, Status: "Pending"})
+		return
 	}
 
-	if total > 0 && completed == total {
-		status = "Completed"
-	} else if completed > 0 {
-		status = "Running"
+	completed := 0
+	status := "Running"
+	message := ""
+
+	for _, job := range jobs.Items {
+		if job.Status.Failed > 0 {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(DockingJobResponse{
+				Name:             jobName,
+				Status:           "Failed",
+				CompletedBatches: completed,
+				BatchCount:       total,
+				Message:          fmt.Sprintf("job %s failed", job.Name),
+			})
+			return
+		}
+		if job.Status.Succeeded > 0 {
+			completed++
+			if job.Labels["docking.khemia.io/job-type"] == "postprocessing" {
+				status = "Completed"
+				message = h.postprocessingResult(r.Context(), job.Name)
+			}
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -186,7 +209,29 @@ func (h *APIHandler) GetJob(w http.ResponseWriter, r *http.Request) {
 		Status:           status,
 		CompletedBatches: completed,
 		BatchCount:       total,
+		Message:          message,
 	})
+}
+
+// postprocessingResult fetches the "Best energy: ..." line from postprocessing pod logs.
+func (h *APIHandler) postprocessingResult(ctx context.Context, jobName string) string {
+	pods, err := h.client.CoreV1().Pods(h.namespace).List(ctx, metav1.ListOptions{
+		LabelSelector: fmt.Sprintf("job-name=%s", jobName),
+	})
+	if err != nil || len(pods.Items) == 0 {
+		return ""
+	}
+	raw, err := h.client.CoreV1().Pods(h.namespace).GetLogs(pods.Items[0].Name, &corev1.PodLogOptions{}).
+		Do(ctx).Raw()
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+		if strings.HasPrefix(line, "Best energy:") {
+			return strings.TrimSpace(line)
+		}
+	}
+	return strings.TrimSpace(string(raw))
 }
 
 // DeleteJob handles DELETE /api/v1/dockingjobs/{name}
