@@ -42,7 +42,7 @@ jobs:
             http://docking-controller.chem.svc.cluster.local/api/v1/dockingjobs \
             -H "Content-Type: application/json" \
             -d '{
-              "ligand_db":          "test_tiny",
+              "ligand_db":          "test-tiny",
               "pdbid":              "7jrn",
               "native_ligand":      "TTT",
               "ligands_chunk_size": 100,
