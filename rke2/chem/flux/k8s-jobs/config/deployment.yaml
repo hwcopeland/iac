@@ -21,7 +21,7 @@ spec:
         - name: zot-pull-secret
       containers:
         - name: controller
-          image: zot.hwcopeland.net/chem/docking-controller:latest # {"$imagepolicy": "chem:docking-controller"}
+          image: zot.hwcopeland.net/chem/docking-controller:sha-9582742 # {"$imagepolicy": "chem:docking-controller"}
           imagePullPolicy: Always
           ports:
             - containerPort: 8080
