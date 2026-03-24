@@ -6,6 +6,7 @@ resources:
   - config/deployment.yaml
   - config/pvc-autodock.yaml
   - config/mysql.yaml
+  - config/mysql-secret.yaml
   - config/seed-test-fixture.yaml
   # zot-pull-secret is managed by the image-automation Kustomization (zot-image-pull-secret.yaml).
   # It is present in this directory as a reference copy but not listed here to avoid a
