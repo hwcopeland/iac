@@ -71,10 +71,9 @@ spec:
                 --name "arc-chem-$(hostname)" \
                 --labels "arc-chem,self-hosted,linux,x64" \
                 --unattended \
-                --ephemeral \
                 --disableupdate \
                 --replace
-              echo "Runner configured. Starting..."
+              echo "Runner configured. Starting (persistent — handles multiple jobs)..."
               ./run.sh
           volumeMounts:
             - name: work
