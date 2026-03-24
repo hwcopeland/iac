@@ -3,6 +3,7 @@ bitbucket:
 env:
   AUTH_URL: https://aiauth.hwcopeland.net
   ENABLE_ENTERPRISE_SSO: "1"
+  HIDE_LLM_SETTINGS: "true"
   KEYCLOAK_EXTERNAL_URL: https://aiauth.hwcopeland.net
   KEYCLOAK_SERVER_URL_EXT: https://aiauth.hwcopeland.net
   LITE_LLM_API_URL: http://openhands-litellm:4000
