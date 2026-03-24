@@ -11,6 +11,7 @@ import (
 	"os/signal"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -45,6 +46,10 @@ type DockingJobController struct {
 	namespace string
 	jobClient typed.JobInterface
 	stopCh    chan struct{}
+	// results caches postprocessing output (parent job name → "Best energy: X").
+	// Populated immediately after the postprocessing job succeeds so the result
+	// is readable even after the pod's 5-minute TTL expires.
+	results sync.Map
 }
 
 // DockingJob represents the custom resource
@@ -264,7 +269,10 @@ func (c *DockingJobController) processDockingJob(job DockingJob) {
 		return
 	}
 
-	log.Printf("[%s] Postprocessing complete", job.Name)
+	log.Printf("[%s] Postprocessing complete — capturing result", job.Name)
+	result := c.captureResult(postprocessingName)
+	c.results.Store(job.Name, result)
+	log.Printf("[%s] Cached result: %q", job.Name, result)
 	completionTime := time.Now()
 	job.Status.Phase = "Completed"
 	job.Status.CompletionTime = &completionTime
@@ -531,6 +539,42 @@ func (c *DockingJobController) createPostProcessingJob(job DockingJob) error {
 
 	_, err := c.jobClient.Create(context.TODO(), j, metav1.CreateOptions{})
 	return err
+}
+
+// captureResult reads the postprocessing pod's logs immediately after the job
+// succeeds and returns the "Best energy: ..." line (or the full log on fallback).
+// Called from processDockingJob while the pod is guaranteed fresh.
+func (c *DockingJobController) captureResult(postprocessingJobName string) string {
+	pods, err := c.client.CoreV1().Pods(c.namespace).List(context.TODO(), metav1.ListOptions{
+		LabelSelector: fmt.Sprintf("job-name=%s", postprocessingJobName),
+	})
+	if err != nil || len(pods.Items) == 0 {
+		log.Printf("[captureResult] no pods found for job %s: err=%v", postprocessingJobName, err)
+		return ""
+	}
+	podName := pods.Items[0].Name
+	log.Printf("[captureResult] reading logs from pod %s", podName)
+	stream, err := c.client.CoreV1().Pods(c.namespace).GetLogs(podName, &corev1.PodLogOptions{}).
+		Stream(context.TODO())
+	if err != nil {
+		log.Printf("[captureResult] GetLogs error for pod %s: %v", podName, err)
+		return ""
+	}
+	defer stream.Close()
+	buf, err := io.ReadAll(stream)
+	if err != nil {
+		log.Printf("[captureResult] ReadAll error for pod %s: %v", podName, err)
+		return ""
+	}
+	log.Printf("[captureResult] pod %s logs (%d bytes):\n%s", podName, len(buf), strings.TrimSpace(string(buf)))
+	for _, line := range strings.Split(strings.TrimSpace(string(buf)), "\n") {
+		if strings.HasPrefix(line, "Best energy:") {
+			log.Printf("[captureResult] found result: %s", line)
+			return strings.TrimSpace(line)
+		}
+	}
+	// No "Best energy:" line found — return trimmed full output for diagnostics.
+	return strings.TrimSpace(string(buf))
 }
 
 // parseBatchCountFromLogs reads the completed split-sdf pod's logs and parses
