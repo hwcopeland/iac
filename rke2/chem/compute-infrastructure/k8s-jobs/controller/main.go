@@ -258,7 +258,7 @@ func (c *DockingJobController) processDockingJob(job DockingJob) {
 		log.Printf("[%s] Batch %d/%d complete", job.Name, i+1, batchCount)
 	}
 
-	log.Printf("[%s] Step 5/5: postprocessing", job.Name)
+	log.Printf("[%s] Step 5/6: postprocessing", job.Name)
 	if err := c.createPostProcessingJob(job); err != nil {
 		c.failJob(job, fmt.Sprintf("postprocessing failed: %v", err))
 		return
@@ -273,6 +273,19 @@ func (c *DockingJobController) processDockingJob(job DockingJob) {
 	result := c.captureResult(postprocessingName)
 	c.results.Store(job.Name, result)
 	log.Printf("[%s] Cached result: %q", job.Name, result)
+
+	log.Printf("[%s] Step 6/6: export results to MySQL", job.Name)
+	if err := c.createMySQLExportJob(job); err != nil {
+		c.failJob(job, fmt.Sprintf("mysql export failed: %v", err))
+		return
+	}
+	mysqlExportName := fmt.Sprintf("%s-export-mysql", job.Name)
+	if err := c.waitForJobCompletion(mysqlExportName); err != nil {
+		c.failJob(job, fmt.Sprintf("mysql export failed: %v", err))
+		return
+	}
+	log.Printf("[%s] MySQL export complete", job.Name)
+
 	completionTime := time.Now()
 	job.Status.Phase = "Completed"
 	job.Status.CompletionTime = &completionTime
@@ -529,6 +542,63 @@ func (c *DockingJobController) createPostProcessingJob(job DockingJob) error {
 							Command:         []string{"/autodock/scripts/3_post_processing.sh"},
 							Args:            []string{job.Spec.PDBID, job.Spec.LigandDb},
 							VolumeMounts:    []corev1.VolumeMount{pvcMount("autodock-pvc", job.Spec.MountPath)},
+						},
+					},
+					Volumes: []corev1.Volume{pvcVolume("autodock-pvc", job.Spec.AutodockPvc)},
+				},
+			},
+		},
+	}
+
+	_, err := c.jobClient.Create(context.TODO(), j, metav1.CreateOptions{})
+	return err
+}
+
+func (c *DockingJobController) createMySQLExportJob(job DockingJob) error {
+	j := &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: fmt.Sprintf("%s-export-mysql", job.Name),
+			Labels: map[string]string{
+				"docking.khemia.io/workflow":   job.Name,
+				"docking.khemia.io/job-type":   "export-mysql",
+				"docking.khemia.io/parent-job": job.Name,
+			},
+		},
+		Spec: batchv1.JobSpec{
+			TTLSecondsAfterFinished: ptrInt32(300),
+			Template: corev1.PodTemplateSpec{
+				Spec: corev1.PodSpec{
+					RestartPolicy:    corev1.RestartPolicyOnFailure,
+					ImagePullSecrets: []corev1.LocalObjectReference{{Name: "zot-pull-secret"}},
+					Containers: []corev1.Container{
+						{
+							Name:            "export",
+							Image:           job.Spec.Image,
+							ImagePullPolicy: corev1.PullAlways,
+							WorkingDir:      job.Spec.MountPath,
+							Command:         []string{"python3", "/autodock/scripts/export_energies_mysql.py"},
+							Args: []string{
+								"--workflow", job.Name,
+								"--pdbid", job.Spec.PDBID,
+								"--db-label", job.Spec.LigandDb,
+								"--base-dir", job.Spec.MountPath,
+							},
+							Env: []corev1.EnvVar{
+								{Name: "MYSQL_HOST", Value: "docking-mysql.chem.svc.cluster.local"},
+								{Name: "MYSQL_PORT", Value: "3306"},
+								{Name: "MYSQL_USER", Value: "root"},
+								{Name: "MYSQL_DATABASE", Value: "docking"},
+								{
+									Name: "MYSQL_PASSWORD",
+									ValueFrom: &corev1.EnvVarSource{
+										SecretKeyRef: &corev1.SecretKeySelector{
+											LocalObjectReference: corev1.LocalObjectReference{Name: "docking-mysql-secret"},
+											Key:                  "root-password",
+										},
+									},
+								},
+							},
+							VolumeMounts: []corev1.VolumeMount{pvcMount("autodock-pvc", job.Spec.MountPath)},
 						},
 					},
 					Volumes: []corev1.Volume{pvcVolume("autodock-pvc", job.Spec.AutodockPvc)},

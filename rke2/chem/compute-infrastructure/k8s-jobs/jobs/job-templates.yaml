@@ -137,7 +137,7 @@ spec:
           command: ["python3", "/autodock/scripts/ligandprepv2.py"]
           args:
             - {{ .BatchLabel }}.sdf
-            - {{ .MountPath }}/output
+            - {{ .BatchLabel }}
             - "--format"
             - "pdb"
           env:
@@ -176,10 +176,10 @@ spec:
           image: {{ .Image }}
           imagePullPolicy: Always
           workingDir: {{ .MountPath }}
-          command: ["/bin/sh", "-c"]
+          command: ["python3", "/autodock/scripts/dockingv2.py"]
           args:
-            - |
-              /autodock/scripts/dockingv2.sh {{ .PdbId }} {{ .BatchLabel }}
+            - {{ .PdbId }}
+            - {{ .BatchLabel }}
           volumeMounts:
             - name: autodock-pvc
               mountPath: {{ .MountPath }}
@@ -215,6 +215,61 @@ spec:
           args:
             - {{ .PdbId }}
             - {{ .LigandDb }}
+          volumeMounts:
+            - name: autodock-pvc
+              mountPath: {{ .MountPath }}
+      volumes:
+        - name: autodock-pvc
+          persistentVolumeClaim:
+            claimName: {{ .AutodockPvc }}
+
+---
+# Job 7: Export Results to MySQL
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: export-mysql-{{ .WorkflowName }}
+  labels:
+    docking.k8s.io/job-type: export-mysql
+    docking.k8s.io/workflow: {{ .WorkflowName }}
+spec:
+  ttlSecondsAfterFinished: 300
+  template:
+    metadata:
+      labels:
+        docking.k8s.io/job-type: export-mysql
+        docking.k8s.io/workflow: {{ .WorkflowName }}
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: export
+          image: {{ .Image }}
+          imagePullPolicy: Always
+          workingDir: {{ .MountPath }}
+          command: ["python3", "/autodock/scripts/export_energies_mysql.py"]
+          args:
+            - "--workflow"
+            - {{ .WorkflowName }}
+            - "--pdbid"
+            - {{ .PdbId }}
+            - "--db-label"
+            - {{ .LigandDb }}
+            - "--base-dir"
+            - {{ .MountPath }}
+          env:
+            - name: MYSQL_HOST
+              value: docking-mysql.chem.svc.cluster.local
+            - name: MYSQL_PORT
+              value: "3306"
+            - name: MYSQL_USER
+              value: root
+            - name: MYSQL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: docking-mysql-secret
+                  key: root-password
+            - name: MYSQL_DATABASE
+              value: docking
           volumeMounts:
             - name: autodock-pvc
               mountPath: {{ .MountPath }}
