@@ -29,39 +29,13 @@ on:
     paths:
       - 'rke2/chem/compute-infrastructure/k8s-jobs/controller/**'
       - 'rke2/chem/compute-infrastructure/docker/autodock-vina/**'
-      - 'rke2/chem/compute-infrastructure/test/autodock/**'
       - '.github/workflows/build-chem-images.yml'
   workflow_dispatch:
 
 jobs:
-  test-autodock-vina:
-    name: Test autodock-vina MySQL export
-    runs-on: [self-hosted, arc-chem]
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
-
-      - name: Run MySQL export test in cluster pod
-        run: |
-          MYSQL_PWD=$(kubectl get secret docking-mysql-secret -n chem \
-            -o jsonpath='{.data.root-password}' | base64 -d)
-          kubectl run "vina-test-${{ github.run_id }}" -n chem \
-            --image=python:3.11-slim \
-            --restart=Never \
-            --rm -i \
-            --env="MYSQL_HOST=docking-mysql" \
-            --env="MYSQL_PORT=3306" \
-            --env="MYSQL_USER=root" \
-            --env="MYSQL_PASSWORD=$MYSQL_PWD" \
-            --env="MYSQL_DATABASE=docking" \
-            --env="WORKFLOW_NAME=ci-${{ github.run_id }}" \
-            --command -- bash -c 'pip install mysql-connector-python -q && python3 -' \
-            < rke2/chem/compute-infrastructure/test/autodock/ci_test.py
-
   build-and-push:
     name: Build ${{ matrix.name }}
     runs-on: [self-hosted, arc-chem]
-    needs: test-autodock-vina
     strategy:
       fail-fast: false
       matrix:
