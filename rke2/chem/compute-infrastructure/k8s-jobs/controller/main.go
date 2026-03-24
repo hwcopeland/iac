@@ -202,6 +202,15 @@ func (c *DockingJobController) processDockingJob(job DockingJob) {
 		return
 	}
 
+	// prepare-receptor was started concurrently with split-sdf (both are
+	// independent of each other). Ensure it has finished before docking
+	// starts, since docking needs the PDBQT receptor file on the PVC.
+	receptorJobName := fmt.Sprintf("%s-prepare-receptor", job.Name)
+	if err := c.waitForJobCompletion(receptorJobName); err != nil {
+		c.failJob(job, fmt.Sprintf("prepare receptor failed: %v", err))
+		return
+	}
+
 	job.Status.BatchCount = batchCount
 
 	for i := 0; i < batchCount; i++ {
@@ -235,6 +244,11 @@ func (c *DockingJobController) processDockingJob(job DockingJob) {
 	}
 
 	if err := c.createPostProcessingJob(job); err != nil {
+		c.failJob(job, fmt.Sprintf("postprocessing failed: %v", err))
+		return
+	}
+	postprocessingName := fmt.Sprintf("%s-postprocessing", job.Name)
+	if err := c.waitForJobCompletion(postprocessingName); err != nil {
 		c.failJob(job, fmt.Sprintf("postprocessing failed: %v", err))
 		return
 	}
