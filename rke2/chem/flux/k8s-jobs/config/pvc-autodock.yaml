@@ -1,0 +1,19 @@
+---
+# Shared working PVC for docking workflow jobs.
+# All docking steps (copy-ligand, split-sdf, prepare-ligands, docking, postprocessing)
+# mount this volume at /data. Ligand databases and intermediate files live here.
+#
+# RWX is required so parallel batch jobs running on different nodes can all mount
+# the same volume simultaneously. Longhorn provides RWX via its share manager (NFS).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: pvc-autodock
+  namespace: chem
+spec:
+  storageClassName: longhorn
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 20Gi
