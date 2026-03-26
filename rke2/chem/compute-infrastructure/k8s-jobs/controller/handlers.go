@@ -291,7 +291,8 @@ func (h *APIHandler) DeleteJob(w http.ResponseWriter, r *http.Request) {
 	}
 
 	for _, job := range jobs.Items {
-		if err := h.client.BatchV1().Jobs(h.namespace).Delete(r.Context(), job.Name, metav1.DeleteOptions{}); err != nil {
+		propagation := metav1.DeletePropagationBackground
+		if err := h.client.BatchV1().Jobs(h.namespace).Delete(r.Context(), job.Name, metav1.DeleteOptions{PropagationPolicy: &propagation}); err != nil {
 			log.Printf("Failed to delete job %s: %v", job.Name, err)
 		}
 	}
