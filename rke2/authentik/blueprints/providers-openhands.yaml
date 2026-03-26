@@ -19,7 +19,7 @@ entries:
     - !Find [authentik_providers_oauth2.scopemapping, [scope_name, openid]]
     redirect_uris:
     - matching_mode: strict
-      url: https://ai.hwcopeland.net/oauth2/callback
+      url: https://aiauth.hwcopeland.net/realms/allhands/broker/enterprise_sso/endpoint
     refresh_token_threshold: seconds=0
     refresh_token_validity: days=30
     signing_key: !Find [authentik_crypto.certificatekeypair, [name, authentik Self-signed Certificate]]
