@@ -33,21 +33,21 @@ type Config struct {
 	SessionSecret   string        `envconfig:"SESSION_SECRET"   required:"true"`
 	SessionDuration time.Duration `envconfig:"SESSION_DURATION" default:"168h"`
 
-	// Agent callback
-	CallbackToken   string `envconfig:"SECRET_CALLBACK_TOKEN" required:"true"`
-	CallbackBaseURL string `envconfig:"CALLBACK_BASE_URL"     required:"true"` // e.g. http://kai.kai.svc.cluster.local:8081
+	// Agent callback — required for Phase 2 (agent operator); set to empty to defer startup until Phase 2.
+	CallbackToken   string `envconfig:"SECRET_CALLBACK_TOKEN" default:""`
+	CallbackBaseURL string `envconfig:"CALLBACK_BASE_URL"     default:"http://kai.kai.svc.cluster.local:8081"`
 
 	// Kubernetes operator
 	KubeNamespace  string `envconfig:"KUBE_NAMESPACE"  default:"kai"`
 	KubeInCluster  bool   `envconfig:"KUBE_IN_CLUSTER" default:"true"`
 	KubeConfigPath string `envconfig:"KUBECONFIG"      default:""`
 
-	// Agent workload
-	AgentImage string `envconfig:"AGENT_IMAGE" required:"true"`
+	// Agent workload — required for Phase 2; placeholder until agent image is built.
+	AgentImage string `envconfig:"AGENT_IMAGE" default:""`
 
 	// LiteLLM proxy
 	LiteLLMBaseURL string `envconfig:"LITELLM_BASE_URL" default:"http://openhands-litellm.openhands.svc.cluster.local:4000"`
-	LiteLLMAPIKey  string `envconfig:"LITELLM_API_KEY"  required:"true"`
+	LiteLLMAPIKey  string `envconfig:"LITELLM_API_KEY"  default:""`
 
 	// Observability
 	OTLPEndpoint string `envconfig:"OTLP_ENDPOINT" default:""`
