@@ -1,7 +1,8 @@
 # kai-api multi-stage Dockerfile
 #
 # Stage 1 (node-builder): compiles the React/TypeScript UI.
-#   Output: /app/ui/dist — embedded into the Go binary via go:embed.
+#   Output: /app/cmd/kai/ui/dist — vite outDir is '../cmd/kai/ui/dist' relative to
+#   WORKDIR /app/ui, so the built files land at /app/cmd/kai/ui/dist.
 #
 # Stage 2 (go-builder): compiles the Go backend.
 #   Copies ui/dist from node-builder so go:embed can include it.
@@ -40,7 +41,8 @@ RUN go mod download
 COPY kai/ ./
 
 # Copy the compiled UI dist so go:embed can include it.
-COPY --from=node-builder /app/ui/dist ./cmd/kai/ui/dist
+# vite outDir is '../cmd/kai/ui/dist' relative to WORKDIR /app/ui → /app/cmd/kai/ui/dist
+COPY --from=node-builder /app/cmd/kai/ui/dist ./cmd/kai/ui/dist
 
 RUN go build -o /kai ./cmd/kai/
 
