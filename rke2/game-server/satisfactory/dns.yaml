@@ -2,12 +2,12 @@
 apiVersion: cloudflare-operator.io/v1
 kind: DNSRecord
 metadata:
-  name: kai
-  namespace: kai
+  name: satisfactory
+  namespace: game-server
 spec:
-  name: kai.hwcopeland.net
+  name: satisfactory.hwcopeland.net
   type: CNAME
   content: hwcopeland.net
-  proxied: true
+  proxied: false
   ttl: 1
   interval: 5m
