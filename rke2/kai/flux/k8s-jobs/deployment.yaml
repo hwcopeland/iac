@@ -1,4 +1,3 @@
----
 # Deployment for kai-api — Go backend for the Kai multi-agent platform.
 # Image tag is managed by Flux ImageUpdateAutomation (policy: kai:kai-api).
 # Env vars split between ConfigMap kai-config (non-sensitive) and
@@ -31,7 +30,7 @@ spec:
         fsGroup: 1000
       containers:
         - name: kai-api
-          image: zot.hwcopeland.net/kai/kai-api:latest # {"$imagepolicy": "kai:kai-api"}
+          image: zot.hwcopeland.net/kai/kai-api:build-000005-28f9c38 # {"$imagepolicy": "kai:kai-api"}
           imagePullPolicy: Always
           ports:
             - containerPort: 8080
