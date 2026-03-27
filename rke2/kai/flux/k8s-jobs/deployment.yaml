@@ -30,7 +30,7 @@ spec:
         fsGroup: 1000
       containers:
         - name: kai-api
-          image: zot.hwcopeland.net/kai/kai-api:build-000007-0b6e533 # {"$imagepolicy": "kai:kai-api"}
+          image: zot.hwcopeland.net/kai/kai-api:build-000008-567f6f2 # {"$imagepolicy": "kai:kai-api"}
           imagePullPolicy: Always
           ports:
             - containerPort: 8080
