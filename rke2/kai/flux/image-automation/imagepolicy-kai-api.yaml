@@ -1,0 +1,19 @@
+---
+# Selects the latest kai-api image tag matching ^build-[0-9]+ format.
+# Tags are produced by CI as build-<NNNNNN>-<sha7> where NNNNNN is the
+# zero-padded GitHub Actions run_number. This ensures alphabetical order ==
+# chronological order, so the newest build is always selected.
+apiVersion: image.toolkit.fluxcd.io/v1beta2
+kind: ImagePolicy
+metadata:
+  name: kai-api
+  namespace: kai
+spec:
+  imageRepositoryRef:
+    name: kai-api
+  filterTags:
+    pattern: '^build-[0-9]+'
+    extract: "$0"
+  policy:
+    alphabetical:
+      order: asc

@@ -1,0 +1,10 @@
+# UI build artifacts (built in CI via Docker multi-stage)
+ui/node_modules/
+ui/dist/
+ui/tsconfig.tsbuildinfo
+
+# Go build output
+bin/
+
+# Keep the embed placeholder
+!cmd/kai/ui/dist/.gitkeep

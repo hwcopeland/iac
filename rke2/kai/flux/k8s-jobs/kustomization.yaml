@@ -1,0 +1,6 @@
+# Phase 0 placeholder — Phase 1 manifests (Deployment, Service, HTTPRoute, etc.) go here.
+# This file must exist so the Flux Kustomization in apps.yaml can reconcile the path
+# without error before any workload manifests are committed.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources: []
