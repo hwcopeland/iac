@@ -1,0 +1,20 @@
+---
+# ClusterIP Service for kai-api.
+# Port 80 → containerPort 8080 so HTTPRoute and in-cluster clients
+# can use the conventional HTTP port.
+apiVersion: v1
+kind: Service
+metadata:
+  name: kai
+  namespace: kai
+  labels:
+    app.kubernetes.io/name: kai-api
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8080
+      protocol: TCP
+  selector:
+    app.kubernetes.io/name: kai-api

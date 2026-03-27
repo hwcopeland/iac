@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 	"os"
@@ -9,7 +10,10 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/hwcopeland/iac/kai/internal/api"
+	"github.com/hwcopeland/iac/kai/internal/auth"
 	"github.com/hwcopeland/iac/kai/internal/config"
+	"github.com/hwcopeland/iac/kai/internal/db"
 )
 
 func main() {
@@ -25,23 +29,43 @@ func main() {
 		slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, nil)))
 	}
 
-	mux := http.NewServeMux()
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("ok"))
-	})
-
-	srv := &http.Server{
-		Addr:    cfg.ListenAddr,
-		Handler: mux,
-	}
-
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	pool, err := db.New(ctx, cfg.DatabaseURL)
+	if err != nil {
+		slog.Error("db connect", "err", err)
+		os.Exit(1)
+	}
+	defer pool.Close()
+
+	if err := db.Migrate(ctx, cfg.DatabaseURL); err != nil {
+		slog.Error("db migrate", "err", err)
+		os.Exit(1)
+	}
+
+	oidcClient, err := auth.NewOIDCClient(
+		cfg.AuthIssuerURL,
+		cfg.AuthClientID,
+		cfg.AuthClientSecret,
+		cfg.AuthRedirectURL,
+	)
+	if err != nil {
+		slog.Error("oidc init", "err", err)
+		os.Exit(1)
+	}
+
+	srv := &http.Server{
+		Addr:         cfg.ListenAddr,
+		Handler:      api.NewServer(oidcClient, pool).Router(),
+		ReadTimeout:  15 * time.Second,
+		WriteTimeout: 15 * time.Second,
+		IdleTimeout:  60 * time.Second,
+	}
+
 	go func() {
-		slog.Info("kai-api starting", "addr", cfg.ListenAddr)
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		slog.Info("kai-api listening", "addr", cfg.ListenAddr)
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			slog.Error("server error", "err", err)
 			os.Exit(1)
 		}
@@ -49,7 +73,13 @@ func main() {
 
 	<-ctx.Done()
 	slog.Info("shutting down")
+
 	shutCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	srv.Shutdown(shutCtx)
+
+	if err := srv.Shutdown(shutCtx); err != nil {
+		slog.Error("graceful shutdown", "err", err)
+	}
+
+	slog.Info("kai shutdown complete")
 }
