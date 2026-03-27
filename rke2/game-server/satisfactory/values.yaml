@@ -1,0 +1,44 @@
+image:
+  repository: wolveix/satisfactory-server
+  pullPolicy: IfNotPresent
+
+env:
+  - name: AUTOPAUSE
+    value: "true"
+  - name: AUTOSAVEINTERVAL
+    value: "300"
+  - name: AUTOSAVENUM
+    value: "3"
+  - name: AUTOSAVEONDISCONNECT
+    value: "true"
+  - name: CRASHREPORT
+    value: "true"
+  - name: MAXPLAYERS
+    value: "8"
+  - name: PGID
+    value: "1000"
+  - name: PUID
+    value: "1000"
+  - name: STEAMBETA
+    value: "true"
+  - name: ROOTLESS
+    value: "true"
+
+service:
+  type: LoadBalancer
+  port: 7777
+  annotations:
+    io.cilium/lb-ipam-ips: "10.44.0.33"
+
+persistence:
+  - name: config
+    enabled: false
+    accessModes:
+      - ReadWriteOnce
+    size: 1Gi
+  - name: server-cache
+    enabled: true
+    accessModes:
+      - ReadWriteOnce
+    storageClass: longhorn
+    size: 30Gi
