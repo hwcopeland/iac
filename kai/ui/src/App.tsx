@@ -1,9 +1,4 @@
-function App() {
-  return (
-    <div className="min-h-screen bg-gray-950 text-gray-100 flex items-center justify-center">
-      <h1 className="text-4xl font-bold">Kai</h1>
-    </div>
-  )
-}
+// App.tsx — replaced by the router-based setup in main.tsx
+// This file is kept to satisfy TypeScript's include glob but is not imported.
+export {}
 
-export default App
