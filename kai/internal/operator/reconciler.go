@@ -32,6 +32,8 @@ type AgentSandboxReconciler struct {
 	// ImagePullSecret is the name of the k8s secret used for private registry auth.
 	// Leave empty to skip imagePullSecrets on the Pod.
 	ImagePullSecret string
+	// XAIAPIKey is injected into agent pods as XAI_API_KEY for direct Grok API access.
+	XAIAPIKey string
 }
 
 // Reconcile is the main reconcile loop called for every AgentSandbox event.
@@ -89,7 +91,7 @@ func (r *AgentSandboxReconciler) reconcilePending(ctx context.Context, sb *Agent
 	}
 
 	// Ensure Pod exists (idempotent).
-	pod := BuildAgentPod(sb, r.CallbackBaseURL, r.CallbackToken, r.ImagePullSecret)
+	pod := BuildAgentPod(sb, r.CallbackBaseURL, r.CallbackToken, r.ImagePullSecret, r.XAIAPIKey)
 	if err := r.Create(ctx, pod); err != nil && !apierrors.IsAlreadyExists(err) {
 		return ctrl.Result{}, fmt.Errorf("creating Pod: %w", err)
 	}
