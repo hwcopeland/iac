@@ -26,3 +26,5 @@ resources:
   - service.yaml
   # Ingress
   - httproute.yaml
+  # DNS
+  - dnsrecord.yaml
