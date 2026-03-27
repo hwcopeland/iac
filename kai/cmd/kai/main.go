@@ -14,6 +14,9 @@ import (
 	"github.com/hwcopeland/iac/kai/internal/auth"
 	"github.com/hwcopeland/iac/kai/internal/config"
 	"github.com/hwcopeland/iac/kai/internal/db"
+	"github.com/hwcopeland/iac/kai/internal/events"
+	"github.com/hwcopeland/iac/kai/internal/operator"
+	sigs "sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 func main() {
@@ -55,9 +58,49 @@ func main() {
 		os.Exit(1)
 	}
 
+	// ── Phase 2: AgentSandbox operator ────────────────────────────────────────
+	// Skip operator startup when AgentImage is not configured (Phase 1 / dev mode).
+	var k8sClient sigs.Client // nil when operator is not running
+	if cfg.AgentImage != "" {
+		mgr, err := operator.NewManager(cfg)
+		if err != nil {
+			slog.Error("operator manager init", "err", err)
+			os.Exit(1)
+		}
+		k8sClient = mgr.GetClient()
+		go func() {
+			slog.Info("starting AgentSandbox operator", "namespace", cfg.KubeNamespace)
+			if err := mgr.Start(ctx); err != nil {
+				slog.Error("operator manager exited", "err", err)
+			}
+		}()
+	} else {
+		slog.Info("AGENT_IMAGE not set, skipping operator startup (Phase 1 mode)")
+	}
+
+	hub := events.NewHub()
+
+	apiServer := api.NewServer(oidcClient, pool, cfg, hub, k8sClient)
+
+	// ── Internal server (agent callbacks, not internet-facing) ───────────────
+	internalSrv := &http.Server{
+		Addr:         cfg.InternalListenAddr,
+		Handler:      apiServer.InternalRouter(),
+		ReadTimeout:  15 * time.Second,
+		WriteTimeout: 15 * time.Second,
+		IdleTimeout:  60 * time.Second,
+	}
+	go func() {
+		slog.Info("kai internal API listening", "addr", cfg.InternalListenAddr)
+		if err := internalSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			slog.Error("internal server error", "err", err)
+		}
+	}()
+
+	// ── Public server ────────────────────────────────────────────────────────
 	srv := &http.Server{
 		Addr:         cfg.ListenAddr,
-		Handler:      api.NewServer(oidcClient, pool).Router(),
+		Handler:      apiServer.Router(),
 		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 15 * time.Second,
 		IdleTimeout:  60 * time.Second,
@@ -78,7 +121,10 @@ func main() {
 	defer cancel()
 
 	if err := srv.Shutdown(shutCtx); err != nil {
-		slog.Error("graceful shutdown", "err", err)
+		slog.Error("graceful shutdown (public)", "err", err)
+	}
+	if err := internalSrv.Shutdown(shutCtx); err != nil {
+		slog.Error("graceful shutdown (internal)", "err", err)
 	}
 
 	slog.Info("kai shutdown complete")
