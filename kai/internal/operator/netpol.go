@@ -14,6 +14,7 @@ import (
 //   1. DNS   — UDP+TCP port 53 to any destination.
 //   2. Kai API internal — TCP port 8081 to kai-api pod in the kai namespace.
 //   3. LiteLLM — TCP port 4000 to openhands-litellm in the openhands namespace.
+//   4. External HTTPS — TCP port 443 to any destination (xAI API, etc.).
 func BuildNetworkPolicy(sb *AgentSandbox) *networkingv1.NetworkPolicy {
 	trueVal := true
 
@@ -21,6 +22,7 @@ func BuildNetworkPolicy(sb *AgentSandbox) *networkingv1.NetworkPolicy {
 	protocolUDP := corev1.ProtocolUDP
 
 	port53 := intstr.FromInt(53)
+	port443 := intstr.FromInt(443)
 	port8081 := intstr.FromInt(8081)
 	port4000 := intstr.FromInt(4000)
 
@@ -103,6 +105,13 @@ func BuildNetworkPolicy(sb *AgentSandbox) *networkingv1.NetworkPolicy {
 							},
 						},
 					},
+				},
+				// 4. External HTTPS (TCP 443 to any destination — xAI API, etc.)
+				{
+					Ports: []networkingv1.NetworkPolicyPort{
+						{Protocol: &protocolTCP, Port: &port443},
+					},
+					// No To peers → allow to any destination.
 				},
 			},
 		},

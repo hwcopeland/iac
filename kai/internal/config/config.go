@@ -49,6 +49,9 @@ type Config struct {
 	LiteLLMBaseURL string `envconfig:"LITELLM_BASE_URL" default:"http://openhands-litellm.openhands.svc.cluster.local:4000"`
 	LiteLLMAPIKey  string `envconfig:"LITELLM_API_KEY"  default:""`
 
+	// xAI (Grok) — direct API key injected into agent pods
+	XAIAPIKey string `envconfig:"XAI_API_KEY" default:""`
+
 	// Observability
 	OTLPEndpoint string `envconfig:"OTLP_ENDPOINT" default:""`
 	LogLevel     string `envconfig:"LOG_LEVEL"     default:"info"`

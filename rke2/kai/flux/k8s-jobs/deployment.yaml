@@ -72,6 +72,11 @@ spec:
                 secretKeyRef:
                   name: kai-secrets
                   key: SESSION_SECRET
+            - name: XAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: kai-secrets
+                  key: XAI_API_KEY
           resources:
             requests:
               cpu: 100m
