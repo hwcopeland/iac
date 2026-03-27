@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"io/fs"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -21,16 +22,19 @@ type Server struct {
 	cfg       *config.Config
 	hub       *events.Hub
 	k8sClient sigs.Client // may be nil; checked before use in orchestrateRun
+	ui        fs.FS       // embedded ui/dist; may be nil in tests
 }
 
 // NewServer constructs an API server with all required dependencies.
 // k8sClient may be nil — when nil, orchestrateRun simulates agent completion.
+// ui may be nil — when nil, the SPA catch-all handler is skipped.
 func NewServer(
 	oidc *auth.OIDCClient,
 	pool *db.Pool,
 	cfg *config.Config,
 	hub *events.Hub,
 	k8sClient sigs.Client,
+	ui fs.FS,
 ) *Server {
 	return &Server{
 		oidc:      oidc,
@@ -38,6 +42,7 @@ func NewServer(
 		cfg:       cfg,
 		hub:       hub,
 		k8sClient: k8sClient,
+		ui:        ui,
 	}
 }
 
@@ -72,7 +77,7 @@ func (s *Server) Router() http.Handler {
 		r.Get("/api/runs/{runID}", s.handleGetRun)
 		r.Post("/api/runs/{runID}/cancel", s.handleCancelRun)
 
-		// Phase 3 placeholder — WebSocket event stream
+		// Phase 3 — WebSocket event stream
 		r.Get("/api/runs/{runID}/events", s.handleRunEvents)
 
 		// Phase 4 — artifacts
@@ -93,6 +98,21 @@ func (s *Server) Router() http.Handler {
 	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
+
+	// ── SPA catch-all: serve embedded ui/dist, fall back to index.html ───────
+	if s.ui != nil {
+		fileServer := http.FileServer(http.FS(s.ui))
+		r.Get("/*", func(w http.ResponseWriter, r *http.Request) {
+			// Try to serve the exact file; if not found serve index.html so
+			// TanStack Router can handle client-side navigation.
+			_, err := s.ui.Open(r.URL.Path[1:]) // strip leading /
+			if err != nil {
+				// Serve index.html for all unknown paths (SPA routing).
+				r.URL.Path = "/"
+			}
+			fileServer.ServeHTTP(w, r)
+		})
+	}
 
 	return r
 }
