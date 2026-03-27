@@ -1,0 +1,108 @@
+---
+# PostgreSQL 16 StatefulSet for the Kai data layer.
+# Storage: Longhorn 10Gi PVC via volumeClaimTemplates (auto-provisioned per-pod).
+# Credentials sourced from Secret kai-postgres-secret (see postgres-secret.yaml).
+# ClusterIP Service postgres-svc exposes port 5432 within the cluster.
+# DSN consumed by kai-api: postgres://kai:<password>@postgres-svc.kai.svc.cluster.local:5432/kai
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: kai-postgres
+  namespace: kai
+  labels:
+    app.kubernetes.io/name: kai-postgres
+    app.kubernetes.io/component: database
+spec:
+  serviceName: postgres-svc
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: kai-postgres
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: kai-postgres
+        app.kubernetes.io/component: database
+    spec:
+      securityContext:
+        fsGroup: 999
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 5432
+              name: postgres
+              protocol: TCP
+          env:
+            - name: POSTGRES_DB
+              valueFrom:
+                secretKeyRef:
+                  name: kai-postgres-secret
+                  key: POSTGRES_DB
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: kai-postgres-secret
+                  key: POSTGRES_USER
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: kai-postgres-secret
+                  key: POSTGRES_PASSWORD
+            # Keep data directory explicit to avoid pgdata-in-mount-root issues
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 1Gi
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-U", "kai", "-d", "kai"]
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 5
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "kai", "-d", "kai"]
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        storageClassName: longhorn
+        resources:
+          requests:
+            storage: 10Gi
+---
+# Headless Service for StatefulSet DNS + ClusterIP for stable in-cluster address.
+# StatefulSet pod DNS: kai-postgres-0.postgres-svc.kai.svc.cluster.local
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-svc
+  namespace: kai
+  labels:
+    app.kubernetes.io/name: kai-postgres
+spec:
+  type: ClusterIP
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: 5432
+      protocol: TCP
+  selector:
+    app.kubernetes.io/name: kai-postgres

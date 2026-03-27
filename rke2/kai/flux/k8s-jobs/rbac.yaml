@@ -1,0 +1,48 @@
+---
+# ServiceAccount, ClusterRole, and ClusterRoleBinding for kai.
+# kai-api needs cluster-scoped permissions to manage AgentSandbox CRDs and the
+# infrastructure (Pods, Services, PVCs, NetworkPolicies) they require.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kai
+  namespace: kai
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kai
+rules:
+  # AgentSandbox CRD management
+  - apiGroups: ["kai.hwcopeland.net"]
+    resources: ["agentsandboxes", "agentsandboxes/status", "agentsandboxes/finalizers"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Pod lifecycle for agent sandboxes
+  - apiGroups: [""]
+    resources: ["pods", "pods/log", "pods/exec"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Services for sandbox networking
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # PersistentVolumeClaims for sandbox workspaces
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # NetworkPolicies for sandbox isolation
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["networkpolicies"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kai
+subjects:
+  - kind: ServiceAccount
+    name: kai
+    namespace: kai
+roleRef:
+  kind: ClusterRole
+  name: kai
+  apiGroup: rbac.authorization.k8s.io

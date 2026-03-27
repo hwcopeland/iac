@@ -1,0 +1,22 @@
+---
+# HTTPRoute: kai.hwcopeland.net → Service kai:80
+# Attached to the hwcopeland-gateway (kube-system), https listener.
+# TLS is terminated at the gateway (cf-wildcard-cert-secret).
+# Note: verify that an existing ReferenceGrant in kube-system allows routes
+# from namespace kai. If not present, add a ReferenceGrant before Phase 3.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: kai
+  namespace: kai
+spec:
+  parentRefs:
+    - name: hwcopeland-gateway
+      namespace: kube-system
+      sectionName: https
+  hostnames:
+    - kai.hwcopeland.net
+  rules:
+    - backendRefs:
+        - name: kai
+          port: 80
