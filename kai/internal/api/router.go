@@ -74,6 +74,19 @@ func (s *Server) Router() http.Handler {
 
 		// Phase 3 placeholder — WebSocket event stream
 		r.Get("/api/runs/{runID}/events", s.handleRunEvents)
+
+		// Phase 4 — artifacts
+		r.Get("/api/runs/{runID}/artifacts", s.handleListArtifacts)
+		r.Get("/api/artifacts/{artifactID}/download", s.handleDownloadArtifact)
+
+		// Phase 4 — API keys
+		r.Get("/api/keys", s.handleListAPIKeys)
+		r.Post("/api/keys", s.handleCreateAPIKey)
+		r.Delete("/api/keys/{keyID}", s.handleRevokeAPIKey)
+
+		// Phase 4 — admin (IsAdmin check inside handler; returns 403 for non-admins)
+		r.Get("/api/admin/users", s.handleAdminListUsers)
+		r.Get("/api/admin/runs", s.handleAdminListRuns)
 	})
 
 	// ── Infrastructure ───────────────────────────────────────────────────────

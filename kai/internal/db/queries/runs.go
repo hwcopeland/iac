@@ -274,6 +274,25 @@ func CreateArtifact(ctx context.Context, pool *db.Pool, runID string, agentTaskI
 	return id, err
 }
 
+// GetArtifact fetches a single artifact by UUID.
+// Returns pgx.ErrNoRows if not found.
+func GetArtifact(ctx context.Context, pool *db.Pool, artifactID string) (*Artifact, error) {
+	row := pool.QueryRow(ctx, `
+		SELECT id, run_id, agent_task_id, name, mime_type, size_bytes, storage_path, created_at
+		FROM artifacts
+		WHERE id = $1
+	`, artifactID)
+
+	var a Artifact
+	if err := row.Scan(
+		&a.ID, &a.RunID, &a.AgentTaskID, &a.Name, &a.MimeType,
+		&a.SizeBytes, &a.StoragePath, &a.CreatedAt,
+	); err != nil {
+		return nil, err
+	}
+	return &a, nil
+}
+
 // ListArtifacts returns all artifacts for a run, ordered by creation time.
 func ListArtifacts(ctx context.Context, pool *db.Pool, runID string) ([]Artifact, error) {
 	rows, err := pool.Query(ctx, `
@@ -299,4 +318,33 @@ func ListArtifacts(ctx context.Context, pool *db.Pool, runID string) ([]Artifact
 		artifacts = append(artifacts, a)
 	}
 	return artifacts, rows.Err()
+}
+
+// ListAllRuns returns up to limit runs across all teams, ordered newest first.
+// Intended for admin use only — callers must verify admin access before calling.
+func ListAllRuns(ctx context.Context, pool *db.Pool, limit int) ([]TeamRun, error) {
+	rows, err := pool.Query(ctx, `
+		SELECT id, team_id, initiated_by, objective, status, model,
+		       created_at, started_at, completed_at, error
+		FROM team_runs
+		ORDER BY created_at DESC
+		LIMIT $1
+	`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var runs []TeamRun
+	for rows.Next() {
+		var r TeamRun
+		if err := rows.Scan(
+			&r.ID, &r.TeamID, &r.InitiatedBy, &r.Objective, &r.Status, &r.Model,
+			&r.CreatedAt, &r.StartedAt, &r.CompletedAt, &r.Error,
+		); err != nil {
+			return nil, err
+		}
+		runs = append(runs, r)
+	}
+	return runs, rows.Err()
 }

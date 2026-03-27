@@ -70,3 +70,30 @@ func GetUserByID(ctx context.Context, pool *db.Pool, id string) (User, error) {
 	)
 	return u, err
 }
+
+// ListAllUsers returns all users ordered by creation time descending.
+// Intended for admin use only — callers must verify admin access before calling.
+func ListAllUsers(ctx context.Context, pool *db.Pool) ([]User, error) {
+	rows, err := pool.Query(ctx, `
+		SELECT id, email, display_name, avatar_url, is_admin, created_at, last_login_at
+		FROM users
+		ORDER BY created_at DESC
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var users []User
+	for rows.Next() {
+		var u User
+		if err := rows.Scan(
+			&u.ID, &u.Email, &u.DisplayName, &u.AvatarURL,
+			&u.IsAdmin, &u.CreatedAt, &u.LastLoginAt,
+		); err != nil {
+			return nil, err
+		}
+		users = append(users, u)
+	}
+	return users, rows.Err()
+}
