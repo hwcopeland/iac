@@ -30,6 +30,20 @@ spec:
 apiVersion: kustomize.toolkit.fluxcd.io/v1
 kind: Kustomization
 metadata:
+  name: kai-bootstrap
+  namespace: tooling
+spec:
+  interval: 5m
+  path: ./rke2/kai/flux
+  prune: true
+  sourceRef:
+    kind: GitRepository
+    name: tooling
+    namespace: tooling
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
   name: chem-bootstrap
   namespace: tooling
 spec:
