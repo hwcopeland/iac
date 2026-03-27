@@ -16,7 +16,8 @@ var defaultResources = AgentSandboxResources{
 // callbackURL is the fully-qualified internal URL the agent should POST events to.
 // imagePullSecret is the name of the k8s Secret for private registry auth; pass ""
 // to omit imagePullSecrets from the spec.
-func BuildAgentPod(sb *AgentSandbox, callbackURL, callbackToken, imagePullSecret string) *corev1.Pod {
+// xaiAPIKey is injected as XAI_API_KEY so the agent can call api.x.ai directly.
+func BuildAgentPod(sb *AgentSandbox, callbackURL, callbackToken, imagePullSecret, xaiAPIKey string) *corev1.Pod {
 	trueVal := true
 
 	// ── Resource requirements ─────────────────────────────────────────────────
@@ -55,6 +56,7 @@ func BuildAgentPod(sb *AgentSandbox, callbackURL, callbackToken, imagePullSecret
 		{Name: "KAI_SANDBOX_NAME", Value: sb.Name},
 		{Name: "KAI_CALLBACK_URL", Value: callbackURL},
 		{Name: "KAI_CALLBACK_TOKEN", Value: callbackToken},
+		{Name: "XAI_API_KEY", Value: xaiAPIKey},
 	}
 	// Append spec.env after standard vars; spec cannot override standard keys
 	// but can add extras. If a spec key collides with a standard key the standard

@@ -57,7 +57,8 @@ func NewManager(cfg *config.Config) (ctrl.Manager, error) {
 		AgentImage:      cfg.AgentImage,
 		CallbackBaseURL: cfg.CallbackBaseURL,
 		CallbackToken:   cfg.CallbackToken,
-		// ImagePullSecret: populate from config if a field is added in the future.
+		ImagePullSecret: "zot-pull-secret",
+		XAIAPIKey:       cfg.XAIAPIKey,
 	}
 	if err := reconciler.SetupWithManager(mgr); err != nil {
 		return nil, fmt.Errorf("setting up AgentSandboxReconciler: %w", err)
