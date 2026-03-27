@@ -1,5 +1,5 @@
 import { createRoute } from '@tanstack/react-router'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import { authedRoute } from '../_authed'
 import { apiFetch } from '../../api/client'
@@ -12,7 +12,7 @@ export const adminRoute = createRoute({
   component: AdminPage,
 })
 
-type Tab = 'users' | 'runs'
+type Tab = 'users' | 'runs' | 'teams'
 
 function StatusBadge({ status }: { status: TeamRun['status'] }) {
   const configs: Record<TeamRun['status'], { label: string; className: string }> = {
@@ -47,9 +47,84 @@ function StatusBadge({ status }: { status: TeamRun['status'] }) {
   )
 }
 
+function CreateTeamForm() {
+  const qc = useQueryClient()
+  const [name, setName] = useState('')
+  const [slug, setSlug] = useState('')
+
+  const mutation = useMutation({
+    mutationFn: () =>
+      apiFetch<{ id: string }>('/teams', {
+        method: 'POST',
+        body: JSON.stringify({ name: name.trim(), slug: slug.trim() }),
+      }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['teams'] })
+      setName('')
+      setSlug('')
+    },
+  })
+
+  const autoSlug = (n: string) =>
+    n
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-|-$/g, '')
+
+  return (
+    <form
+      onSubmit={(e) => {
+        e.preventDefault()
+        mutation.mutate()
+      }}
+      className="rounded-xl border border-gray-800 bg-gray-900 p-6 space-y-4 max-w-lg"
+    >
+      <h2 className="text-base font-semibold text-white">➕ New Team</h2>
+      <div className="grid grid-cols-2 gap-4">
+        <div>
+          <label className="block text-xs font-medium text-gray-400 mb-1">Name</label>
+          <input
+            type="text"
+            value={name}
+            onChange={(e) => {
+              setName(e.target.value)
+              if (!slug) setSlug(autoSlug(e.target.value))
+            }}
+            placeholder="Platform Engineering"
+            className="w-full rounded-md border border-gray-700 bg-gray-800 px-3 py-2 text-sm text-gray-100 placeholder-gray-500 focus:border-indigo-500 focus:outline-none"
+          />
+        </div>
+        <div>
+          <label className="block text-xs font-medium text-gray-400 mb-1">Slug</label>
+          <input
+            type="text"
+            value={slug}
+            onChange={(e) => setSlug(e.target.value)}
+            placeholder="platform-eng"
+            className="w-full rounded-md border border-gray-700 bg-gray-800 px-3 py-2 text-sm text-gray-100 placeholder-gray-500 focus:border-indigo-500 focus:outline-none"
+          />
+        </div>
+      </div>
+      {mutation.isError && (
+        <p className="text-xs text-rose-400">Failed to create team. Check name/slug are unique.</p>
+      )}
+      {mutation.isSuccess && (
+        <p className="text-xs text-emerald-400">Team created!</p>
+      )}
+      <button
+        type="submit"
+        disabled={!name.trim() || !slug.trim() || mutation.isPending}
+        className="rounded-lg bg-indigo-600 px-5 py-2 text-sm font-medium text-white hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+      >
+        {mutation.isPending ? 'Creating…' : 'Create Team'}
+      </button>
+    </form>
+  )
+}
+
 function AdminPage() {
   const { data: me } = useMe()
-  const [tab, setTab] = useState<Tab>('users')
+  const [tab, setTab] = useState<Tab>('teams')
   const [userSearch, setUserSearch] = useState('')
 
   const isAdmin = me?.is_admin === true
@@ -104,7 +179,7 @@ function AdminPage() {
 
         {/* Tab bar */}
         <div className="flex gap-1 border-b border-gray-800">
-          {(['users', 'runs'] as const).map((t) => (
+          {(['teams', 'users', 'runs'] as const).map((t) => (
             <button
               key={t}
               onClick={() => setTab(t)}
@@ -118,6 +193,13 @@ function AdminPage() {
             </button>
           ))}
         </div>
+
+        {/* ── Teams tab ────────────────────────────────────────────── */}
+        {tab === 'teams' && (
+          <div className="space-y-6">
+            <CreateTeamForm />
+          </div>
+        )}
 
         {/* ── Users tab ────────────────────────────────────────────── */}
         {tab === 'users' && (
