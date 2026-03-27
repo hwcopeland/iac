@@ -1,0 +1,46 @@
+version: 1
+metadata:
+  name: kai Provider and Application
+entries:
+- attrs:
+    access_code_validity: minutes=1
+    access_token_validity: hours=1
+    authorization_flow: !Find [authentik_flows.flow, [slug, default-provider-authorization-implicit-consent]]
+    client_id: kai                         # REPLACE with generated client_id from Bitwarden (kai-auth-client-id)
+    client_type: confidential
+    include_claims_in_id_token: true
+    invalidation_flow: !Find [authentik_flows.flow, [slug, default-provider-invalidation-flow]]
+    issuer_mode: per_provider
+    logout_method: backchannel
+    name: kai
+    property_mappings:
+    - !Find [authentik_providers_oauth2.scopemapping, [scope_name, email]]
+    - !Find [authentik_providers_oauth2.scopemapping, [scope_name, profile]]
+    - !Find [authentik_providers_oauth2.scopemapping, [scope_name, openid]]
+    - !Find [authentik_providers_oauth2.scopemapping, [scope_name, groups]]  # existing mapping from scope-mappings.yaml
+    redirect_uris:
+    - matching_mode: strict
+      url: https://kai.hwcopeland.net/api/auth/callback
+    refresh_token_threshold: seconds=0
+    refresh_token_validity: days=30
+    signing_key: !Find [authentik_crypto.certificatekeypair, [name, authentik Self-signed Certificate]]
+    sub_mode: hashed_user_id              # consistent with other apps on this cluster; ensures users.id is stable
+  conditions: []
+  identifiers:
+    pk: 9                                 # incremented from openhands (pk: 8)
+  model: authentik_providers_oauth2.oauth2provider
+  permissions: []
+  state: present
+- attrs:
+    meta_description: Kai AI Agent Platform
+    meta_launch_url: https://kai.hwcopeland.net
+    name: kai
+    policy_engine_mode: any
+    provider: !Find [authentik_providers_oauth2.oauth2provider, [name, kai]]
+    slug: kai
+  conditions: []
+  identifiers:
+    pk: kai-app-uuid-placeholder          # REPLACE with actual UUID before applying
+  model: authentik_core.application
+  permissions: []
+  state: present

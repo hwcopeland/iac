@@ -1,0 +1,14 @@
+---
+# ImageRepository for kai-agent.
+# Polls zot.hwcopeland.net/kai/kai-agent every 5 minutes.
+# Credentials from zot-pull-secret (ExternalSecret → bitwarden-login, same pattern as chem).
+apiVersion: image.toolkit.fluxcd.io/v1beta2
+kind: ImageRepository
+metadata:
+  name: kai-agent
+  namespace: kai
+spec:
+  image: zot.hwcopeland.net/kai/kai-agent
+  interval: 5m
+  secretRef:
+    name: zot-pull-secret

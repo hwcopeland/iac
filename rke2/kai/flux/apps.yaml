@@ -1,0 +1,28 @@
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: kai
+  namespace: kai
+spec:
+  interval: 5m
+  path: ./rke2/kai/flux/k8s-jobs
+  prune: true
+  sourceRef:
+    kind: GitRepository
+    name: tooling
+    namespace: tooling
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: kai-image-automation
+  namespace: kai
+spec:
+  interval: 5m
+  path: ./rke2/kai/flux/image-automation
+  prune: true
+  sourceRef:
+    kind: GitRepository
+    name: tooling
+    namespace: tooling
