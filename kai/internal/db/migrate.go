@@ -13,12 +13,11 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib" // registers "pgx" driver for database/sql
 )
 
-// Embed only the canonical migration files. The 000001_init.* files are stubs
-// that pre-date the authoritative 001_initial.* schema and must not be included
-// to avoid a duplicate-version-1 conflict in golang-migrate.
+// Embed the entire migrations directory so that new migration files are picked
+// up automatically without editing this file.
 //
-//go:embed migrations/001_initial.up.sql migrations/001_initial.down.sql
-var migrationsFS embed.FS
+//go:embed migrations
+var migrationFS embed.FS
 
 // Migrate runs all pending SQL migrations embedded in internal/db/migrations/.
 // It is idempotent: already-applied migrations are skipped.
@@ -33,7 +32,7 @@ func Migrate(ctx context.Context, url string) error {
 		return fmt.Errorf("db migrate ping: %w", err)
 	}
 
-	src, err := iofs.New(migrationsFS, "migrations")
+	src, err := iofs.New(migrationFS, "migrations")
 	if err != nil {
 		return fmt.Errorf("db migrate iofs source: %w", err)
 	}

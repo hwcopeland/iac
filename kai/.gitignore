@@ -8,3 +8,5 @@ bin/
 
 # Keep the embed placeholder
 !cmd/kai/ui/dist/.gitkeep
+kai/kai
+kai/kai-agent
