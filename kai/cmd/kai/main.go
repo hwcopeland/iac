@@ -80,7 +80,7 @@ func main() {
 
 	hub := events.NewHub()
 
-	apiServer := api.NewServer(oidcClient, pool, cfg, hub, k8sClient)
+	apiServer := api.NewServer(oidcClient, pool, cfg, hub, k8sClient, uiFS())
 
 	// ── Internal server (agent callbacks, not internet-facing) ───────────────
 	internalSrv := &http.Server{
