@@ -20,12 +20,8 @@
 # (e.g. sha-e063a72 beats sha-2398b71 alphabetically even though it is older).
 # Additionally pushes :latest for backward compatibility.
 #
-# Build order for kai-api:
-#   1. npm run build (in kai/ui/) — multi-stage Dockerfile stage 1 handles this
-#      internally, but running it first provides fast feedback on frontend errors
-#      without waiting for the Go build layer.
-#   2. docker buildx build — multi-stage build embeds ui/dist into the Go binary.
-# kai-agent builds independently (no frontend dependency).
+# The multi-stage Dockerfile.api handles npm ci + npm run build in the
+# node-builder stage. kai-agent builds independently (no frontend dependency).
 
 name: Build and Push Kai Images
 
@@ -52,17 +48,12 @@ jobs:
             # Build context is repo root so the Dockerfile can COPY kai/ui/ and kai/
             # in the multi-stage build (node-builder and go-builder stages).
             context: .
-            # Run frontend build before docker build for fast failure on UI errors.
-            # The Dockerfile also runs npm ci + npm run build in stage 1; the CI step
-            # here is strictly a fail-fast check — it does not feed artifacts into Docker.
-            pre_build_cmd: "cd kai/ui && npm ci && npm run build"
 
           - name: kai-agent
             image: zot.hwcopeland.net/kai/kai-agent
             dockerfile: kai/Dockerfile.agent
             # Build context is repo root so the Dockerfile can COPY kai/agent/.
             context: .
-            pre_build_cmd: ""
 
     steps:
       - name: Checkout repository
@@ -86,10 +77,6 @@ jobs:
           BUILD_TAG="build-${RUN_NUM}-${SHORT_SHA}"
           echo "build_tag=${BUILD_TAG}" >> "$GITHUB_OUTPUT"
           echo "Building ${{ matrix.name }} with tag: ${BUILD_TAG}"
-
-      - name: Pre-build check (${{ matrix.name }})
-        if: ${{ matrix.pre_build_cmd != '' }}
-        run: ${{ matrix.pre_build_cmd }}
 
       - name: Build and push ${{ matrix.name }}
         uses: docker/build-push-action@14487ce63c7a62a4a324b0bfb37086795e31c6c1  # v6.16.0
