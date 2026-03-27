@@ -57,11 +57,11 @@ spec:
                 secretKeyRef:
                   name: kai-secrets
                   key: AUTH_CLIENT_SECRET
-            - name: AUTH_CALLBACK_URL
+            - name: AUTH_REDIRECT_URL
               valueFrom:
                 configMapKeyRef:
                   name: kai-config
-                  key: AUTH_CALLBACK_URL
+                  key: AUTH_REDIRECT_URL
             - name: LISTEN_ADDR
               valueFrom:
                 configMapKeyRef:
