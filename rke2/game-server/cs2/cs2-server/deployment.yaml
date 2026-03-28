@@ -21,9 +21,17 @@ spec:
             - -c
             - |
               apk add --no-cache gettext
-              cp -rf /home/custom_files/. /home/steam/cs2/game/csgo/
+              # Substitute MySQL credentials and write back to custom_files PVC.
+              # install_docker.sh copies custom_files PVC -> game data PVC on every start,
+              # so writing here ensures the substituted version ends up in game data.
               envsubst < /home/custom_files/cfg/SharpTimer/mysqlConfig.json > /tmp/mysqlConfig.json
-              cp /tmp/mysqlConfig.json /home/steam/cs2/game/csgo/cfg/SharpTimer/mysqlConfig.json
+              cp /tmp/mysqlConfig.json /home/custom_files/cfg/SharpTimer/mysqlConfig.json
+              # Install multiaddonmanager config and metamod VDF into custom_files PVC
+              # so install_docker.sh merges them into game data at startup.
+              mkdir -p /home/custom_files/cfg/multiaddonmanager
+              cp /addon-config/multiaddonmanager.cfg /home/custom_files/cfg/multiaddonmanager/multiaddonmanager.cfg
+              mkdir -p /home/custom_files/addons/metamod
+              cp /addon-config/multiaddonmanager.vdf /home/custom_files/addons/metamod/multiaddonmanager.vdf
           env:
             - name: MYSQL_USER
               valueFrom:
@@ -38,8 +46,8 @@ spec:
           volumeMounts:
             - name: custom
               mountPath: /home/custom_files
-            - name: cs2-data
-              mountPath: /home/steam/cs2
+            - name: addon-config
+              mountPath: /addon-config
       containers:
         - name: cs2-modded-server
           image: ghcr.io/kus/cs2-modded-server:latest
@@ -123,6 +131,9 @@ spec:
         - name: custom
           persistentVolumeClaim:
             claimName: cs2-custom-files
+        - name: addon-config
+          configMap:
+            name: cs2-addon-config
         #- name: demo-storage
         #  persistentVolumeClaim:
         #    claimName: demo-storage
