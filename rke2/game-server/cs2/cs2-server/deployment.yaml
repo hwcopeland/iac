@@ -20,16 +20,13 @@ spec:
             - sh
             - -c
             - |
+              set -ex
               apk add --no-cache gettext
-              # Substitute MySQL credentials and write back to custom_files PVC.
-              # install_docker.sh copies custom_files PVC -> game data PVC on every start,
-              # so writing here ensures the substituted version ends up in game data.
               envsubst < /home/custom_files/cfg/SharpTimer/mysqlConfig.json > /tmp/mysqlConfig.json
               cp /tmp/mysqlConfig.json /home/custom_files/cfg/SharpTimer/mysqlConfig.json
-              # Install multiaddonmanager config and metamod VDF into custom_files PVC
-              # so install_docker.sh merges them into game data at startup.
               mkdir -p /home/custom_files/cfg/multiaddonmanager
               cp /addon-config/multiaddonmanager.cfg /home/custom_files/cfg/multiaddonmanager/multiaddonmanager.cfg
+              echo "multiaddonmanager.cfg lines: $(wc -l < /home/custom_files/cfg/multiaddonmanager/multiaddonmanager.cfg)"
               mkdir -p /home/custom_files/addons/metamod
               cp /addon-config/multiaddonmanager.vdf /home/custom_files/addons/metamod/multiaddonmanager.vdf
           env:
