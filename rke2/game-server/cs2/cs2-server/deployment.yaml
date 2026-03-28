@@ -25,6 +25,7 @@ spec:
               cp /tmp/mysqlConfig.json /home/custom_files/cfg/SharpTimer/mysqlConfig.json
               mkdir -p /home/steam/cs2/game/csgo/cfg/SharpTimer
               cp /tmp/mysqlConfig.json /home/steam/cs2/game/csgo/cfg/SharpTimer/mysqlConfig.json
+              cp /home/custom_files/cfg/SharpTimer/config.cfg /home/steam/cs2/game/csgo/cfg/SharpTimer/config.cfg
           env:
             - name: MYSQL_USER
               valueFrom:
