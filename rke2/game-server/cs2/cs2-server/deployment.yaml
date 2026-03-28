@@ -21,11 +21,9 @@ spec:
             - -c
             - |
               apk add --no-cache gettext
+              cp -rf /home/custom_files/. /home/steam/cs2/game/csgo/
               envsubst < /home/custom_files/cfg/SharpTimer/mysqlConfig.json > /tmp/mysqlConfig.json
-              cp /tmp/mysqlConfig.json /home/custom_files/cfg/SharpTimer/mysqlConfig.json
-              mkdir -p /home/steam/cs2/game/csgo/cfg/SharpTimer
               cp /tmp/mysqlConfig.json /home/steam/cs2/game/csgo/cfg/SharpTimer/mysqlConfig.json
-              cp /home/custom_files/cfg/SharpTimer/config.cfg /home/steam/cs2/game/csgo/cfg/SharpTimer/config.cfg
           env:
             - name: MYSQL_USER
               valueFrom:
