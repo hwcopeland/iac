@@ -1,10 +1,10 @@
 {
     "Host": "10.43.43.43",
-    "Database": "mysql",
+    "Database": "sharptimer",
     "Username": "${MYSQL_USER}",
     "Password": "${MYSQL_PASS}",
     "TablePrefix": "",
     "Port": 3306,
     "Timeout": 30,
-    "SslMode": "Preferred"
+    "SslMode": "None"
 }
