@@ -16,7 +16,6 @@ data:
     mm_cache_clients_duration       21600
     mm_block_disconnect_messages    1
     mm_addon_debug                  0
-    mm_add_addon 3461824328
   multiaddonmanager.vdf: |
     "Metamod Plugin"
     {
