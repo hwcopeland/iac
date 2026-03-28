@@ -13,6 +13,34 @@ spec:
       labels:
         app: cs2-modded-server
     spec:
+      initContainers:
+        - name: envsubst-config
+          image: alpine:3.20
+          command:
+            - sh
+            - -c
+            - |
+              apk add --no-cache gettext
+              envsubst < /home/custom_files/cfg/SharpTimer/mysqlConfig.json > /tmp/mysqlConfig.json
+              cp /tmp/mysqlConfig.json /home/custom_files/cfg/SharpTimer/mysqlConfig.json
+              mkdir -p /home/steam/cs2/game/csgo/cfg/SharpTimer
+              cp /tmp/mysqlConfig.json /home/steam/cs2/game/csgo/cfg/SharpTimer/mysqlConfig.json
+          env:
+            - name: MYSQL_USER
+              valueFrom:
+                secretKeyRef:
+                  name: mysql-secret
+                  key: username
+            - name: MYSQL_PASS
+              valueFrom:
+                secretKeyRef:
+                  name: mysql-secret
+                  key: password
+          volumeMounts:
+            - name: custom
+              mountPath: /home/custom_files
+            - name: cs2-data
+              mountPath: /home/steam/cs2
       containers:
         - name: cs2-modded-server
           image: ghcr.io/kus/cs2-modded-server:latest

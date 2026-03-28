@@ -2,7 +2,7 @@
   "Version": 12,
   "RTV": {
     "Enabled": true,
-    "Style": "chat",
+    "Style": "center",
     "PerMap": false,
     "HideHud": true,
     "MinRounds": 0,
