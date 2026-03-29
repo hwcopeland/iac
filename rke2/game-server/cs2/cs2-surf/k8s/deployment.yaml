@@ -116,8 +116,8 @@ spec:
             - name: cs2-data
               mountPath: /home/steam/cs2
             - name: config-out
-              mountPath: /home/steam/cs2/game/csgo/cfg/SharpTimer
-              # envsubst output (timer.jsonc) lands here
+              mountPath: /opt/cs2-surf/config-out
+              # envsubst writes timer.jsonc here; entrypoint copies to sharp/configs/
           startupProbe:
             tcpSocket:
               port: 27015
