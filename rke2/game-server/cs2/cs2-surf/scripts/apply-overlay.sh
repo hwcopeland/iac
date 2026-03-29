@@ -52,23 +52,19 @@ cp -rf "${OVERLAY_DIR}/." "${CS2_DIR}/game/csgo/"
 # ModSharp's loader shim MUST replace the original libserver.so
 # The shim is at sharp/bin/linuxsteamrt64/libserver.so (17KB)
 # The original is at bin/linuxsteamrt64/libserver.so (38MB)
-# ModSharp loader: use LD_PRELOAD to inject the shim.
-# The shim exports CreateInterface which shadows the original libserver.so.
-# The shim's dlopen("../../csgo/bin/linuxsteamrt64/libserver.so") from CWD
-# game/bin/linuxsteamrt64/ loads the original (which is still at that path).
-# No gameinfo.gi patching needed — no vtable conflicts from dual loading.
-#
-# Write the LD_PRELOAD path for the entrypoint to use.
+# ModSharp loader: patch gameinfo.gi AND use LD_PRELOAD.
+# gameinfo.gi csgo/sharp before csgo makes engine find the shim first.
+# LD_PRELOAD ensures the shim is loaded before any dlopen calls.
+GAMEINFO="${CS2_DIR}/game/csgo/gameinfo.gi"
+if [ -f "${GAMEINFO}" ] && ! grep -q "csgo/sharp" "${GAMEINFO}"; then
+    sed -i 's/^\(\s*Game\s*csgo\s*$\)/\t\t\tGame\tcsgo\/sharp\n\1/' "${GAMEINFO}"
+    log "Patched gameinfo.gi with csgo/sharp search path"
+fi
+
 SHIM="${CS2_DIR}/game/csgo/sharp/bin/linuxsteamrt64/libserver.so"
 if [ -f "${SHIM}" ]; then
     echo "${SHIM}" > "${CS2_DIR}/.modsharp-preload"
     log "ModSharp shim registered for LD_PRELOAD: ${SHIM}"
-fi
-
-# Remove any previous gameinfo.gi patches
-GAMEINFO="${CS2_DIR}/game/csgo/gameinfo.gi"
-if [ -f "${GAMEINFO}" ]; then
-    sed -i "/csgo\/sharp/d" "${GAMEINFO}" 2>/dev/null
 fi
 
 # Restore original libserver.so if we previously replaced it
