@@ -23,7 +23,7 @@ log "Updating CS2 dedicated server via steamcmd..."
 "${STEAMCMD_DIR}/steamcmd.sh" \
     +force_install_dir "${CS2_DIR}" \
     +login anonymous \
-    +app_update 730 validate \
+    +app_update 730 \
     +quit
 
 if [ ! -f "${CS2_DIR}/game/bin/linuxsteamrt64/cs2" ]; then
