@@ -52,15 +52,13 @@ RUN sed -i '/<Target Name="PostBuild"/,/<\/Target>/d' Timer/Timer.csproj && \
 RUN git clone --depth 1 --branch "${MAPCHOOSER_REF}" \
         https://github.com/fltuna/MapChooserSharpMS.git /build/mapchooser
 WORKDIR /build/mapchooser
-RUN dotnet publish -c Release -r linux-x64 --no-self-contained -o /build/out/mapchooser \
-    || echo "WARN: MapChooserSharpMS build failed"
+RUN dotnet publish MapChooserSharpMS/MapChooserSharpMS.csproj -c Release -r linux-x64 --no-self-contained -o /build/out/mapchooser
 
 # --- TnmsAdminUtils ---
 RUN git clone --depth 1 --branch "${TNMSADMINUTILS_REF}" \
         https://github.com/fltuna/TnmsAdminUtils.git /build/tnmsadminutils
 WORKDIR /build/tnmsadminutils
-RUN dotnet publish -c Release -r linux-x64 --no-self-contained -o /build/out/tnmsadminutils \
-    || echo "WARN: TnmsAdminUtils build failed"
+RUN dotnet publish TnmsAdminUtils/TnmsAdminUtils.csproj -c Release -r linux-x64 --no-self-contained -o /build/out/tnmsadminutils
 
 # ---------------------------------------------------------------------------
 # Stage 2: Download and assemble the overlay
