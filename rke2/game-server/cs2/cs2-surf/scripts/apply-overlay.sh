@@ -52,20 +52,38 @@ cp -rf "${OVERLAY_DIR}/." "${CS2_DIR}/game/csgo/"
 # ModSharp's loader shim MUST replace the original libserver.so
 # The shim is at sharp/bin/linuxsteamrt64/libserver.so (17KB)
 # The original is at bin/linuxsteamrt64/libserver.so (38MB)
-# ModSharp loader: patch gameinfo.gi AND use LD_PRELOAD.
-# gameinfo.gi csgo/sharp before csgo makes engine find the shim first.
-# LD_PRELOAD ensures the shim is loaded before any dlopen calls.
+# ModSharp loader installation:
+# 1. Rename original libserver.so so engine won't find it at csgo/bin/
+# 2. Engine finds the shim at csgo/sharp/bin/ via gameinfo.gi
+# 3. Shim's dlopen("../../csgo/bin/linuxsteamrt64/libserver.so") from CWD
+#    resolves to game/csgo/bin/linuxsteamrt64/libserver.so
+# 4. We symlink that path to the renamed original so the shim finds it
+ORIGINAL="${CS2_DIR}/game/csgo/bin/linuxsteamrt64/libserver.so"
+BACKUP="${CS2_DIR}/game/csgo/bin/linuxsteamrt64/libserver_original.so"
+SHIM="${CS2_DIR}/game/csgo/sharp/bin/linuxsteamrt64/libserver.so"
+
+if [ -f "${SHIM}" ] && [ -f "${ORIGINAL}" ] && [ ! -L "${ORIGINAL}" ]; then
+    # Only if original is real file (not already a symlink from previous run)
+    SIZE=$(stat -c%s "${ORIGINAL}")
+    if [ "$SIZE" -gt 100000 ]; then
+        # Original is the real 38MB server lib, not the 17KB shim
+        mv "${ORIGINAL}" "${BACKUP}"
+        # Symlink so shim's relative dlopen still finds "libserver.so" here
+        # but it loads the original (different inode than the shim)
+        ln -sf "${BACKUP}" "${ORIGINAL}"
+        log "Moved original libserver.so -> libserver_original.so, symlinked back"
+    fi
+fi
+
+# Patch gameinfo.gi to add csgo/sharp search path
 GAMEINFO="${CS2_DIR}/game/csgo/gameinfo.gi"
 if [ -f "${GAMEINFO}" ] && ! grep -q "csgo/sharp" "${GAMEINFO}"; then
     sed -i 's/^\(\s*Game\s*csgo\s*$\)/\t\t\tGame\tcsgo\/sharp\n\1/' "${GAMEINFO}"
     log "Patched gameinfo.gi with csgo/sharp search path"
 fi
 
-SHIM="${CS2_DIR}/game/csgo/sharp/bin/linuxsteamrt64/libserver.so"
-if [ -f "${SHIM}" ]; then
-    echo "${SHIM}" > "${CS2_DIR}/.modsharp-preload"
-    log "ModSharp shim registered for LD_PRELOAD: ${SHIM}"
-fi
+# No LD_PRELOAD needed with this approach
+rm -f "${CS2_DIR}/.modsharp-preload"
 
 # Restore original libserver.so if we previously replaced it
 VALVE_BACKUP="${CS2_DIR}/game/csgo/bin/linuxsteamrt64/libserver_valve.so"
