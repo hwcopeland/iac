@@ -44,7 +44,7 @@ WORKDIR /build
 RUN git clone --depth 1 --branch "${SOURCE2SURF_TIMER_REF}" \
         https://github.com/Source2Surf/Timer.git /build/timer
 WORKDIR /build/timer
-RUN dotnet publish Timer/Timer.csproj -c Release -r linux-x64 --no-self-contained -o /build/out/timer && \
+RUN dotnet publish Timer/Timer.csproj -c Release -r linux-x64 --no-self-contained -o /build/out/timer /p:PostBuildEvent= && \
     dotnet publish Timer.RequestManager/Timer.RequestManager.csproj -c Release -r linux-x64 --no-self-contained -o /build/out/timer-rm
 
 # --- MapChooserSharpMS ---
