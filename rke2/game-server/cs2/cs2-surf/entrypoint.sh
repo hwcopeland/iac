@@ -37,19 +37,21 @@ if [ ! -L "${STEAM_APPS}" ]; then
 fi
 
 # ── Step 1: Install / Update CS2 Dedicated Server ───────────────────────────
-log "Updating CS2 dedicated server via steamcmd..."
+if [ -f "${CS2_DIR}/game/bin/linuxsteamrt64/cs2" ] && [ "${FORCE_UPDATE:-0}" != "1" ]; then
+    log "CS2 already installed, skipping steamcmd. Set FORCE_UPDATE=1 to force."
+else
+    log "Installing/updating CS2 via steamcmd..."
+    "${STEAMCMD_DIR}/steamcmd.sh" \
+        +force_install_dir "${CS2_DIR}" \
+        +login anonymous \
+        +app_update 730 \
+        +quit
 
-"${STEAMCMD_DIR}/steamcmd.sh" \
-    +force_install_dir "${CS2_DIR}" \
-    +login anonymous \
-    +app_update 730 \
-    +quit
-
-if [ ! -f "${CS2_DIR}/game/bin/linuxsteamrt64/cs2" ]; then
-    die "CS2 binary not found after steamcmd update. Check disk space and network."
+    if [ ! -f "${CS2_DIR}/game/bin/linuxsteamrt64/cs2" ]; then
+        die "CS2 binary not found after steamcmd update. Check disk space and network."
+    fi
+    log "CS2 server files up to date."
 fi
-
-log "CS2 server files up to date."
 
 # ── Step 2: Apply plugin overlay ────────────────────────────────────────────
 log "Checking plugin overlay..."
