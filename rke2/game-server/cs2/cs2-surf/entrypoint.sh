@@ -98,13 +98,6 @@ if [ -d "${ENGINE_BIN}" ] && [ -d "${CSGO_BIN}" ]; then
     log "Engine .so files linked to csgo/bin"
 fi
 
-# ── Step 3c: Set up ModSharp LD_PRELOAD ─────────────────────────────────────
-PRELOAD_FILE="${CS2_DIR}/.modsharp-preload"
-if [ -f "${PRELOAD_FILE}" ]; then
-    export LD_PRELOAD="$(cat "${PRELOAD_FILE}")"
-    log "LD_PRELOAD set to: ${LD_PRELOAD}"
-fi
-
 log "Starting CS2 surf server..."
 log "  Map:        ${MAP:-surf_kitsune}"
 log "  Port:       ${PORT:-27015}"
