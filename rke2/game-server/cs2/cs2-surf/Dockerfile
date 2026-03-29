@@ -44,22 +44,22 @@ WORKDIR /build
 RUN git clone --depth 1 --branch "${SOURCE2SURF_TIMER_REF}" \
         https://github.com/Source2Surf/Timer.git /build/timer
 WORKDIR /build/timer
-RUN dotnet publish Timer/Timer.csproj -c Release -o /build/out/timer \
-    || echo "WARN: Timer build failed — see notes in Dockerfile"
+RUN dotnet publish Timer/Timer.csproj -c Release -r linux-x64 --no-self-contained -o /build/out/timer && \
+    dotnet publish Timer.RequestManager/Timer.RequestManager.csproj -c Release -r linux-x64 --no-self-contained -o /build/out/timer-rm
 
 # --- MapChooserSharpMS ---
 RUN git clone --depth 1 --branch "${MAPCHOOSER_REF}" \
         https://github.com/fltuna/MapChooserSharpMS.git /build/mapchooser
 WORKDIR /build/mapchooser
-RUN dotnet publish MapChooserSharpMS/MapChooserSharpMS.csproj -c Release -o /build/out/mapchooser \
-    || echo "WARN: MapChooserSharpMS build failed — see notes in Dockerfile"
+RUN dotnet publish -c Release -r linux-x64 --no-self-contained -o /build/out/mapchooser \
+    || echo "WARN: MapChooserSharpMS build failed"
 
 # --- TnmsAdminUtils ---
 RUN git clone --depth 1 --branch "${TNMSADMINUTILS_REF}" \
         https://github.com/fltuna/TnmsAdminUtils.git /build/tnmsadminutils
 WORKDIR /build/tnmsadminutils
-RUN dotnet publish TnmsAdminUtils/TnmsAdminUtils.csproj -c Release -o /build/out/tnmsadminutils \
-    || echo "WARN: TnmsAdminUtils build failed — see notes in Dockerfile"
+RUN dotnet publish -c Release -r linux-x64 --no-self-contained -o /build/out/tnmsadminutils \
+    || echo "WARN: TnmsAdminUtils build failed"
 
 # ---------------------------------------------------------------------------
 # Stage 2: Download and assemble the overlay
@@ -122,11 +122,10 @@ RUN curl -fsSL "https://github.com/fltuna/TnmsAdministrationPlatform/releases/do
     && rm /tmp/tnmsadmin.zip
 
 # --- Source2Surf/Timer (built from source) ---
-# Timer outputs DLLs; install as a ModSharp module + copy gamedata/configs
 COPY --from=plugin-builder /build/out/timer/ /staging/sharp/modules/Timer/
-# Copy gamedata and configs from repo source tree
-COPY --from=plugin-builder /build/timer/sharp/gamedata/ /staging/sharp/gamedata/
-COPY --from=plugin-builder /build/timer/sharp/configs/ /staging/sharp/configs/
+COPY --from=plugin-builder /build/out/timer-rm/ /staging/sharp/modules/Timer.RequestManager/
+COPY --from=plugin-builder /build/timer/gamedata/ /staging/sharp/gamedata/
+COPY --from=plugin-builder /build/timer/sharp/ /staging/sharp/
 
 # --- MapChooserSharpMS (built from source) ---
 COPY --from=plugin-builder /build/out/mapchooser/ /staging/sharp/modules/MapChooserSharpMS/
