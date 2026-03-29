@@ -9,7 +9,7 @@
 # =============================================================================
 set -euo pipefail
 
-CS2_DIR="${CS2_DIR:-/home/steam/cs2-dedicated}"
+CS2_DIR="${CS2_DIR:-/home/steam/cs2}"
 STEAMCMD_DIR="${STEAMCMD_DIR:-/home/steam/steamcmd}"
 
 # ── Logging helpers ──────────────────────────────────────────────────────────
@@ -41,16 +41,26 @@ log "Checking plugin overlay..."
 # or can be mounted via ConfigMap at /opt/cs2-surf/configs/.
 # It uses ${MYSQL_USER}, ${MYSQL_PASS}, etc. — substituted by envsubst.
 
-DB_TEMPLATE="/opt/cs2-surf/configs/timer.jsonc"
+# Database config: init container already ran envsubst, just copy the result
+DB_SOURCE="/opt/cs2-surf/config-out/timer.jsonc"
 DB_TARGET="${CS2_DIR}/game/csgo/sharp/configs/timer.jsonc"
 
-if [ -f "${DB_TEMPLATE}" ]; then
-    log "Substituting database credentials into timer.jsonc..."
+if [ -f "${DB_SOURCE}" ]; then
+    log "Copying substituted timer.jsonc to sharp configs..."
     mkdir -p "$(dirname "${DB_TARGET}")"
-    envsubst < "${DB_TEMPLATE}" > "${DB_TARGET}"
+    cp "${DB_SOURCE}" "${DB_TARGET}"
     log "Database config written to ${DB_TARGET}"
 else
-    warn "No database template found at ${DB_TEMPLATE} — skipping substitution."
+    # Fallback: use baked-in template with envsubst (for local Docker testing)
+    DB_TEMPLATE="/opt/cs2-surf/configs/timer.jsonc"
+    if [ -f "${DB_TEMPLATE}" ]; then
+        log "Substituting database credentials into timer.jsonc..."
+        mkdir -p "$(dirname "${DB_TARGET}")"
+        envsubst < "${DB_TEMPLATE}" > "${DB_TARGET}"
+        log "Database config written to ${DB_TARGET}"
+    else
+        warn "No database config found — skipping."
+    fi
 fi
 
 # ── Step 4: Launch CS2 ──────────────────────────────────────────────────────
