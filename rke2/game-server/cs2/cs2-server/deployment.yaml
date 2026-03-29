@@ -29,6 +29,21 @@ spec:
               echo "multiaddonmanager.cfg lines: $(wc -l < /home/custom_files/cfg/multiaddonmanager/multiaddonmanager.cfg)"
               mkdir -p /home/custom_files/addons/metamod
               cp /addon-config/multiaddonmanager.vdf /home/custom_files/addons/metamod/multiaddonmanager.vdf
+              mkdir -p /home/custom_files/cfg/SharpTimer/MapData/MapExecs
+              cp /addon-config/surf_mapexec.cfg /home/custom_files/cfg/SharpTimer/MapData/MapExecs/surf_.cfg
+              mkdir -p /home/custom_files/addons/counterstrikesharp/configs/plugins/GameModeManager
+              cp /addon-config/gamemodemanager.json /home/custom_files/addons/counterstrikesharp/configs/plugins/GameModeManager/GameModeManager.json
+              grep -q "sharptimer_default_mode" /home/custom_files/cfg/SharpTimer/config.cfg || printf '\nsharptimer_default_mode 0\nsharptimer_enable_standard_mode true\nsharptimer_enable_source_mode false\nsharptimer_enable_bhop_mode false\nsharptimer_enable_85t_mode false\nsharptimer_enable_102t_mode false\nsharptimer_enable_128t_mode false\nsharptimer_enable_custom_mode false\nsharptimer_mode_custom_aa 150\nsharptimer_mode_custom_accel 6.5\nsharptimer_mode_custom_friction 5.2\nsharptimer_mode_custom_wishspeed 30\nsharptimer_mode_multiplier_standard 1.0\nsharptimer_mode_multiplier_source 1.0\nsharptimer_mode_multiplier_bhop 1.0\nsharptimer_mode_multiplier_85t 1.0\nsharptimer_mode_multiplier_102t 1.0\nsharptimer_mode_multiplier_128t 1.0\nsharptimer_max_bhop_block_time 1.0\nsharptimer_record_cache_interval 120\nsharptimer_remote_data_bhop false\nsharptimer_remote_data_surf false\nsharptimer_replays_use_binary true\nsharptimer_startzone_single_jump false\n' >> /home/custom_files/cfg/SharpTimer/config.cfg
+              echo "SharpTimer cvars checked"
+              echo "Downloading GameModeManager v1.0.63"
+              wget -q -O /tmp/gmm.zip https://github.com/nickj609/GameModeManager/releases/download/v1.0.63/GameModeManager_v1.0.63.zip
+              cd /tmp && unzip -qo gmm.zip -d gmm
+              cp -r /tmp/gmm/addons/counterstrikesharp/plugins/GameModeManager /home/custom_files/addons/counterstrikesharp/plugins/
+              cp -r /tmp/gmm/addons/counterstrikesharp/plugins/MenuManagerAPI /home/custom_files/addons/counterstrikesharp/plugins/
+              cp -r /tmp/gmm/addons/counterstrikesharp/plugins/PlayerSettings /home/custom_files/addons/counterstrikesharp/plugins/
+              cp -r /tmp/gmm/addons/counterstrikesharp/shared /home/custom_files/addons/counterstrikesharp/
+              cp -r /tmp/gmm/addons/counterstrikesharp/plugins/CS2-CustomVotes /home/custom_files/addons/counterstrikesharp/plugins/
+              echo "GameModeManager v1.0.63 installed"
           env:
             - name: MYSQL_USER
               valueFrom:
