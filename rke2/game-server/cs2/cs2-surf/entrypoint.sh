@@ -17,6 +17,13 @@ log()  { echo "[cs2-surf] $(date '+%Y-%m-%d %H:%M:%S') $*"; }
 warn() { echo "[cs2-surf] $(date '+%Y-%m-%d %H:%M:%S') WARN: $*" >&2; }
 die()  { echo "[cs2-surf] $(date '+%Y-%m-%d %H:%M:%S') FATAL: $*" >&2; exit 1; }
 
+# ── Step 0a: Symlink cs2-dedicated -> cs2 for path compatibility ────────────
+# cm2network/steamcmd defaults to cs2-dedicated but our PVC mounts at cs2
+if [ ! -e "/home/steam/cs2-dedicated" ]; then
+    ln -sf "${CS2_DIR}" /home/steam/cs2-dedicated
+    log "Linked /home/steam/cs2-dedicated -> ${CS2_DIR}"
+fi
+
 # ── Step 0: Persist steamcmd app manifest on PVC ───────────────────────────
 # Without this, every new pod re-downloads 62GB because steamcmd doesn't know
 # CS2 is already installed on the PVC.
