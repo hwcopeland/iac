@@ -52,21 +52,39 @@ cp -rf "${OVERLAY_DIR}/." "${CS2_DIR}/game/csgo/"
 # ModSharp's loader shim MUST replace the original libserver.so
 # The shim is at sharp/bin/linuxsteamrt64/libserver.so (17KB)
 # The original is at bin/linuxsteamrt64/libserver.so (38MB)
-# ModSharp's loader lives at sharp/bin/linuxsteamrt64/libserver.so
-# CS2 must find it BEFORE the original at csgo/bin/linuxsteamrt64/libserver.so
-# Patch gameinfo.gi to add csgo/sharp as a Game search path
+# ModSharp loader installation:
+# The shim at sharp/bin/linuxsteamrt64/libserver.so must REPLACE the original
+# at csgo/bin/linuxsteamrt64/libserver.so. The shim's dlopen uses a path
+# relative to CWD (game/bin/linuxsteamrt64/) to load the original:
+#   ../../csgo/bin/linuxsteamrt64/libserver.so
+# Since the shim IS at that path now, we need the original available there too.
+# Solution: the shim replaces the file, but we keep the original as
+# libserver_original.so and patch the shim... no that won't work.
+#
+# Actual solution from the loader source: the shim is loaded by the engine,
+# calls dlopen on the relative path which resolves to the same file (itself).
+# dlopen returns the already-loaded handle. Then CreateInterface calls the
+# shim's own CreateInterface in a loop.
+#
+# The REAL install method: the shim must be at game/csgo/bin/linuxsteamrt64/
+# AND the original must be loadable. Looking at CS2-Egg and other installs,
+# ModSharp uses LD_PRELOAD or the engine loads it differently.
+#
+# For now: use gameinfo.gi Game search path so engine finds shim first,
+# keep original untouched at csgo/bin/linuxsteamrt64/libserver.so.
+# The shim's dlopen will load the original (different inode, different path).
 GAMEINFO="${CS2_DIR}/game/csgo/gameinfo.gi"
 if [ -f "${GAMEINFO}" ] && ! grep -q "csgo/sharp" "${GAMEINFO}"; then
-    sed -i '/Game_LowViolence.*csgo_lv/a\\t\t\tGame\tcsgo/sharp' "${GAMEINFO}"
+    sed -i 's/^\(\s*Game\s*csgo\s*$\)/\t\t\tGame\tcsgo\/sharp\n\1/' "${GAMEINFO}"
     log "Patched gameinfo.gi with csgo/sharp search path"
 fi
 
-# Restore original libserver.so if we previously renamed it
+# Restore original if we previously replaced it
 VALVE_BACKUP="${CS2_DIR}/game/csgo/bin/linuxsteamrt64/libserver_valve.so"
 ORIGINAL="${CS2_DIR}/game/csgo/bin/linuxsteamrt64/libserver.so"
-if [ -f "${VALVE_BACKUP}" ] && [ "$(stat -c%s "${ORIGINAL}")" -lt 100000 ]; then
+if [ -f "${VALVE_BACKUP}" ]; then
     mv "${VALVE_BACKUP}" "${ORIGINAL}"
-    log "Restored original libserver.so from backup"
+    log "Restored original libserver.so"
 fi
 
 # Write the version stamp
