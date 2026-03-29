@@ -89,6 +89,14 @@ RUN curl -fsSL "https://github.com/Kxnrl/modsharp-public/releases/download/${MOD
     && rm /tmp/modsharp.zip
 # Result: /staging/sharp/{bin,core,configs,gamedata,locales,modules,shared}/
 
+# --- .NET 10.0 runtime (required by ModSharp — Steam RT3 can't use system .NET) ---
+ARG DOTNET_VERSION="10.0.0-preview.3.25171.5"
+RUN curl -fsSL "https://dotnetcli.azureedge.net/dotnet/Runtime/${DOTNET_VERSION}/dotnet-runtime-${DOTNET_VERSION}-linux-x64.tar.gz" \
+        -o /tmp/dotnet-runtime.tar.gz \
+    && mkdir -p /staging/sharp/runtime \
+    && tar xzf /tmp/dotnet-runtime.tar.gz -C /staging/sharp/runtime/ \
+    && rm /tmp/dotnet-runtime.tar.gz
+
 # --- ModSharp extensions ---
 RUN curl -fsSL "https://github.com/Kxnrl/modsharp-public/releases/download/${MODSHARP_VERSION}/ModSharp-git${MODSHARP_BUILD}-linux-extensions.zip" \
         -o /tmp/modsharp-ext.zip \

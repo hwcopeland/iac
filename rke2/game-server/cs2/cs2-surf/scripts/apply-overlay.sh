@@ -52,18 +52,21 @@ cp -rf "${OVERLAY_DIR}/." "${CS2_DIR}/game/csgo/"
 # ModSharp's loader shim MUST replace the original libserver.so
 # The shim is at sharp/bin/linuxsteamrt64/libserver.so (17KB)
 # The original is at bin/linuxsteamrt64/libserver.so (38MB)
-# ModSharp's loader shim replaces libserver.so and loads the original
-# from libserver_valve.so (same pattern as Metamod)
-SHIM="${CS2_DIR}/game/csgo/sharp/bin/linuxsteamrt64/libserver.so"
-ORIGINAL="${CS2_DIR}/game/csgo/bin/linuxsteamrt64/libserver.so"
+# ModSharp's loader lives at sharp/bin/linuxsteamrt64/libserver.so
+# CS2 must find it BEFORE the original at csgo/bin/linuxsteamrt64/libserver.so
+# Patch gameinfo.gi to add csgo/sharp as a Game search path
+GAMEINFO="${CS2_DIR}/game/csgo/gameinfo.gi"
+if [ -f "${GAMEINFO}" ] && ! grep -q "csgo/sharp" "${GAMEINFO}"; then
+    sed -i '/Game_LowViolence.*csgo_lv/a\\t\t\tGame\tcsgo/sharp' "${GAMEINFO}"
+    log "Patched gameinfo.gi with csgo/sharp search path"
+fi
+
+# Restore original libserver.so if we previously renamed it
 VALVE_BACKUP="${CS2_DIR}/game/csgo/bin/linuxsteamrt64/libserver_valve.so"
-if [ -f "${SHIM}" ] && [ -f "${ORIGINAL}" ]; then
-    if [ ! -f "${VALVE_BACKUP}" ]; then
-        mv "${ORIGINAL}" "${VALVE_BACKUP}"
-        log "Renamed original libserver.so -> libserver_valve.so ($(stat -c%s "${VALVE_BACKUP}") bytes)"
-    fi
-    cp -f "${SHIM}" "${ORIGINAL}"
-    log "Installed ModSharp loader shim as libserver.so ($(stat -c%s "${ORIGINAL}") bytes)"
+ORIGINAL="${CS2_DIR}/game/csgo/bin/linuxsteamrt64/libserver.so"
+if [ -f "${VALVE_BACKUP}" ] && [ "$(stat -c%s "${ORIGINAL}")" -lt 100000 ]; then
+    mv "${VALVE_BACKUP}" "${ORIGINAL}"
+    log "Restored original libserver.so from backup"
 fi
 
 # Write the version stamp
