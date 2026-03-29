@@ -17,6 +17,18 @@ log()  { echo "[cs2-surf] $(date '+%Y-%m-%d %H:%M:%S') $*"; }
 warn() { echo "[cs2-surf] $(date '+%Y-%m-%d %H:%M:%S') WARN: $*" >&2; }
 die()  { echo "[cs2-surf] $(date '+%Y-%m-%d %H:%M:%S') FATAL: $*" >&2; exit 1; }
 
+# ── Step 0: Persist steamcmd app manifest on PVC ───────────────────────────
+# Without this, every new pod re-downloads 62GB because steamcmd doesn't know
+# CS2 is already installed on the PVC.
+STEAM_APPS="/home/steam/Steam/steamapps"
+PVC_STEAM_APPS="${CS2_DIR}/steamapps"
+mkdir -p "${PVC_STEAM_APPS}" "${STEAM_APPS%/*}"
+if [ ! -L "${STEAM_APPS}" ]; then
+    rm -rf "${STEAM_APPS}"
+    ln -sf "${PVC_STEAM_APPS}" "${STEAM_APPS}"
+    log "Linked ${STEAM_APPS} -> ${PVC_STEAM_APPS}"
+fi
+
 # ── Step 1: Install / Update CS2 Dedicated Server ───────────────────────────
 log "Updating CS2 dedicated server via steamcmd..."
 
