@@ -64,7 +64,7 @@ log "Checking plugin overlay..."
 
 # Database config: init container already ran envsubst, just copy the result
 DB_SOURCE="/opt/cs2-surf/config-out/timer.jsonc"
-DB_TARGET="${CS2_DIR}/game/csgo/sharp/configs/timer.jsonc"
+DB_TARGET="${CS2_DIR}/game/sharp/configs/timer.jsonc"
 
 if [ -f "${DB_SOURCE}" ]; then
     log "Copying substituted timer.jsonc to sharp configs..."
