@@ -1,0 +1,23 @@
+---
+# ConfigMap holding the SharpTimer database config template.
+# The init container runs envsubst to replace ${MYSQL_*} placeholders with
+# real credentials from the mysql-secret, writing the result to an emptyDir
+# volume that the main container mounts.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cs2-surf-db-template
+  namespace: game-server
+data:
+  timer.jsonc: |
+    {
+      "database": {
+        "type": "mysql",
+        "host": "${MYSQL_HOST}",
+        "port": 3306,
+        "database_name": "${MYSQL_DB}",
+        "username": "${MYSQL_USER}",
+        "password": "${MYSQL_PASS}"
+      },
+      "replay_storage_base_url": ""
+    }
