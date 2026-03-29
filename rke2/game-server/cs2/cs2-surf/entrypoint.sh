@@ -83,6 +83,19 @@ else
 fi
 
 # ── Step 4: Launch CS2 ──────────────────────────────────────────────────────
+# ── Step 3b: Ensure engine .so files are available to csgo/bin ──────────────
+# ModSharp's libserver.so in csgo/bin/ needs libv8.so from game/bin/
+# CS2 16.9.2025 update requires these to be accessible from csgo/bin/
+ENGINE_BIN="${CS2_DIR}/game/bin/linuxsteamrt64"
+CSGO_BIN="${CS2_DIR}/game/csgo/bin/linuxsteamrt64"
+if [ -d "${ENGINE_BIN}" ] && [ -d "${CSGO_BIN}" ]; then
+    for so in "${ENGINE_BIN}"/*.so; do
+        target="${CSGO_BIN}/$(basename "$so")"
+        [ ! -e "${target}" ] && ln -sf "$so" "${target}"
+    done
+    log "Engine .so files linked to csgo/bin"
+fi
+
 log "Starting CS2 surf server..."
 log "  Map:        ${MAP:-surf_kitsune}"
 log "  Port:       ${PORT:-27015}"
