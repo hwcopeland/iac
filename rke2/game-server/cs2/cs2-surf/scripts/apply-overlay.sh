@@ -47,9 +47,21 @@ log "Overlay version mismatch (image: ${IMAGE_VERSION}, installed: ${INSTALLED_V
 mkdir -p "${CS2_DIR}/game/csgo"
 
 # Copy overlay contents into the game directory
-# -r: recursive, preserves directory structure
-# Using cp instead of rsync to avoid adding another dependency
 cp -rf "${OVERLAY_DIR}/." "${CS2_DIR}/game/csgo/"
+
+# ModSharp's loader shim MUST replace the original libserver.so
+# The shim is at sharp/bin/linuxsteamrt64/libserver.so (17KB)
+# The original is at bin/linuxsteamrt64/libserver.so (38MB)
+SHIM="${CS2_DIR}/game/csgo/sharp/bin/linuxsteamrt64/libserver.so"
+ORIGINAL="${CS2_DIR}/game/csgo/bin/linuxsteamrt64/libserver.so"
+if [ -f "${SHIM}" ]; then
+    if [ -f "${ORIGINAL}" ]; then
+        cp "${ORIGINAL}" "${ORIGINAL}.valve_backup"
+        log "Backed up original libserver.so ($(stat -c%s "${ORIGINAL}") bytes)"
+    fi
+    cp -f "${SHIM}" "${ORIGINAL}"
+    log "Installed ModSharp loader shim as libserver.so ($(stat -c%s "${ORIGINAL}") bytes)"
+fi
 
 # Write the version stamp
 echo "${IMAGE_VERSION}" > "${STAMP_FILE}"
