@@ -12,8 +12,8 @@
 # ---------------------------------------------------------------------------
 # ARGs — pin every dependency version
 # ---------------------------------------------------------------------------
-ARG MODSHARP_VERSION="git-109"
-ARG MODSHARP_BUILD="109"
+ARG MODSHARP_VERSION="git-108"
+ARG MODSHARP_BUILD="108"
 
 # Plugins with GitHub releases (pinned versions)
 ARG ADVERTISEMENT_VERSION="v1.0.2"
