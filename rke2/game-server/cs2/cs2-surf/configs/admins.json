@@ -1,0 +1,32 @@
+{
+  "76561198808592972": {
+    "name": "Hamp",
+    "immunity": 100,
+    "permissions": ["*"]
+  },
+  "76561198047424687": {
+    "name": "Defacto",
+    "immunity": 50,
+    "permissions": ["admin.kick", "admin.slay", "admin.mute", "admin.map"]
+  },
+  "76561197987522730": {
+    "name": "caYabo",
+    "immunity": 50,
+    "permissions": ["admin.kick", "admin.slay", "admin.mute", "admin.map"]
+  },
+  "76561198795419638": {
+    "name": "Cam",
+    "immunity": 50,
+    "permissions": ["admin.kick", "admin.slay", "admin.mute", "admin.map"]
+  },
+  "76561199024854792": {
+    "name": "Raden",
+    "immunity": 50,
+    "permissions": ["admin.kick", "admin.slay", "admin.mute", "admin.map"]
+  },
+  "76561198166513184": {
+    "name": "Acelink",
+    "immunity": 50,
+    "permissions": ["admin.kick", "admin.slay", "admin.mute", "admin.map"]
+  }
+}

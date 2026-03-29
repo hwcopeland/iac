@@ -1,0 +1,37 @@
+---
+# Service patch: switches the existing cs2-modded-service selector to point
+# at the cs2-surf-server deployment instead of the kus cs2-modded-server.
+#
+# To cutover:  kubectl apply -f service-patch.yaml
+# To rollback: change selector back to app: cs2-modded-server and re-apply.
+#
+# This is a full Service manifest (not a strategic merge patch) so it can be
+# applied directly. The only change from the original is the selector value.
+apiVersion: v1
+kind: Service
+metadata:
+  name: cs2-modded-service
+  namespace: game-server
+  annotations:
+    io.cilium/lb-ipam-ips: "10.44.0.32"
+spec:
+  selector:
+    app: cs2-surf-server
+  ports:
+    - name: tcp-27015
+      protocol: TCP
+      port: 27015
+      targetPort: 27015
+    - name: udp-27015
+      protocol: UDP
+      port: 27015
+      targetPort: 27015
+    - name: tcp-27020
+      protocol: TCP
+      port: 27020
+      targetPort: 27020
+    - name: udp-27020
+      protocol: UDP
+      port: 27020
+      targetPort: 27020
+  type: LoadBalancer

@@ -1,0 +1,140 @@
+---
+# CS2 Surf Server deployment.
+#
+# Runs the forked cs2-surf-server image alongside the existing kus deployment.
+# Both share the same PVC (cs2-modded-claim) — only one should be scaled to 1
+# at a time. The service selector swap (service-patch.yaml) controls which
+# deployment receives traffic on 10.44.0.32.
+#
+# Init container: substitutes MySQL credentials into the SharpTimer timer.jsonc
+# template from the ConfigMap and writes the result to an emptyDir volume that
+# the main container mounts.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cs2-surf-server
+  namespace: game-server
+  labels:
+    app: cs2-surf-server
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: cs2-surf-server
+  template:
+    metadata:
+      labels:
+        app: cs2-surf-server
+    spec:
+      initContainers:
+        - name: envsubst-config
+          image: alpine:3.20
+          command:
+            - sh
+            - -c
+            - |
+              apk add --no-cache gettext
+              envsubst < /db-template/timer.jsonc > /config-out/timer.jsonc
+          env:
+            - name: MYSQL_HOST
+              value: "10.43.43.43"
+            - name: MYSQL_DB
+              value: "source2surf"
+            - name: MYSQL_USER
+              valueFrom:
+                secretKeyRef:
+                  name: mysql-secret
+                  key: username
+            - name: MYSQL_PASS
+              valueFrom:
+                secretKeyRef:
+                  name: mysql-secret
+                  key: password
+          volumeMounts:
+            - name: db-template
+              mountPath: /db-template
+            - name: config-out
+              mountPath: /config-out
+          resources:
+            requests:
+              cpu: 100m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+      containers:
+        - name: cs2-surf-server
+          image: ghcr.io/hwcopeland/cs2-surf-server:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 27015
+              protocol: TCP
+              name: tcp-game
+            - containerPort: 27015
+              protocol: UDP
+              name: udp-game
+            - containerPort: 27020
+              protocol: TCP
+              name: tcp-sourcetv
+            - containerPort: 27020
+              protocol: UDP
+              name: udp-sourcetv
+          env:
+            - name: API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: cs2-secret
+                  key: API_KEY
+            - name: STEAM_ACCOUNT
+              valueFrom:
+                secretKeyRef:
+                  name: cs2-secret
+                  key: STEAM_ACCOUNT
+            - name: RCON_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: cs2-rcon
+                  key: password
+            - name: PORT
+              value: "27015"
+            - name: MAXPLAYERS
+              value: "32"
+            - name: TICKRATE
+              value: "64"
+            - name: MAP
+              value: "surf_kitsune"
+            - name: SERVER_NAME
+              value: "W4de Surf"
+          resources:
+            requests:
+              cpu: 2000m
+              memory: 4Gi
+            limits:
+              cpu: 4000m
+              memory: 8Gi
+          volumeMounts:
+            - name: cs2-data
+              mountPath: /home/steam/cs2
+            - name: config-out
+              mountPath: /home/steam/cs2/game/csgo/cfg/SharpTimer
+              # envsubst output (timer.jsonc) lands here
+          startupProbe:
+            tcpSocket:
+              port: 27015
+            initialDelaySeconds: 60
+            periodSeconds: 10
+            failureThreshold: 18
+          livenessProbe:
+            tcpSocket:
+              port: 27015
+            periodSeconds: 30
+            failureThreshold: 3
+      volumes:
+        - name: cs2-data
+          persistentVolumeClaim:
+            claimName: cs2-modded-claim
+        - name: db-template
+          configMap:
+            name: cs2-surf-db-template
+        - name: config-out
+          emptyDir: {}

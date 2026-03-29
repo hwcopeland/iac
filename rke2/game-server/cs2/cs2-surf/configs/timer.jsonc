@@ -1,0 +1,11 @@
+{
+  "database": {
+    "type": "mysql",
+    "host": "${MYSQL_HOST}",
+    "port": 3306,
+    "database_name": "${MYSQL_DB}",
+    "username": "${MYSQL_USER}",
+    "password": "${MYSQL_PASS}"
+  },
+  "replay_storage_base_url": ""
+}

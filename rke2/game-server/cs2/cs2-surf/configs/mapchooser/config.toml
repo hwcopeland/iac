@@ -1,0 +1,22 @@
+[General]
+ChangeMapImmediately = true
+
+[General.Sql]
+Enabled = false
+
+[MapCycle]
+MapTimeDefault = 30
+MaxExtendsDefault = 2
+ExtendTimeStep = 15
+
+[MapVote]
+VoteDuration = 60
+TriggerSecondsBeforeEnd = 60
+RunoffEnabled = false
+
+[Nomination]
+Enabled = true
+
+[Rtv]
+Enabled = true
+MinPlayers = 1

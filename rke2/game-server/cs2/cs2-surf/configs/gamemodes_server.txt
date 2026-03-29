@@ -1,0 +1,58 @@
+// Surf-only gamemodes_server.txt for cs2-surf-server
+// Only the mg_surf mapgroup is included — all other modes removed.
+
+"GameModes_Server.txt"
+{
+	"gameTypes"
+	{
+		"classic"
+		{
+			"gameModes"
+			{
+				"casual"
+				{
+					"maxplayers"			"64"
+					"exec"
+					{
+						"exec" "gamemode_casual_last.cfg"
+					}
+					"mapgroupsMP"
+					{
+						"mg_surf"			"50"
+					}
+				}
+			}
+		}
+	}
+	"mapgroups"
+	{
+		"mg_surf"
+		{
+			"name"			"mg_surf"
+			"displayname"			"Surf"
+			"maps"
+			{
+				"surf_kitsune"		""
+				"surf_utopia_njv"		""
+				"surf_beginner"		""
+				"surf_mesa_revo"		""
+				"surf_deathstar"		""
+				"surf_rookie"		""
+				"surf_benevolent"		""
+				"surf_ace"		""
+				"surf_boreas"		""
+				"surf_nyx"		""
+				"surf_whiteout"		""
+				"surf_ski_2"		""
+				"surf_ofsfice"		""
+				"surf_lt_omnific"		""
+				"surf_sundown_njv"		""
+				"surf_aquaflow"		""
+				"surf_astra"		""
+				"surf_mesa_aether"		""
+				"surf_siren"		""
+				"surf_cuboid"		""
+			}
+		}
+	}
+}
