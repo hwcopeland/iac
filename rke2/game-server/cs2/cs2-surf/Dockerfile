@@ -156,7 +156,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # CS2 dedicated server install path (steamcmd convention for cm2network image)
-ENV CS2_DIR="/home/steam/cs2-dedicated"
+ENV CS2_DIR="/home/steam/cs2"
 
 # Copy the assembled overlay
 COPY --from=assembler --chown=steam:steam /staging/ /opt/cs2-surf/overlay/
