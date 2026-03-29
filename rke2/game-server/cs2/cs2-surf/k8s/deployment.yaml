@@ -110,7 +110,6 @@ spec:
               cpu: 2000m
               memory: 8Gi
             limits:
-              cpu: 6000m
               memory: 16Gi
           volumeMounts:
             - name: cs2-data
@@ -121,9 +120,9 @@ spec:
           startupProbe:
             tcpSocket:
               port: 27015
-            initialDelaySeconds: 60
-            periodSeconds: 10
-            failureThreshold: 18
+            initialDelaySeconds: 120
+            periodSeconds: 15
+            failureThreshold: 120
           livenessProbe:
             tcpSocket:
               port: 27015
