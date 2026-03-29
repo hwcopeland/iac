@@ -13,7 +13,7 @@
 # =============================================================================
 set -euo pipefail
 
-CS2_DIR="${CS2_DIR:-/home/steam/cs2-dedicated}"
+CS2_DIR="${CS2_DIR:-/home/steam/cs2}"
 OVERLAY_DIR="/opt/cs2-surf/overlay"
 VERSION_FILE="/opt/cs2-surf/VERSION"
 STAMP_FILE="${CS2_DIR}/game/csgo/.surf-overlay-version"
