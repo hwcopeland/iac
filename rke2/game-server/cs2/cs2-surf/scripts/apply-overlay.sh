@@ -55,9 +55,13 @@ cp -rf "${OVERLAY_DIR}/." "${CS2_DIR}/game/"
 # The shim is at sharp/bin/linuxsteamrt64/libserver.so (17KB)
 # The original is at bin/linuxsteamrt64/libserver.so (38MB)
 # ModSharp's loader shim lives at game/sharp/bin/linuxsteamrt64/libserver.so
-# The engine loads it automatically — no gameinfo.gi patch or replacement needed.
-# The shim's dlopen("../../csgo/bin/linuxsteamrt64/libserver.so") from CWD
-# game/bin/linuxsteamrt64/ resolves to the original server lib.
+# DISABLED: ModSharp git-109 loader segfaults on CS2 1.41.4.1 (vtable offsets wrong)
+# Rename the shim so the engine doesn't find it — server runs vanilla until fixed.
+SHIM="${CS2_DIR}/game/sharp/bin/linuxsteamrt64/libserver.so"
+if [ -f "${SHIM}" ]; then
+    mv "${SHIM}" "${SHIM}.disabled"
+    log "ModSharp shim DISABLED (segfault on CS2 1.41.4.1) — rename .disabled to .so to re-enable"
+fi
 
 # Clean up any previous bad installs
 GAMEINFO="${CS2_DIR}/game/csgo/gameinfo.gi"
