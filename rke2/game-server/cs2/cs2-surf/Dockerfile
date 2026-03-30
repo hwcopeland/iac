@@ -46,13 +46,15 @@ RUN git clone --depth 1 --branch "${SOURCE2SURF_TIMER_REF}" \
 WORKDIR /build/timer
 RUN sed -i '/<Target Name="PostBuild"/,/<\/Target>/d' Timer/Timer.csproj && \
     dotnet publish Timer/Timer.csproj -c Release -r linux-x64 --no-self-contained -o /build/out/timer && \
-    dotnet publish Timer.RequestManager/Timer.RequestManager.csproj -c Release -r linux-x64 --no-self-contained -o /build/out/timer-rm
+    dotnet publish Timer.RequestManager/Timer.RequestManager.csproj -c Release -r linux-x64 --no-self-contained -o /build/out/timer-rm && \
+    dotnet publish Timer.Shared/Timer.Shared.csproj -c Release -r linux-x64 --no-self-contained -o /build/out/timer-shared
 
 # --- MapChooserSharpMS ---
 RUN git clone --depth 1 --branch "${MAPCHOOSER_REF}" \
         https://github.com/fltuna/MapChooserSharpMS.git /build/mapchooser
 WORKDIR /build/mapchooser
-RUN dotnet publish MapChooserSharpMS/MapChooserSharpMS.csproj -c Release -r linux-x64 --no-self-contained -o /build/out/mapchooser
+RUN dotnet publish MapChooserSharpMS/MapChooserSharpMS.csproj -c Release -r linux-x64 --no-self-contained -o /build/out/mapchooser && \
+    dotnet publish MapChooserSharpMS.Shared/MapChooserSharpMS.Shared.csproj -c Release -r linux-x64 --no-self-contained -o /build/out/mapchooser-shared
 
 # --- TnmsAdminUtils ---
 RUN git clone --depth 1 --branch "${TNMSADMINUTILS_REF}" \
@@ -131,8 +133,9 @@ RUN curl -fsSL "https://github.com/fltuna/TnmsAdministrationPlatform/releases/do
 # --- Source2Surf/Timer (built from source) ---
 COPY --from=plugin-builder /build/out/timer/ /staging/sharp/modules/Timer/
 COPY --from=plugin-builder /build/out/timer-rm/ /staging/sharp/modules/Timer.RequestManager/
+COPY --from=plugin-builder /build/out/timer-shared/ /staging/sharp/shared/Timer.Shared/
 # Generate runtimeconfig.json if missing (UseCommonOutputDirectory suppresses it)
-RUN for mod in Timer Timer.RequestManager MapChooserSharpMS TnmsAdminUtils; do \
+RUN for mod in Timer Timer.RequestManager Timer.Shared MapChooserSharpMS TnmsAdminUtils; do \
       dir="/staging/sharp/modules/${mod}"; \
       if [ -d "${dir}" ] && [ ! -f "${dir}/${mod}.runtimeconfig.json" ]; then \
         echo '{"runtimeOptions":{"tfm":"net10.0","framework":{"name":"Microsoft.NETCore.App","version":"10.0.0"}}}' > "${dir}/${mod}.runtimeconfig.json"; \
@@ -143,6 +146,7 @@ COPY --from=plugin-builder /build/timer/sharp/ /staging/sharp/
 
 # --- MapChooserSharpMS (built from source) ---
 COPY --from=plugin-builder /build/out/mapchooser/ /staging/sharp/modules/MapChooserSharpMS/
+COPY --from=plugin-builder /build/out/mapchooser-shared/ /staging/sharp/shared/MapChooserSharpMS.Shared/
 
 # --- TnmsAdminUtils (built from source) ---
 COPY --from=plugin-builder /build/out/tnmsadminutils/ /staging/sharp/modules/TnmsAdminUtils/
