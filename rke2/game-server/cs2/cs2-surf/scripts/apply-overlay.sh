@@ -58,9 +58,13 @@ cp -rf "${OVERLAY_DIR}/." "${CS2_DIR}/game/"
 # Engine finds it automatically — no patches needed.
 # Requires Steam RT3 base image for native library compatibility.
 
-# Clean up any previous bad installs
+# Clean up kus/Metamod/CSS remnants and any previous bad installs
 GAMEINFO="${CS2_DIR}/game/csgo/gameinfo.gi"
-[ -f "${GAMEINFO}" ] && sed -i "/csgo\/sharp/d" "${GAMEINFO}" 2>/dev/null
+if [ -f "${GAMEINFO}" ]; then
+    sed -i "/csgo\/sharp/d" "${GAMEINFO}"
+    sed -i "/csgo\/addons\/metamod/d" "${GAMEINFO}"
+    log "Cleaned gameinfo.gi (removed metamod and sharp entries)"
+fi
 
 # Restore original if we previously moved/symlinked it
 ORIGINAL="${CS2_DIR}/game/csgo/bin/linuxsteamrt64/libserver.so"
