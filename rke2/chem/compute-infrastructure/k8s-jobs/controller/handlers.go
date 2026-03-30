@@ -2,17 +2,14 @@
 package main
 
 import (
-	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 
-	_ "github.com/go-sql-driver/mysql"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
@@ -23,14 +20,16 @@ type APIHandler struct {
 	client     *kubernetes.Clientset
 	namespace  string
 	controller *DockingJobController
+	db         *sql.DB
 }
 
 // NewAPIHandler creates a new API handler
-func NewAPIHandler(client *kubernetes.Clientset, namespace string, controller *DockingJobController) *APIHandler {
+func NewAPIHandler(client *kubernetes.Clientset, namespace string, controller *DockingJobController, db *sql.DB) *APIHandler {
 	return &APIHandler{
 		client:     client,
 		namespace:  namespace,
 		controller: controller,
+		db:         db,
 	}
 }
 
@@ -38,7 +37,6 @@ func NewAPIHandler(client *kubernetes.Clientset, namespace string, controller *D
 type DockingJobRequest struct {
 	PDBID            string `json:"pdbid"`
 	LigandDb         string `json:"ligand_db"`
-	JupyterUser      string `json:"jupyter_user"`
 	NativeLigand     string `json:"native_ligand"`
 	LigandsChunkSize int    `json:"ligands_chunk_size"`
 	Image            string `json:"image"`
@@ -58,6 +56,17 @@ type DockingJobResponse struct {
 	CompletionTime   *time.Time `json:"completion_time,omitempty"`
 }
 
+// WorkflowListItem represents a single workflow in the list response
+type WorkflowListItem struct {
+	Name             string    `json:"name"`
+	Phase            string    `json:"phase"`
+	PDBID            string    `json:"pdbid"`
+	SourceDb         string    `json:"source_db"`
+	BatchCount       int       `json:"batch_count"`
+	CompletedBatches int       `json:"completed_batches"`
+	CreatedAt        time.Time `json:"created_at"`
+}
+
 // writeError writes a JSON error response
 func writeError(w http.ResponseWriter, msg string, code int) {
 	w.Header().Set("Content-Type", "application/json")
@@ -67,20 +76,33 @@ func writeError(w http.ResponseWriter, msg string, code int) {
 
 // ListJobs handles GET /api/v1/dockingjobs
 func (h *APIHandler) ListJobs(w http.ResponseWriter, r *http.Request) {
-	jobs, err := h.client.BatchV1().Jobs(h.namespace).List(r.Context(), metav1.ListOptions{
-		LabelSelector: "docking.khemia.io/parent-job",
-	})
+	rows, err := h.db.QueryContext(r.Context(),
+		`SELECT name, phase, pdbid, source_db, batch_count, completed_batches, created_at
+		   FROM docking_workflows ORDER BY created_at DESC`)
 	if err != nil {
-		writeError(w, fmt.Sprintf("failed to list jobs: %v", err), http.StatusInternalServerError)
+		writeError(w, fmt.Sprintf("failed to list workflows: %v", err), http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	var workflows []WorkflowListItem
+	for rows.Next() {
+		var wf WorkflowListItem
+		if err := rows.Scan(&wf.Name, &wf.Phase, &wf.PDBID, &wf.SourceDb,
+			&wf.BatchCount, &wf.CompletedBatches, &wf.CreatedAt); err != nil {
+			writeError(w, fmt.Sprintf("failed to scan workflow: %v", err), http.StatusInternalServerError)
+			return
+		}
+		workflows = append(workflows, wf)
+	}
+	if err := rows.Err(); err != nil {
+		writeError(w, fmt.Sprintf("failed to iterate workflows: %v", err), http.StatusInternalServerError)
 		return
 	}
 
-	workflows := make(map[string][]string)
-	for _, job := range jobs.Items {
-		parentJob := job.Labels["docking.khemia.io/parent-job"]
-		if parentJob != "" {
-			workflows[parentJob] = append(workflows[parentJob], job.Name)
-		}
+	// Return empty array instead of null when no workflows exist.
+	if workflows == nil {
+		workflows = []WorkflowListItem{}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -105,9 +127,6 @@ func (h *APIHandler) CreateJob(w http.ResponseWriter, r *http.Request) {
 	if req.PDBID == "" {
 		req.PDBID = DefaultPDBID
 	}
-	if req.JupyterUser == "" {
-		req.JupyterUser = DefaultJupyterUser
-	}
 	if req.NativeLigand == "" {
 		req.NativeLigand = DefaultNativeLigand
 	}
@@ -118,27 +137,42 @@ func (h *APIHandler) CreateJob(w http.ResponseWriter, r *http.Request) {
 		req.LigandsChunkSize = DefaultLigandsChunkSize
 	}
 
+	// Validate that ligands exist for the given source_db.
+	var ligandCount int
+	err := h.db.QueryRowContext(r.Context(),
+		`SELECT COUNT(*) FROM ligands WHERE source_db = ?`, req.LigandDb).Scan(&ligandCount)
+	if err != nil {
+		writeError(w, fmt.Sprintf("failed to check ligands: %v", err), http.StatusInternalServerError)
+		return
+	}
+	if ligandCount == 0 {
+		writeError(w, fmt.Sprintf("no ligands found for source_db '%s'", req.LigandDb), http.StatusBadRequest)
+		return
+	}
+
 	jobName := fmt.Sprintf("docking-%d", time.Now().Unix())
 
+	// INSERT workflow row with phase='Running'.
+	_, err = h.db.ExecContext(r.Context(),
+		`INSERT INTO docking_workflows (name, phase, pdbid, source_db, native_ligand, chunk_size, image)
+		 VALUES (?, 'Running', ?, ?, ?, ?, ?)`,
+		jobName, req.PDBID, req.LigandDb, req.NativeLigand, req.LigandsChunkSize, req.Image)
+	if err != nil {
+		writeError(w, fmt.Sprintf("failed to create workflow: %v", err), http.StatusInternalServerError)
+		return
+	}
+
 	job := DockingJob{
-		ObjectMeta: metav1.ObjectMeta{Name: jobName},
+		Name: jobName,
 		Spec: DockingJobSpec{
 			PDBID:            req.PDBID,
 			LigandDb:         req.LigandDb,
-			JupyterUser:      req.JupyterUser,
 			NativeLigand:     req.NativeLigand,
 			LigandsChunkSize: req.LigandsChunkSize,
 			Image:            req.Image,
-			AutodockPvc:      DefaultAutodockPvc,
-			UserPvcPrefix:    DefaultUserPvcPrefix,
-			MountPath:        DefaultMountPath,
 		},
-		Status: DockingJobStatus{Phase: "Pending"},
+		Status: DockingJobStatus{Phase: "Running"},
 	}
-
-	// Seed in-memory state before the goroutine starts so GetJob immediately
-	// returns "Running" instead of deriving status from stale K8s jobs.
-	h.controller.jobStatuses.Store(jobName, DockingJobStatus{Phase: "Running"})
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
@@ -154,13 +188,6 @@ func (h *APIHandler) CreateJob(w http.ResponseWriter, r *http.Request) {
 }
 
 // GetJob handles GET /api/v1/dockingjobs/{name}
-//
-// Status is returned from the in-memory jobStatuses map when available
-// (set by CreateJob and updated throughout processDockingJob). This is the
-// authoritative source and avoids false "Completed" responses from stale K8s
-// Job objects left by previous runs when TTLSecondsAfterFinished is not
-// enforced by the cluster. Falls back to K8s-derived status only after a
-// controller restart when the in-memory map is empty.
 func (h *APIHandler) GetJob(w http.ResponseWriter, r *http.Request) {
 	jobName := strings.TrimPrefix(r.URL.Path, "/api/v1/dockingjobs/")
 	if jobName == "" {
@@ -168,110 +195,40 @@ func (h *APIHandler) GetJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// In-memory state is authoritative when present.
-	if val, ok := h.controller.jobStatuses.Load(jobName); ok {
-		s := val.(DockingJobStatus)
-		resp := DockingJobResponse{
-			Name:             jobName,
-			Status:           s.Phase,
-			Message:          s.Message,
-			BatchCount:       s.BatchCount,
-			CompletedBatches: s.CompletedBatches,
-			StartTime:        s.StartTime,
-			CompletionTime:   s.CompletionTime,
-		}
-		log.Printf("[GetJob] %s: in-memory status=%s batch=%d completed=%d",
-			jobName, s.Phase, s.BatchCount, s.CompletedBatches)
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
+	var resp DockingJobResponse
+	var startTime, completionTime sql.NullTime
+	var message sql.NullString
+
+	err := h.db.QueryRowContext(r.Context(),
+		`SELECT name, phase, pdbid, source_db, batch_count, completed_batches,
+		        message, created_at, started_at, completed_at
+		   FROM docking_workflows WHERE name = ?`, jobName).Scan(
+		&resp.Name, &resp.Status, &resp.PDBID, &resp.LigandDb,
+		&resp.BatchCount, &resp.CompletedBatches,
+		&message, &resp.CreatedAt, &startTime, &completionTime)
+	if err == sql.ErrNoRows {
+		writeError(w, "workflow not found", http.StatusNotFound)
 		return
 	}
-
-	// Fallback: derive status from K8s jobs (used after controller restart).
-	jobs, err := h.client.BatchV1().Jobs(h.namespace).List(r.Context(), metav1.ListOptions{
-		LabelSelector: fmt.Sprintf("docking.khemia.io/parent-job=%s", jobName),
-	})
 	if err != nil {
-		writeError(w, fmt.Sprintf("failed to get job: %v", err), http.StatusInternalServerError)
+		writeError(w, fmt.Sprintf("failed to get workflow: %v", err), http.StatusInternalServerError)
 		return
 	}
 
-	total := len(jobs.Items)
-	if total == 0 {
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(DockingJobResponse{Name: jobName, Status: "Pending"})
-		return
+	if message.Valid {
+		resp.Message = message.String
+	}
+	if startTime.Valid {
+		resp.StartTime = &startTime.Time
+	}
+	if completionTime.Valid {
+		resp.CompletionTime = &completionTime.Time
 	}
 
-	completed := 0
-	status := "Running"
-	message := ""
-
-	for _, job := range jobs.Items {
-		if job.Status.Failed > 0 {
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(DockingJobResponse{
-				Name:             jobName,
-				Status:           "Failed",
-				CompletedBatches: completed,
-				BatchCount:       total,
-				Message:          fmt.Sprintf("job %s failed", job.Name),
-			})
-			return
-		}
-		if job.Status.Succeeded > 0 {
-			completed++
-			if job.Labels["docking.khemia.io/job-type"] == "postprocessing" {
-				status = "Completed"
-				if cached, ok := h.controller.results.Load(jobName); ok {
-					message = cached.(string)
-				} else {
-					message = h.postprocessingResult(r.Context(), job.Name)
-				}
-			}
-		}
-	}
-
-	log.Printf("[GetJob] %s: k8s-fallback status=%s total=%d completed=%d",
-		jobName, status, total, completed)
+	log.Printf("[GetJob] %s: status=%s batch=%d completed=%d",
+		jobName, resp.Status, resp.BatchCount, resp.CompletedBatches)
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(DockingJobResponse{
-		Name:             jobName,
-		Status:           status,
-		CompletedBatches: completed,
-		BatchCount:       total,
-		Message:          message,
-	})
-}
-
-// postprocessingResult fetches the "Best energy: ..." line from postprocessing pod logs.
-// This is the fallback path used when the in-memory cache is unavailable (e.g. after
-// a controller restart). Prefer the cache when possible.
-func (h *APIHandler) postprocessingResult(ctx context.Context, jobName string) string {
-	log.Printf("[postprocessingResult] fetching logs from job %s", jobName)
-	pods, err := h.client.CoreV1().Pods(h.namespace).List(ctx, metav1.ListOptions{
-		LabelSelector: fmt.Sprintf("job-name=%s", jobName),
-	})
-	if err != nil || len(pods.Items) == 0 {
-		log.Printf("[postprocessingResult] no pods found for job %s: err=%v", jobName, err)
-		return ""
-	}
-	podName := pods.Items[0].Name
-	log.Printf("[postprocessingResult] reading logs from pod %s", podName)
-	raw, err := h.client.CoreV1().Pods(h.namespace).GetLogs(podName, &corev1.PodLogOptions{}).
-		Do(ctx).Raw()
-	if err != nil {
-		log.Printf("[postprocessingResult] GetLogs error for pod %s: %v", podName, err)
-		return ""
-	}
-	log.Printf("[postprocessingResult] pod %s logs (%d bytes):\n%s", podName, len(raw), strings.TrimSpace(string(raw)))
-	for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
-		if strings.HasPrefix(line, "Best energy:") {
-			log.Printf("[postprocessingResult] found result: %s", line)
-			return strings.TrimSpace(line)
-		}
-	}
-	return strings.TrimSpace(string(raw))
+	json.NewEncoder(w).Encode(resp)
 }
 
 // DeleteJob handles DELETE /api/v1/dockingjobs/{name}
@@ -282,6 +239,7 @@ func (h *APIHandler) DeleteJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Delete associated K8s Jobs by label (cleanup running/completed pods).
 	jobs, err := h.client.BatchV1().Jobs(h.namespace).List(r.Context(), metav1.ListOptions{
 		LabelSelector: fmt.Sprintf("docking.khemia.io/parent-job=%s", jobName),
 	})
@@ -297,8 +255,22 @@ func (h *APIHandler) DeleteJob(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	h.controller.jobStatuses.Delete(jobName)
-	h.controller.results.Delete(jobName)
+	// Delete from MySQL tables (staging first, then results, then workflow).
+	if _, err := h.db.ExecContext(r.Context(),
+		`DELETE FROM staging WHERE job_type = 'dock' AND JSON_EXTRACT(payload, '$.workflow_name') = ?`, jobName); err != nil {
+		log.Printf("Failed to delete staging rows for workflow %s: %v", jobName, err)
+	}
+
+	if _, err := h.db.ExecContext(r.Context(),
+		`DELETE FROM docking_results WHERE workflow_name = ?`, jobName); err != nil {
+		log.Printf("Failed to delete results for workflow %s: %v", jobName, err)
+	}
+
+	if _, err := h.db.ExecContext(r.Context(),
+		`DELETE FROM docking_workflows WHERE name = ?`, jobName); err != nil {
+		log.Printf("Failed to delete workflow %s: %v", jobName, err)
+	}
+
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -347,33 +319,11 @@ func (h *APIHandler) GetLogs(w http.ResponseWriter, r *http.Request) {
 
 // DockingResultsResponse holds aggregated MySQL stats for a workflow
 type DockingResultsResponse struct {
-	WorkflowName        string  `json:"workflow_name"`
-	ResultCount         int     `json:"result_count"`
-	BestAffinityKcalMol float64 `json:"best_affinity_kcal_mol,omitempty"`
+	WorkflowName         string  `json:"workflow_name"`
+	ResultCount          int     `json:"result_count"`
+	BestAffinityKcalMol  float64 `json:"best_affinity_kcal_mol,omitempty"`
 	WorstAffinityKcalMol float64 `json:"worst_affinity_kcal_mol,omitempty"`
-	AvgAffinityKcalMol  float64 `json:"avg_affinity_kcal_mol,omitempty"`
-}
-
-// mysqlDSN builds a DSN from the standard MYSQL_* env vars injected into the controller pod.
-func mysqlDSN() string {
-	host := os.Getenv("MYSQL_HOST")
-	if host == "" {
-		host = "docking-mysql.chem.svc.cluster.local"
-	}
-	port := os.Getenv("MYSQL_PORT")
-	if port == "" {
-		port = "3306"
-	}
-	user := os.Getenv("MYSQL_USER")
-	if user == "" {
-		user = "root"
-	}
-	password := os.Getenv("MYSQL_PASSWORD")
-	dbName := os.Getenv("MYSQL_DATABASE")
-	if dbName == "" {
-		dbName = "docking"
-	}
-	return fmt.Sprintf("%s:%s@tcp(%s:%s)/%s", user, password, host, port, dbName)
+	AvgAffinityKcalMol   float64 `json:"avg_affinity_kcal_mol,omitempty"`
 }
 
 // GetResults handles GET /api/v1/dockingjobs/{name}/results
@@ -386,16 +336,9 @@ func (h *APIHandler) GetResults(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	db, err := sql.Open("mysql", mysqlDSN())
-	if err != nil {
-		writeError(w, fmt.Sprintf("db open error: %v", err), http.StatusInternalServerError)
-		return
-	}
-	defer db.Close()
-
 	var count int
 	var best, worst, avg sql.NullFloat64
-	row := db.QueryRowContext(r.Context(),
+	row := h.db.QueryRowContext(r.Context(),
 		`SELECT COUNT(*), MIN(affinity_kcal_mol), MAX(affinity_kcal_mol), AVG(affinity_kcal_mol)
 		   FROM docking_results WHERE workflow_name = ?`, jobName)
 	if err := row.Scan(&count, &best, &worst, &avg); err != nil {
@@ -430,6 +373,12 @@ func (h *APIHandler) HealthCheck(w http.ResponseWriter, r *http.Request) {
 
 // ReadinessCheck handles GET /readyz
 func (h *APIHandler) ReadinessCheck(w http.ResponseWriter, r *http.Request) {
+	if err := h.db.PingContext(r.Context()); err != nil {
+		log.Printf("[ReadinessCheck] MySQL ping failed: %v", err)
+		writeError(w, "database not reachable", http.StatusServiceUnavailable)
+		return
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "ready"})
 }
