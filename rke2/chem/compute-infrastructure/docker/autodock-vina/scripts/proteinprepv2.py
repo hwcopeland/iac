@@ -3,6 +3,8 @@
 import os
 import subprocess
 import argparse
+import json
+import base64
 from Bio.PDB import PDBParser, PDBIO, Select
 
 # Define paths to MGLTools and AutoGrid executables
@@ -117,19 +119,34 @@ def main():
     # the native ligand is no longer present.
     if os.path.exists(receptor_pdbqt) and os.path.exists('grid_center.txt'):
         print(f"Receptor {receptor_pdbqt} and grid_center.txt already exist, skipping preparation.")
-        return
+    else:
+        # Step 1: Download the protein PDB file
+        download_protein(pdb_id)
 
-    # Step 1: Download the protein PDB file
-    download_protein(pdb_id)
+        # Step 2: Calculate grid center from the original PDB file
+        grid_center = calculate_grid_center(receptor_pdb, ligand_id)
 
-    # Step 2: Calculate grid center from the original PDB file
-    grid_center = calculate_grid_center(receptor_pdb, ligand_id)
+        # Step 3: Remove the ligand from the PDB file
+        remove_ligand_from_pdb(receptor_pdb, ligand_id, receptor_pdb_clean)
 
-    # Step 3: Remove the ligand from the PDB file
-    remove_ligand_from_pdb(receptor_pdb, ligand_id, receptor_pdb_clean)
+        # Step 4: Prepare the receptor using the cleaned PDB file
+        prepare_receptor(receptor_pdb_clean)
 
-    # Step 4: Prepare the receptor using the cleaned PDB file
-    prepare_receptor(receptor_pdb_clean)
+    # Emit structured JSON output for the controller.
+    # Read the receptor PDBQT and base64-encode it.
+    with open(receptor_pdbqt, 'rb') as f:
+        pdbqt_b64 = base64.b64encode(f.read()).decode('ascii')
+
+    # Parse the grid center coordinates from grid_center.txt.
+    with open('grid_center.txt', 'r') as f:
+        parts = f.read().strip().split()
+        grid_center_obj = {
+            "x": float(parts[0]),
+            "y": float(parts[1]),
+            "z": float(parts[2]),
+        }
+
+    print(json.dumps({"pdbqt_b64": pdbqt_b64, "grid_center": grid_center_obj}))
 
 if __name__ == "__main__":
     main()
