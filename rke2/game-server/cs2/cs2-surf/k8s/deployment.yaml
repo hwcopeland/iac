@@ -120,9 +120,9 @@ spec:
           startupProbe:
             tcpSocket:
               port: 27015
-            initialDelaySeconds: 300
-            periodSeconds: 15
-            failureThreshold: 40
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 60
           livenessProbe:
             tcpSocket:
               port: 27015
