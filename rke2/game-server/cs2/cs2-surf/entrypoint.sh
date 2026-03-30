@@ -17,7 +17,18 @@ log()  { echo "[cs2-surf] $(date '+%Y-%m-%d %H:%M:%S') $*"; }
 warn() { echo "[cs2-surf] $(date '+%Y-%m-%d %H:%M:%S') WARN: $*" >&2; }
 die()  { echo "[cs2-surf] $(date '+%Y-%m-%d %H:%M:%S') FATAL: $*" >&2; exit 1; }
 
-# ── Step 0a: Symlink cs2-dedicated -> cs2 for path compatibility ────────────
+# ── Step 0a: Set up Steam client libraries ─────────────────────────────────
+# Steamcmd must run once to bootstrap its own libraries
+if [ ! -f "${STEAMCMD_DIR}/linux64/steamclient.so" ]; then
+    log "Bootstrapping steamcmd..."
+    "${STEAMCMD_DIR}/steamcmd.sh" +quit
+fi
+mkdir -p /home/steam/.steam/sdk64 /home/steam/.steam/sdk32
+ln -sf "${STEAMCMD_DIR}/linux64/steamclient.so" /home/steam/.steam/sdk64/steamclient.so
+ln -sf "${STEAMCMD_DIR}/linux32/steamclient.so" /home/steam/.steam/sdk32/steamclient.so
+log "Steam client libraries linked"
+
+# ── Step 0b: Symlink cs2-dedicated -> cs2 for path compatibility ────────────
 # cm2network/steamcmd uses cs2-dedicated as default but our PVC mounts at /home/steam/cs2
 if [ "${CS2_DIR}" != "/home/steam/cs2-dedicated" ] && [ ! -e "/home/steam/cs2-dedicated" ]; then
     ln -sf "${CS2_DIR}" /home/steam/cs2-dedicated
