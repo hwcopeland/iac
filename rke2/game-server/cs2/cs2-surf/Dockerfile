@@ -106,11 +106,11 @@ RUN curl -fsSL "https://github.com/Kxnrl/modsharp-public/releases/download/${MOD
     && unzip -q /tmp/modsharp-ext.zip -d /staging/sharp/extensions/ \
     && rm /tmp/modsharp-ext.zip
 
-# --- ms-advertisement (zip has sharp/ prefix, extracts to staging root) ---
-RUN curl -fsSL "https://github.com/partiusfabaa/ms-advertisement/releases/download/${ADVERTISEMENT_VERSION}/Advertisement.zip" \
-        -o /tmp/advertisement.zip \
-    && unzip -qo /tmp/advertisement.zip -d /staging/ \
-    && rm /tmp/advertisement.zip
+# --- ms-advertisement DISABLED — spams chat/screen ads ---
+# RUN curl -fsSL "https://github.com/partiusfabaa/ms-advertisement/releases/download/${ADVERTISEMENT_VERSION}/Advertisement.zip" \
+#         -o /tmp/advertisement.zip \
+#     && unzip -qo /tmp/advertisement.zip -d /staging/ \
+#     && rm /tmp/advertisement.zip
 
 # --- Rampfix (zip has modules/ and gamedata/ — extract into sharp/) ---
 RUN curl -fsSL "https://github.com/Nukoooo/Rampfix/releases/download/${RAMPFIX_VERSION}/RampFix-${RAMPFIX_VERSION}.zip" \
