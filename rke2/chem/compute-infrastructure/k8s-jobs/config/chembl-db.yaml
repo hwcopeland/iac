@@ -221,7 +221,7 @@ spec:
             claimName: pvc-chembl-mysql
         - name: chembl-dump
           emptyDir:
-            sizeLimit: 10Gi
+            sizeLimit: 25Gi
 
 ---
 # Service for ChEMBL MySQL
