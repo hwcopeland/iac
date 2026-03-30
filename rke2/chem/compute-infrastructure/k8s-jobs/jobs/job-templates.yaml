@@ -1,62 +1,34 @@
-# Standalone Job Templates
-# These can be used independently or managed by the controller
+# Job Templates for Docking Pipeline
+# These are reference templates — the controller creates jobs programmatically.
 
 ---
-# Job 1: Copy Ligand Database
-apiVersion: batch/v1
-kind: Job
-metadata:
-  name: copy-ligand-db-{{ .WorkflowName }}
-  labels:
-    docking.k8s.io/job-type: copy-ligand-db
-    docking.k8s.io/workflow: {{ .WorkflowName }}
-spec:
-  ttlSecondsAfterFinished: 300
-  template:
-    metadata:
-      labels:
-        docking.k8s.io/job-type: copy-ligand-db
-        docking.k8s.io/workflow: {{ .WorkflowName }}
-    spec:
-      restartPolicy: OnFailure
-      containers:
-        - name: copy
-          image: alpine:latest
-          command: ["/bin/sh", "-c"]
-          args:
-            - |
-              cp {{ .MountPath }}/{{ .UserPvc }}/{{ .LigandDb }}.sdf {{ .MountPath }}/{{ .LigandDb }}.sdf
-          volumeMounts:
-            - name: autodock-pvc
-              mountPath: {{ .MountPath }}
-      volumes:
-        - name: autodock-pvc
-          persistentVolumeClaim:
-            claimName: {{ .AutodockPvc }}
-
----
-# Job 2: Prepare Receptor
+# Job 1: Prepare Receptor
+# Downloads PDB, removes native ligand, creates PDBQT + grid center.
+# Outputs receptor data as JSON to stdout for controller capture.
 apiVersion: batch/v1
 kind: Job
 metadata:
   name: prepare-receptor-{{ .WorkflowName }}
   labels:
-    docking.k8s.io/job-type: prepare-receptor
-    docking.k8s.io/workflow: {{ .WorkflowName }}
+    docking.khemia.io/job-type: prepare-receptor
+    docking.khemia.io/workflow: {{ .WorkflowName }}
+    docking.khemia.io/parent-job: {{ .WorkflowName }}
 spec:
   ttlSecondsAfterFinished: 300
   template:
     metadata:
       labels:
-        docking.k8s.io/job-type: prepare-receptor
-        docking.k8s.io/workflow: {{ .WorkflowName }}
+        docking.khemia.io/job-type: prepare-receptor
+        docking.khemia.io/workflow: {{ .WorkflowName }}
     spec:
       restartPolicy: OnFailure
+      imagePullSecrets:
+        - name: zot-pull-secret
       containers:
         - name: prepare
           image: {{ .Image }}
           imagePullPolicy: Always
-          workingDir: {{ .MountPath }}
+          workingDir: /data
           command: ["python3", "/autodock/scripts/proteinprepv2.py"]
           args:
             - "--protein_id"
@@ -64,199 +36,54 @@ spec:
             - "--ligand_id"
             - {{ .NativeLigand }}
           volumeMounts:
-            - name: autodock-pvc
-              mountPath: {{ .MountPath }}
+            - name: scratch
+              mountPath: /data
       volumes:
-        - name: autodock-pvc
-          persistentVolumeClaim:
-            claimName: {{ .AutodockPvc }}
+        - name: scratch
+          emptyDir: {}
 
 ---
-# Job 3: Split SDF
+# Job 2: Dock Batch
+# Reads pre-calculated ligand PDBQTs + receptor from MySQL.
+# Runs Vina docking. Writes results to staging table.
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: split-sdf-{{ .WorkflowName }}
+  name: dock-batch-{{ .WorkflowName }}-{{ .BatchIndex }}
   labels:
-    docking.k8s.io/job-type: split-sdf
-    docking.k8s.io/workflow: {{ .WorkflowName }}
+    docking.khemia.io/job-type: dock-batch
+    docking.khemia.io/workflow: {{ .WorkflowName }}
+    docking.khemia.io/parent-job: {{ .WorkflowName }}
 spec:
   ttlSecondsAfterFinished: 300
   template:
     metadata:
       labels:
-        docking.k8s.io/job-type: split-sdf
-        docking.k8s.io/workflow: {{ .WorkflowName }}
+        docking.khemia.io/job-type: dock-batch
+        docking.khemia.io/workflow: {{ .WorkflowName }}
     spec:
       restartPolicy: OnFailure
+      imagePullSecrets:
+        - name: zot-pull-secret
       containers:
-        - name: split
+        - name: dock
           image: {{ .Image }}
           imagePullPolicy: Always
-          workingDir: {{ .MountPath }}
-          command: ["/bin/sh", "-c"]
-          args:
-            - |
-              /autodock/scripts/split_sdf.sh {{ .LigandsChunkSize }} {{ .LigandDb }}
+          workingDir: /data
+          command: ["python3", "/autodock/scripts/dock_batch.py"]
           env:
-            - name: MOUNT_PATH_AUTODOCK
-              value: {{ .MountPath }}
-          volumeMounts:
-            - name: autodock-pvc
-              mountPath: {{ .MountPath }}
-      volumes:
-        - name: autodock-pvc
-          persistentVolumeClaim:
-            claimName: {{ .AutodockPvc }}
-
----
-# Job 4: Prepare Ligands (for each batch)
-apiVersion: batch/v1
-kind: Job
-metadata:
-  name: prepare-ligands-{{ .WorkflowName }}-{{ .BatchLabel }}
-  labels:
-    docking.k8s.io/job-type: prepare-ligands
-    docking.k8s.io/workflow: {{ .WorkflowName }}
-    docking.k8s.io/batch: {{ .BatchLabel }}
-spec:
-  ttlSecondsAfterFinished: 300
-  template:
-    metadata:
-      labels:
-        docking.k8s.io/job-type: prepare-ligands
-        docking.k8s.io/workflow: {{ .WorkflowName }}
-        docking.k8s.io/batch: {{ .BatchLabel }}
-    spec:
-      restartPolicy: OnFailure
-      containers:
-        - name: prepare
-          image: {{ .Image }}
-          imagePullPolicy: Always
-          workingDir: {{ .MountPath }}
-          command: ["python3", "/autodock/scripts/ligandprepv2.py"]
-          args:
-            - {{ .BatchLabel }}.sdf
-            - {{ .BatchLabel }}
-            - "--format"
-            - "pdb"
-          env:
-            - name: MOUNT_PATH_AUTODOCK
-              value: {{ .MountPath }}
-          volumeMounts:
-            - name: autodock-pvc
-              mountPath: {{ .MountPath }}
-      volumes:
-        - name: autodock-pvc
-          persistentVolumeClaim:
-            claimName: {{ .AutodockPvc }}
-
----
-# Job 5: Perform Docking (for each batch)
-apiVersion: batch/v1
-kind: Job
-metadata:
-  name: docking-{{ .WorkflowName }}-{{ .BatchLabel }}
-  labels:
-    docking.k8s.io/job-type: docking
-    docking.k8s.io/workflow: {{ .WorkflowName }}
-    docking.k8s.io/batch: {{ .BatchLabel }}
-spec:
-  ttlSecondsAfterFinished: 300
-  template:
-    metadata:
-      labels:
-        docking.k8s.io/job-type: docking
-        docking.k8s.io/workflow: {{ .WorkflowName }}
-        docking.k8s.io/batch: {{ .BatchLabel }}
-    spec:
-      restartPolicy: OnFailure
-      containers:
-        - name: docking
-          image: {{ .Image }}
-          imagePullPolicy: Always
-          workingDir: {{ .MountPath }}
-          command: ["python3", "/autodock/scripts/dockingv2.py"]
-          args:
-            - {{ .PdbId }}
-            - {{ .BatchLabel }}
-          volumeMounts:
-            - name: autodock-pvc
-              mountPath: {{ .MountPath }}
-      volumes:
-        - name: autodock-pvc
-          persistentVolumeClaim:
-            claimName: {{ .AutodockPvc }}
-
----
-# Job 6: Postprocessing
-apiVersion: batch/v1
-kind: Job
-metadata:
-  name: postprocessing-{{ .WorkflowName }}
-  labels:
-    docking.k8s.io/job-type: postprocessing
-    docking.k8s.io/workflow: {{ .WorkflowName }}
-spec:
-  ttlSecondsAfterFinished: 300
-  template:
-    metadata:
-      labels:
-        docking.k8s.io/job-type: postprocessing
-        docking.k8s.io/workflow: {{ .WorkflowName }}
-    spec:
-      restartPolicy: OnFailure
-      containers:
-        - name: postprocess
-          image: {{ .Image }}
-          imagePullPolicy: Always
-          workingDir: {{ .MountPath }}
-          command: ["/autodock/scripts/3_post_processing.sh"]
-          args:
-            - {{ .PdbId }}
-            - {{ .LigandDb }}
-          volumeMounts:
-            - name: autodock-pvc
-              mountPath: {{ .MountPath }}
-      volumes:
-        - name: autodock-pvc
-          persistentVolumeClaim:
-            claimName: {{ .AutodockPvc }}
-
----
-# Job 7: Export Results to MySQL
-apiVersion: batch/v1
-kind: Job
-metadata:
-  name: export-mysql-{{ .WorkflowName }}
-  labels:
-    docking.k8s.io/job-type: export-mysql
-    docking.k8s.io/workflow: {{ .WorkflowName }}
-spec:
-  ttlSecondsAfterFinished: 300
-  template:
-    metadata:
-      labels:
-        docking.k8s.io/job-type: export-mysql
-        docking.k8s.io/workflow: {{ .WorkflowName }}
-    spec:
-      restartPolicy: OnFailure
-      containers:
-        - name: export
-          image: {{ .Image }}
-          imagePullPolicy: Always
-          workingDir: {{ .MountPath }}
-          command: ["python3", "/autodock/scripts/export_energies_mysql.py"]
-          args:
-            - "--workflow"
-            - {{ .WorkflowName }}
-            - "--pdbid"
-            - {{ .PdbId }}
-            - "--db-label"
-            - {{ .LigandDb }}
-            - "--base-dir"
-            - {{ .MountPath }}
-          env:
+            - name: WORKFLOW_NAME
+              value: {{ .WorkflowName }}
+            - name: PDBID
+              value: {{ .PdbId }}
+            - name: NATIVE_LIGAND
+              value: {{ .NativeLigand }}
+            - name: SOURCE_DB
+              value: {{ .SourceDb }}
+            - name: BATCH_OFFSET
+              value: "{{ .BatchOffset }}"
+            - name: BATCH_LIMIT
+              value: "{{ .BatchLimit }}"
             - name: MYSQL_HOST
               value: docking-mysql.chem.svc.cluster.local
             - name: MYSQL_PORT
@@ -271,9 +98,8 @@ spec:
             - name: MYSQL_DATABASE
               value: docking
           volumeMounts:
-            - name: autodock-pvc
-              mountPath: {{ .MountPath }}
+            - name: scratch
+              mountPath: /data
       volumes:
-        - name: autodock-pvc
-          persistentVolumeClaim:
-            claimName: {{ .AutodockPvc }}
+        - name: scratch
+          emptyDir: {}
