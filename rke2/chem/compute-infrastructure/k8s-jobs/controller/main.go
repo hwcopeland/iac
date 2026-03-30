@@ -258,6 +258,13 @@ func (c *DockingJobController) startAPIServer() error {
 			writeError(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
 	})
+	mux.HandleFunc("/api/v1/ligands", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			handler.ImportLigands(w, r)
+		} else {
+			writeError(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+	})
 	mux.HandleFunc("/health", handler.HealthCheck)
 	mux.HandleFunc("/readyz", handler.ReadinessCheck)
 
