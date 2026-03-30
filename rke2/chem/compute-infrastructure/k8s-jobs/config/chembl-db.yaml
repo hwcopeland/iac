@@ -1,0 +1,242 @@
+---
+# PVC for ChEMBL MySQL data + dump storage (~50GB covers DB + temp dump)
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: pvc-chembl-mysql
+  namespace: chem
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: longhorn
+  resources:
+    requests:
+      storage: 50Gi
+
+---
+# ChEMBL MySQL instance.
+# Init container downloads the ChEMBL dump on first boot.
+# A post-start lifecycle hook imports the data if tables don't exist yet.
+# First boot: ~30-60 min (download 1.9GB + import). Restarts: seconds.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: chembl-mysql
+  namespace: chem
+  labels:
+    app: chembl-mysql
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: chembl-mysql
+  template:
+    metadata:
+      labels:
+        app: chembl-mysql
+    spec:
+      initContainers:
+        - name: download-chembl
+          image: alpine:latest
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+              CHEMBL_VERSION="36"
+              DUMP_DIR="/var/lib/mysql/chembl-dump"
+              MARKER="$DUMP_DIR/.chembl_${CHEMBL_VERSION}_downloaded"
+
+              if [ -f "$MARKER" ]; then
+                echo "ChEMBL ${CHEMBL_VERSION} already downloaded, skipping."
+                exit 0
+              fi
+
+              apk add --no-cache wget tar
+              mkdir -p "$DUMP_DIR"
+              cd "$DUMP_DIR"
+
+              echo "Downloading ChEMBL ${CHEMBL_VERSION} MySQL dump (~1.9GB)..."
+              wget -q --show-progress \
+                "https://ftp.ebi.ac.uk/pub/databases/chembl/ChEMBLdb/latest/chembl_${CHEMBL_VERSION}_mysql.tar.gz" \
+                -O "chembl_${CHEMBL_VERSION}_mysql.tar.gz"
+
+              echo "Extracting..."
+              tar xzf "chembl_${CHEMBL_VERSION}_mysql.tar.gz"
+              rm "chembl_${CHEMBL_VERSION}_mysql.tar.gz"
+
+              touch "$MARKER"
+              echo "Download and extract complete."
+              ls -lR "$DUMP_DIR/chembl_${CHEMBL_VERSION}/" || true
+          volumeMounts:
+            - name: chembl-storage
+              mountPath: /var/lib/mysql
+      containers:
+        - name: mysql
+          image: mysql:8.0
+          env:
+            - name: MYSQL_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: docking-mysql-secret
+                  key: root-password
+            - name: MYSQL_DATABASE
+              value: chembl_36
+          ports:
+            - containerPort: 3306
+          args:
+            - --innodb-buffer-pool-size=2G
+            - --innodb-log-file-size=512M
+            - --max-allowed-packet=256M
+            - --local-infile=1
+          volumeMounts:
+            - name: chembl-storage
+              mountPath: /var/lib/mysql
+          resources:
+            requests:
+              cpu: 500m
+              memory: 3Gi
+            limits:
+              cpu: "2"
+              memory: 4Gi
+          readinessProbe:
+            exec:
+              command:
+                - mysqladmin
+                - ping
+                - -h
+                - localhost
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          livenessProbe:
+            exec:
+              command:
+                - mysqladmin
+                - ping
+                - -h
+                - localhost
+            initialDelaySeconds: 120
+            periodSeconds: 30
+      volumes:
+        - name: chembl-storage
+          persistentVolumeClaim:
+            claimName: pvc-chembl-mysql
+
+---
+# One-shot Job that imports the ChEMBL dump into MySQL.
+# Runs after the Deployment is up. Idempotent — skips if tables already exist.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: chembl-import
+  namespace: chem
+  labels:
+    app: chembl-mysql
+spec:
+  ttlSecondsAfterFinished: 3600
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        app: chembl-mysql-import
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: import
+          image: mysql:8.0
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -e
+              CHEMBL_VERSION="36"
+              MYSQL_HOST="chembl-mysql.chem.svc.cluster.local"
+
+              echo "Waiting for ChEMBL MySQL to be ready..."
+              for i in $(seq 1 120); do
+                if mysqladmin ping -h "$MYSQL_HOST" -u root -p"$MYSQL_ROOT_PASSWORD" --silent 2>/dev/null; then
+                  echo "MySQL ready after ${i}x5s"
+                  break
+                fi
+                [ "$i" -eq 120 ] && echo "TIMEOUT waiting for MySQL" && exit 1
+                sleep 5
+              done
+
+              # Check if already imported
+              TABLE_COUNT=$(mysql -h "$MYSQL_HOST" -u root -p"$MYSQL_ROOT_PASSWORD" -N \
+                -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'chembl_${CHEMBL_VERSION}'" 2>/dev/null || echo "0")
+
+              if [ "$TABLE_COUNT" -gt 100 ]; then
+                echo "ChEMBL already imported ($TABLE_COUNT tables). Skipping."
+                exit 0
+              fi
+
+              echo "Creating database..."
+              mysql -h "$MYSQL_HOST" -u root -p"$MYSQL_ROOT_PASSWORD" \
+                -e "CREATE DATABASE IF NOT EXISTS chembl_${CHEMBL_VERSION} CHARACTER SET utf8mb4"
+
+              # The ChEMBL MySQL dump extracts to chembl_XX/chembl_XX_mysql/chembl_XX_mysql.dmp
+              DUMP_FILE=$(find /chembl-dump -name "*.dmp" -o -name "*.sql" 2>/dev/null | head -1)
+              if [ -z "$DUMP_FILE" ]; then
+                echo "ERROR: No dump file found in /chembl-dump"
+                find /chembl-dump -type f | head -20
+                exit 1
+              fi
+
+              echo "Importing $DUMP_FILE (this will take 20-40 minutes)..."
+              mysql -h "$MYSQL_HOST" -u root -p"$MYSQL_ROOT_PASSWORD" \
+                "chembl_${CHEMBL_VERSION}" < "$DUMP_FILE"
+
+              TABLE_COUNT=$(mysql -h "$MYSQL_HOST" -u root -p"$MYSQL_ROOT_PASSWORD" -N \
+                -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'chembl_${CHEMBL_VERSION}'")
+              COMPOUND_COUNT=$(mysql -h "$MYSQL_HOST" -u root -p"$MYSQL_ROOT_PASSWORD" -N \
+                -e "SELECT COUNT(*) FROM chembl_${CHEMBL_VERSION}.compound_structures" 2>/dev/null || echo "?")
+
+              echo "=== Import complete ==="
+              echo "Tables: $TABLE_COUNT"
+              echo "Compounds with structures: $COMPOUND_COUNT"
+          env:
+            - name: MYSQL_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: docking-mysql-secret
+                  key: root-password
+          volumeMounts:
+            - name: chembl-dump
+              mountPath: /chembl-dump
+              readOnly: true
+          resources:
+            requests:
+              cpu: 500m
+              memory: 1Gi
+            limits:
+              cpu: "2"
+              memory: 2Gi
+      volumes:
+        # Mount the same PVC where the init container downloaded the dump.
+        # The dump lives at /var/lib/mysql/chembl-dump/ on the PVC, but we
+        # mount the PVC root and the script finds the .dmp file.
+        - name: chembl-dump
+          persistentVolumeClaim:
+            claimName: pvc-chembl-mysql
+            readOnly: true
+
+---
+# Service for ChEMBL MySQL
+apiVersion: v1
+kind: Service
+metadata:
+  name: chembl-mysql
+  namespace: chem
+  labels:
+    app: chembl-mysql
+spec:
+  type: ClusterIP
+  ports:
+    - port: 3306
+      targetPort: 3306
+      protocol: TCP
+  selector:
+    app: chembl-mysql
