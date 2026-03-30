@@ -5,9 +5,8 @@
 # Direct ClusterIP access to docking-controller — no kubectl, no kubeconfig needed.
 #
 # Prerequisites (one-time setup, not per-run):
-#   pvc-autodock must exist with test-tiny.sdf at /data/claim-jovyan/test-tiny.sdf.
-#   Run: kubectl apply -f k8s-jobs/config/pvc-autodock.yaml
-#   Seed: see rke2/chem/compute-infrastructure/k8s-jobs/tests/fixtures/README.md
+#   MySQL must have test ligands imported into the `ligands` table for source_db='test-tiny'.
+#   The result-writer pod must be running in the chem namespace.
 #
 # Triggers:
 #   workflow_run — fires automatically after Build and Push Chem Images succeeds.
@@ -78,8 +77,7 @@ jobs:
               "ligand_db":          "test-tiny",
               "pdbid":              "7jrn",
               "native_ligand":      "TTT",
-              "ligands_chunk_size": 100,
-              "jupyter_user":       "jovyan"
+              "ligands_chunk_size": 100
             }')
           echo "$RESPONSE"
           JOB_NAME=$(echo "$RESPONSE" \
@@ -125,7 +123,7 @@ jobs:
           JOB_NAME="${{ steps.submit.outputs.job_name }}"
           [ -z "$JOB_NAME" ] && exit 0
           BASE="http://docking-controller.chem.svc.cluster.local/api/v1/dockingjobs/$JOB_NAME"
-          for TASK in split-sdf prepare-ligands docking postprocessing export-mysql; do
+          for TASK in prepare-receptor dock-batch; do
             echo "=== logs: $TASK ==="
             curl -sf "$BASE/logs?task=$TASK" 2>/dev/null || echo "(no logs or job gone)"
           done
