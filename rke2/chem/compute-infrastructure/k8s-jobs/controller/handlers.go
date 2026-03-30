@@ -3,6 +3,7 @@ package main
 
 import (
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -369,6 +370,67 @@ func (h *APIHandler) HealthCheck(w http.ResponseWriter, r *http.Request) {
 		"status": "healthy",
 		"time":   time.Now().Format(time.RFC3339),
 	})
+}
+
+// LigandImportRequest represents a single ligand to import.
+type LigandImportRequest struct {
+	CompoundID string `json:"compound_id"`
+	Smiles     string `json:"smiles"`
+	PDBQTB64   string `json:"pdbqt_b64,omitempty"` // base64-encoded PDBQT, optional
+	SourceDb   string `json:"source_db"`
+}
+
+// ImportLigands handles POST /api/v1/ligands
+// Accepts a JSON array of ligands and upserts them into the ligands table.
+func (h *APIHandler) ImportLigands(w http.ResponseWriter, r *http.Request) {
+	var ligands []LigandImportRequest
+	if err := json.NewDecoder(r.Body).Decode(&ligands); err != nil {
+		writeError(w, fmt.Sprintf("invalid request: %v", err), http.StatusBadRequest)
+		return
+	}
+	if len(ligands) == 0 {
+		writeError(w, "empty ligand list", http.StatusBadRequest)
+		return
+	}
+
+	imported := 0
+	for _, lig := range ligands {
+		if lig.CompoundID == "" || lig.Smiles == "" || lig.SourceDb == "" {
+			continue
+		}
+
+		var pdbqt []byte
+		if lig.PDBQTB64 != "" {
+			var err error
+			pdbqt, err = base64Decode(lig.PDBQTB64)
+			if err != nil {
+				log.Printf("[ImportLigands] bad base64 for %s: %v", lig.CompoundID, err)
+				continue
+			}
+		}
+
+		_, err := h.db.ExecContext(r.Context(),
+			`INSERT INTO ligands (compound_id, smiles, pdbqt, source_db)
+			 VALUES (?, ?, ?, ?)
+			 ON DUPLICATE KEY UPDATE smiles = VALUES(smiles), pdbqt = VALUES(pdbqt)`,
+			lig.CompoundID, lig.Smiles, pdbqt, lig.SourceDb)
+		if err != nil {
+			log.Printf("[ImportLigands] failed to upsert %s: %v", lig.CompoundID, err)
+			continue
+		}
+		imported++
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"imported": imported,
+		"total":    len(ligands),
+	})
+}
+
+// base64Decode decodes a base64 string.
+func base64Decode(s string) ([]byte, error) {
+	return base64.StdEncoding.DecodeString(s)
 }
 
 // ReadinessCheck handles GET /readyz
