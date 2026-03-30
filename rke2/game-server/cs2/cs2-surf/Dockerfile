@@ -131,6 +131,13 @@ RUN curl -fsSL "https://github.com/fltuna/TnmsAdministrationPlatform/releases/do
 # --- Source2Surf/Timer (built from source) ---
 COPY --from=plugin-builder /build/out/timer/ /staging/sharp/modules/Timer/
 COPY --from=plugin-builder /build/out/timer-rm/ /staging/sharp/modules/Timer.RequestManager/
+# Generate runtimeconfig.json if missing (UseCommonOutputDirectory suppresses it)
+RUN for mod in Timer Timer.RequestManager MapChooserSharpMS TnmsAdminUtils; do \
+      dir="/staging/sharp/modules/${mod}"; \
+      if [ -d "${dir}" ] && [ ! -f "${dir}/${mod}.runtimeconfig.json" ]; then \
+        echo '{"runtimeOptions":{"tfm":"net10.0","framework":{"name":"Microsoft.NETCore.App","version":"10.0.0"}}}' > "${dir}/${mod}.runtimeconfig.json"; \
+      fi; \
+    done
 COPY --from=plugin-builder /build/timer/gamedata/ /staging/sharp/gamedata/
 COPY --from=plugin-builder /build/timer/sharp/ /staging/sharp/
 
