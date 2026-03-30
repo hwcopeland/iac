@@ -143,7 +143,7 @@ COPY --from=plugin-builder /build/out/tnmsadminutils/ /staging/sharp/modules/Tnm
 # ---------------------------------------------------------------------------
 # Stage 3: Final image
 # ---------------------------------------------------------------------------
-FROM cm2network/steamcmd:latest
+FROM registry.gitlab.steamos.cloud/steamrt/sniper/sdk:latest
 
 # Re-declare ARGs needed in this stage
 ARG MODSHARP_VERSION
@@ -153,18 +153,26 @@ LABEL maintainer="hwcopeland"
 LABEL description="CS2 ModSharp surf server"
 LABEL modsharp.version="${MODSHARP_VERSION}"
 
-# Install runtime dependencies.
-# cm2network/steamcmd runs as 'steam' (UID 1000); we need root for apt.
+# Steam RT3 image — required for ModSharp native loader compatibility.
+# Set up steamcmd and steam user.
 USER root
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        gettext-base \
-        jq \
-        curl \
+RUN dpkg --add-architecture i386 && \
+    apt-get update && apt-get install -y --no-install-recommends \
+        gettext-base jq curl ca-certificates lib32gcc-s1 \
     && rm -rf /var/lib/apt/lists/*
 
-# CS2 dedicated server install path (steamcmd convention for cm2network image)
+# Create steam user
+RUN useradd -m -s /bin/bash steam
+
+# Install steamcmd
+RUN mkdir -p /home/steam/steamcmd && \
+    curl -fsSL https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz | \
+    tar xzf - -C /home/steam/steamcmd && \
+    chown -R steam:steam /home/steam
+
 ENV CS2_DIR="/home/steam/cs2"
+ENV STEAMCMD_DIR="/home/steam/steamcmd"
 
 # Copy the assembled overlay
 COPY --from=assembler --chown=steam:steam /staging/ /opt/cs2-surf/overlay/
