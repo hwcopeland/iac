@@ -28,6 +28,7 @@ on:
       - main
     paths:
       - 'rke2/chem/compute-infrastructure/k8s-jobs/controller/**'
+      - 'rke2/chem/compute-infrastructure/k8s-jobs/result-writer/**'
       - 'rke2/chem/compute-infrastructure/docker/autodock-vina/**'
       - '.github/workflows/build-chem-images.yml'
   workflow_dispatch:
@@ -51,6 +52,11 @@ jobs:
             image: zot.hwcopeland.net/chem/autodock-vina
             dockerfile: rke2/chem/compute-infrastructure/docker/autodock-vina/Dockerfile
             context: rke2/chem/compute-infrastructure/docker/autodock-vina/
+
+          - name: result-writer
+            image: zot.hwcopeland.net/chem/result-writer
+            dockerfile: rke2/chem/compute-infrastructure/k8s-jobs/result-writer/Dockerfile
+            context: rke2/chem/compute-infrastructure/k8s-jobs/result-writer/
 
 
     steps:
