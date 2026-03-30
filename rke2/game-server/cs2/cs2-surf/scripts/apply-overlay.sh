@@ -51,37 +51,29 @@ mkdir -p "${CS2_DIR}/game/csgo"
 # The zip extracts as sharp/ which goes directly under game/
 cp -rf "${OVERLAY_DIR}/." "${CS2_DIR}/game/"
 
-# ModSharp's loader shim MUST replace the original libserver.so
-# The shim is at sharp/bin/linuxsteamrt64/libserver.so (17KB)
-# The original is at bin/linuxsteamrt64/libserver.so (38MB)
-# ModSharp's loader shim at game/sharp/bin/linuxsteamrt64/libserver.so
-# Engine finds it automatically — no patches needed.
-# Requires Steam RT3 base image for native library compatibility.
-
-# Clean up kus/Metamod/CSS remnants and any previous bad installs
+# Patch gameinfo.gi: add "Game sharp" before "Game csgo" per ModSharp docs
+# Also strip any leftover Metamod/CSS entries from kus
 GAMEINFO="${CS2_DIR}/game/csgo/gameinfo.gi"
 if [ -f "${GAMEINFO}" ]; then
+    # Remove old entries
     sed -i "/csgo\/sharp/d" "${GAMEINFO}"
     sed -i "/csgo\/addons\/metamod/d" "${GAMEINFO}"
-    log "Cleaned gameinfo.gi (removed metamod and sharp entries)"
+    # Add "Game sharp" if not present (before "Game csgo")
+    if ! grep -q "Game[[:space:]]*sharp" "${GAMEINFO}"; then
+        sed -i '/Game_LowViolence.*csgo_lv/a\\t\t\tGame\tsharp' "${GAMEINFO}"
+        log "Patched gameinfo.gi: added Game sharp"
+    fi
 fi
 
-# Restore original if we previously moved/symlinked it
+# Restore original libserver.so if previous runs messed with it
 ORIGINAL="${CS2_DIR}/game/csgo/bin/linuxsteamrt64/libserver.so"
-BACKUP="${CS2_DIR}/game/csgo/bin/linuxsteamrt64/libserver_original.so"
-VALVE="${CS2_DIR}/game/csgo/bin/linuxsteamrt64/libserver_valve.so"
-if [ -L "${ORIGINAL}" ]; then rm -f "${ORIGINAL}"; fi
-[ -f "${BACKUP}" ] && mv "${BACKUP}" "${ORIGINAL}"
-[ -f "${VALVE}" ] && [ ! -f "${ORIGINAL}" ] && mv "${VALVE}" "${ORIGINAL}"
+for backup in "${ORIGINAL}.valve_backup" "${ORIGINAL%/*}/libserver_original.so" "${ORIGINAL%/*}/libserver_valve.so"; do
+    if [ -f "${backup}" ]; then
+        [ -L "${ORIGINAL}" ] && rm -f "${ORIGINAL}"
+        [ ! -f "${ORIGINAL}" ] && mv "${backup}" "${ORIGINAL}" && log "Restored original libserver.so from ${backup}"
+    fi
+done
 rm -f "${CS2_DIR}/.modsharp-preload"
-
-# Restore original libserver.so if we previously replaced it
-VALVE_BACKUP="${CS2_DIR}/game/csgo/bin/linuxsteamrt64/libserver_valve.so"
-ORIGINAL="${CS2_DIR}/game/csgo/bin/linuxsteamrt64/libserver.so"
-if [ -f "${VALVE_BACKUP}" ]; then
-    mv "${VALVE_BACKUP}" "${ORIGINAL}"
-    log "Restored original libserver.so"
-fi
 
 # Write the version stamp
 echo "${IMAGE_VERSION}" > "${STAMP_FILE}"
