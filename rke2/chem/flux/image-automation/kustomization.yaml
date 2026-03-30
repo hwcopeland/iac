@@ -10,4 +10,6 @@ resources:
   - image-policy-autodock4.yaml
   - image-policy-autodock-vina.yaml
   - image-policy-jupyter-chem.yaml
+  - image-repository-result-writer.yaml
+  - image-policy-result-writer.yaml
   - image-update-automation.yaml

@@ -1,13 +1,11 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources:
-  - crd/dockingjob-crd.yaml
   - config/rbac.yaml
   - config/deployment.yaml
-  - config/pvc-autodock.yaml
+  - config/result-writer-deployment.yaml
   - config/mysql.yaml
   - config/mysql-secret.yaml
-  - config/seed-test-fixture.yaml
   # zot-pull-secret is managed by the image-automation Kustomization (zot-image-pull-secret.yaml).
   # It is present in this directory as a reference copy but not listed here to avoid a
   # duplicate ExternalSecret owner conflict between the two Kustomizations.
