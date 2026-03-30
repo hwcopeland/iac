@@ -89,33 +89,41 @@ spec:
                 exit 0
               fi
 
+              # Initialize MySQL data directory if empty
+              if [ ! -d "$DATADIR/mysql" ]; then
+                echo "Initializing MySQL data directory..."
+                mysqld --initialize-insecure --user=mysql --datadir=$DATADIR
+              fi
+
               echo "Starting temporary MySQL for import..."
               mysqld --user=mysql --datadir=$DATADIR \
                 --innodb-buffer-pool-size=2G \
                 --innodb-log-file-size=512M \
                 --max-allowed-packet=256M \
-                --skip-networking=OFF \
-                --port=3306 \
+                --skip-networking \
                 --socket=/tmp/mysql.sock &
               MYSQL_PID=$!
 
               echo "Waiting for MySQL to be ready..."
               for i in $(seq 1 60); do
-                if mysqladmin ping --socket=/tmp/mysql.sock -u root -p"$MYSQL_ROOT_PASSWORD" --silent 2>/dev/null; then
+                if mysqladmin ping --socket=/tmp/mysql.sock --silent 2>/dev/null; then
                   echo "MySQL ready"
                   break
                 fi
+                [ "$i" -eq 60 ] && echo "TIMEOUT" && kill $MYSQL_PID && exit 1
                 sleep 2
               done
 
-              # Check if database needs initializing first
-              DB_EXISTS=$(mysql --socket=/tmp/mysql.sock -u root -p"$MYSQL_ROOT_PASSWORD" -N \
-                -e "SELECT COUNT(*) FROM information_schema.schemata WHERE schema_name = 'chembl_${CHEMBL_VERSION}'" 2>/dev/null || echo "0")
-              TABLE_COUNT="0"
-              if [ "$DB_EXISTS" -gt 0 ]; then
-                TABLE_COUNT=$(mysql --socket=/tmp/mysql.sock -u root -p"$MYSQL_ROOT_PASSWORD" -N \
-                  -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'chembl_${CHEMBL_VERSION}'" 2>/dev/null || echo "0")
-              fi
+              # Set root password
+              mysql --socket=/tmp/mysql.sock -u root \
+                -e "ALTER USER 'root'@'localhost' IDENTIFIED BY '$MYSQL_ROOT_PASSWORD'; \
+                    CREATE USER IF NOT EXISTS 'root'@'%' IDENTIFIED BY '$MYSQL_ROOT_PASSWORD'; \
+                    GRANT ALL PRIVILEGES ON *.* TO 'root'@'%' WITH GRANT OPTION; \
+                    FLUSH PRIVILEGES;"
+
+              # Check if already imported
+              TABLE_COUNT=$(mysql --socket=/tmp/mysql.sock -u root -p"$MYSQL_ROOT_PASSWORD" -N \
+                -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'chembl_${CHEMBL_VERSION}'" 2>/dev/null || echo "0")
 
               if [ "$TABLE_COUNT" -gt 100 ]; then
                 echo "Already imported ($TABLE_COUNT tables). Marking done."
