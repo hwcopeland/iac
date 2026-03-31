@@ -1,4 +1,17 @@
 ---
+apiVersion: cloudflare-operator.io/v1
+kind: DNSRecord
+metadata:
+  name: khemia-api
+  namespace: chem
+spec:
+  name: khemia.hwcopeland.net
+  type: CNAME
+  content: hwcopeland.net
+  proxied: true
+  ttl: 1
+  interval: 5m
+---
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
@@ -6,9 +19,6 @@ metadata:
   namespace: chem
   annotations:
     cert-manager.io/cluster-issuer: cf-issuer
-    cloudflare-operator.io/content: khemia.hwcopeland.net
-    cloudflare-operator.io/proxied: "true"
-    cloudflare-operator.io/type: CNAME
 spec:
   hostnames:
     - khemia.hwcopeland.net
