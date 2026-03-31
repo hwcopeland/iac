@@ -101,8 +101,8 @@ When status is `Completed`:
   "name": "qe-1774969295168344935",
   "status": "Completed",
   "executable": "pw.x",
-  "total_energy": -15.84823,
-  "wall_time_sec": 12.3,
+  "total_energy": -22.83836927,
+  "wall_time_sec": 0.26,
   "output_file": "... full QE output ..."
 }
 ```
