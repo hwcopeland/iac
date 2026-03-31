@@ -3,7 +3,7 @@
 ## API Endpoint
 
 ```
-https://khemia.hwcopeland.net/api/v1/qe/
+https://khemeia.hwcopeland.net/api/v1/qe/
 ```
 
 ## Authentication
@@ -31,7 +31,7 @@ Your client secret is in Bitwarden under `docking-controller-oidc` in the `k8s-s
 Add it to every request:
 
 ```bash
-curl -H "Authorization: Bearer $TOKEN" https://khemia.hwcopeland.net/api/v1/qe/jobs
+curl -H "Authorization: Bearer $TOKEN" https://khemeia.hwcopeland.net/api/v1/qe/jobs
 ```
 
 ## Running a Calculation
@@ -70,7 +70,7 @@ EOF
 ### 2. Submit the job
 
 ```bash
-curl -X POST https://khemia.hwcopeland.net/api/v1/qe/submit \
+curl -X POST https://khemeia.hwcopeland.net/api/v1/qe/submit \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d "$(jq -n --rawfile input si_scf.in '{
@@ -90,7 +90,7 @@ Response:
 
 ```bash
 curl -H "Authorization: Bearer $TOKEN" \
-  https://khemia.hwcopeland.net/api/v1/qe/jobs/qe-1774969295168344935
+  https://khemeia.hwcopeland.net/api/v1/qe/jobs/qe-1774969295168344935
 ```
 
 ### 4. Get results
@@ -113,7 +113,7 @@ Pseudopotentials (.UPF files) are auto-downloaded from the QE server on first us
 
 ```bash
 # Upload a pseudopotential
-curl -X POST https://khemia.hwcopeland.net/api/v1/qe/pseudopotentials \
+curl -X POST https://khemeia.hwcopeland.net/api/v1/qe/pseudopotentials \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d "{
@@ -125,7 +125,7 @@ curl -X POST https://khemia.hwcopeland.net/api/v1/qe/pseudopotentials \
 
 # List stored pseudopotentials
 curl -H "Authorization: Bearer $TOKEN" \
-  https://khemia.hwcopeland.net/api/v1/qe/pseudopotentials
+  https://khemeia.hwcopeland.net/api/v1/qe/pseudopotentials
 ```
 
 Stored pseudopotentials are automatically included in the job's input — no download needed.
