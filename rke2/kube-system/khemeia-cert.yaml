@@ -1,0 +1,14 @@
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: cf-khemeia-wildcard-cert
+  namespace: kube-system
+spec:
+  dnsNames:
+    - "*.khemeia.net"
+    - khemeia.net
+  issuerRef:
+    kind: ClusterIssuer
+    name: cf-issuer
+  secretName: cf-khemeia-wildcard-cert-secret
