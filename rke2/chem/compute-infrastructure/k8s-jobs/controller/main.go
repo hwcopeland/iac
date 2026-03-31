@@ -39,7 +39,7 @@ const (
 	DefaultNativeLigand     = "TTT"
 	WorkDir                 = "/data"
 
-	DefaultQEImage      = "opensciencegrid/osgvo-quantum-espresso:latest"
+	DefaultQEImage      = "costrouc/quantum-espresso:latest"
 	DefaultQEExecutable = "pw.x"
 	DefaultQENumCPUs    = 1
 	DefaultQEMemoryMB   = 2048
