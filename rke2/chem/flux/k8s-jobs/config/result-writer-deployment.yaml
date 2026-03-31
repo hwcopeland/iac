@@ -20,7 +20,7 @@ spec:
         - name: zot-pull-secret
       containers:
         - name: result-writer
-          image: zot.hwcopeland.net/chem/result-writer:build-000040-fa0ef01 # {"$imagepolicy": "chem:result-writer"}
+          image: zot.hwcopeland.net/chem/result-writer:build-000041-5088e63 # {"$imagepolicy": "chem:result-writer"}
           imagePullPolicy: Always
           ports:
             - containerPort: 8081
