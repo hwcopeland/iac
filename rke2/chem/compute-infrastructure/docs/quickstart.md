@@ -1,208 +1,246 @@
-# Khemeia Platform — Quickstart
+# Khemeia — Getting Started
 
-## 1. Get an Account
+You'll need a terminal with `curl` and `jq` installed.
 
-1. Go to **https://auth.hwcopeland.net** and click **Sign Up** (or ask the admin to create your account)
-2. Ask the admin to assign you to the **Docking Controller** application in Authentik
-3. The admin will give you a **client ID** and **client secret** — save these securely
+---
 
-## 2. Get Your API Token
+## Step 1: Sign in with GitHub
+
+Go to **https://auth.hwcopeland.net** and click **Sign in with GitHub**. That's it — your account is created automatically.
+
+After you sign in, let Hampton know your username so he can approve your access. Once approved, he'll send you two things:
+
+- **Client ID** (e.g., `docking-controller`)
+- **Client Secret** (a long random string)
+
+Keep the client secret private. If you lose it, ask Hampton for a new one.
+
+---
+
+## Step 2: Get a token
+
+Every time you want to use the API, grab a fresh token (they last 1 hour):
 
 ```bash
-# Replace with your credentials
-CLIENT_ID="your-client-id"
-CLIENT_SECRET="your-client-secret"
+export CLIENT_ID="docking-controller"
+export CLIENT_SECRET="paste-your-secret-here"
 
-# Get a JWT (valid for 1 hour, re-run when it expires)
-TOKEN=$(curl -sf -X POST https://auth.hwcopeland.net/application/o/token/ \
+export TOKEN=$(curl -sf -X POST https://auth.hwcopeland.net/application/o/token/ \
   -d "grant_type=client_credentials" \
   -d "client_id=$CLIENT_ID" \
   -d "client_secret=$CLIENT_SECRET" \
   -d "scope=openid" | jq -r '.access_token')
-
-echo $TOKEN
 ```
 
-All API requests use this token:
+Test it:
 ```bash
-curl -H "Authorization: Bearer $TOKEN" https://khemeia.hwcopeland.net/api/v1/...
+curl -sf -H "Authorization: Bearer $TOKEN" https://khemeia.hwcopeland.net/health
+# Should print: {"status":"healthy", ...}
 ```
-
-## 3. What You Can Do
-
-The platform runs two types of computational jobs:
-
-| Service | What it does | Endpoint prefix |
-|---------|-------------|-----------------|
-| **Molecular Docking** | Dock compounds against protein targets (AutoDock Vina) | `/api/v1/dockingjobs` |
-| **Quantum ESPRESSO** | First-principles DFT calculations (pw.x, ph.x, etc.) | `/api/v1/qe/` |
 
 ---
 
-## Quantum ESPRESSO
+## Running a Quantum ESPRESSO calculation
 
-### Submit a Calculation
+### Write your input file
 
-Write your QE input file, then submit:
+Here's a simple silicon SCF calculation:
 
 ```bash
-curl -X POST https://khemeia.hwcopeland.net/api/v1/qe/submit \
+cat > si.in << 'EOF'
+&CONTROL
+  calculation = 'scf'
+  prefix = 'silicon'
+  outdir = './tmp'
+  pseudo_dir = './'
+/
+&SYSTEM
+  ibrav = 2
+  celldm(1) = 10.2
+  nat = 2
+  ntyp = 1
+  ecutwfc = 30.0
+/
+&ELECTRONS
+  mixing_beta = 0.7
+  conv_thr = 1.0d-8
+/
+ATOMIC_SPECIES
+  Si 28.086 Si.pbe-n-rrkjus_psl.1.0.0.UPF
+ATOMIC_POSITIONS {alat}
+  Si 0.00 0.00 0.00
+  Si 0.25 0.25 0.25
+K_POINTS {automatic}
+  4 4 4 1 1 1
+EOF
+```
+
+Pseudopotentials (the `.UPF` files) are downloaded automatically — you don't need to provide them.
+
+### Submit it
+
+```bash
+JOB=$(curl -sf -X POST https://khemeia.hwcopeland.net/api/v1/qe/submit \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
-  -d "$(jq -n --rawfile input your_input.in '{
+  -d "$(jq -n --rawfile input si.in '{
     input_file: $input,
     executable: "pw.x",
     num_cpus: 2,
     memory_mb: 2048
-  }')"
+  }')")
+
+echo $JOB
+# {"name":"qe-1774976667038212124","status":"Pending"}
+
+JOB_NAME=$(echo $JOB | jq -r '.name')
 ```
 
-Response:
-```json
-{"name": "qe-1774976667038212124", "status": "Pending"}
-```
-
-### Check Status
+### Wait for it
 
 ```bash
-curl -H "Authorization: Bearer $TOKEN" \
-  https://khemeia.hwcopeland.net/api/v1/qe/jobs/qe-1774976667038212124
+# Poll until done (usually < 1 minute for small systems)
+while true; do
+  STATUS=$(curl -sf -H "Authorization: Bearer $TOKEN" \
+    https://khemeia.hwcopeland.net/api/v1/qe/jobs/$JOB_NAME | jq -r '.status')
+  echo "Status: $STATUS"
+  [ "$STATUS" = "Completed" ] || [ "$STATUS" = "Failed" ] && break
+  sleep 10
+done
 ```
 
-### Results
+### Get the results
 
-When `status` is `Completed`:
+```bash
+curl -sf -H "Authorization: Bearer $TOKEN" \
+  https://khemeia.hwcopeland.net/api/v1/qe/jobs/$JOB_NAME | jq '{
+    status,
+    total_energy,
+    wall_time_sec
+  }'
+```
+
+Output:
 ```json
 {
   "status": "Completed",
   "total_energy": -22.83836927,
-  "wall_time_sec": 0.26,
-  "output_file": "... full QE output ..."
+  "wall_time_sec": 0.26
 }
 ```
 
-### List All Your Jobs
-
+To get the full QE output text:
 ```bash
-curl -H "Authorization: Bearer $TOKEN" \
-  https://khemeia.hwcopeland.net/api/v1/qe/jobs
+curl -sf -H "Authorization: Bearer $TOKEN" \
+  https://khemeia.hwcopeland.net/api/v1/qe/jobs/$JOB_NAME | jq -r '.output_file'
 ```
 
-### Delete a Job
+### List your jobs
 
 ```bash
-curl -X DELETE -H "Authorization: Bearer $TOKEN" \
-  https://khemeia.hwcopeland.net/api/v1/qe/jobs/qe-1774976667038212124
+curl -sf -H "Authorization: Bearer $TOKEN" \
+  https://khemeia.hwcopeland.net/api/v1/qe/jobs | jq '.jobs[] | {name, status, total_energy}'
 ```
 
-### Pseudopotentials
-
-Pseudopotentials (.UPF files) are auto-downloaded on first use. To pre-upload for faster runs:
+### Delete a job
 
 ```bash
-curl -X POST https://khemeia.hwcopeland.net/api/v1/qe/pseudopotentials \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d "{
-    \"filename\": \"Si.pbe-n-rrkjus_psl.1.0.0.UPF\",
-    \"content_b64\": \"$(base64 -w0 Si.pbe-n-rrkjus_psl.1.0.0.UPF)\",
-    \"element\": \"Si\",
-    \"functional\": \"PBE\"
-  }"
+curl -sf -X DELETE -H "Authorization: Bearer $TOKEN" \
+  https://khemeia.hwcopeland.net/api/v1/qe/jobs/$JOB_NAME
 ```
-
-### Supported Executables
-
-| Executable | Use |
-|-----------|-----|
-| `pw.x` | SCF, relaxation, MD (default) |
-| `ph.x` | Phonon calculations |
-| `bands.x` | Band structure |
-| `pp.x` | Post-processing |
-| `dos.x` | Density of states |
-| `projwfc.x` | Projected DOS |
-
-### Resource Limits
-
-| Parameter | Default | Max |
-|-----------|---------|-----|
-| `num_cpus` | 1 | 20 |
-| `memory_mb` | 2048 | 32768 |
-| Timeout | 4 hours | — |
 
 ---
 
-## Molecular Docking
+## Running a molecular docking job
 
-### Import Compounds
+### Upload your compounds
 
-Upload compounds as SMILES:
+Provide SMILES strings. Give them a group name (like a project name):
+
 ```bash
-curl -X POST https://khemeia.hwcopeland.net/api/v1/ligands \
+curl -sf -X POST https://khemeia.hwcopeland.net/api/v1/ligands \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '[
-    {"compound_id": "aspirin", "smiles": "CC(=O)Oc1ccccc1C(O)=O", "source_db": "my-compounds"},
-    {"compound_id": "ibuprofen", "smiles": "CC(C)Cc1ccc(cc1)C(C)C(O)=O", "source_db": "my-compounds"}
+    {"compound_id": "aspirin", "smiles": "CC(=O)Oc1ccccc1C(O)=O", "source_db": "my-project"},
+    {"compound_id": "caffeine", "smiles": "Cn1c(=O)c2c(ncn2C)n(C)c1=O", "source_db": "my-project"},
+    {"compound_id": "ibuprofen", "smiles": "CC(C)Cc1ccc(cc1)C(C)C(O)=O", "source_db": "my-project"}
   ]'
 ```
 
-### Prep Ligands (SMILES → 3D PDBQT)
+### Prep them (converts 2D SMILES to 3D structures)
 
 ```bash
-curl -X POST https://khemeia.hwcopeland.net/api/v1/prep \
+curl -sf -X POST https://khemeia.hwcopeland.net/api/v1/prep \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"source_db": "my-compounds"}'
+  -d '{"source_db": "my-project"}'
 ```
 
-Wait a few minutes for RDKit to generate 3D structures.
+This takes a minute or two. It generates 3D molecular structures using RDKit.
 
-### Run Docking
+### Dock against a protein
+
+Pick a PDB ID for your target protein. Example: `7jrn` is SARS-CoV-2 main protease.
 
 ```bash
-curl -X POST https://khemeia.hwcopeland.net/api/v1/dockingjobs \
+DOCK=$(curl -sf -X POST https://khemeia.hwcopeland.net/api/v1/dockingjobs \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
     "pdbid": "7jrn",
-    "ligand_db": "my-compounds",
+    "ligand_db": "my-project",
     "native_ligand": "TTT",
     "ligands_chunk_size": 100
-  }'
+  }')
+
+echo $DOCK
+DOCK_NAME=$(echo $DOCK | jq -r '.name')
 ```
 
-### Check Results
+### Wait and check results
 
 ```bash
-# Job status
-curl -H "Authorization: Bearer $TOKEN" \
-  https://khemeia.hwcopeland.net/api/v1/dockingjobs/docking-XXXX
+# Poll
+while true; do
+  STATUS=$(curl -sf -H "Authorization: Bearer $TOKEN" \
+    https://khemeia.hwcopeland.net/api/v1/dockingjobs/$DOCK_NAME | jq -r '.status')
+  echo "Status: $STATUS"
+  [ "$STATUS" = "Completed" ] || [ "$STATUS" = "Failed" ] && break
+  sleep 30
+done
 
-# Binding energies
-curl -H "Authorization: Bearer $TOKEN" \
-  https://khemeia.hwcopeland.net/api/v1/dockingjobs/docking-XXXX/results
+# Get binding energies
+curl -sf -H "Authorization: Bearer $TOKEN" \
+  https://khemeia.hwcopeland.net/api/v1/dockingjobs/$DOCK_NAME/results | jq
 ```
 
-Response:
+Output:
 ```json
 {
-  "result_count": 2,
+  "result_count": 3,
   "best_affinity_kcal_mol": -6.1,
   "worst_affinity_kcal_mol": -5.0,
   "avg_affinity_kcal_mol": -5.55
 }
 ```
 
+More negative = better binding. Anything below -7.0 kcal/mol is a promising hit.
+
 ---
 
-## Job Ownership
+## Quick reference
 
-All jobs are tagged with your username. The admin can see all jobs; you can see yours.
+| What | Command |
+|------|---------|
+| Health check | `curl https://khemeia.hwcopeland.net/health` |
+| List QE jobs | `curl -H "Auth..." .../api/v1/qe/jobs` |
+| List docking jobs | `curl -H "Auth..." .../api/v1/dockingjobs` |
+| Submit QE | `POST .../api/v1/qe/submit` |
+| Submit docking | `POST .../api/v1/dockingjobs` |
+| Import compounds | `POST .../api/v1/ligands` |
+| Prep compounds | `POST .../api/v1/prep` |
 
-## Need Help?
+## Something broken?
 
-Contact the platform admin or check the API health:
-```bash
-curl https://khemeia.hwcopeland.net/health
-```
+Check `https://khemeia.hwcopeland.net/health`. If that works but your jobs fail, check the job status for an error message. Otherwise, message Hampton.
