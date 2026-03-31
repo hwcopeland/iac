@@ -234,6 +234,16 @@ func (c *DockingJobController) ensureSchema() error {
 			INDEX idx_status (status),
 			INDEX idx_created_at (created_at)
 		)`,
+		`CREATE TABLE IF NOT EXISTS pseudopotentials (
+			id          INT AUTO_INCREMENT PRIMARY KEY,
+			filename    VARCHAR(255) NOT NULL UNIQUE,
+			content     MEDIUMBLOB NOT NULL,
+			element     VARCHAR(4) NOT NULL,
+			functional  VARCHAR(32) NULL,
+			source_url  TEXT NULL,
+			created_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			INDEX idx_element (element)
+		)`,
 	}
 
 	for _, ddl := range tables {
@@ -364,6 +374,17 @@ func (c *DockingJobController) startAPIServer() error {
 			handler.GetQEJob(w, r)
 		case http.MethodDelete:
 			handler.DeleteQEJob(w, r)
+		default:
+			writeError(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+	}))
+
+	mux.HandleFunc("/api/v1/qe/pseudopotentials", wrap(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPost:
+			handler.UploadPseudopotential(w, r)
+		case http.MethodGet:
+			handler.ListPseudopotentials(w, r)
 		default:
 			writeError(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
@@ -542,7 +563,28 @@ func (c *DockingJobController) processQEJob(jobName, executable, inputFile, imag
 	ctx := context.Background()
 	cmName := fmt.Sprintf("qe-input-%s", jobName)
 
-	// 2. Create a ConfigMap with the input file content.
+	// 2. Create a ConfigMap with input file + pseudopotentials from DB.
+	cmData := map[string]string{"input.in": inputFile}
+	cmBinary := map[string][]byte{}
+
+	// Find .UPF references in the input file and look them up in the DB.
+	for _, line := range strings.Split(inputFile, "\n") {
+		line = strings.TrimSpace(line)
+		fields := strings.Fields(line)
+		for _, f := range fields {
+			if strings.HasSuffix(strings.ToUpper(f), ".UPF") {
+				var content []byte
+				err := c.db.QueryRow(`SELECT content FROM pseudopotentials WHERE filename = ?`, f).Scan(&content)
+				if err == nil && len(content) > 0 {
+					cmBinary[f] = content
+					log.Printf("[%s] Loaded pseudopotential %s from DB (%d bytes)", jobName, f, len(content))
+				} else {
+					log.Printf("[%s] Pseudopotential %s not in DB, will try download at runtime", jobName, f)
+				}
+			}
+		}
+	}
+
 	cm := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: cmName,
@@ -551,7 +593,8 @@ func (c *DockingJobController) processQEJob(jobName, executable, inputFile, imag
 				"qe.khemia.io/job-name": jobName,
 			},
 		},
-		Data: map[string]string{"input.in": inputFile},
+		Data:       cmData,
+		BinaryData: cmBinary,
 	}
 	if _, err := c.client.CoreV1().ConfigMaps(c.namespace).Create(ctx, cm, metav1.CreateOptions{}); err != nil {
 		c.failQEJob(jobName, fmt.Sprintf("failed to create input ConfigMap: %v", err))

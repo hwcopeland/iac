@@ -669,6 +669,84 @@ func isNotFound(err error) bool {
 	return k8serrors.IsNotFound(err)
 }
 
+// UploadPseudopotential handles POST /api/v1/qe/pseudopotentials
+// Accepts a JSON object with filename, content (base64), element, functional.
+func (h *APIHandler) UploadPseudopotential(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Filename   string `json:"filename"`
+		ContentB64 string `json:"content_b64"`
+		Element    string `json:"element"`
+		Functional string `json:"functional,omitempty"`
+		SourceURL  string `json:"source_url,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, fmt.Sprintf("invalid request: %v", err), http.StatusBadRequest)
+		return
+	}
+	if req.Filename == "" || req.ContentB64 == "" || req.Element == "" {
+		writeError(w, "filename, content_b64, and element are required", http.StatusBadRequest)
+		return
+	}
+
+	content, err := base64Decode(req.ContentB64)
+	if err != nil {
+		writeError(w, fmt.Sprintf("invalid base64: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	_, err = h.db.ExecContext(r.Context(),
+		`INSERT INTO pseudopotentials (filename, content, element, functional, source_url)
+		 VALUES (?, ?, ?, ?, ?)
+		 ON DUPLICATE KEY UPDATE content = VALUES(content), functional = VALUES(functional)`,
+		req.Filename, content, req.Element, req.Functional, req.SourceURL)
+	if err != nil {
+		writeError(w, fmt.Sprintf("failed to store pseudopotential: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"filename": req.Filename,
+		"size":     len(content),
+	})
+}
+
+// ListPseudopotentials handles GET /api/v1/qe/pseudopotentials
+func (h *APIHandler) ListPseudopotentials(w http.ResponseWriter, r *http.Request) {
+	rows, err := h.db.QueryContext(r.Context(),
+		`SELECT filename, element, functional, LENGTH(content) as size, created_at FROM pseudopotentials ORDER BY element, filename`)
+	if err != nil {
+		writeError(w, fmt.Sprintf("query error: %v", err), http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	type ppEntry struct {
+		Filename   string    `json:"filename"`
+		Element    string    `json:"element"`
+		Functional *string   `json:"functional,omitempty"`
+		Size       int       `json:"size_bytes"`
+		CreatedAt  time.Time `json:"created_at"`
+	}
+	var pps []ppEntry
+	for rows.Next() {
+		var p ppEntry
+		if err := rows.Scan(&p.Filename, &p.Element, &p.Functional, &p.Size, &p.CreatedAt); err != nil {
+			continue
+		}
+		pps = append(pps, p)
+	}
+	if pps == nil {
+		pps = []ppEntry{}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"pseudopotentials": pps,
+		"count":            len(pps),
+	})
+}
+
 // PrepRequest represents a request to prep ligands for docking.
 type PrepRequest struct {
 	SourceDb  string `json:"source_db"`
