@@ -41,11 +41,12 @@ type prepPayload struct {
 
 // dockPayload is the JSON payload for job_type='dock'.
 type dockPayload struct {
-	WorkflowName   string  `json:"workflow_name"`
-	PDBID          string  `json:"pdb_id"`
-	LigandID       int     `json:"ligand_id"`
-	CompoundID     string  `json:"compound_id"`
+	WorkflowName    string  `json:"workflow_name"`
+	PDBID           string  `json:"pdb_id"`
+	LigandID        int     `json:"ligand_id"`
+	CompoundID      string  `json:"compound_id"`
 	AffinityKcalMol float64 `json:"affinity_kcal_mol"`
+	DockedPDBQT     *string `json:"docked_pdbqt,omitempty"` // all 9 Vina modes, only for top hits
 }
 
 func main() {
@@ -241,9 +242,9 @@ func processDock(ctx context.Context, tx *sql.Tx, row stagingRow) error {
 	}
 
 	_, err := tx.ExecContext(ctx,
-		`INSERT INTO docking_results (workflow_name, pdb_id, ligand_id, compound_id, affinity_kcal_mol)
-		 VALUES (?, ?, ?, ?, ?)`,
-		d.WorkflowName, d.PDBID, d.LigandID, d.CompoundID, d.AffinityKcalMol)
+		`INSERT INTO docking_results (workflow_name, pdb_id, ligand_id, compound_id, affinity_kcal_mol, docked_pdbqt)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		d.WorkflowName, d.PDBID, d.LigandID, d.CompoundID, d.AffinityKcalMol, d.DockedPDBQT)
 	if err != nil {
 		return fmt.Errorf("inserting docking result for ligand %d: %w", d.LigandID, err)
 	}

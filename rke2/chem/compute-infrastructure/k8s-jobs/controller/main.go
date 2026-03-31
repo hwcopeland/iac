@@ -220,6 +220,7 @@ func (c *DockingJobController) ensureSchema() error {
 		`ALTER TABLE docking_results ADD INDEX idx_ligand (ligand_id)`,
 		`ALTER TABLE docking_results DROP COLUMN batch_label`,
 		`ALTER TABLE docking_results DROP COLUMN ligand_name`,
+		`ALTER TABLE docking_results ADD COLUMN docked_pdbqt MEDIUMBLOB NULL`,
 	}
 	for _, m := range migrations {
 		c.db.Exec(m) // Ignore errors (column may already exist or not exist)
