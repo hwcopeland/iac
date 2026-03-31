@@ -1,0 +1,12 @@
+---
+apiVersion: cloudflare-operator.io/v1
+kind: Zone
+metadata:
+  name: khemeia
+spec:
+  name: khemeia.net
+  interval: 5m
+  prune: false
+  ignoredRecords:
+    TXT:
+      - _acme-challenge
