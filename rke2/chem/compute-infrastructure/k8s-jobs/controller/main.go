@@ -739,7 +739,7 @@ mpirun --allow-run-as-root -np %d %s -in input.in 2>&1`,
 	wallTimeSec := parseQEWallTime(output)
 
 	// 8. Store output and parsed values.
-	if _, err := c.db.Exec(
+	if _, err := c.qeDb.Exec(
 		`UPDATE qe_jobs SET status='Completed', output_file=?, total_energy=?, wall_time_sec=?, completed_at=NOW() WHERE name=?`,
 		output, totalEnergy, wallTimeSec, jobName); err != nil {
 		log.Printf("[%s] CRITICAL: failed to store QE results: %v", jobName, err)
@@ -789,7 +789,7 @@ func (c *DockingJobController) waitForQEJobCompletion(jobName string) error {
 
 // failQEJob marks a QE job as Failed and stores the error output.
 func (c *DockingJobController) failQEJob(jobName, message string) {
-	if _, err := c.db.Exec(
+	if _, err := c.qeDb.Exec(
 		`UPDATE qe_jobs SET status='Failed', error_output=?, completed_at=NOW() WHERE name=?`,
 		message, jobName); err != nil {
 		log.Printf("[%s] CRITICAL: failed to mark QE job as Failed: %v", jobName, err)
