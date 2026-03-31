@@ -154,12 +154,13 @@ func (h *APIHandler) CreateJob(w http.ResponseWriter, r *http.Request) {
 	}
 
 	jobName := fmt.Sprintf("docking-%d", time.Now().UnixNano())
+	submittedBy := UserFromContext(r)
 
 	// INSERT workflow row with phase='Running'.
 	_, err = h.db.ExecContext(r.Context(),
-		`INSERT INTO docking_workflows (name, phase, pdbid, source_db, native_ligand, chunk_size, image)
-		 VALUES (?, 'Running', ?, ?, ?, ?, ?)`,
-		jobName, req.PDBID, req.LigandDb, req.NativeLigand, req.LigandsChunkSize, req.Image)
+		`INSERT INTO docking_workflows (name, phase, pdbid, source_db, native_ligand, chunk_size, image, submitted_by)
+		 VALUES (?, 'Running', ?, ?, ?, ?, ?, ?)`,
+		jobName, req.PDBID, req.LigandDb, req.NativeLigand, req.LigandsChunkSize, req.Image, submittedBy)
 	if err != nil {
 		writeError(w, fmt.Sprintf("failed to create workflow: %v", err), http.StatusInternalServerError)
 		return
@@ -505,11 +506,12 @@ func (h *APIHandler) SubmitQEJob(w http.ResponseWriter, r *http.Request) {
 	}
 
 	jobName := fmt.Sprintf("qe-%d", time.Now().UnixNano())
+	submittedBy := UserFromContext(r)
 
 	_, err := h.db.ExecContext(r.Context(),
-		`INSERT INTO qe_jobs (name, executable, input_file, num_cpus, memory_mb, image)
-		 VALUES (?, ?, ?, ?, ?, ?)`,
-		jobName, req.Executable, req.InputFile, req.NumCPUs, req.MemoryMB, req.Image)
+		`INSERT INTO qe_jobs (name, executable, input_file, num_cpus, memory_mb, image, submitted_by)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		jobName, req.Executable, req.InputFile, req.NumCPUs, req.MemoryMB, req.Image, submittedBy)
 	if err != nil {
 		writeError(w, fmt.Sprintf("failed to create QE job: %v", err), http.StatusInternalServerError)
 		return
