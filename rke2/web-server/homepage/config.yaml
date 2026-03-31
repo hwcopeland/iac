@@ -58,11 +58,6 @@ data:
             siteMonitor: https://vault.hwcopeland.net
 
     - Automation:
-        - n8n:
-            icon: n8n.png
-            href: https://n8n.hwcopeland.net
-            description: Workflow Automation
-            siteMonitor: https://n8n.hwcopeland.net
         - Openclaw:
             icon: https://raw.githubusercontent.com/phosphor-icons/core/main/assets/regular/robot.svg
             href: https://claw.hwcopeland.net

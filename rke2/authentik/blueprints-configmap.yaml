@@ -349,37 +349,6 @@ data:
       model: authentik_policies.policybinding
       permissions: []
       state: present
-  providers-n8n.yaml: |
-    version: 1
-    metadata:
-      name: n8n Provider and Application
-    entries:
-    - attrs:
-        authorization_flow: !Find [authentik_flows.flow, [slug, default-provider-authorization-implicit-consent]]
-        invalidation_flow: !Find [authentik_flows.flow, [slug, default-provider-invalidation-flow]]
-        name: n8n
-        redirect_uris:
-        - matching_mode: strict
-          url: https://n8n.hwcopeland.net/rest/sso/oidc/callback
-        signing_key: !Find [authentik_crypto.certificatekeypair, [name, authentik Self-signed Certificate]]
-        sub_mode: hashed_user_id
-      conditions: []
-      identifiers:
-        name: n8n
-      model: authentik_providers_oauth2.oauth2provider
-      permissions: []
-      state: present
-    - attrs:
-        meta_launch_url: https://n8n.hwcopeland.net
-        name: n8n
-        provider: !Find [authentik_providers_oauth2.oauth2provider, [name, n8n]]
-        slug: n8n
-      conditions: []
-      identifiers:
-        slug: n8n
-      model: authentik_core.application
-      permissions: []
-      state: present
   providers-zot.yaml: |
     version: 1
     metadata:
