@@ -245,8 +245,33 @@ func (c *DockingJobController) Run(ctx context.Context) error {
 func (c *DockingJobController) startAPIServer() error {
 	handler := NewAPIHandler(c.client, c.namespace, c, c.db)
 
+	// Initialize auth middleware. When AUTH_ENABLED is "true", JWT validation
+	// is enforced for external requests; internal pod/service CIDRs are exempt.
+	// When disabled (default), all requests pass through without auth.
+	var wrap func(http.HandlerFunc) http.HandlerFunc
+
+	if os.Getenv("AUTH_ENABLED") == "true" {
+		issuerURL := os.Getenv("OIDC_ISSUER_URL")
+		if issuerURL == "" {
+			return fmt.Errorf("AUTH_ENABLED=true but OIDC_ISSUER_URL is not set")
+		}
+
+		auth, err := NewAuthMiddleware(issuerURL)
+		if err != nil {
+			return fmt.Errorf("initializing auth middleware: %w", err)
+		}
+		wrap = auth.Wrap
+		log.Println("JWT authentication enabled")
+	} else {
+		noop := noopAuthMiddleware()
+		wrap = noop.WrapNoop
+		log.Println("JWT authentication disabled (AUTH_ENABLED != \"true\")")
+	}
+
 	mux := http.NewServeMux()
-	mux.HandleFunc("/api/v1/dockingjobs", func(w http.ResponseWriter, r *http.Request) {
+
+	// API routes — wrapped with auth middleware.
+	mux.HandleFunc("/api/v1/dockingjobs", wrap(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:
 			handler.ListJobs(w, r)
@@ -255,8 +280,8 @@ func (c *DockingJobController) startAPIServer() error {
 		default:
 			writeError(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
-	})
-	mux.HandleFunc("/api/v1/dockingjobs/", func(w http.ResponseWriter, r *http.Request) {
+	}))
+	mux.HandleFunc("/api/v1/dockingjobs/", wrap(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:
 			if hasResultsSuffix(r.URL.Path) {
@@ -271,21 +296,23 @@ func (c *DockingJobController) startAPIServer() error {
 		default:
 			writeError(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
-	})
-	mux.HandleFunc("/api/v1/ligands", func(w http.ResponseWriter, r *http.Request) {
+	}))
+	mux.HandleFunc("/api/v1/ligands", wrap(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost {
 			handler.ImportLigands(w, r)
 		} else {
 			writeError(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
-	})
-	mux.HandleFunc("/api/v1/prep", func(w http.ResponseWriter, r *http.Request) {
+	}))
+	mux.HandleFunc("/api/v1/prep", wrap(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost {
 			handler.StartPrep(w, r)
 		} else {
 			writeError(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
-	})
+	}))
+
+	// Health/readiness endpoints — always unauthenticated.
 	mux.HandleFunc("/health", handler.HealthCheck)
 	mux.HandleFunc("/readyz", handler.ReadinessCheck)
 

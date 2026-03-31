@@ -43,6 +43,10 @@ spec:
                 secretKeyRef:
                   name: docking-mysql-secret
                   key: root-password
+            - name: AUTH_ENABLED
+              value: "true"
+            - name: OIDC_ISSUER_URL
+              value: "https://auth.hwcopeland.net/application/o/docking-controller/"
           resources:
             requests:
               cpu: 100m
