@@ -52,7 +52,8 @@ type DockingJobController struct {
 	client    *kubernetes.Clientset
 	namespace string
 	jobClient typed.JobInterface
-	db        *sql.DB
+	db        *sql.DB   // docking database
+	qeDb      *sql.DB   // qe database
 	stopCh    chan struct{}
 }
 
@@ -132,21 +133,46 @@ func NewDockingJobController() (*DockingJobController, error) {
 		db.Close()
 		return nil, fmt.Errorf("failed to ping mysql: %v", err)
 	}
-	log.Println("MySQL connection established")
+	log.Println("MySQL docking connection established")
+
+	// Create and connect to the QE database.
+	db.Exec("CREATE DATABASE IF NOT EXISTS qe")
+	qeDsn := fmt.Sprintf("%s:%s@tcp(%s:%s)/qe?parseTime=true",
+		mysqlUser, mysqlPassword, mysqlHost, mysqlPort)
+	qeDb, err := sql.Open("mysql", qeDsn)
+	if err != nil {
+		db.Close()
+		return nil, fmt.Errorf("failed to open qe mysql connection: %v", err)
+	}
+	qeDb.SetMaxOpenConns(5)
+	qeDb.SetConnMaxLifetime(5 * time.Minute)
+	if err := qeDb.Ping(); err != nil {
+		db.Close()
+		qeDb.Close()
+		return nil, fmt.Errorf("failed to ping qe database: %v", err)
+	}
+	log.Println("MySQL qe connection established")
 
 	controller := &DockingJobController{
 		client:    client,
 		namespace: namespace,
 		jobClient: client.BatchV1().Jobs(namespace),
 		db:        db,
+		qeDb:      qeDb,
 		stopCh:    make(chan struct{}),
 	}
 
 	if err := controller.ensureSchema(); err != nil {
 		db.Close()
-		return nil, fmt.Errorf("failed to ensure database schema: %v", err)
+		qeDb.Close()
+		return nil, fmt.Errorf("failed to ensure docking schema: %v", err)
 	}
-	log.Println("Database schema verified")
+	if err := controller.ensureQESchema(); err != nil {
+		db.Close()
+		qeDb.Close()
+		return nil, fmt.Errorf("failed to ensure qe schema: %v", err)
+	}
+	log.Println("Database schemas verified")
 
 	return controller, nil
 }
@@ -214,36 +240,6 @@ func (c *DockingJobController) ensureSchema() error {
 			payload    JSON NOT NULL,
 			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 		)`,
-		`CREATE TABLE IF NOT EXISTS qe_jobs (
-			id              INT AUTO_INCREMENT PRIMARY KEY,
-			name            VARCHAR(255) NOT NULL UNIQUE,
-			status          ENUM('Pending','Running','Completed','Failed') NOT NULL DEFAULT 'Pending',
-			executable      VARCHAR(64)  NOT NULL DEFAULT 'pw.x',
-			input_file      MEDIUMTEXT   NOT NULL,
-			output_file     MEDIUMTEXT   NULL,
-			error_output    MEDIUMTEXT   NULL,
-			total_energy    DOUBLE       NULL,
-			wall_time_sec   FLOAT        NULL,
-			num_cpus        INT          NOT NULL DEFAULT 1,
-			memory_mb       INT          NOT NULL DEFAULT 2048,
-			image           VARCHAR(512) NOT NULL DEFAULT 'opensciencegrid/osgvo-quantum-espresso:latest',
-			submitted_by    VARCHAR(255) NULL,
-			created_at      TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
-			started_at      TIMESTAMP    NULL,
-			completed_at    TIMESTAMP    NULL,
-			INDEX idx_status (status),
-			INDEX idx_created_at (created_at)
-		)`,
-		`CREATE TABLE IF NOT EXISTS pseudopotentials (
-			id          INT AUTO_INCREMENT PRIMARY KEY,
-			filename    VARCHAR(255) NOT NULL UNIQUE,
-			content     MEDIUMBLOB NOT NULL,
-			element     VARCHAR(4) NOT NULL,
-			functional  VARCHAR(32) NULL,
-			source_url  TEXT NULL,
-			created_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-			INDEX idx_element (element)
-		)`,
 	}
 
 	for _, ddl := range tables {
@@ -269,6 +265,48 @@ func (c *DockingJobController) ensureSchema() error {
 	return nil
 }
 
+// ensureQESchema creates QE tables in the separate 'qe' database.
+func (c *DockingJobController) ensureQESchema() error {
+	tables := []string{
+		`CREATE TABLE IF NOT EXISTS qe_jobs (
+			id              INT AUTO_INCREMENT PRIMARY KEY,
+			name            VARCHAR(255) NOT NULL UNIQUE,
+			status          ENUM('Pending','Running','Completed','Failed') NOT NULL DEFAULT 'Pending',
+			executable      VARCHAR(64)  NOT NULL DEFAULT 'pw.x',
+			input_file      MEDIUMTEXT   NOT NULL,
+			output_file     MEDIUMTEXT   NULL,
+			error_output    MEDIUMTEXT   NULL,
+			total_energy    DOUBLE       NULL,
+			wall_time_sec   FLOAT        NULL,
+			num_cpus        INT          NOT NULL DEFAULT 1,
+			memory_mb       INT          NOT NULL DEFAULT 2048,
+			image           VARCHAR(512) NOT NULL DEFAULT 'costrouc/quantum-espresso:latest',
+			submitted_by    VARCHAR(255) NULL,
+			created_at      TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			started_at      TIMESTAMP    NULL,
+			completed_at    TIMESTAMP    NULL,
+			INDEX idx_status (status),
+			INDEX idx_created_at (created_at)
+		)`,
+		`CREATE TABLE IF NOT EXISTS pseudopotentials (
+			id          INT AUTO_INCREMENT PRIMARY KEY,
+			filename    VARCHAR(255) NOT NULL UNIQUE,
+			content     MEDIUMBLOB NOT NULL,
+			element     VARCHAR(4) NOT NULL,
+			functional  VARCHAR(32) NULL,
+			source_url  TEXT NULL,
+			created_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			INDEX idx_element (element)
+		)`,
+	}
+	for _, ddl := range tables {
+		if _, err := c.qeDb.Exec(ddl); err != nil {
+			return fmt.Errorf("executing QE DDL: %w\n%s", err, ddl)
+		}
+	}
+	return nil
+}
+
 // Run starts the controller
 func (c *DockingJobController) Run(ctx context.Context) error {
 	log.Println("Starting Docking Job Controller...")
@@ -284,7 +322,7 @@ func (c *DockingJobController) Run(ctx context.Context) error {
 }
 
 func (c *DockingJobController) startAPIServer() error {
-	handler := NewAPIHandler(c.client, c.namespace, c, c.db)
+	handler := NewAPIHandler(c.client, c.namespace, c, c.db, c.qeDb)
 
 	// Initialize auth middleware. When AUTH_ENABLED is "true", JWT validation
 	// is enforced for external requests; internal pod/service CIDRs are exempt.
@@ -555,7 +593,7 @@ func (c *DockingJobController) processQEJob(jobName, executable, inputFile, imag
 		jobName, executable, numCPUs, memoryMB, image)
 
 	// 1. Update status to Running.
-	if _, err := c.db.Exec(`UPDATE qe_jobs SET status='Running', started_at=NOW() WHERE name=?`, jobName); err != nil {
+	if _, err := c.qeDb.Exec(`UPDATE qe_jobs SET status='Running', started_at=NOW() WHERE name=?`, jobName); err != nil {
 		log.Printf("[%s] Failed to update QE job status to Running: %v", jobName, err)
 		return
 	}
@@ -574,7 +612,7 @@ func (c *DockingJobController) processQEJob(jobName, executable, inputFile, imag
 		for _, f := range fields {
 			if strings.HasSuffix(strings.ToUpper(f), ".UPF") {
 				var content []byte
-				err := c.db.QueryRow(`SELECT content FROM pseudopotentials WHERE filename = ?`, f).Scan(&content)
+				err := c.qeDb.QueryRow(`SELECT content FROM pseudopotentials WHERE filename = ?`, f).Scan(&content)
 				if err == nil && len(content) > 0 {
 					cmBinary[f] = content
 					log.Printf("[%s] Loaded pseudopotential %s from DB (%d bytes)", jobName, f, len(content))
