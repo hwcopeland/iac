@@ -11,7 +11,7 @@ spec:
   storageClassName: longhorn
   resources:
     requests:
-      storage: 50Gi
+      storage: 100Gi
 
 ---
 # ChEMBL MySQL instance.
@@ -89,8 +89,13 @@ spec:
                 exit 0
               fi
 
-              # Initialize MySQL data directory if empty
-              if [ ! -d "$DATADIR/mysql" ]; then
+              # Initialize MySQL data directory if not properly initialized.
+              # If a previous import failed mid-way, the directory may have partial
+              # data. We detect this by checking for the import marker — if it doesn't
+              # exist but data files are present, we wipe and re-initialize.
+              if [ ! -d "$DATADIR/mysql" ] || [ ! -d "$DATADIR/sys" ]; then
+                echo "Cleaning data directory for fresh init..."
+                find "$DATADIR" -mindepth 1 -maxdepth 1 ! -name 'chembl-dump' -exec rm -rf {} +
                 echo "Initializing MySQL data directory..."
                 mysqld --initialize-insecure --user=mysql --datadir=$DATADIR
               fi
