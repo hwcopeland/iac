@@ -1,0 +1,331 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: khemeia-landing
+  namespace: web-server
+data:
+  index.html: |
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+      <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>khemeia.net</title>
+      <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&display=swap');
+
+        :root {
+          --bg: #0a0e17;
+          --surface: #111827;
+          --accent: #60a5fa;
+          --accent-dim: rgba(96, 165, 250, 0.08);
+          --text: #e2e8f0;
+          --muted: #64748b;
+          --border: rgba(96, 165, 250, 0.12);
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+          font-family: 'Inter', system-ui, sans-serif;
+          background: var(--bg);
+          color: var(--text);
+          min-height: 100vh;
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          overflow: hidden;
+          position: relative;
+        }
+
+        /* subtle animated grid */
+        body::before {
+          content: '';
+          position: fixed;
+          inset: 0;
+          background-image:
+            linear-gradient(var(--border) 1px, transparent 1px),
+            linear-gradient(90deg, var(--border) 1px, transparent 1px);
+          background-size: 60px 60px;
+          animation: drift 30s linear infinite;
+          opacity: 0.4;
+          z-index: 0;
+        }
+
+        @keyframes drift {
+          0% { transform: translate(0, 0); }
+          100% { transform: translate(60px, 60px); }
+        }
+
+        /* floating molecule-like particles */
+        .particles {
+          position: fixed;
+          inset: 0;
+          z-index: 0;
+          pointer-events: none;
+        }
+        .particle {
+          position: absolute;
+          width: 4px;
+          height: 4px;
+          background: var(--accent);
+          border-radius: 50%;
+          opacity: 0;
+          animation: float 8s ease-in-out infinite;
+        }
+        .particle:nth-child(1) { left: 15%; top: 20%; animation-delay: 0s; }
+        .particle:nth-child(2) { left: 75%; top: 30%; animation-delay: 2s; }
+        .particle:nth-child(3) { left: 40%; top: 70%; animation-delay: 4s; }
+        .particle:nth-child(4) { left: 85%; top: 60%; animation-delay: 1s; }
+        .particle:nth-child(5) { left: 25%; top: 80%; animation-delay: 3s; }
+        .particle:nth-child(6) { left: 60%; top: 15%; animation-delay: 5s; }
+
+        @keyframes float {
+          0%, 100% { opacity: 0; transform: translateY(0); }
+          50% { opacity: 0.6; transform: translateY(-20px); }
+        }
+
+        .container {
+          position: relative;
+          z-index: 1;
+          text-align: center;
+          padding: 2rem;
+          max-width: 640px;
+        }
+
+        /* hexagon accent */
+        .hex {
+          width: 80px;
+          height: 80px;
+          margin: 0 auto 2.5rem;
+          position: relative;
+        }
+        .hex svg {
+          width: 100%;
+          height: 100%;
+        }
+        .hex-ring {
+          fill: none;
+          stroke: var(--accent);
+          stroke-width: 1.5;
+          opacity: 0.6;
+          animation: pulse-ring 4s ease-in-out infinite;
+        }
+        .hex-fill {
+          fill: var(--accent-dim);
+        }
+        @keyframes pulse-ring {
+          0%, 100% { opacity: 0.4; }
+          50% { opacity: 0.9; }
+        }
+
+        h1 {
+          font-size: 2.8rem;
+          font-weight: 600;
+          letter-spacing: -0.02em;
+          margin-bottom: 0.25rem;
+          background: linear-gradient(135deg, var(--text) 0%, var(--accent) 100%);
+          -webkit-background-clip: text;
+          background-clip: text;
+          color: transparent;
+        }
+
+        .greek {
+          font-size: 1rem;
+          color: var(--muted);
+          letter-spacing: 0.25em;
+          margin-bottom: 2.5rem;
+        }
+
+        .divider {
+          width: 48px;
+          height: 1px;
+          background: var(--accent);
+          margin: 0 auto 2rem;
+          opacity: 0.4;
+        }
+
+        p {
+          font-size: 1.05rem;
+          line-height: 1.7;
+          color: var(--muted);
+          font-weight: 300;
+          margin-bottom: 1rem;
+        }
+
+        .status {
+          display: inline-flex;
+          align-items: center;
+          gap: 0.5rem;
+          margin-top: 2rem;
+          padding: 0.5rem 1.25rem;
+          border: 1px solid var(--border);
+          border-radius: 999px;
+          font-size: 0.85rem;
+          color: var(--muted);
+          background: var(--accent-dim);
+        }
+
+        .status-dot {
+          width: 6px;
+          height: 6px;
+          background: var(--accent);
+          border-radius: 50%;
+          animation: blink 2s ease-in-out infinite;
+        }
+
+        @keyframes blink {
+          0%, 100% { opacity: 0.3; }
+          50% { opacity: 1; }
+        }
+
+        footer {
+          position: fixed;
+          bottom: 2rem;
+          z-index: 1;
+          font-size: 0.75rem;
+          color: var(--muted);
+          opacity: 0.5;
+          letter-spacing: 0.1em;
+        }
+      </style>
+    </head>
+    <body>
+      <div class="particles">
+        <div class="particle"></div>
+        <div class="particle"></div>
+        <div class="particle"></div>
+        <div class="particle"></div>
+        <div class="particle"></div>
+        <div class="particle"></div>
+      </div>
+
+      <div class="container">
+        <!-- benzene ring / hexagon motif -->
+        <div class="hex">
+          <svg viewBox="0 0 100 100">
+            <polygon class="hex-fill" points="50,5 93,27.5 93,72.5 50,95 7,72.5 7,27.5" />
+            <polygon class="hex-ring" points="50,5 93,27.5 93,72.5 50,95 7,72.5 7,27.5" />
+          </svg>
+        </div>
+
+        <h1>khemeia</h1>
+        <div class="divider"></div>
+
+        <p>
+          Cloud-native computational chemistry.
+          Scaling molecular discovery across orchestrated infrastructure.
+        </p>
+
+        <div class="status">
+          <span class="status-dot"></span>
+          Systems under construction
+        </div>
+      </div>
+
+      <footer>khemeia.net</footer>
+    </body>
+    </html>
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: khemeia-landing
+  namespace: web-server
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: khemeia-landing
+  template:
+    metadata:
+      labels:
+        app: khemeia-landing
+    spec:
+      containers:
+        - name: nginx
+          image: nginx:alpine
+          ports:
+            - containerPort: 80
+          volumeMounts:
+            - name: html
+              mountPath: /usr/share/nginx/html
+              readOnly: true
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              memory: 32Mi
+      volumes:
+        - name: html
+          configMap:
+            name: khemeia-landing
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: khemeia-landing
+  namespace: web-server
+spec:
+  selector:
+    app: khemeia-landing
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 80
+---
+apiVersion: cloudflare-operator.io/v1
+kind: DNSRecord
+metadata:
+  name: khemeia-landing
+  namespace: web-server
+spec:
+  name: khemeia.net
+  type: CNAME
+  content: hwcopeland.net
+  proxied: true
+  ttl: 1
+  interval: 5m
+---
+apiVersion: cloudflare-operator.io/v1
+kind: DNSRecord
+metadata:
+  name: khemeia-www
+  namespace: web-server
+spec:
+  name: www.khemeia.net
+  type: CNAME
+  content: hwcopeland.net
+  proxied: true
+  ttl: 1
+  interval: 5m
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: khemeia-landing
+  namespace: web-server
+  annotations:
+    cert-manager.io/cluster-issuer: cf-issuer
+spec:
+  hostnames:
+    - khemeia.net
+    - www.khemeia.net
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: hwcopeland-gateway
+      namespace: kube-system
+      sectionName: khemeia-https
+  rules:
+    - backendRefs:
+        - kind: Service
+          name: khemeia-landing
+          port: 80
+      matches:
+        - path:
+            type: PathPrefix
+            value: /
