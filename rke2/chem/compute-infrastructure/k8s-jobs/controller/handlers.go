@@ -13,6 +13,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 )
@@ -432,6 +433,238 @@ func (h *APIHandler) ImportLigands(w http.ResponseWriter, r *http.Request) {
 // base64Decode decodes a base64 string.
 func base64Decode(s string) ([]byte, error) {
 	return base64.StdEncoding.DecodeString(s)
+}
+
+// --- Quantum ESPRESSO handlers ---
+
+// QESubmitRequest represents a request to submit a QE calculation.
+type QESubmitRequest struct {
+	Executable string `json:"executable,omitempty"`
+	InputFile  string `json:"input_file"`
+	NumCPUs    int    `json:"num_cpus,omitempty"`
+	MemoryMB   int    `json:"memory_mb,omitempty"`
+	Image      string `json:"image,omitempty"`
+}
+
+// QEJobSummary is the list-level view (omits large text fields).
+type QEJobSummary struct {
+	ID          int        `json:"id"`
+	Name        string     `json:"name"`
+	Status      string     `json:"status"`
+	Executable  string     `json:"executable"`
+	TotalEnergy *float64   `json:"total_energy,omitempty"`
+	WallTimeSec *float32   `json:"wall_time_sec,omitempty"`
+	CreatedAt   time.Time  `json:"created_at"`
+	CompletedAt *time.Time `json:"completed_at,omitempty"`
+}
+
+// QEJobDetail is the full view returned by GetQEJob.
+type QEJobDetail struct {
+	ID          int        `json:"id"`
+	Name        string     `json:"name"`
+	Status      string     `json:"status"`
+	Executable  string     `json:"executable"`
+	InputFile   string     `json:"input_file"`
+	OutputFile  *string    `json:"output_file,omitempty"`
+	ErrorOutput *string    `json:"error_output,omitempty"`
+	TotalEnergy *float64   `json:"total_energy,omitempty"`
+	WallTimeSec *float32   `json:"wall_time_sec,omitempty"`
+	NumCPUs     int        `json:"num_cpus"`
+	MemoryMB    int        `json:"memory_mb"`
+	Image       string     `json:"image"`
+	CreatedAt   time.Time  `json:"created_at"`
+	StartedAt   *time.Time `json:"started_at,omitempty"`
+	CompletedAt *time.Time `json:"completed_at,omitempty"`
+}
+
+// SubmitQEJob handles POST /api/v1/qe/submit
+func (h *APIHandler) SubmitQEJob(w http.ResponseWriter, r *http.Request) {
+	var req QESubmitRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, fmt.Sprintf("invalid request: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	if strings.TrimSpace(req.InputFile) == "" {
+		writeError(w, "input_file is required", http.StatusBadRequest)
+		return
+	}
+
+	// Apply defaults.
+	if req.Executable == "" {
+		req.Executable = DefaultQEExecutable
+	}
+	if req.NumCPUs == 0 {
+		req.NumCPUs = DefaultQENumCPUs
+	}
+	if req.MemoryMB == 0 {
+		req.MemoryMB = DefaultQEMemoryMB
+	}
+	if req.Image == "" {
+		req.Image = DefaultQEImage
+	}
+
+	jobName := fmt.Sprintf("qe-%d", time.Now().UnixNano())
+
+	_, err := h.db.ExecContext(r.Context(),
+		`INSERT INTO qe_jobs (name, executable, input_file, num_cpus, memory_mb, image)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		jobName, req.Executable, req.InputFile, req.NumCPUs, req.MemoryMB, req.Image)
+	if err != nil {
+		writeError(w, fmt.Sprintf("failed to create QE job: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusAccepted)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"name":   jobName,
+		"status": "Pending",
+	})
+
+	go h.controller.processQEJob(jobName, req.Executable, req.InputFile, req.Image, req.NumCPUs, req.MemoryMB)
+}
+
+// ListQEJobs handles GET /api/v1/qe/jobs
+func (h *APIHandler) ListQEJobs(w http.ResponseWriter, r *http.Request) {
+	rows, err := h.db.QueryContext(r.Context(),
+		`SELECT id, name, status, executable, total_energy, wall_time_sec, created_at, completed_at
+		   FROM qe_jobs ORDER BY created_at DESC`)
+	if err != nil {
+		writeError(w, fmt.Sprintf("failed to list QE jobs: %v", err), http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	var jobs []QEJobSummary
+	for rows.Next() {
+		var j QEJobSummary
+		var totalEnergy sql.NullFloat64
+		var wallTime sql.NullFloat64
+		var completedAt sql.NullTime
+
+		if err := rows.Scan(&j.ID, &j.Name, &j.Status, &j.Executable,
+			&totalEnergy, &wallTime, &j.CreatedAt, &completedAt); err != nil {
+			writeError(w, fmt.Sprintf("failed to scan QE job: %v", err), http.StatusInternalServerError)
+			return
+		}
+		if totalEnergy.Valid {
+			j.TotalEnergy = &totalEnergy.Float64
+		}
+		if wallTime.Valid {
+			wt := float32(wallTime.Float64)
+			j.WallTimeSec = &wt
+		}
+		if completedAt.Valid {
+			j.CompletedAt = &completedAt.Time
+		}
+		jobs = append(jobs, j)
+	}
+	if err := rows.Err(); err != nil {
+		writeError(w, fmt.Sprintf("failed to iterate QE jobs: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	if jobs == nil {
+		jobs = []QEJobSummary{}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"jobs":  jobs,
+		"count": len(jobs),
+	})
+}
+
+// GetQEJob handles GET /api/v1/qe/jobs/{name}
+func (h *APIHandler) GetQEJob(w http.ResponseWriter, r *http.Request) {
+	jobName := strings.TrimPrefix(r.URL.Path, "/api/v1/qe/jobs/")
+	if jobName == "" {
+		writeError(w, "job name required", http.StatusBadRequest)
+		return
+	}
+
+	var j QEJobDetail
+	var outputFile, errorOutput sql.NullString
+	var totalEnergy sql.NullFloat64
+	var wallTime sql.NullFloat64
+	var startedAt, completedAt sql.NullTime
+
+	err := h.db.QueryRowContext(r.Context(),
+		`SELECT id, name, status, executable, input_file, output_file, error_output,
+		        total_energy, wall_time_sec, num_cpus, memory_mb, image,
+		        created_at, started_at, completed_at
+		   FROM qe_jobs WHERE name = ?`, jobName).Scan(
+		&j.ID, &j.Name, &j.Status, &j.Executable, &j.InputFile, &outputFile, &errorOutput,
+		&totalEnergy, &wallTime, &j.NumCPUs, &j.MemoryMB, &j.Image,
+		&j.CreatedAt, &startedAt, &completedAt)
+	if err == sql.ErrNoRows {
+		writeError(w, "QE job not found", http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		writeError(w, fmt.Sprintf("failed to get QE job: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	if outputFile.Valid {
+		j.OutputFile = &outputFile.String
+	}
+	if errorOutput.Valid {
+		j.ErrorOutput = &errorOutput.String
+	}
+	if totalEnergy.Valid {
+		j.TotalEnergy = &totalEnergy.Float64
+	}
+	if wallTime.Valid {
+		wt := float32(wallTime.Float64)
+		j.WallTimeSec = &wt
+	}
+	if startedAt.Valid {
+		j.StartedAt = &startedAt.Time
+	}
+	if completedAt.Valid {
+		j.CompletedAt = &completedAt.Time
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(j)
+}
+
+// DeleteQEJob handles DELETE /api/v1/qe/jobs/{name}
+func (h *APIHandler) DeleteQEJob(w http.ResponseWriter, r *http.Request) {
+	jobName := strings.TrimPrefix(r.URL.Path, "/api/v1/qe/jobs/")
+	if jobName == "" {
+		writeError(w, "job name required", http.StatusBadRequest)
+		return
+	}
+
+	// Delete the K8s Job if it still exists.
+	propagation := metav1.DeletePropagationBackground
+	if err := h.client.BatchV1().Jobs(h.namespace).Delete(r.Context(), jobName, metav1.DeleteOptions{
+		PropagationPolicy: &propagation,
+	}); err != nil && !isNotFound(err) {
+		log.Printf("[DeleteQEJob] Failed to delete K8s job %s: %v", jobName, err)
+	}
+
+	// Delete the input ConfigMap if it still exists.
+	cmName := fmt.Sprintf("qe-input-%s", jobName)
+	if err := h.client.CoreV1().ConfigMaps(h.namespace).Delete(r.Context(), cmName, metav1.DeleteOptions{}); err != nil && !isNotFound(err) {
+		log.Printf("[DeleteQEJob] Failed to delete ConfigMap %s: %v", cmName, err)
+	}
+
+	// Delete from MySQL.
+	if _, err := h.db.ExecContext(r.Context(),
+		`DELETE FROM qe_jobs WHERE name = ?`, jobName); err != nil {
+		log.Printf("[DeleteQEJob] Failed to delete QE job %s from DB: %v", jobName, err)
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// isNotFound checks if a Kubernetes API error is a NotFound error.
+func isNotFound(err error) bool {
+	return k8serrors.IsNotFound(err)
 }
 
 // PrepRequest represents a request to prep ligands for docking.

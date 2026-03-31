@@ -14,6 +14,8 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"regexp"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -22,6 +24,7 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	typed "k8s.io/client-go/kubernetes/typed/batch/v1"
@@ -35,6 +38,12 @@ const (
 	DefaultPDBID            = "7jrn"
 	DefaultNativeLigand     = "TTT"
 	WorkDir                 = "/data"
+
+	DefaultQEImage      = "opensciencegrid/osgvo-quantum-espresso:latest"
+	DefaultQEExecutable = "pw.x"
+	DefaultQENumCPUs    = 1
+	DefaultQEMemoryMB   = 2048
+	DefaultQETimeoutH   = 4 // hours
 )
 
 // DockingJobController handles the lifecycle of docking workflows.
@@ -205,6 +214,26 @@ func (c *DockingJobController) ensureSchema() error {
 			payload    JSON NOT NULL,
 			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 		)`,
+		`CREATE TABLE IF NOT EXISTS qe_jobs (
+			id              INT AUTO_INCREMENT PRIMARY KEY,
+			name            VARCHAR(255) NOT NULL UNIQUE,
+			status          ENUM('Pending','Running','Completed','Failed') NOT NULL DEFAULT 'Pending',
+			executable      VARCHAR(64)  NOT NULL DEFAULT 'pw.x',
+			input_file      MEDIUMTEXT   NOT NULL,
+			output_file     MEDIUMTEXT   NULL,
+			error_output    MEDIUMTEXT   NULL,
+			total_energy    DOUBLE       NULL,
+			wall_time_sec   FLOAT        NULL,
+			num_cpus        INT          NOT NULL DEFAULT 1,
+			memory_mb       INT          NOT NULL DEFAULT 2048,
+			image           VARCHAR(512) NOT NULL DEFAULT 'opensciencegrid/osgvo-quantum-espresso:latest',
+			submitted_by    VARCHAR(255) NULL,
+			created_at      TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			started_at      TIMESTAMP    NULL,
+			completed_at    TIMESTAMP    NULL,
+			INDEX idx_status (status),
+			INDEX idx_created_at (created_at)
+		)`,
 	}
 
 	for _, ddl := range tables {
@@ -309,6 +338,32 @@ func (c *DockingJobController) startAPIServer() error {
 		if r.Method == http.MethodPost {
 			handler.StartPrep(w, r)
 		} else {
+			writeError(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+	}))
+
+	// QE (Quantum ESPRESSO) routes — wrapped with auth middleware.
+	mux.HandleFunc("/api/v1/qe/submit", wrap(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			handler.SubmitQEJob(w, r)
+		} else {
+			writeError(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+	}))
+	mux.HandleFunc("/api/v1/qe/jobs", wrap(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			handler.ListQEJobs(w, r)
+		} else {
+			writeError(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+	}))
+	mux.HandleFunc("/api/v1/qe/jobs/", wrap(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			handler.GetQEJob(w, r)
+		case http.MethodDelete:
+			handler.DeleteQEJob(w, r)
+		default:
 			writeError(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
 	}))
@@ -469,6 +524,239 @@ func (c *DockingJobController) processLigandPrep(req PrepRequest) {
 	}
 
 	log.Printf("[prep] All %d batches complete for source_db=%s", batchCount, req.SourceDb)
+}
+
+// processQEJob runs a Quantum ESPRESSO calculation as a single K8s Job.
+// Input is provided via a ConfigMap, output is captured from pod stdout.
+func (c *DockingJobController) processQEJob(jobName, executable, inputFile, image string, numCPUs, memoryMB int) {
+	log.Printf("[%s] Starting QE job: executable=%s cpus=%d memory=%dMi image=%s",
+		jobName, executable, numCPUs, memoryMB, image)
+
+	// 1. Update status to Running.
+	if _, err := c.db.Exec(`UPDATE qe_jobs SET status='Running', started_at=NOW() WHERE name=?`, jobName); err != nil {
+		log.Printf("[%s] Failed to update QE job status to Running: %v", jobName, err)
+		return
+	}
+
+	ctx := context.Background()
+	cmName := fmt.Sprintf("qe-input-%s", jobName)
+
+	// 2. Create a ConfigMap with the input file content.
+	cm := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: cmName,
+			Labels: map[string]string{
+				"app":                  "qe-job",
+				"qe.khemia.io/job-name": jobName,
+			},
+		},
+		Data: map[string]string{"input.in": inputFile},
+	}
+	if _, err := c.client.CoreV1().ConfigMaps(c.namespace).Create(ctx, cm, metav1.CreateOptions{}); err != nil {
+		c.failQEJob(jobName, fmt.Sprintf("failed to create input ConfigMap: %v", err))
+		return
+	}
+
+	// Cleanup ConfigMap when done (regardless of success or failure).
+	defer func() {
+		if err := c.client.CoreV1().ConfigMaps(c.namespace).Delete(ctx, cmName, metav1.DeleteOptions{}); err != nil {
+			log.Printf("[%s] Warning: failed to delete ConfigMap %s: %v", jobName, cmName, err)
+		}
+	}()
+
+	// 3. Create the K8s Job.
+	backoffLimit := int32(0)
+	j := &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: jobName,
+			Labels: map[string]string{
+				"app":                   "qe-job",
+				"qe.khemia.io/job-name": jobName,
+			},
+		},
+		Spec: batchv1.JobSpec{
+			TTLSecondsAfterFinished: ptrInt32(600),
+			BackoffLimit:            &backoffLimit,
+			Template: corev1.PodTemplateSpec{
+				Spec: corev1.PodSpec{
+					RestartPolicy: corev1.RestartPolicyNever,
+					Containers: []corev1.Container{
+						{
+							Name:            "qe",
+							Image:           image,
+							ImagePullPolicy: corev1.PullIfNotPresent,
+							Command:         []string{"/bin/sh", "-c"},
+							Args: []string{
+								fmt.Sprintf("cd /scratch && cp /input/input.in . && mpirun -np %d %s -in input.in 2>&1",
+									numCPUs, executable),
+							},
+							Resources: corev1.ResourceRequirements{
+								Requests: corev1.ResourceList{
+									corev1.ResourceCPU:    resource.MustParse(fmt.Sprintf("%d", numCPUs)),
+									corev1.ResourceMemory: resource.MustParse(fmt.Sprintf("%dMi", memoryMB)),
+								},
+								Limits: corev1.ResourceList{
+									corev1.ResourceCPU:    resource.MustParse(fmt.Sprintf("%d", numCPUs)),
+									corev1.ResourceMemory: resource.MustParse(fmt.Sprintf("%dMi", memoryMB)),
+								},
+							},
+							VolumeMounts: []corev1.VolumeMount{
+								{Name: "input", MountPath: "/input", ReadOnly: true},
+								emptyDirMount("scratch", "/scratch"),
+							},
+						},
+					},
+					Volumes: []corev1.Volume{
+						{
+							Name: "input",
+							VolumeSource: corev1.VolumeSource{
+								ConfigMap: &corev1.ConfigMapVolumeSource{
+									LocalObjectReference: corev1.LocalObjectReference{Name: cmName},
+								},
+							},
+						},
+						emptyDirVolume("scratch"),
+					},
+				},
+			},
+		},
+	}
+
+	if _, err := c.jobClient.Create(ctx, j, metav1.CreateOptions{}); err != nil {
+		c.failQEJob(jobName, fmt.Sprintf("failed to create K8s Job: %v", err))
+		return
+	}
+
+	// 4. Stream logs for observability.
+	streamCtx, streamCancel := context.WithCancel(ctx)
+	go c.streamJobLogs(streamCtx, jobName)
+
+	// 5. Wait for completion with QE-appropriate timeout.
+	if err := c.waitForQEJobCompletion(jobName); err != nil {
+		streamCancel()
+		c.failQEJob(jobName, fmt.Sprintf("job execution failed: %v", err))
+		return
+	}
+	streamCancel()
+
+	// 6. Capture output from pod logs.
+	output, err := c.readPodLogs(jobName)
+	if err != nil {
+		c.failQEJob(jobName, fmt.Sprintf("failed to read pod logs: %v", err))
+		return
+	}
+
+	// 7. Parse total energy and wall time from the QE output.
+	totalEnergy := parseQETotalEnergy(output)
+	wallTimeSec := parseQEWallTime(output)
+
+	// 8. Store output and parsed values.
+	if _, err := c.db.Exec(
+		`UPDATE qe_jobs SET status='Completed', output_file=?, total_energy=?, wall_time_sec=?, completed_at=NOW() WHERE name=?`,
+		output, totalEnergy, wallTimeSec, jobName); err != nil {
+		log.Printf("[%s] CRITICAL: failed to store QE results: %v", jobName, err)
+		return
+	}
+
+	log.Printf("[%s] QE job completed: total_energy=%v wall_time=%v", jobName, totalEnergy, wallTimeSec)
+}
+
+// waitForQEJobCompletion polls for job completion with a 4-hour timeout (QE jobs can be long).
+func (c *DockingJobController) waitForQEJobCompletion(jobName string) error {
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+	timeout := time.After(time.Duration(DefaultQETimeoutH) * time.Hour)
+	pollCount := 0
+
+	for {
+		select {
+		case <-timeout:
+			return fmt.Errorf("timeout after %d hours waiting for job %s", DefaultQETimeoutH, jobName)
+		case <-ticker.C:
+			pollCount++
+			job, err := c.jobClient.Get(context.TODO(), jobName, metav1.GetOptions{})
+			if err != nil {
+				if errors.IsNotFound(err) {
+					if pollCount <= 3 || pollCount%30 == 0 {
+						log.Printf("[qe-wait] %s: not found yet (poll %d)", jobName, pollCount)
+					}
+					continue
+				}
+				return err
+			}
+			if pollCount%30 == 0 {
+				log.Printf("[qe-wait] %s: active=%d succeeded=%d failed=%d (poll %d)",
+					jobName, job.Status.Active, job.Status.Succeeded, job.Status.Failed, pollCount)
+			}
+			if job.Status.Succeeded > 0 {
+				log.Printf("[qe-wait] %s: succeeded after %d polls", jobName, pollCount)
+				return nil
+			}
+			if job.Status.Failed > 0 {
+				return fmt.Errorf("job %s failed", jobName)
+			}
+		}
+	}
+}
+
+// failQEJob marks a QE job as Failed and stores the error output.
+func (c *DockingJobController) failQEJob(jobName, message string) {
+	if _, err := c.db.Exec(
+		`UPDATE qe_jobs SET status='Failed', error_output=?, completed_at=NOW() WHERE name=?`,
+		message, jobName); err != nil {
+		log.Printf("[%s] CRITICAL: failed to mark QE job as Failed: %v", jobName, err)
+	}
+	log.Printf("[%s] QE job failed: %s", jobName, message)
+}
+
+// parseQETotalEnergy extracts total energy from QE output.
+// Looks for lines like: "!    total   energy              =     -32.44928392 Ry"
+func parseQETotalEnergy(output string) *float64 {
+	re := regexp.MustCompile(`!\s+total\s+energy\s+=\s+([-\d.]+)\s+Ry`)
+	matches := re.FindAllStringSubmatch(output, -1)
+	if len(matches) == 0 {
+		return nil
+	}
+	// Use the last match (final SCF iteration).
+	lastMatch := matches[len(matches)-1]
+	val, err := strconv.ParseFloat(lastMatch[1], 64)
+	if err != nil {
+		return nil
+	}
+	return &val
+}
+
+// parseQEWallTime extracts wall time in seconds from QE output.
+// Looks for lines like: "     PWSCF        :     12.34s CPU     13.56s WALL"
+// or multi-unit formats like: "     PWSCF        :   1h23m CPU   1h24m WALL"
+func parseQEWallTime(output string) *float32 {
+	// Try seconds format first: "XXXs WALL"
+	reSeconds := regexp.MustCompile(`([\d.]+)s\s+WALL`)
+	if matches := reSeconds.FindStringSubmatch(output); len(matches) > 1 {
+		val, err := strconv.ParseFloat(matches[1], 32)
+		if err == nil {
+			result := float32(val)
+			return &result
+		}
+	}
+
+	// Try h/m/s format: "1h23m45.67s WALL" or "23m45.67s WALL"
+	reHMS := regexp.MustCompile(`(?:(\d+)h)?(\d+)m([\d.]+)s\s+WALL`)
+	if matches := reHMS.FindStringSubmatch(output); len(matches) > 0 {
+		var totalSec float64
+		if matches[1] != "" {
+			h, _ := strconv.ParseFloat(matches[1], 64)
+			totalSec += h * 3600
+		}
+		m, _ := strconv.ParseFloat(matches[2], 64)
+		totalSec += m * 60
+		s, _ := strconv.ParseFloat(matches[3], 64)
+		totalSec += s
+		result := float32(totalSec)
+		return &result
+	}
+
+	return nil
 }
 
 // createPrepBatchJob creates a K8s Job that runs prep_ligands.py for a ligand batch.
