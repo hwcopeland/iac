@@ -16,6 +16,20 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
+// contextKey is used for storing auth info in request context.
+type contextKey string
+
+const userContextKey contextKey = "authenticated_user"
+
+// UserFromContext extracts the authenticated username from the request context.
+// Returns empty string for internal/unauthenticated requests.
+func UserFromContext(r *http.Request) string {
+	if user, ok := r.Context().Value(userContextKey).(string); ok {
+		return user
+	}
+	return ""
+}
+
 // AuthMiddleware validates JWT tokens against an OIDC provider's JWKS endpoint.
 // Requests from internal pod/service CIDRs bypass authentication entirely.
 type AuthMiddleware struct {
@@ -210,6 +224,14 @@ func (a *AuthMiddleware) Wrap(next http.HandlerFunc) http.HandlerFunc {
 		if !token.Valid {
 			writeAuthError(w, "invalid token", http.StatusUnauthorized)
 			return
+		}
+
+		// Extract subject (username) from JWT claims and add to request context.
+		if claims, ok := token.Claims.(jwt.MapClaims); ok {
+			if sub, ok := claims["sub"].(string); ok && sub != "" {
+				ctx := context.WithValue(r.Context(), userContextKey, sub)
+				r = r.WithContext(ctx)
+			}
 		}
 
 		next(w, r)
