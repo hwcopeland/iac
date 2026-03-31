@@ -6,6 +6,8 @@ resources:
   - config/result-writer-deployment.yaml
   - config/mysql.yaml
   - config/mysql-secret.yaml
+  - config/flux-webhook-secret.yaml
+  - config/flux-webhook-receiver.yaml
   # zot-pull-secret is managed by the image-automation Kustomization (zot-image-pull-secret.yaml).
   # It is present in this directory as a reference copy but not listed here to avoid a
   # duplicate ExternalSecret owner conflict between the two Kustomizations.

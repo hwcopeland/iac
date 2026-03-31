@@ -23,6 +23,7 @@ on:
 
 env:
   CONTROLLER_URL: http://docking-controller.chem.svc.cluster.local
+  FLUX_WEBHOOK_URL: http://webhook-receiver.tooling.svc.cluster.local/hook/af49d0fcea89a1eb9c7cb24c3cb716ce5f28138bd071ea530bc5123fb1f94241
 
 jobs:
   e2e-test:
@@ -34,23 +35,26 @@ jobs:
     timeout-minutes: 60
 
     steps:
-      - name: Wait for Flux rollout
+      - name: Trigger Flux reconciliation
         run: |
           if [ "${{ github.event_name }}" = "workflow_run" ]; then
-            echo "Auto-triggered: sleeping 7 minutes for Flux to deploy new image..."
-            sleep 420
+            echo "Auto-triggered: triggering Flux webhook to deploy new images..."
+            curl -sf -X POST "$FLUX_WEBHOOK_URL" -H "Content-Type: application/json" -d '{}' \
+              && echo "Webhook triggered" || echo "Webhook failed (non-fatal)"
+            echo "Waiting 90s for image scan + rollout..."
+            sleep 90
           else
-            echo "Manual dispatch: skipping Flux rollout wait"
+            echo "Manual dispatch: skipping Flux rollout"
           fi
           echo "Verifying controller health..."
-          for i in $(seq 1 24); do
+          for i in $(seq 1 30); do
             if curl -sf $CONTROLLER_URL/health > /dev/null 2>&1; then
               echo "Controller healthy"
               exit 0
             fi
             sleep 5
           done
-          echo "ERROR: controller not healthy"
+          echo "ERROR: controller not healthy after 150s"
           exit 1
 
       - name: Verify controller and result-writer health
