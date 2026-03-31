@@ -631,10 +631,10 @@ func (c *DockingJobController) processQEJob(jobName, executable, inputFile, imag
 							ImagePullPolicy: corev1.PullIfNotPresent,
 							Command:         []string{"/bin/sh", "-c"},
 							Args: []string{
-								fmt.Sprintf(`cd /scratch && cp /input/input.in . && \
+								fmt.Sprintf(`cd /scratch && cp /input/* . && \
 for pp in $(grep -i '\.UPF' input.in | awk '{print $NF}'); do \
-  [ -f "$pp" ] || wget -q "https://pseudopotentials.quantum-espresso.org/upf_files/$pp" -O "$pp" 2>/dev/null || \
-  wget -q "https://www.quantum-espresso.org/upf_files/$pp" -O "$pp" 2>/dev/null || \
+  [ -f "$pp" ] || curl -sfL "https://pseudopotentials.quantum-espresso.org/upf_files/$pp" -o "$pp" 2>/dev/null || \
+  curl -sfL "https://www.quantum-espresso.org/upf_files/$pp" -o "$pp" 2>/dev/null || \
   echo "WARNING: could not download $pp"; \
 done && \
 mpirun --allow-run-as-root -np %d %s -in input.in 2>&1`,
