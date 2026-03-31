@@ -11,6 +11,17 @@
       - multipath-tools
     state: present
 
+- name: Set kernel tuning for container workloads
+  sysctl:
+    name: "{{ item.key }}"
+    value: "{{ item.value }}"
+    sysctl_file: /etc/sysctl.d/99-kubernetes.conf
+    reload: true
+    state: present
+  loop:
+    - { key: fs.inotify.max_user_instances, value: "1024" }
+    - { key: fs.inotify.max_user_watches, value: "524288" }
+
 - name: Enable and start iscsid
   systemd:
     name: iscsid
