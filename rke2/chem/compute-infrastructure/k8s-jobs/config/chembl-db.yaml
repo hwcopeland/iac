@@ -119,12 +119,18 @@ spec:
                 sleep 2
               done
 
-              # Set root password
-              mysql --socket=/tmp/mysql.sock -u root \
-                -e "ALTER USER 'root'@'localhost' IDENTIFIED BY '$MYSQL_ROOT_PASSWORD'; \
-                    CREATE USER IF NOT EXISTS 'root'@'%' IDENTIFIED BY '$MYSQL_ROOT_PASSWORD'; \
-                    GRANT ALL PRIVILEGES ON *.* TO 'root'@'%' WITH GRANT OPTION; \
-                    FLUSH PRIVILEGES;"
+              # Set root password (try without password first for fresh init,
+              # fall back to existing password for restarts)
+              if mysql --socket=/tmp/mysql.sock -u root -e "SELECT 1" 2>/dev/null; then
+                echo "Setting root password..."
+                mysql --socket=/tmp/mysql.sock -u root \
+                  -e "ALTER USER 'root'@'localhost' IDENTIFIED BY '$MYSQL_ROOT_PASSWORD'; \
+                      CREATE USER IF NOT EXISTS 'root'@'%' IDENTIFIED BY '$MYSQL_ROOT_PASSWORD'; \
+                      GRANT ALL PRIVILEGES ON *.* TO 'root'@'%' WITH GRANT OPTION; \
+                      FLUSH PRIVILEGES;"
+              else
+                echo "Root password already set."
+              fi
 
               # Check if already imported
               TABLE_COUNT=$(mysql --socket=/tmp/mysql.sock -u root -p"$MYSQL_ROOT_PASSWORD" -N \
