@@ -152,7 +152,7 @@ func (h *APIHandler) CreateJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	jobName := fmt.Sprintf("docking-%d", time.Now().Unix())
+	jobName := fmt.Sprintf("docking-%d", time.Now().UnixNano())
 
 	// INSERT workflow row with phase='Running'.
 	_, err = h.db.ExecContext(r.Context(),
