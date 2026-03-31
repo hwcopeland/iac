@@ -15,10 +15,6 @@
 name: E2E Test — Chem Job Cycle
 
 on:
-  workflow_run:
-    workflows: ["Build and Push Chem Images"]
-    types: [completed]
-    branches: [main]
   workflow_dispatch:
 
 env:
