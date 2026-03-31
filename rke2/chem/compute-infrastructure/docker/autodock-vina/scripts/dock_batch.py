@@ -19,6 +19,7 @@ All configuration is via environment variables:
   MYSQL_USER     — MySQL user (default: root)
   MYSQL_PASSWORD — MySQL password (required)
   MYSQL_DATABASE — MySQL database (default: docking)
+  POSE_THRESHOLD — affinity threshold for saving docked poses (default: -7.0)
 """
 
 import json
@@ -131,7 +132,7 @@ def fetch_ligands(cursor, source_db, batch_limit, batch_offset):
 
 
 def run_vina(ligand_pdbqt_path, grid_x, grid_y, grid_z):
-    """Run Vina and return the mode-1 affinity, or None on failure."""
+    """Run Vina and return (mode-1 affinity, docked_output_path), or (None, None) on failure."""
     out_path = os.path.join(DATA_DIR, "docked.pdbqt")
     log_path = os.path.join(DATA_DIR, "docked.log")
 
@@ -156,9 +157,10 @@ def run_vina(ligand_pdbqt_path, grid_x, grid_y, grid_z):
             f"WARNING: Vina failed for {ligand_pdbqt_path}: {exc.stderr.decode(errors='replace')}",
             file=sys.stderr,
         )
-        return None
+        return None, None
 
-    return parse_vina_log(log_path)
+    affinity = parse_vina_log(log_path)
+    return affinity, out_path if affinity is not None else None
 
 
 def parse_vina_log(log_path):
@@ -212,7 +214,7 @@ def main():
                 else:
                     fh.write(pdbqt_text)
 
-            affinity = run_vina(ligand_path, grid_x, grid_y, grid_z)
+            affinity, docked_path = run_vina(ligand_path, grid_x, grid_y, grid_z)
 
             if affinity is None:
                 print(
@@ -221,14 +223,24 @@ def main():
                 )
                 continue
 
+            # Save docked poses (all 9 modes) for top hits only
+            pose_threshold = float(os.environ.get("POSE_THRESHOLD", "-7.0"))
+            docked_pdbqt = None
+            if affinity <= pose_threshold and docked_path and os.path.exists(docked_path):
+                with open(docked_path, "r") as fh:
+                    docked_pdbqt = fh.read()
+
             # Write result to staging table
-            payload = json.dumps({
+            result = {
                 "workflow_name": cfg["workflow_name"],
                 "pdb_id": cfg["pdb_id"],
                 "ligand_id": ligand_id,
                 "compound_id": compound_id,
                 "affinity_kcal_mol": affinity,
-            })
+            }
+            if docked_pdbqt is not None:
+                result["docked_pdbqt"] = docked_pdbqt
+            payload = json.dumps(result)
             cursor.execute(
                 "INSERT INTO staging (job_type, payload) VALUES ('dock', %s)",
                 (payload,),
