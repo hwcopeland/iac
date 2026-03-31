@@ -2,6 +2,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"database/sql"
 	"encoding/base64"
@@ -315,10 +316,14 @@ func (c *DockingJobController) processDockingJob(job DockingJob) {
 		return
 	}
 	receptorJobName := fmt.Sprintf("%s-prepare-receptor", job.Name)
+	receptorStreamCtx, receptorStreamCancel := context.WithCancel(context.Background())
+	go c.streamJobLogs(receptorStreamCtx, receptorJobName)
 	if err := c.waitForJobCompletion(receptorJobName); err != nil {
+		receptorStreamCancel()
 		c.failJob(job.Name, fmt.Sprintf("prepare receptor failed: %v", err))
 		return
 	}
+	receptorStreamCancel()
 
 	// Capture receptor data from pod stdout and store in MySQL.
 	if err := c.captureReceptorData(job.Name, receptorJobName); err != nil {
@@ -357,10 +362,14 @@ func (c *DockingJobController) processDockingJob(job DockingJob) {
 			return
 		}
 		dockJobName := fmt.Sprintf("%s-dock-batch-%d", job.Name, i)
+		dockStreamCtx, dockStreamCancel := context.WithCancel(context.Background())
+		go c.streamJobLogs(dockStreamCtx, dockJobName)
 		if err := c.waitForJobCompletion(dockJobName); err != nil {
+			dockStreamCancel()
 			c.failJob(job.Name, fmt.Sprintf("dock batch %d failed: %v", i, err))
 			return
 		}
+		dockStreamCancel()
 
 		if _, err := c.db.Exec(`UPDATE docking_workflows SET completed_batches = ? WHERE name = ?`, i+1, job.Name); err != nil {
 			log.Printf("[%s] failed to update completed_batches: %v", job.Name, err)
@@ -419,10 +428,14 @@ func (c *DockingJobController) processLigandPrep(req PrepRequest) {
 		}
 
 		jobName := fmt.Sprintf("prep-%s-batch-%d", req.SourceDb, i)
+		prepStreamCtx, prepStreamCancel := context.WithCancel(context.Background())
+		go c.streamJobLogs(prepStreamCtx, jobName)
 		if err := c.waitForJobCompletion(jobName); err != nil {
+			prepStreamCancel()
 			log.Printf("[prep] Prep batch %d failed: %v", i, err)
 			return
 		}
+		prepStreamCancel()
 
 		log.Printf("[prep] Batch %d/%d complete", i+1, batchCount)
 	}
@@ -690,6 +703,61 @@ func (c *DockingJobController) readPodLogs(jobName string) (string, error) {
 		return "", fmt.Errorf("reading logs: %w", err)
 	}
 	return string(buf), nil
+}
+
+// streamJobLogs streams pod logs for a K8s Job to the controller's stdout in real-time.
+// It waits for the job's pod to reach Running phase, then follows the log stream until the
+// pod completes or the context is cancelled. This is best-effort observability — failures
+// are logged as warnings and never block the pipeline.
+func (c *DockingJobController) streamJobLogs(ctx context.Context, jobName string) {
+	// Wait for a Running pod (poll every 2s, give up after 2 minutes).
+	var podName string
+	pollTimeout := time.After(2 * time.Minute)
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+
+	for podName == "" {
+		select {
+		case <-ctx.Done():
+			return
+		case <-pollTimeout:
+			log.Printf("[stream] %s: timed out waiting for pod to start, giving up on log streaming", jobName)
+			return
+		case <-ticker.C:
+			pods, err := c.client.CoreV1().Pods(c.namespace).List(ctx, metav1.ListOptions{
+				LabelSelector: fmt.Sprintf("job-name=%s", jobName),
+			})
+			if err != nil {
+				log.Printf("[stream] %s: warning: failed to list pods: %v", jobName, err)
+				continue
+			}
+			for _, pod := range pods.Items {
+				if pod.Status.Phase == corev1.PodRunning || pod.Status.Phase == corev1.PodSucceeded {
+					podName = pod.Name
+					break
+				}
+			}
+		}
+	}
+
+	log.Printf("[stream] %s: streaming logs from pod %s", jobName, podName)
+
+	stream, err := c.client.CoreV1().Pods(c.namespace).GetLogs(podName, &corev1.PodLogOptions{
+		Follow: true,
+	}).Stream(ctx)
+	if err != nil {
+		log.Printf("[stream] %s: warning: failed to open log stream: %v", jobName, err)
+		return
+	}
+	defer stream.Close()
+
+	scanner := bufio.NewScanner(stream)
+	for scanner.Scan() {
+		log.Printf("[%s] %s", jobName, scanner.Text())
+	}
+	if err := scanner.Err(); err != nil && ctx.Err() == nil {
+		log.Printf("[stream] %s: warning: log stream read error: %v", jobName, err)
+	}
 }
 
 func (c *DockingJobController) waitForJobCompletion(jobName string) error {
