@@ -265,6 +265,13 @@ func (c *DockingJobController) startAPIServer() error {
 			writeError(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
 	})
+	mux.HandleFunc("/api/v1/prep", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			handler.StartPrep(w, r)
+		} else {
+			writeError(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+	})
 	mux.HandleFunc("/health", handler.HealthCheck)
 	mux.HandleFunc("/readyz", handler.ReadinessCheck)
 
@@ -370,6 +377,98 @@ func (c *DockingJobController) processDockingJob(job DockingJob) {
 	}
 
 	log.Printf("[%s] Pipeline complete: %s", job.Name, result)
+}
+
+// processLigandPrep runs sequential batch prep jobs to convert SMILES to PDBQT.
+func (c *DockingJobController) processLigandPrep(req PrepRequest) {
+	log.Printf("[prep] Starting ligand prep: source_db=%s chunk_size=%d image=%s",
+		req.SourceDb, req.ChunkSize, req.Image)
+
+	// Recount unprepared ligands at processing time (may differ from handler check).
+	var unpreparedCount int
+	if err := c.db.QueryRow(
+		`SELECT COUNT(*) FROM ligands WHERE source_db = ? AND pdbqt IS NULL`,
+		req.SourceDb).Scan(&unpreparedCount); err != nil {
+		log.Printf("[prep] Failed to count unprepared ligands: %v", err)
+		return
+	}
+
+	batchCount := int(math.Ceil(float64(unpreparedCount) / float64(req.ChunkSize)))
+	log.Printf("[prep] %d unprepared ligands in %d batch(es)", unpreparedCount, batchCount)
+
+	for i := 0; i < batchCount; i++ {
+		offset := i * req.ChunkSize
+		log.Printf("[prep] Batch %d/%d (offset=%d limit=%d)", i+1, batchCount, offset, req.ChunkSize)
+
+		if err := c.createPrepBatchJob(req.SourceDb, req.Image, i, offset, req.ChunkSize); err != nil {
+			log.Printf("[prep] Failed to create prep batch %d: %v", i, err)
+			return
+		}
+
+		jobName := fmt.Sprintf("prep-%s-batch-%d", req.SourceDb, i)
+		if err := c.waitForJobCompletion(jobName); err != nil {
+			log.Printf("[prep] Prep batch %d failed: %v", i, err)
+			return
+		}
+
+		log.Printf("[prep] Batch %d/%d complete", i+1, batchCount)
+	}
+
+	log.Printf("[prep] All %d batches complete for source_db=%s", batchCount, req.SourceDb)
+}
+
+// createPrepBatchJob creates a K8s Job that runs prep_ligands.py for a ligand batch.
+func (c *DockingJobController) createPrepBatchJob(sourceDb, image string, batchIndex, offset, chunkSize int) error {
+	j := &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: fmt.Sprintf("prep-%s-batch-%d", sourceDb, batchIndex),
+			Labels: map[string]string{
+				"docking.khemia.io/job-type":   "prep-ligands",
+				"docking.khemia.io/parent-job": fmt.Sprintf("prep-%s", sourceDb),
+			},
+		},
+		Spec: batchv1.JobSpec{
+			TTLSecondsAfterFinished: ptrInt32(300),
+			Template: corev1.PodTemplateSpec{
+				Spec: corev1.PodSpec{
+					RestartPolicy:    corev1.RestartPolicyOnFailure,
+					ImagePullSecrets: []corev1.LocalObjectReference{{Name: "zot-pull-secret"}},
+					Containers: []corev1.Container{
+						{
+							Name:            "prep",
+							Image:           image,
+							ImagePullPolicy: corev1.PullAlways,
+							WorkingDir:      WorkDir,
+							Command:         []string{"python3", "/autodock/scripts/prep_ligands.py"},
+							Env: []corev1.EnvVar{
+								{Name: "SOURCE_DB", Value: sourceDb},
+								{Name: "BATCH_OFFSET", Value: fmt.Sprintf("%d", offset)},
+								{Name: "BATCH_LIMIT", Value: fmt.Sprintf("%d", chunkSize)},
+								{Name: "MYSQL_HOST", Value: os.Getenv("MYSQL_HOST")},
+								{Name: "MYSQL_PORT", Value: os.Getenv("MYSQL_PORT")},
+								{Name: "MYSQL_USER", Value: os.Getenv("MYSQL_USER")},
+								{Name: "MYSQL_DATABASE", Value: os.Getenv("MYSQL_DATABASE")},
+								{
+									Name: "MYSQL_PASSWORD",
+									ValueFrom: &corev1.EnvVarSource{
+										SecretKeyRef: &corev1.SecretKeySelector{
+											LocalObjectReference: corev1.LocalObjectReference{Name: "docking-mysql-secret"},
+											Key:                  "root-password",
+										},
+									},
+								},
+							},
+							VolumeMounts: []corev1.VolumeMount{emptyDirMount("scratch", WorkDir)},
+						},
+					},
+					Volumes: []corev1.Volume{emptyDirVolume("scratch")},
+				},
+			},
+		},
+	}
+
+	_, err := c.jobClient.Create(context.TODO(), j, metav1.CreateOptions{})
+	return err
 }
 
 // waitForStagingDrain polls the staging table until no dock rows remain for this workflow,
