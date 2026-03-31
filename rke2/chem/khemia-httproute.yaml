@@ -5,7 +5,7 @@ metadata:
   name: khemia-api
   namespace: chem
 spec:
-  name: khemia.hwcopeland.net
+  name: khemeia.hwcopeland.net
   type: CNAME
   content: hwcopeland.net
   proxied: true
@@ -21,7 +21,7 @@ metadata:
     cert-manager.io/cluster-issuer: cf-issuer
 spec:
   hostnames:
-    - khemia.hwcopeland.net
+    - khemeia.hwcopeland.net
   parentRefs:
     - group: gateway.networking.k8s.io
       kind: Gateway

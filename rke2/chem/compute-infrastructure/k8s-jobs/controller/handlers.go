@@ -23,15 +23,17 @@ type APIHandler struct {
 	client     *kubernetes.Clientset
 	namespace  string
 	controller *DockingJobController
-	db         *sql.DB
+	db         *sql.DB   // docking database
+	qeDb       *sql.DB   // qe database
 }
 
 // NewAPIHandler creates a new API handler
-func NewAPIHandler(client *kubernetes.Clientset, namespace string, controller *DockingJobController, db *sql.DB) *APIHandler {
+func NewAPIHandler(client *kubernetes.Clientset, namespace string, controller *DockingJobController, db, qeDb *sql.DB) *APIHandler {
 	return &APIHandler{
 		client:     client,
 		namespace:  namespace,
 		controller: controller,
+		qeDb:       qeDb,
 		db:         db,
 	}
 }
@@ -508,7 +510,7 @@ func (h *APIHandler) SubmitQEJob(w http.ResponseWriter, r *http.Request) {
 	jobName := fmt.Sprintf("qe-%d", time.Now().UnixNano())
 	submittedBy := UserFromContext(r)
 
-	_, err := h.db.ExecContext(r.Context(),
+	_, err := h.qeDb.ExecContext(r.Context(),
 		`INSERT INTO qe_jobs (name, executable, input_file, num_cpus, memory_mb, image, submitted_by)
 		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		jobName, req.Executable, req.InputFile, req.NumCPUs, req.MemoryMB, req.Image, submittedBy)
@@ -529,7 +531,7 @@ func (h *APIHandler) SubmitQEJob(w http.ResponseWriter, r *http.Request) {
 
 // ListQEJobs handles GET /api/v1/qe/jobs
 func (h *APIHandler) ListQEJobs(w http.ResponseWriter, r *http.Request) {
-	rows, err := h.db.QueryContext(r.Context(),
+	rows, err := h.qeDb.QueryContext(r.Context(),
 		`SELECT id, name, status, executable, total_energy, wall_time_sec, created_at, completed_at
 		   FROM qe_jobs ORDER BY created_at DESC`)
 	if err != nil {
@@ -592,7 +594,7 @@ func (h *APIHandler) GetQEJob(w http.ResponseWriter, r *http.Request) {
 	var wallTime sql.NullFloat64
 	var startedAt, completedAt sql.NullTime
 
-	err := h.db.QueryRowContext(r.Context(),
+	err := h.qeDb.QueryRowContext(r.Context(),
 		`SELECT id, name, status, executable, input_file, output_file, error_output,
 		        total_energy, wall_time_sec, num_cpus, memory_mb, image,
 		        created_at, started_at, completed_at
@@ -656,7 +658,7 @@ func (h *APIHandler) DeleteQEJob(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Delete from MySQL.
-	if _, err := h.db.ExecContext(r.Context(),
+	if _, err := h.qeDb.ExecContext(r.Context(),
 		`DELETE FROM qe_jobs WHERE name = ?`, jobName); err != nil {
 		log.Printf("[DeleteQEJob] Failed to delete QE job %s from DB: %v", jobName, err)
 	}
@@ -694,7 +696,7 @@ func (h *APIHandler) UploadPseudopotential(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	_, err = h.db.ExecContext(r.Context(),
+	_, err = h.qeDb.ExecContext(r.Context(),
 		`INSERT INTO pseudopotentials (filename, content, element, functional, source_url)
 		 VALUES (?, ?, ?, ?, ?)
 		 ON DUPLICATE KEY UPDATE content = VALUES(content), functional = VALUES(functional)`,
@@ -713,7 +715,7 @@ func (h *APIHandler) UploadPseudopotential(w http.ResponseWriter, r *http.Reques
 
 // ListPseudopotentials handles GET /api/v1/qe/pseudopotentials
 func (h *APIHandler) ListPseudopotentials(w http.ResponseWriter, r *http.Request) {
-	rows, err := h.db.QueryContext(r.Context(),
+	rows, err := h.qeDb.QueryContext(r.Context(),
 		`SELECT filename, element, functional, LENGTH(content) as size, created_at FROM pseudopotentials ORDER BY element, filename`)
 	if err != nil {
 		writeError(w, fmt.Sprintf("query error: %v", err), http.StatusInternalServerError)
