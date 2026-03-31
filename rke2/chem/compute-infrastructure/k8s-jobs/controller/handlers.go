@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math"
 	"net/http"
 	"strings"
 	"time"
@@ -431,6 +432,69 @@ func (h *APIHandler) ImportLigands(w http.ResponseWriter, r *http.Request) {
 // base64Decode decodes a base64 string.
 func base64Decode(s string) ([]byte, error) {
 	return base64.StdEncoding.DecodeString(s)
+}
+
+// PrepRequest represents a request to prep ligands for docking.
+type PrepRequest struct {
+	SourceDb  string `json:"source_db"`
+	ChunkSize int    `json:"chunk_size,omitempty"` // defaults to 500
+	Image     string `json:"image,omitempty"`
+}
+
+// StartPrep handles POST /api/v1/prep
+// Counts unprepared ligands for the given source_db, then launches batch prep jobs.
+func (h *APIHandler) StartPrep(w http.ResponseWriter, r *http.Request) {
+	var req PrepRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, fmt.Sprintf("invalid request: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	if req.SourceDb == "" {
+		writeError(w, "source_db is required", http.StatusBadRequest)
+		return
+	}
+
+	// Count unprepared ligands (those without PDBQT data).
+	var unpreparedCount int
+	err := h.db.QueryRowContext(r.Context(),
+		`SELECT COUNT(*) FROM ligands WHERE source_db = ? AND pdbqt IS NULL`,
+		req.SourceDb).Scan(&unpreparedCount)
+	if err != nil {
+		writeError(w, fmt.Sprintf("failed to count unprepared ligands: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	if unpreparedCount == 0 {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"message": "all ligands already prepped",
+			"count":   0,
+		})
+		return
+	}
+
+	// Apply defaults.
+	if req.ChunkSize == 0 {
+		req.ChunkSize = 500
+	}
+	if req.Image == "" {
+		req.Image = DefaultImage
+	}
+
+	batchCount := int(math.Ceil(float64(unpreparedCount) / float64(req.ChunkSize)))
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusAccepted)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"message":    "prep started",
+		"source_db":  req.SourceDb,
+		"unprepared": unpreparedCount,
+		"batches":    batchCount,
+	})
+
+	go h.controller.processLigandPrep(req)
 }
 
 // ReadinessCheck handles GET /readyz
