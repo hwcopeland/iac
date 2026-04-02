@@ -4,32 +4,16 @@ You'll need a terminal with `curl` and `jq` installed.
 
 ---
 
-## Step 1: Sign in with GitHub
+## Step 1: Get your API token
 
-Go to **https://auth.hwcopeland.net** and click **Sign in with GitHub**. That's it — your account is created automatically.
-
-After you sign in, let Hampton know your username so he can approve your access. Once approved, he'll send you two things:
-
-- **Client ID** (e.g., `docking-controller`)
-- **Client Secret** (a long random string)
-
-Keep the client secret private. If you lose it, ask Hampton for a new one.
+Ask Hampton for an API token. He'll generate one for you and send it over. Tokens are time-limited (typically 72 hours) — when yours expires, ask for a new one.
 
 ---
 
-## Step 2: Get a token
-
-Every time you want to use the API, grab a fresh token (they last 1 hour):
+## Step 2: Set up your token
 
 ```bash
-export CLIENT_ID="docking-controller"
-export CLIENT_SECRET="paste-your-secret-here"
-
-export TOKEN=$(curl -sf -X POST https://auth.hwcopeland.net/application/o/token/ \
-  -d "grant_type=client_credentials" \
-  -d "client_id=$CLIENT_ID" \
-  -d "client_secret=$CLIENT_SECRET" \
-  -d "scope=openid" | jq -r '.access_token')
+export TOKEN="paste-your-token-here"
 ```
 
 Test it:
