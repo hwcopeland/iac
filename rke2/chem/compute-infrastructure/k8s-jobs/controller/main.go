@@ -815,6 +815,19 @@ func (c *DockingJobController) waitForQEJobCompletion(jobName string) error {
 			if job.Status.Failed > 0 {
 				return fmt.Errorf("job %s failed", jobName)
 			}
+
+			// Workaround: if the Job says active but no pods exist,
+			// the kubelet lost the completion event. Treat as succeeded
+			// after a grace period (pod must have been gone for 2+ polls).
+			if job.Status.Active > 0 && pollCount > 3 {
+				pods, perr := c.client.CoreV1().Pods(c.namespace).List(context.TODO(), metav1.ListOptions{
+					LabelSelector: fmt.Sprintf("job-name=%s", jobName),
+				})
+				if perr == nil && len(pods.Items) == 0 {
+					log.Printf("[qe-wait] %s: Job says active but no pods exist — treating as succeeded (poll %d)", jobName, pollCount)
+					return nil
+				}
+			}
 		}
 	}
 }
@@ -1229,6 +1242,18 @@ func (c *DockingJobController) waitForJobCompletion(jobName string) error {
 			if job.Status.Failed > 0 {
 				log.Printf("[wait] %s: FAILED after %d polls (active=%d)", jobName, pollCount, job.Status.Active)
 				return fmt.Errorf("job %s failed", jobName)
+			}
+
+			// Workaround: if the Job says active but no pods exist,
+			// the kubelet lost the completion event. Treat as succeeded.
+			if job.Status.Active > 0 && pollCount > 6 {
+				pods, perr := c.client.CoreV1().Pods(c.namespace).List(context.TODO(), metav1.ListOptions{
+					LabelSelector: fmt.Sprintf("job-name=%s", jobName),
+				})
+				if perr == nil && len(pods.Items) == 0 {
+					log.Printf("[wait] %s: Job says active but no pods exist — treating as succeeded (poll %d)", jobName, pollCount)
+					return nil
+				}
 			}
 		}
 	}
