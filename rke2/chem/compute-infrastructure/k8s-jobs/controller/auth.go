@@ -3,6 +3,9 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -31,11 +34,13 @@ func UserFromContext(r *http.Request) string {
 }
 
 // AuthMiddleware validates JWT tokens against an OIDC provider's JWKS endpoint.
-// Requests from internal pod/service CIDRs bypass authentication entirely.
+// It also supports static API tokens stored in MySQL. Requests from internal
+// pod/service CIDRs bypass authentication entirely.
 type AuthMiddleware struct {
 	jwks      keyfunc.Keyfunc
 	issuerURL string
 	cidrs     []*net.IPNet
+	db        *sql.DB // for static API token lookups
 
 	mu     sync.RWMutex
 	cancel context.CancelFunc
@@ -101,6 +106,7 @@ func NewAuthMiddleware(issuerURL string) (*AuthMiddleware, error) {
 		issuerURL: issuerURL,
 		cidrs:     cidrs,
 		cancel:    cancel,
+		// db is set after construction via SetDB.
 	}
 
 	// Background JWKS refresh every hour.
@@ -207,7 +213,14 @@ func (a *AuthMiddleware) Wrap(next http.HandlerFunc) http.HandlerFunc {
 		}
 		tokenStr := parts[1]
 
-		// Validate the JWT.
+		// Check static API tokens first (fast path).
+		if user := a.checkStaticToken(tokenStr); user != "" {
+			ctx := context.WithValue(r.Context(), userContextKey, user)
+			next(w, r.WithContext(ctx))
+			return
+		}
+
+		// Fall back to JWT validation.
 		a.mu.RLock()
 		jwks := a.jwks
 		a.mu.RUnlock()
@@ -290,4 +303,50 @@ func writeAuthError(w http.ResponseWriter, msg string, code int) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
 	json.NewEncoder(w).Encode(map[string]string{"error": msg})
+}
+
+// SetDB attaches a database connection for static API token lookups.
+func (a *AuthMiddleware) SetDB(db *sql.DB) {
+	a.db = db
+}
+
+// checkStaticToken looks up a bearer token in the api_tokens table.
+// Returns the username if the token is valid and not expired, or "" if not found/expired.
+func (a *AuthMiddleware) checkStaticToken(token string) string {
+	if a.db == nil {
+		return ""
+	}
+	var username string
+	err := a.db.QueryRow(
+		"SELECT username FROM api_tokens WHERE token = ? AND expires_at > NOW()",
+		token,
+	).Scan(&username)
+	if err != nil {
+		return ""
+	}
+	return username
+}
+
+// generateToken creates a cryptographically random 32-byte hex token.
+func generateToken() (string, error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
+}
+
+// EnsureAPITokenSchema creates the api_tokens table if it doesn't exist.
+func EnsureAPITokenSchema(db *sql.DB) error {
+	_, err := db.Exec(`CREATE TABLE IF NOT EXISTS api_tokens (
+		id         INT AUTO_INCREMENT PRIMARY KEY,
+		token      VARCHAR(64) NOT NULL UNIQUE,
+		username   VARCHAR(255) NOT NULL,
+		created_by VARCHAR(255) NOT NULL DEFAULT 'admin',
+		created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		expires_at TIMESTAMP NOT NULL,
+		INDEX idx_token (token),
+		INDEX idx_expires (expires_at)
+	)`)
+	return err
 }

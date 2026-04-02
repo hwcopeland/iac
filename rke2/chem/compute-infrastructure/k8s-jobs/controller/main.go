@@ -339,12 +339,21 @@ func (c *DockingJobController) startAPIServer() error {
 		if err != nil {
 			return fmt.Errorf("initializing auth middleware: %w", err)
 		}
+		auth.SetDB(c.db)
+		if err := EnsureAPITokenSchema(c.db); err != nil {
+			return fmt.Errorf("creating api_tokens table: %w", err)
+		}
 		wrap = auth.Wrap
 		log.Println("JWT authentication enabled")
 	} else {
 		noop := noopAuthMiddleware()
 		wrap = noop.WrapNoop
 		log.Println("JWT authentication disabled (AUTH_ENABLED != \"true\")")
+	}
+
+	// Always create api_tokens table so token management works regardless of auth mode.
+	if err := EnsureAPITokenSchema(c.db); err != nil {
+		log.Printf("Warning: failed to create api_tokens table: %v", err)
 	}
 
 	mux := http.NewServeMux()
@@ -427,6 +436,25 @@ func (c *DockingJobController) startAPIServer() error {
 			writeError(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
 	}))
+
+	// Token management — admin only (no external auth, internal IPs only).
+	mux.HandleFunc("/api/v1/tokens", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPost:
+			handler.CreateAPIToken(w, r)
+		case http.MethodGet:
+			handler.ListAPITokens(w, r)
+		default:
+			writeError(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+	})
+	mux.HandleFunc("/api/v1/tokens/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodDelete {
+			handler.RevokeAPIToken(w, r)
+		} else {
+			writeError(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+	})
 
 	// Health/readiness endpoints — always unauthenticated.
 	mux.HandleFunc("/health", handler.HealthCheck)

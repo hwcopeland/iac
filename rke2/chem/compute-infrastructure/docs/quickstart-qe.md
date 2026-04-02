@@ -8,25 +8,15 @@ https://khemeia.hwcopeland.net/api/v1/qe/
 
 ## Authentication
 
-All external API requests require a JWT token from Authentik. Internal cluster requests (pods, E2E tests) are exempt.
+All external API requests require an API token. Internal cluster requests (pods, E2E tests) are exempt.
 
-### Get a Token
+### Set your token
+
+Ask Hampton for an API token, then export it:
 
 ```bash
-# Client credentials grant (no browser needed)
-TOKEN=$(curl -sf -X POST https://auth.hwcopeland.net/application/o/token/ \
-  -d "grant_type=client_credentials" \
-  -d "client_id=docking-controller" \
-  -d "client_secret=<your-client-secret>" \
-  -d "scope=openid" | jq -r '.access_token')
-
-# Token is valid for 1 hour
-echo $TOKEN
+export TOKEN="paste-your-token-here"
 ```
-
-Your client secret is in Bitwarden under `docking-controller-oidc` in the `k8s-secrets` folder.
-
-### Use the Token
 
 Add it to every request:
 
@@ -161,4 +151,4 @@ The `executable` field accepts any QE binary:
 
 ## Job Ownership
 
-All jobs are tagged with your Authentik username (`submitted_by` field). You can see this in the job details.
+All jobs are tagged with your username (`submitted_by` field). You can see this in the job details.

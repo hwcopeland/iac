@@ -812,6 +812,110 @@ func (h *APIHandler) StartPrep(w http.ResponseWriter, r *http.Request) {
 	go h.controller.processLigandPrep(req)
 }
 
+// CreateAPIToken handles POST /api/v1/tokens — generates a new API token.
+func (h *APIHandler) CreateAPIToken(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Username      string `json:"username"`
+		ExpiresInHours int   `json:"expires_in_hours"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, "invalid JSON body", http.StatusBadRequest)
+		return
+	}
+	if req.Username == "" {
+		writeError(w, "username is required", http.StatusBadRequest)
+		return
+	}
+	if req.ExpiresInHours <= 0 {
+		req.ExpiresInHours = 72 // default 72 hours
+	}
+
+	token, err := generateToken()
+	if err != nil {
+		writeError(w, "failed to generate token", http.StatusInternalServerError)
+		return
+	}
+
+	expiresAt := time.Now().Add(time.Duration(req.ExpiresInHours) * time.Hour)
+	_, err = h.db.Exec(
+		"INSERT INTO api_tokens (token, username, expires_at) VALUES (?, ?, ?)",
+		token, req.Username, expiresAt,
+	)
+	if err != nil {
+		log.Printf("[CreateAPIToken] DB error: %v", err)
+		writeError(w, "failed to store token", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"token":      token,
+		"username":   req.Username,
+		"expires_at": expiresAt.UTC().Format(time.RFC3339),
+	})
+}
+
+// ListAPITokens handles GET /api/v1/tokens — lists active tokens (token value redacted).
+func (h *APIHandler) ListAPITokens(w http.ResponseWriter, r *http.Request) {
+	rows, err := h.db.Query(
+		"SELECT id, username, created_at, expires_at FROM api_tokens WHERE expires_at > NOW() ORDER BY created_at DESC",
+	)
+	if err != nil {
+		writeError(w, "failed to list tokens", http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	type tokenEntry struct {
+		ID        int    `json:"id"`
+		Username  string `json:"username"`
+		CreatedAt string `json:"created_at"`
+		ExpiresAt string `json:"expires_at"`
+	}
+	var tokens []tokenEntry
+	for rows.Next() {
+		var t tokenEntry
+		var createdAt, expiresAt time.Time
+		if err := rows.Scan(&t.ID, &t.Username, &createdAt, &expiresAt); err != nil {
+			continue
+		}
+		t.CreatedAt = createdAt.UTC().Format(time.RFC3339)
+		t.ExpiresAt = expiresAt.UTC().Format(time.RFC3339)
+		tokens = append(tokens, t)
+	}
+	if tokens == nil {
+		tokens = []tokenEntry{}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"tokens": tokens})
+}
+
+// RevokeAPIToken handles DELETE /api/v1/tokens/{id} — revokes a token by ID.
+func (h *APIHandler) RevokeAPIToken(w http.ResponseWriter, r *http.Request) {
+	// Extract token ID from path: /api/v1/tokens/123
+	path := strings.TrimPrefix(r.URL.Path, "/api/v1/tokens/")
+	if path == "" {
+		writeError(w, "token id required", http.StatusBadRequest)
+		return
+	}
+
+	result, err := h.db.Exec("DELETE FROM api_tokens WHERE id = ?", path)
+	if err != nil {
+		writeError(w, "failed to revoke token", http.StatusInternalServerError)
+		return
+	}
+	affected, _ := result.RowsAffected()
+	if affected == 0 {
+		writeError(w, "token not found", http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "revoked"})
+}
+
 // ReadinessCheck handles GET /readyz
 func (h *APIHandler) ReadinessCheck(w http.ResponseWriter, r *http.Request) {
 	if err := h.db.PingContext(r.Context()); err != nil {
