@@ -193,8 +193,10 @@ func (a *AuthMiddleware) Shutdown() {
 // It checks for internal IP exemption first, then validates the JWT.
 func (a *AuthMiddleware) Wrap(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		// Skip auth for internal IPs.
-		if a.isInternalIP(r.RemoteAddr) {
+		// Skip auth for internal IPs, but only if the request was not
+		// forwarded by the ingress controller. When X-Forwarded-For is set,
+		// the request came from an external client through the ingress.
+		if r.Header.Get("X-Forwarded-For") == "" && a.isInternalIP(r.RemoteAddr) {
 			next(w, r)
 			return
 		}
