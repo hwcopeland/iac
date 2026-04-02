@@ -101,6 +101,12 @@ func NewAuthMiddleware(issuerURL string) (*AuthMiddleware, error) {
 		"::1/128",      // IPv6 loopback
 	})
 
+	// Use the issuer from the discovery document (not our input) since
+	// that's exactly what Authentik puts in the JWT's iss claim.
+	if disc.Issuer != "" {
+		issuerURL = disc.Issuer
+	}
+
 	am := &AuthMiddleware{
 		jwks:      jwks,
 		issuerURL: issuerURL,
