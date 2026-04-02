@@ -703,8 +703,12 @@ for pp in $(grep -i '\.UPF' input.in | awk '{print $NF}'); do \
   curl -sfL "https://www.quantum-espresso.org/upf_files/$pp" -o "$pp" 2>/dev/null || \
   echo "WARNING: could not download $pp"; \
 done && \
-mpirun --allow-run-as-root -np %d %s -in input.in 2>&1`,
-									numCPUs, executable),
+if [ %d -gt 1 ]; then \
+  mpirun --allow-run-as-root -np %d %s -in input.in 2>&1 || true; \
+else \
+  %s -in input.in 2>&1; \
+fi`,
+									numCPUs, numCPUs, executable, executable),
 							},
 							Resources: corev1.ResourceRequirements{
 								Requests: corev1.ResourceList{
