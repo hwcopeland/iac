@@ -1,0 +1,16 @@
+/**
+ * Copyright (c) 2018-2025 mol* contributors, licensed under MIT, See LICENSE file for more info.
+ *
+ * @author David Sehnal <david.sehnal@gmail.com>
+ * @author Alexander Rose <alexander.rose@weirdbyte.de>
+ * @author Ventura Rivera <venturaxrivera@gmail.com>
+ */
+import { CreateVolumeStreamingBehavior } from '../mol-plugin/behavior/dynamic/volume-streaming/transformers.js';
+import { DefaultPluginSpec } from '../mol-plugin/spec.js';
+import { VolumeStreamingCustomControls } from './custom/volume.js';
+export const DefaultPluginUISpec = () => ({
+    ...DefaultPluginSpec(),
+    customParamEditors: [
+        [CreateVolumeStreamingBehavior, VolumeStreamingCustomControls]
+    ],
+});

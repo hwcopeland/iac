@@ -1,27 +1,27 @@
-# Deployment for the Docking Job Controller
+# Deployment for the Khemeia Controller
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: docking-controller
+  name: khemeia-controller
   namespace: chem
   labels:
-    app.kubernetes.io/name: docking-controller
+    app.kubernetes.io/name: khemeia-controller
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app.kubernetes.io/name: docking-controller
+      app.kubernetes.io/name: khemeia-controller
   template:
     metadata:
       labels:
-        app.kubernetes.io/name: docking-controller
+        app.kubernetes.io/name: khemeia-controller
     spec:
-      serviceAccountName: docking-controller
+      serviceAccountName: khemeia-controller
       imagePullSecrets:
         - name: zot-pull-secret
       containers:
         - name: controller
-          image: zot.hwcopeland.net/chem/docking-controller:build-000048-abd6886 # {"$imagepolicy": "chem:docking-controller"}
+          image: zot.hwcopeland.net/chem/khemeia-controller:build-000048-abd6886 # {"$imagepolicy": "chem:khemeia-controller"}
           imagePullPolicy: Always
           ports:
             - containerPort: 8080
@@ -46,7 +46,7 @@ spec:
             - name: AUTH_ENABLED
               value: "true"
             - name: OIDC_ISSUER_URL
-              value: "https://auth.hwcopeland.net/application/o/docking-controller/"
+              value: "https://auth.hwcopeland.net/application/o/khemeia-controller/"
           resources:
             requests:
               cpu: 100m
@@ -67,14 +67,14 @@ spec:
             initialDelaySeconds: 10
             periodSeconds: 5
 ---
-# Service for the Docking Job Controller
+# Service for the Khemeia Controller
 apiVersion: v1
 kind: Service
 metadata:
-  name: docking-controller
+  name: khemeia-controller
   namespace: chem
   labels:
-    app.kubernetes.io/name: docking-controller
+    app.kubernetes.io/name: khemeia-controller
 spec:
   type: LoadBalancer
   ports:
@@ -83,4 +83,4 @@ spec:
       protocol: TCP
       name: http
   selector:
-    app.kubernetes.io/name: docking-controller
+    app.kubernetes.io/name: khemeia-controller

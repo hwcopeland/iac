@@ -1,0 +1,49 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.CustomColorThemeProvider = void 0;
+exports.CustomColorTheme = CustomColorTheme;
+const location_iterator_1 = require("../../mol-geo/util/location-iterator.js");
+const linear_algebra_1 = require("../../mol-math/linear-algebra.js");
+const color_1 = require("../../mol-theme/color.js");
+const categories_1 = require("../../mol-theme/color/categories.js");
+const names_1 = require("../../mol-util/color/names.js");
+function CustomColorTheme(ctx, props) {
+    var _a;
+    const { radius, center } = (_a = ctx.structure) === null || _a === void 0 ? void 0 : _a.boundary.sphere;
+    const radiusSq = Math.max(radius * radius, 0.001);
+    const scale = color_1.ColorTheme.PaletteScale;
+    return {
+        factory: CustomColorTheme,
+        granularity: 'vertex',
+        color: location => {
+            if (!(0, location_iterator_1.isPositionLocation)(location))
+                return names_1.ColorNames.black;
+            const dist = linear_algebra_1.Vec3.squaredDistance(location.position, center);
+            const t = Math.min(dist / radiusSq, 1);
+            return ((t * scale) | 0);
+        },
+        palette: {
+            filter: 'nearest',
+            colors: [
+                names_1.ColorNames.red,
+                names_1.ColorNames.pink,
+                names_1.ColorNames.violet,
+                names_1.ColorNames.orange,
+                names_1.ColorNames.yellow,
+                names_1.ColorNames.green,
+                names_1.ColorNames.blue
+            ]
+        },
+        props: props,
+        description: '',
+    };
+}
+exports.CustomColorThemeProvider = {
+    name: 'basic-wrapper-custom-color-theme',
+    label: 'Custom Color Theme',
+    category: categories_1.ColorThemeCategory.Misc,
+    factory: CustomColorTheme,
+    getParams: () => ({}),
+    defaultValues: {},
+    isApplicable: (ctx) => true,
+};
