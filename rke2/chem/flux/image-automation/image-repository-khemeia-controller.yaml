@@ -1,0 +1,11 @@
+---
+apiVersion: image.toolkit.fluxcd.io/v1beta2
+kind: ImageRepository
+metadata:
+  name: khemeia-controller
+  namespace: chem
+spec:
+  image: zot.hwcopeland.net/chem/khemeia-controller
+  interval: 5m
+  secretRef:
+    name: zot-pull-secret

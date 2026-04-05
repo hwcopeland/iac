@@ -21,7 +21,7 @@ spec:
         - name: zot-pull-secret
       containers:
         - name: controller
-          image: zot.hwcopeland.net/chem/khemeia-controller:build-000048-abd6886 # {"$imagepolicy": "chem:khemeia-controller"}
+          image: zot.hwcopeland.net/chem/khemeia-controller:latest
           imagePullPolicy: Always
           ports:
             - containerPort: 8080
@@ -30,6 +30,8 @@ spec:
           env:
             - name: NAMESPACE
               value: "chem"
+            - name: PLUGINS_DIR
+              value: "/app/plugins"
             - name: MYSQL_HOST
               value: "docking-mysql.chem.svc.cluster.local"
             - name: MYSQL_PORT
@@ -44,9 +46,10 @@ spec:
                   name: docking-mysql-secret
                   key: root-password
             - name: AUTH_ENABLED
-              value: "true"
-            - name: OIDC_ISSUER_URL
-              value: "https://auth.hwcopeland.net/application/o/khemeia-controller/"
+              value: "false"
+          volumeMounts:
+            - name: plugins
+              mountPath: /app/plugins
           resources:
             requests:
               cpu: 100m
@@ -66,6 +69,10 @@ spec:
               port: 8080
             initialDelaySeconds: 10
             periodSeconds: 5
+      volumes:
+        - name: plugins
+          configMap:
+            name: khemeia-plugins
 ---
 # Service for the Khemeia Controller
 apiVersion: v1

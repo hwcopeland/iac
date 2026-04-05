@@ -82,10 +82,13 @@ func TestLoadPluginsEmptyDir(t *testing.T) {
 	}
 }
 
-func TestLoadPluginsBadDir(t *testing.T) {
-	_, err := LoadPlugins("/nonexistent/path")
-	if err == nil {
-		t.Error("expected error for nonexistent directory")
+func TestLoadPluginsMissingDir(t *testing.T) {
+	plugins, err := LoadPlugins("/nonexistent/path")
+	if err != nil {
+		t.Errorf("expected nil error for missing dir, got: %v", err)
+	}
+	if len(plugins) != 0 {
+		t.Errorf("expected 0 plugins, got %d", len(plugins))
 	}
 }
 
