@@ -1,0 +1,25 @@
+---
+# Webhook receiver for triggering Flux reconciliation from CI.
+# The E2E test calls this after image build to skip the 5-minute poll wait.
+apiVersion: notification.toolkit.fluxcd.io/v1
+kind: Receiver
+metadata:
+  name: chem-image-update
+  namespace: tooling
+spec:
+  type: generic
+  secretRef:
+    name: flux-webhook-token
+  resources:
+    - kind: ImageRepository
+      name: docking-controller
+      namespace: chem
+    - kind: ImageRepository
+      name: result-writer
+      namespace: chem
+    - kind: ImageRepository
+      name: autodock-vina
+      namespace: chem
+    - kind: Kustomization
+      name: chem
+      namespace: chem
