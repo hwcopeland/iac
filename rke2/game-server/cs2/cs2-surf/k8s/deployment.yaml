@@ -64,7 +64,7 @@ spec:
               memory: 128Mi
       containers:
         - name: cs2-surf-server
-          image: 10.44.0.6:5000/cs2-surf-server:latest
+          image: zot.hwcopeland.net/game-server/cs2-surf-server:latest
           imagePullPolicy: Always
           ports:
             - containerPort: 27015
