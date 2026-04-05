@@ -2,6 +2,7 @@ apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources:
   - rbac.yaml
+  - plugins-configmap.yaml
   - api-deployment.yaml
   - result-writer.yaml
   - mysql.yaml

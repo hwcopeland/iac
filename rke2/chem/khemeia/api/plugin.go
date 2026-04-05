@@ -200,6 +200,9 @@ func (p *Plugin) ParseOutput(text string) map[string]interface{} {
 func LoadPlugins(dir string) ([]Plugin, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil // No plugins directory — start with zero plugins
+		}
 		return nil, fmt.Errorf("reading plugins directory %s: %w", dir, err)
 	}
 
