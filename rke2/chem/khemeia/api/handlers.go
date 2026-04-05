@@ -1,7 +1,9 @@
-// Package main provides HTTP handlers for the docking job API
+// Package main provides HTTP handlers for infrastructure endpoints.
+// Plugin-specific handlers (submit, list, get, delete) are in handlers_generic.go.
 package main
 
 import (
+	"context"
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
@@ -9,366 +11,42 @@ import (
 	"log"
 	"math"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
-	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 )
 
-// APIHandler handles HTTP requests for docking jobs
+// APIHandler handles HTTP requests for the Khemeia API.
 type APIHandler struct {
 	client     *kubernetes.Clientset
 	namespace  string
-	controller *DockingJobController
-	db         *sql.DB   // docking database
-	qeDb       *sql.DB   // qe database
+	controller *Controller
+	pluginDBs  map[string]*sql.DB
 }
 
-// NewAPIHandler creates a new API handler
-func NewAPIHandler(client *kubernetes.Clientset, namespace string, controller *DockingJobController, db, qeDb *sql.DB) *APIHandler {
+// NewAPIHandler creates a new API handler.
+func NewAPIHandler(client *kubernetes.Clientset, namespace string, controller *Controller, pluginDBs map[string]*sql.DB) *APIHandler {
 	return &APIHandler{
 		client:     client,
 		namespace:  namespace,
 		controller: controller,
-		qeDb:       qeDb,
-		db:         db,
+		pluginDBs:  pluginDBs,
 	}
 }
 
-// DockingJobRequest represents a request to create a new docking job
-type DockingJobRequest struct {
-	PDBID            string `json:"pdbid"`
-	LigandDb         string `json:"ligand_db"`
-	NativeLigand     string `json:"native_ligand"`
-	LigandsChunkSize int    `json:"ligands_chunk_size"`
-	Image            string `json:"image"`
-}
-
-// DockingJobResponse represents a response containing docking job information
-type DockingJobResponse struct {
-	Name             string     `json:"name"`
-	PDBID            string     `json:"pdbid"`
-	LigandDb         string     `json:"ligand_db"`
-	Status           string     `json:"status"`
-	BatchCount       int        `json:"batch_count"`
-	CompletedBatches int        `json:"completed_batches"`
-	Message          string     `json:"message,omitempty"`
-	CreatedAt        time.Time  `json:"created_at"`
-	StartTime        *time.Time `json:"start_time,omitempty"`
-	CompletionTime   *time.Time `json:"completion_time,omitempty"`
-}
-
-// WorkflowListItem represents a single workflow in the list response
-type WorkflowListItem struct {
-	Name             string    `json:"name"`
-	Phase            string    `json:"phase"`
-	PDBID            string    `json:"pdbid"`
-	SourceDb         string    `json:"source_db"`
-	BatchCount       int       `json:"batch_count"`
-	CompletedBatches int       `json:"completed_batches"`
-	CreatedAt        time.Time `json:"created_at"`
-}
-
-// writeError writes a JSON error response
+// writeError writes a JSON error response.
 func writeError(w http.ResponseWriter, msg string, code int) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
 	json.NewEncoder(w).Encode(map[string]string{"error": msg})
 }
 
-// ListJobs handles GET /api/v1/dockingjobs
-func (h *APIHandler) ListJobs(w http.ResponseWriter, r *http.Request) {
-	rows, err := h.db.QueryContext(r.Context(),
-		`SELECT name, phase, pdbid, source_db, batch_count, completed_batches, created_at
-		   FROM docking_workflows ORDER BY created_at DESC`)
-	if err != nil {
-		writeError(w, fmt.Sprintf("failed to list workflows: %v", err), http.StatusInternalServerError)
-		return
-	}
-	defer rows.Close()
-
-	var workflows []WorkflowListItem
-	for rows.Next() {
-		var wf WorkflowListItem
-		if err := rows.Scan(&wf.Name, &wf.Phase, &wf.PDBID, &wf.SourceDb,
-			&wf.BatchCount, &wf.CompletedBatches, &wf.CreatedAt); err != nil {
-			writeError(w, fmt.Sprintf("failed to scan workflow: %v", err), http.StatusInternalServerError)
-			return
-		}
-		workflows = append(workflows, wf)
-	}
-	if err := rows.Err(); err != nil {
-		writeError(w, fmt.Sprintf("failed to iterate workflows: %v", err), http.StatusInternalServerError)
-		return
-	}
-
-	// Return empty array instead of null when no workflows exist.
-	if workflows == nil {
-		workflows = []WorkflowListItem{}
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"workflows": workflows,
-		"count":     len(workflows),
-	})
-}
-
-// CreateJob handles POST /api/v1/dockingjobs
-func (h *APIHandler) CreateJob(w http.ResponseWriter, r *http.Request) {
-	var req DockingJobRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, fmt.Sprintf("invalid request: %v", err), http.StatusBadRequest)
-		return
-	}
-
-	if req.LigandDb == "" {
-		writeError(w, "ligand_db is required", http.StatusBadRequest)
-		return
-	}
-	if req.PDBID == "" {
-		req.PDBID = DefaultPDBID
-	}
-	if req.NativeLigand == "" {
-		req.NativeLigand = DefaultNativeLigand
-	}
-	if req.Image == "" {
-		req.Image = DefaultImage
-	}
-	if req.LigandsChunkSize == 0 {
-		req.LigandsChunkSize = DefaultLigandsChunkSize
-	}
-
-	// Validate that ligands exist for the given source_db.
-	var ligandCount int
-	err := h.db.QueryRowContext(r.Context(),
-		`SELECT COUNT(*) FROM ligands WHERE source_db = ?`, req.LigandDb).Scan(&ligandCount)
-	if err != nil {
-		writeError(w, fmt.Sprintf("failed to check ligands: %v", err), http.StatusInternalServerError)
-		return
-	}
-	if ligandCount == 0 {
-		writeError(w, fmt.Sprintf("no ligands found for source_db '%s'", req.LigandDb), http.StatusBadRequest)
-		return
-	}
-
-	jobName := fmt.Sprintf("docking-%d", time.Now().UnixNano())
-	submittedBy := UserFromContext(r)
-
-	// INSERT workflow row with phase='Running'.
-	_, err = h.db.ExecContext(r.Context(),
-		`INSERT INTO docking_workflows (name, phase, pdbid, source_db, native_ligand, chunk_size, image, submitted_by)
-		 VALUES (?, 'Running', ?, ?, ?, ?, ?, ?)`,
-		jobName, req.PDBID, req.LigandDb, req.NativeLigand, req.LigandsChunkSize, req.Image, submittedBy)
-	if err != nil {
-		writeError(w, fmt.Sprintf("failed to create workflow: %v", err), http.StatusInternalServerError)
-		return
-	}
-
-	job := DockingJob{
-		Name: jobName,
-		Spec: DockingJobSpec{
-			PDBID:            req.PDBID,
-			LigandDb:         req.LigandDb,
-			NativeLigand:     req.NativeLigand,
-			LigandsChunkSize: req.LigandsChunkSize,
-			Image:            req.Image,
-		},
-		Status: DockingJobStatus{Phase: "Running"},
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusAccepted)
-	json.NewEncoder(w).Encode(DockingJobResponse{
-		Name:      jobName,
-		PDBID:     req.PDBID,
-		LigandDb:  req.LigandDb,
-		Status:    "Running",
-		CreatedAt: time.Now(),
-	})
-
-	go h.controller.processDockingJob(job)
-}
-
-// GetJob handles GET /api/v1/dockingjobs/{name}
-func (h *APIHandler) GetJob(w http.ResponseWriter, r *http.Request) {
-	jobName := strings.TrimPrefix(r.URL.Path, "/api/v1/dockingjobs/")
-	if jobName == "" {
-		writeError(w, "job name required", http.StatusBadRequest)
-		return
-	}
-
-	var resp DockingJobResponse
-	var startTime, completionTime sql.NullTime
-	var message sql.NullString
-
-	err := h.db.QueryRowContext(r.Context(),
-		`SELECT name, phase, pdbid, source_db, batch_count, completed_batches,
-		        message, created_at, started_at, completed_at
-		   FROM docking_workflows WHERE name = ?`, jobName).Scan(
-		&resp.Name, &resp.Status, &resp.PDBID, &resp.LigandDb,
-		&resp.BatchCount, &resp.CompletedBatches,
-		&message, &resp.CreatedAt, &startTime, &completionTime)
-	if err == sql.ErrNoRows {
-		writeError(w, "workflow not found", http.StatusNotFound)
-		return
-	}
-	if err != nil {
-		writeError(w, fmt.Sprintf("failed to get workflow: %v", err), http.StatusInternalServerError)
-		return
-	}
-
-	if message.Valid {
-		resp.Message = message.String
-	}
-	if startTime.Valid {
-		resp.StartTime = &startTime.Time
-	}
-	if completionTime.Valid {
-		resp.CompletionTime = &completionTime.Time
-	}
-
-	log.Printf("[GetJob] %s: status=%s batch=%d completed=%d",
-		jobName, resp.Status, resp.BatchCount, resp.CompletedBatches)
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
-}
-
-// DeleteJob handles DELETE /api/v1/dockingjobs/{name}
-func (h *APIHandler) DeleteJob(w http.ResponseWriter, r *http.Request) {
-	jobName := strings.TrimPrefix(r.URL.Path, "/api/v1/dockingjobs/")
-	if jobName == "" {
-		writeError(w, "job name required", http.StatusBadRequest)
-		return
-	}
-
-	// Delete associated K8s Jobs by label (cleanup running/completed pods).
-	jobs, err := h.client.BatchV1().Jobs(h.namespace).List(r.Context(), metav1.ListOptions{
-		LabelSelector: fmt.Sprintf("docking.khemia.io/parent-job=%s", jobName),
-	})
-	if err != nil {
-		writeError(w, fmt.Sprintf("failed to list jobs: %v", err), http.StatusInternalServerError)
-		return
-	}
-
-	for _, job := range jobs.Items {
-		propagation := metav1.DeletePropagationBackground
-		if err := h.client.BatchV1().Jobs(h.namespace).Delete(r.Context(), job.Name, metav1.DeleteOptions{PropagationPolicy: &propagation}); err != nil {
-			log.Printf("Failed to delete job %s: %v", job.Name, err)
-		}
-	}
-
-	// Delete from MySQL tables (staging first, then results, then workflow).
-	if _, err := h.db.ExecContext(r.Context(),
-		`DELETE FROM staging WHERE job_type = 'dock' AND JSON_EXTRACT(payload, '$.workflow_name') = ?`, jobName); err != nil {
-		log.Printf("Failed to delete staging rows for workflow %s: %v", jobName, err)
-	}
-
-	if _, err := h.db.ExecContext(r.Context(),
-		`DELETE FROM docking_results WHERE workflow_name = ?`, jobName); err != nil {
-		log.Printf("Failed to delete results for workflow %s: %v", jobName, err)
-	}
-
-	if _, err := h.db.ExecContext(r.Context(),
-		`DELETE FROM docking_workflows WHERE name = ?`, jobName); err != nil {
-		log.Printf("Failed to delete workflow %s: %v", jobName, err)
-	}
-
-	w.WriteHeader(http.StatusNoContent)
-}
-
-// GetLogs handles GET /api/v1/dockingjobs/{name}/logs
-func (h *APIHandler) GetLogs(w http.ResponseWriter, r *http.Request) {
-	trimmed := strings.TrimPrefix(r.URL.Path, "/api/v1/dockingjobs/")
-	jobName := strings.TrimSuffix(trimmed, "/logs")
-	taskType := r.URL.Query().Get("task")
-
-	if jobName == "" {
-		writeError(w, "job name required", http.StatusBadRequest)
-		return
-	}
-
-	labelSelector := fmt.Sprintf("docking.khemia.io/parent-job=%s", jobName)
-	if taskType != "" {
-		labelSelector = fmt.Sprintf("docking.khemia.io/parent-job=%s,docking.khemia.io/job-type=%s", jobName, taskType)
-	}
-
-	jobs, err := h.client.BatchV1().Jobs(h.namespace).List(r.Context(), metav1.ListOptions{
-		LabelSelector: labelSelector,
-	})
-	if err != nil || len(jobs.Items) == 0 {
-		writeError(w, "job not found", http.StatusNotFound)
-		return
-	}
-
-	pods, err := h.client.CoreV1().Pods(h.namespace).List(r.Context(), metav1.ListOptions{
-		LabelSelector: fmt.Sprintf("job-name=%s", jobs.Items[0].Name),
-	})
-	if err != nil || len(pods.Items) == 0 {
-		writeError(w, "pods not found", http.StatusNotFound)
-		return
-	}
-
-	logs, err := h.client.CoreV1().Pods(h.namespace).GetLogs(pods.Items[0].Name, &corev1.PodLogOptions{}).
-		Do(r.Context()).Raw()
-	if err != nil {
-		writeError(w, fmt.Sprintf("failed to get logs: %v", err), http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", "text/plain")
-	w.Write(logs)
-}
-
-// DockingResultsResponse holds aggregated MySQL stats for a workflow
-type DockingResultsResponse struct {
-	WorkflowName         string  `json:"workflow_name"`
-	ResultCount          int     `json:"result_count"`
-	BestAffinityKcalMol  float64 `json:"best_affinity_kcal_mol,omitempty"`
-	WorstAffinityKcalMol float64 `json:"worst_affinity_kcal_mol,omitempty"`
-	AvgAffinityKcalMol   float64 `json:"avg_affinity_kcal_mol,omitempty"`
-}
-
-// GetResults handles GET /api/v1/dockingjobs/{name}/results
-// Returns aggregated docking affinity stats from MySQL for the given workflow.
-func (h *APIHandler) GetResults(w http.ResponseWriter, r *http.Request) {
-	trimmed := strings.TrimPrefix(r.URL.Path, "/api/v1/dockingjobs/")
-	jobName := strings.TrimSuffix(trimmed, "/results")
-	if jobName == "" {
-		writeError(w, "job name required", http.StatusBadRequest)
-		return
-	}
-
-	var count int
-	var best, worst, avg sql.NullFloat64
-	row := h.db.QueryRowContext(r.Context(),
-		`SELECT COUNT(*), MIN(affinity_kcal_mol), MAX(affinity_kcal_mol), AVG(affinity_kcal_mol)
-		   FROM docking_results WHERE workflow_name = ?`, jobName)
-	if err := row.Scan(&count, &best, &worst, &avg); err != nil {
-		writeError(w, fmt.Sprintf("query error: %v", err), http.StatusInternalServerError)
-		return
-	}
-
-	resp := DockingResultsResponse{
-		WorkflowName: jobName,
-		ResultCount:  count,
-	}
-	if best.Valid {
-		resp.BestAffinityKcalMol = best.Float64
-		resp.WorstAffinityKcalMol = worst.Float64
-		resp.AvgAffinityKcalMol = avg.Float64
-	}
-
-	log.Printf("[GetResults] %s: count=%d best=%.2f worst=%.2f avg=%.2f",
-		jobName, count, resp.BestAffinityKcalMol, resp.WorstAffinityKcalMol, resp.AvgAffinityKcalMol)
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
-}
-
-// HealthCheck handles GET /health
+// HealthCheck handles GET /health.
 func (h *APIHandler) HealthCheck(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{
@@ -377,17 +55,40 @@ func (h *APIHandler) HealthCheck(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// ReadinessCheck handles GET /readyz.
+func (h *APIHandler) ReadinessCheck(w http.ResponseWriter, r *http.Request) {
+	// Check that at least one plugin database is reachable.
+	for slug, db := range h.pluginDBs {
+		if err := db.PingContext(r.Context()); err != nil {
+			log.Printf("[ReadinessCheck] %s database ping failed: %v", slug, err)
+			writeError(w, fmt.Sprintf("database %s not reachable", slug), http.StatusServiceUnavailable)
+			return
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "ready"})
+}
+
+// --- Ligand management (docking infrastructure) ---
+
 // LigandImportRequest represents a single ligand to import.
 type LigandImportRequest struct {
 	CompoundID string `json:"compound_id"`
 	Smiles     string `json:"smiles"`
-	PDBQTB64   string `json:"pdbqt_b64,omitempty"` // base64-encoded PDBQT, optional
+	PDBQTB64   string `json:"pdbqt_b64,omitempty"`
 	SourceDb   string `json:"source_db"`
 }
 
-// ImportLigands handles POST /api/v1/ligands
+// ImportLigands handles POST /api/v1/ligands.
 // Accepts a JSON array of ligands and upserts them into the ligands table.
 func (h *APIHandler) ImportLigands(w http.ResponseWriter, r *http.Request) {
+	db := h.pluginDB("docking")
+	if db == nil {
+		writeError(w, "docking database not available", http.StatusInternalServerError)
+		return
+	}
+
 	var ligands []LigandImportRequest
 	if err := json.NewDecoder(r.Body).Decode(&ligands); err != nil {
 		writeError(w, fmt.Sprintf("invalid request: %v", err), http.StatusBadRequest)
@@ -407,14 +108,14 @@ func (h *APIHandler) ImportLigands(w http.ResponseWriter, r *http.Request) {
 		var pdbqt []byte
 		if lig.PDBQTB64 != "" {
 			var err error
-			pdbqt, err = base64Decode(lig.PDBQTB64)
+			pdbqt, err = base64.StdEncoding.DecodeString(lig.PDBQTB64)
 			if err != nil {
 				log.Printf("[ImportLigands] bad base64 for %s: %v", lig.CompoundID, err)
 				continue
 			}
 		}
 
-		_, err := h.db.ExecContext(r.Context(),
+		_, err := db.ExecContext(r.Context(),
 			`INSERT INTO ligands (compound_id, smiles, pdbqt, source_db)
 			 VALUES (?, ?, ?, ?)
 			 ON DUPLICATE KEY UPDATE smiles = VALUES(smiles), pdbqt = VALUES(pdbqt)`,
@@ -433,247 +134,185 @@ func (h *APIHandler) ImportLigands(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// base64Decode decodes a base64 string.
-func base64Decode(s string) ([]byte, error) {
-	return base64.StdEncoding.DecodeString(s)
+// PrepRequest represents a request to prep ligands for docking.
+type PrepRequest struct {
+	SourceDb  string `json:"source_db"`
+	ChunkSize int    `json:"chunk_size,omitempty"`
+	Image     string `json:"image,omitempty"`
 }
 
-// --- Quantum ESPRESSO handlers ---
+// StartPrep handles POST /api/v1/prep.
+// Counts unprepared ligands for the given source_db, then launches batch prep jobs.
+func (h *APIHandler) StartPrep(w http.ResponseWriter, r *http.Request) {
+	db := h.pluginDB("docking")
+	if db == nil {
+		writeError(w, "docking database not available", http.StatusInternalServerError)
+		return
+	}
 
-// QESubmitRequest represents a request to submit a QE calculation.
-type QESubmitRequest struct {
-	Executable string `json:"executable,omitempty"`
-	InputFile  string `json:"input_file"`
-	NumCPUs    int    `json:"num_cpus,omitempty"`
-	MemoryMB   int    `json:"memory_mb,omitempty"`
-	Image      string `json:"image,omitempty"`
-}
-
-// QEJobSummary is the list-level view (omits large text fields).
-type QEJobSummary struct {
-	ID          int        `json:"id"`
-	Name        string     `json:"name"`
-	Status      string     `json:"status"`
-	Executable  string     `json:"executable"`
-	TotalEnergy *float64   `json:"total_energy,omitempty"`
-	WallTimeSec *float32   `json:"wall_time_sec,omitempty"`
-	CreatedAt   time.Time  `json:"created_at"`
-	CompletedAt *time.Time `json:"completed_at,omitempty"`
-}
-
-// QEJobDetail is the full view returned by GetQEJob.
-type QEJobDetail struct {
-	ID          int        `json:"id"`
-	Name        string     `json:"name"`
-	Status      string     `json:"status"`
-	Executable  string     `json:"executable"`
-	InputFile   string     `json:"input_file"`
-	OutputFile  *string    `json:"output_file,omitempty"`
-	ErrorOutput *string    `json:"error_output,omitempty"`
-	TotalEnergy *float64   `json:"total_energy,omitempty"`
-	WallTimeSec *float32   `json:"wall_time_sec,omitempty"`
-	NumCPUs     int        `json:"num_cpus"`
-	MemoryMB    int        `json:"memory_mb"`
-	Image       string     `json:"image"`
-	CreatedAt   time.Time  `json:"created_at"`
-	StartedAt   *time.Time `json:"started_at,omitempty"`
-	CompletedAt *time.Time `json:"completed_at,omitempty"`
-}
-
-// SubmitQEJob handles POST /api/v1/qe/submit
-func (h *APIHandler) SubmitQEJob(w http.ResponseWriter, r *http.Request) {
-	var req QESubmitRequest
+	var req PrepRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, fmt.Sprintf("invalid request: %v", err), http.StatusBadRequest)
 		return
 	}
 
-	if strings.TrimSpace(req.InputFile) == "" {
-		writeError(w, "input_file is required", http.StatusBadRequest)
+	if req.SourceDb == "" {
+		writeError(w, "source_db is required", http.StatusBadRequest)
 		return
 	}
 
-	// Apply defaults.
-	if req.Executable == "" {
-		req.Executable = DefaultQEExecutable
+	var unpreparedCount int
+	err := db.QueryRowContext(r.Context(),
+		`SELECT COUNT(*) FROM ligands WHERE source_db = ? AND pdbqt IS NULL`,
+		req.SourceDb).Scan(&unpreparedCount)
+	if err != nil {
+		writeError(w, fmt.Sprintf("failed to count unprepared ligands: %v", err), http.StatusInternalServerError)
+		return
 	}
-	if req.NumCPUs == 0 {
-		req.NumCPUs = DefaultQENumCPUs
+
+	if unpreparedCount == 0 {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"message": "all ligands already prepped",
+			"count":   0,
+		})
+		return
 	}
-	if req.MemoryMB == 0 {
-		req.MemoryMB = DefaultQEMemoryMB
+
+	if req.ChunkSize == 0 {
+		req.ChunkSize = 500
 	}
 	if req.Image == "" {
-		req.Image = DefaultQEImage
+		req.Image = "zot.hwcopeland.net/chem/autodock-vina:latest"
 	}
 
-	jobName := fmt.Sprintf("qe-%d", time.Now().UnixNano())
-	submittedBy := UserFromContext(r)
-
-	_, err := h.qeDb.ExecContext(r.Context(),
-		`INSERT INTO qe_jobs (name, executable, input_file, num_cpus, memory_mb, image, submitted_by)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		jobName, req.Executable, req.InputFile, req.NumCPUs, req.MemoryMB, req.Image, submittedBy)
-	if err != nil {
-		writeError(w, fmt.Sprintf("failed to create QE job: %v", err), http.StatusInternalServerError)
-		return
-	}
+	batchCount := int(math.Ceil(float64(unpreparedCount) / float64(req.ChunkSize)))
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"name":   jobName,
-		"status": "Pending",
+		"message":    "prep started",
+		"source_db":  req.SourceDb,
+		"unprepared": unpreparedCount,
+		"batches":    batchCount,
 	})
 
-	go h.controller.processQEJob(jobName, req.Executable, req.InputFile, req.Image, req.NumCPUs, req.MemoryMB)
+	go h.controller.processLigandPrep(req)
 }
 
-// ListQEJobs handles GET /api/v1/qe/jobs
-func (h *APIHandler) ListQEJobs(w http.ResponseWriter, r *http.Request) {
-	rows, err := h.qeDb.QueryContext(r.Context(),
-		`SELECT id, name, status, executable, total_energy, wall_time_sec, created_at, completed_at
-		   FROM qe_jobs ORDER BY created_at DESC`)
-	if err != nil {
-		writeError(w, fmt.Sprintf("failed to list QE jobs: %v", err), http.StatusInternalServerError)
+// processLigandPrep runs sequential batch prep jobs to convert SMILES to PDBQT.
+func (c *Controller) processLigandPrep(req PrepRequest) {
+	db := c.pluginDB("docking")
+	if db == nil {
+		log.Printf("[prep] CRITICAL: no docking database")
 		return
 	}
-	defer rows.Close()
 
-	var jobs []QEJobSummary
-	for rows.Next() {
-		var j QEJobSummary
-		var totalEnergy sql.NullFloat64
-		var wallTime sql.NullFloat64
-		var completedAt sql.NullTime
+	log.Printf("[prep] Starting ligand prep: source_db=%s chunk_size=%d image=%s",
+		req.SourceDb, req.ChunkSize, req.Image)
 
-		if err := rows.Scan(&j.ID, &j.Name, &j.Status, &j.Executable,
-			&totalEnergy, &wallTime, &j.CreatedAt, &completedAt); err != nil {
-			writeError(w, fmt.Sprintf("failed to scan QE job: %v", err), http.StatusInternalServerError)
+	var unpreparedCount int
+	if err := db.QueryRow(
+		`SELECT COUNT(*) FROM ligands WHERE source_db = ? AND pdbqt IS NULL`,
+		req.SourceDb).Scan(&unpreparedCount); err != nil {
+		log.Printf("[prep] Failed to count unprepared ligands: %v", err)
+		return
+	}
+
+	batchCount := int(math.Ceil(float64(unpreparedCount) / float64(req.ChunkSize)))
+	log.Printf("[prep] %d unprepared ligands in %d batch(es)", unpreparedCount, batchCount)
+
+	for i := 0; i < batchCount; i++ {
+		offset := i * req.ChunkSize
+		log.Printf("[prep] Batch %d/%d (offset=%d limit=%d)", i+1, batchCount, offset, req.ChunkSize)
+
+		if err := c.createPrepBatchJob(req.SourceDb, req.Image, i, offset, req.ChunkSize); err != nil {
+			log.Printf("[prep] Failed to create prep batch %d: %v", i, err)
 			return
 		}
-		if totalEnergy.Valid {
-			j.TotalEnergy = &totalEnergy.Float64
+
+		jobName := fmt.Sprintf("prep-%s-batch-%d", req.SourceDb, i)
+		prepStreamCtx, prepStreamCancel := context.WithCancel(context.Background())
+		go c.streamJobLogs(prepStreamCtx, jobName)
+		if err := c.waitForPluginJobCompletion(jobName, 10*time.Minute); err != nil {
+			prepStreamCancel()
+			log.Printf("[prep] Prep batch %d failed: %v", i, err)
+			return
 		}
-		if wallTime.Valid {
-			wt := float32(wallTime.Float64)
-			j.WallTimeSec = &wt
-		}
-		if completedAt.Valid {
-			j.CompletedAt = &completedAt.Time
-		}
-		jobs = append(jobs, j)
-	}
-	if err := rows.Err(); err != nil {
-		writeError(w, fmt.Sprintf("failed to iterate QE jobs: %v", err), http.StatusInternalServerError)
-		return
+		prepStreamCancel()
+
+		log.Printf("[prep] Batch %d/%d complete", i+1, batchCount)
 	}
 
-	if jobs == nil {
-		jobs = []QEJobSummary{}
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"jobs":  jobs,
-		"count": len(jobs),
-	})
+	log.Printf("[prep] All %d batches complete for source_db=%s", batchCount, req.SourceDb)
 }
 
-// GetQEJob handles GET /api/v1/qe/jobs/{name}
-func (h *APIHandler) GetQEJob(w http.ResponseWriter, r *http.Request) {
-	jobName := strings.TrimPrefix(r.URL.Path, "/api/v1/qe/jobs/")
-	if jobName == "" {
-		writeError(w, "job name required", http.StatusBadRequest)
-		return
+// createPrepBatchJob creates a K8s Job that runs prep_ligands.py for a ligand batch.
+func (c *Controller) createPrepBatchJob(sourceDb, image string, batchIndex, offset, chunkSize int) error {
+	workDir := "/data"
+	j := &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: fmt.Sprintf("prep-%s-batch-%d", sourceDb, batchIndex),
+			Labels: map[string]string{
+				"khemeia.io/job-type":   "prep-ligands",
+				"khemeia.io/parent-job": fmt.Sprintf("prep-%s", sourceDb),
+			},
+		},
+		Spec: batchv1.JobSpec{
+			TTLSecondsAfterFinished: ptrInt32(300),
+			Template: corev1.PodTemplateSpec{
+				Spec: corev1.PodSpec{
+					RestartPolicy:    corev1.RestartPolicyOnFailure,
+					ImagePullSecrets: []corev1.LocalObjectReference{{Name: "zot-pull-secret"}},
+					Containers: []corev1.Container{
+						{
+							Name:            "prep",
+							Image:           image,
+							ImagePullPolicy: corev1.PullAlways,
+							WorkingDir:      workDir,
+							Command:         []string{"python3", "/autodock/scripts/prep_ligands.py"},
+							Env: []corev1.EnvVar{
+								{Name: "SOURCE_DB", Value: sourceDb},
+								{Name: "BATCH_OFFSET", Value: fmt.Sprintf("%d", offset)},
+								{Name: "BATCH_LIMIT", Value: fmt.Sprintf("%d", chunkSize)},
+								{Name: "MYSQL_HOST", Value: os.Getenv("MYSQL_HOST")},
+								{Name: "MYSQL_PORT", Value: os.Getenv("MYSQL_PORT")},
+								{Name: "MYSQL_USER", Value: os.Getenv("MYSQL_USER")},
+								{Name: "MYSQL_DATABASE", Value: "docking"},
+								{
+									Name: "MYSQL_PASSWORD",
+									ValueFrom: &corev1.EnvVarSource{
+										SecretKeyRef: &corev1.SecretKeySelector{
+											LocalObjectReference: corev1.LocalObjectReference{Name: "docking-mysql-secret"},
+											Key:                  "root-password",
+										},
+									},
+								},
+							},
+							VolumeMounts: []corev1.VolumeMount{emptyDirMount("scratch", workDir)},
+						},
+					},
+					Volumes: []corev1.Volume{emptyDirVolume("scratch")},
+				},
+			},
+		},
 	}
 
-	var j QEJobDetail
-	var outputFile, errorOutput sql.NullString
-	var totalEnergy sql.NullFloat64
-	var wallTime sql.NullFloat64
-	var startedAt, completedAt sql.NullTime
-
-	err := h.qeDb.QueryRowContext(r.Context(),
-		`SELECT id, name, status, executable, input_file, output_file, error_output,
-		        total_energy, wall_time_sec, num_cpus, memory_mb, image,
-		        created_at, started_at, completed_at
-		   FROM qe_jobs WHERE name = ?`, jobName).Scan(
-		&j.ID, &j.Name, &j.Status, &j.Executable, &j.InputFile, &outputFile, &errorOutput,
-		&totalEnergy, &wallTime, &j.NumCPUs, &j.MemoryMB, &j.Image,
-		&j.CreatedAt, &startedAt, &completedAt)
-	if err == sql.ErrNoRows {
-		writeError(w, "QE job not found", http.StatusNotFound)
-		return
-	}
-	if err != nil {
-		writeError(w, fmt.Sprintf("failed to get QE job: %v", err), http.StatusInternalServerError)
-		return
-	}
-
-	if outputFile.Valid {
-		j.OutputFile = &outputFile.String
-	}
-	if errorOutput.Valid {
-		j.ErrorOutput = &errorOutput.String
-	}
-	if totalEnergy.Valid {
-		j.TotalEnergy = &totalEnergy.Float64
-	}
-	if wallTime.Valid {
-		wt := float32(wallTime.Float64)
-		j.WallTimeSec = &wt
-	}
-	if startedAt.Valid {
-		j.StartedAt = &startedAt.Time
-	}
-	if completedAt.Valid {
-		j.CompletedAt = &completedAt.Time
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(j)
+	_, err := c.jobClient.Create(context.TODO(), j, metav1.CreateOptions{})
+	return err
 }
 
-// DeleteQEJob handles DELETE /api/v1/qe/jobs/{name}
-func (h *APIHandler) DeleteQEJob(w http.ResponseWriter, r *http.Request) {
-	jobName := strings.TrimPrefix(r.URL.Path, "/api/v1/qe/jobs/")
-	if jobName == "" {
-		writeError(w, "job name required", http.StatusBadRequest)
-		return
-	}
+// --- Pseudopotential management (QE infrastructure) ---
 
-	// Delete the K8s Job if it still exists.
-	propagation := metav1.DeletePropagationBackground
-	if err := h.client.BatchV1().Jobs(h.namespace).Delete(r.Context(), jobName, metav1.DeleteOptions{
-		PropagationPolicy: &propagation,
-	}); err != nil && !isNotFound(err) {
-		log.Printf("[DeleteQEJob] Failed to delete K8s job %s: %v", jobName, err)
-	}
-
-	// Delete the input ConfigMap if it still exists.
-	cmName := fmt.Sprintf("qe-input-%s", jobName)
-	if err := h.client.CoreV1().ConfigMaps(h.namespace).Delete(r.Context(), cmName, metav1.DeleteOptions{}); err != nil && !isNotFound(err) {
-		log.Printf("[DeleteQEJob] Failed to delete ConfigMap %s: %v", cmName, err)
-	}
-
-	// Delete from MySQL.
-	if _, err := h.qeDb.ExecContext(r.Context(),
-		`DELETE FROM qe_jobs WHERE name = ?`, jobName); err != nil {
-		log.Printf("[DeleteQEJob] Failed to delete QE job %s from DB: %v", jobName, err)
-	}
-
-	w.WriteHeader(http.StatusNoContent)
-}
-
-// isNotFound checks if a Kubernetes API error is a NotFound error.
-func isNotFound(err error) bool {
-	return k8serrors.IsNotFound(err)
-}
-
-// UploadPseudopotential handles POST /api/v1/qe/pseudopotentials
-// Accepts a JSON object with filename, content (base64), element, functional.
+// UploadPseudopotential handles POST /api/v1/qe/pseudopotentials.
 func (h *APIHandler) UploadPseudopotential(w http.ResponseWriter, r *http.Request) {
+	db := h.pluginDB("qe")
+	if db == nil {
+		writeError(w, "QE database not available", http.StatusInternalServerError)
+		return
+	}
+
 	var req struct {
 		Filename   string `json:"filename"`
 		ContentB64 string `json:"content_b64"`
@@ -690,13 +329,13 @@ func (h *APIHandler) UploadPseudopotential(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	content, err := base64Decode(req.ContentB64)
+	content, err := base64.StdEncoding.DecodeString(req.ContentB64)
 	if err != nil {
 		writeError(w, fmt.Sprintf("invalid base64: %v", err), http.StatusBadRequest)
 		return
 	}
 
-	_, err = h.qeDb.ExecContext(r.Context(),
+	_, err = db.ExecContext(r.Context(),
 		`INSERT INTO pseudopotentials (filename, content, element, functional, source_url)
 		 VALUES (?, ?, ?, ?, ?)
 		 ON DUPLICATE KEY UPDATE content = VALUES(content), functional = VALUES(functional)`,
@@ -713,9 +352,15 @@ func (h *APIHandler) UploadPseudopotential(w http.ResponseWriter, r *http.Reques
 	})
 }
 
-// ListPseudopotentials handles GET /api/v1/qe/pseudopotentials
+// ListPseudopotentials handles GET /api/v1/qe/pseudopotentials.
 func (h *APIHandler) ListPseudopotentials(w http.ResponseWriter, r *http.Request) {
-	rows, err := h.qeDb.QueryContext(r.Context(),
+	db := h.pluginDB("qe")
+	if db == nil {
+		writeError(w, "QE database not available", http.StatusInternalServerError)
+		return
+	}
+
+	rows, err := db.QueryContext(r.Context(),
 		`SELECT filename, element, functional, LENGTH(content) as size, created_at FROM pseudopotentials ORDER BY element, filename`)
 	if err != nil {
 		writeError(w, fmt.Sprintf("query error: %v", err), http.StatusInternalServerError)
@@ -749,74 +394,19 @@ func (h *APIHandler) ListPseudopotentials(w http.ResponseWriter, r *http.Request
 	})
 }
 
-// PrepRequest represents a request to prep ligands for docking.
-type PrepRequest struct {
-	SourceDb  string `json:"source_db"`
-	ChunkSize int    `json:"chunk_size,omitempty"` // defaults to 500
-	Image     string `json:"image,omitempty"`
-}
+// --- API Token management ---
 
-// StartPrep handles POST /api/v1/prep
-// Counts unprepared ligands for the given source_db, then launches batch prep jobs.
-func (h *APIHandler) StartPrep(w http.ResponseWriter, r *http.Request) {
-	var req PrepRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, fmt.Sprintf("invalid request: %v", err), http.StatusBadRequest)
-		return
-	}
-
-	if req.SourceDb == "" {
-		writeError(w, "source_db is required", http.StatusBadRequest)
-		return
-	}
-
-	// Count unprepared ligands (those without PDBQT data).
-	var unpreparedCount int
-	err := h.db.QueryRowContext(r.Context(),
-		`SELECT COUNT(*) FROM ligands WHERE source_db = ? AND pdbqt IS NULL`,
-		req.SourceDb).Scan(&unpreparedCount)
-	if err != nil {
-		writeError(w, fmt.Sprintf("failed to count unprepared ligands: %v", err), http.StatusInternalServerError)
-		return
-	}
-
-	if unpreparedCount == 0 {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"message": "all ligands already prepped",
-			"count":   0,
-		})
-		return
-	}
-
-	// Apply defaults.
-	if req.ChunkSize == 0 {
-		req.ChunkSize = 500
-	}
-	if req.Image == "" {
-		req.Image = DefaultImage
-	}
-
-	batchCount := int(math.Ceil(float64(unpreparedCount) / float64(req.ChunkSize)))
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusAccepted)
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"message":    "prep started",
-		"source_db":  req.SourceDb,
-		"unprepared": unpreparedCount,
-		"batches":    batchCount,
-	})
-
-	go h.controller.processLigandPrep(req)
-}
-
-// CreateAPIToken handles POST /api/v1/tokens — generates a new API token.
+// CreateAPIToken handles POST /api/v1/tokens.
 func (h *APIHandler) CreateAPIToken(w http.ResponseWriter, r *http.Request) {
+	db := h.controller.firstDB()
+	if db == nil {
+		writeError(w, "no database available", http.StatusInternalServerError)
+		return
+	}
+
 	var req struct {
-		Username      string `json:"username"`
-		ExpiresInHours int   `json:"expires_in_hours"`
+		Username       string `json:"username"`
+		ExpiresInHours int    `json:"expires_in_hours"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, "invalid JSON body", http.StatusBadRequest)
@@ -827,7 +417,7 @@ func (h *APIHandler) CreateAPIToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.ExpiresInHours <= 0 {
-		req.ExpiresInHours = 72 // default 72 hours
+		req.ExpiresInHours = 72
 	}
 
 	token, err := generateToken()
@@ -837,7 +427,7 @@ func (h *APIHandler) CreateAPIToken(w http.ResponseWriter, r *http.Request) {
 	}
 
 	expiresAt := time.Now().Add(time.Duration(req.ExpiresInHours) * time.Hour)
-	_, err = h.db.Exec(
+	_, err = db.Exec(
 		"INSERT INTO api_tokens (token, username, expires_at) VALUES (?, ?, ?)",
 		token, req.Username, expiresAt,
 	)
@@ -856,9 +446,15 @@ func (h *APIHandler) CreateAPIToken(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// ListAPITokens handles GET /api/v1/tokens — lists active tokens (token value redacted).
+// ListAPITokens handles GET /api/v1/tokens.
 func (h *APIHandler) ListAPITokens(w http.ResponseWriter, r *http.Request) {
-	rows, err := h.db.Query(
+	db := h.controller.firstDB()
+	if db == nil {
+		writeError(w, "no database available", http.StatusInternalServerError)
+		return
+	}
+
+	rows, err := db.Query(
 		"SELECT id, username, created_at, expires_at FROM api_tokens WHERE expires_at > NOW() ORDER BY created_at DESC",
 	)
 	if err != nil {
@@ -892,16 +488,21 @@ func (h *APIHandler) ListAPITokens(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]interface{}{"tokens": tokens})
 }
 
-// RevokeAPIToken handles DELETE /api/v1/tokens/{id} — revokes a token by ID.
+// RevokeAPIToken handles DELETE /api/v1/tokens/{id}.
 func (h *APIHandler) RevokeAPIToken(w http.ResponseWriter, r *http.Request) {
-	// Extract token ID from path: /api/v1/tokens/123
+	db := h.controller.firstDB()
+	if db == nil {
+		writeError(w, "no database available", http.StatusInternalServerError)
+		return
+	}
+
 	path := strings.TrimPrefix(r.URL.Path, "/api/v1/tokens/")
 	if path == "" {
 		writeError(w, "token id required", http.StatusBadRequest)
 		return
 	}
 
-	result, err := h.db.Exec("DELETE FROM api_tokens WHERE id = ?", path)
+	result, err := db.Exec("DELETE FROM api_tokens WHERE id = ?", path)
 	if err != nil {
 		writeError(w, "failed to revoke token", http.StatusInternalServerError)
 		return
@@ -914,16 +515,4 @@ func (h *APIHandler) RevokeAPIToken(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "revoked"})
-}
-
-// ReadinessCheck handles GET /readyz
-func (h *APIHandler) ReadinessCheck(w http.ResponseWriter, r *http.Request) {
-	if err := h.db.PingContext(r.Context()); err != nil {
-		log.Printf("[ReadinessCheck] MySQL ping failed: %v", err)
-		writeError(w, "database not reachable", http.StatusServiceUnavailable)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"status": "ready"})
 }

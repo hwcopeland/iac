@@ -1,0 +1,50 @@
+name: quantum-espresso
+slug: qe
+version: "1.0"
+image: costrouc/quantum-espresso:latest
+type: job
+database: qe
+
+input:
+  - name: input_file
+    type: text
+    required: true
+    description: "QE input file content"
+  - name: executable
+    type: string
+    default: "pw.x"
+    description: "QE executable"
+  - name: num_cpus
+    type: int
+    default: 1
+    max: 20
+  - name: memory_mb
+    type: int
+    default: 2048
+    max: 32768
+
+output:
+  - name: output_file
+    type: text
+  - name: total_energy
+    type: float
+    parse: '!\s+total\s+energy\s+=\s+([-\d.]+)\s+Ry'
+  - name: wall_time_sec
+    type: float
+    parse: 'PWSCF\s+:\s+[\d.]+s CPU\s+([\d.]+)s WALL'
+
+resources:
+  cpu: "{{ .num_cpus }}"
+  memory: "{{ .memory_mb }}Mi"
+  timeout: 4h
+
+command: |
+  cd /scratch && cp /input/* . &&
+  for pp in $(grep -i '\.UPF' input.in | awk '{print $NF}'); do
+    [ -f "$pp" ] || curl -sfL "https://pseudopotentials.quantum-espresso.org/upf_files/$pp" -o "$pp" 2>/dev/null || true;
+  done &&
+  if [ {{ .num_cpus }} -gt 1 ]; then
+    mpirun --allow-run-as-root -np {{ .num_cpus }} {{ .executable }} -in input.in 2>&1 || true;
+  else
+    {{ .executable }} -in input.in 2>&1;
+  fi
