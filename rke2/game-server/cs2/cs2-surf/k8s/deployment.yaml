@@ -26,6 +26,8 @@ spec:
       labels:
         app: cs2-surf-server
     spec:
+      imagePullSecrets:
+        - name: zot-pull-secret
       initContainers:
         - name: envsubst-config
           image: alpine:3.20
