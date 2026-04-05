@@ -1,6 +1,7 @@
 declare const molstar: any;
 
-let plugin: any = null;
+let viewerInstance: any = null;  // The Viewer wrapper (has loadStructureFromUrl, loadPdb, etc.)
+let plugin: any = null;          // The PluginContext (has canvas3d, managers, builders)
 
 export type AtomInfo = {
   element: string;
@@ -19,7 +20,7 @@ let hoverCallback: InteractionCallback | null = null;
 let clickCallback: InteractionCallback | null = null;
 
 export function isReady(): boolean {
-  return plugin !== null;
+  return viewerInstance !== null;
 }
 
 export function getPlugin(): any {
@@ -46,6 +47,7 @@ export async function init(container: HTMLDivElement): Promise<void> {
     viewportShowScreenshotControls: false,
     viewportShowToggleFullscreen: false,
   });
+  viewerInstance = instance;
   plugin = instance.plugin;
 
   if (plugin.canvas3d) {
@@ -129,16 +131,16 @@ export function onClick(cb: InteractionCallback): void {
 }
 
 export async function loadPdb(id: string): Promise<void> {
-  if (!plugin) throw new Error('Viewer not initialized');
-  plugin.clear();
-  const url = `https://files.rcsb.org/download/${id.toUpperCase()}.cif`;
-  await plugin.loadStructureFromUrl(url, 'mmcif', false);
+  if (!viewerInstance) throw new Error('Viewer not initialized');
+  await viewerInstance.loadStructureFromUrl(
+    `https://files.rcsb.org/download/${id.toUpperCase()}.cif`,
+    'mmcif',
+    false
+  );
 }
 
 export async function loadFile(data: string, format: string): Promise<void> {
   if (!plugin) throw new Error('Viewer not initialized');
-  plugin.clear();
-
   const formatMap: Record<string, string> = {
     pdb: 'pdb',
     cif: 'mmcif',
@@ -153,7 +155,7 @@ export async function loadFile(data: string, format: string): Promise<void> {
   const blob = new Blob([data], { type: 'text/plain' });
   const url = URL.createObjectURL(blob);
   try {
-    await plugin.loadStructureFromUrl(url, fmt, false);
+    await viewerInstance.loadStructureFromUrl(url, fmt, false);
   } finally {
     URL.revokeObjectURL(url);
   }
