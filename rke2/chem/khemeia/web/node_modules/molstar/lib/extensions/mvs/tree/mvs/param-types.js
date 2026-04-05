@@ -1,0 +1,200 @@
+/**
+ * Copyright (c) 2023-2025 mol* contributors, licensed under MIT, See LICENSE file for more info.
+ *
+ * @author Adam Midlik <midlik@gmail.com>
+ * @author David Sehnal <david.sehnal@gmail.com>
+ */
+import * as iots from 'io-ts';
+import { ColorNames } from '../../../../mol-util/color/names.js';
+import { bool, dict, float, int, list, literal, nullable, object, partial, str, tuple, union } from '../generic/field-schema.js';
+export const ParseFormatT = literal(
+// trajectory
+'mmcif', 'bcif', // +volumes
+'pdb', 'pdbqt', 'gro', 'xyz', 'mol', 'sdf', 'mol2', 'lammpstrj', // + coordinates
+// coordinates
+'xtc', 'nctraj', 'dcd', 'trr', 
+// topology
+'psf', 'prmtop', 'top', 
+// volumes
+'map', 'dx', 'dxbin');
+export const MolstarParseFormatT = literal(
+// trajectory
+'cif', // +volumes
+'pdb', 'pdbqt', 'gro', 'xyz', 'mol', 'sdf', 'mol2', 'lammpstrj', 
+// coordinates
+'xtc', 'nctraj', 'dcd', 'trr', 
+// topology
+'psf', 'prmtop', 'top', 
+// volumes
+'map', 'dx', 'dxbin');
+export const StructureTypeT = literal('model', 'assembly', 'symmetry', 'symmetry_mates');
+export const ComponentSelectorT = literal('all', 'polymer', 'protein', 'nucleic', 'branched', 'ligand', 'ion', 'water', 'coarse');
+/** `selector` parameter values for `component` node in MVS tree */
+const _ComponentExpressionT = partial({
+    label_entity_id: str,
+    label_asym_id: str,
+    auth_asym_id: str,
+    label_seq_id: int,
+    auth_seq_id: int,
+    pdbx_PDB_ins_code: str,
+    beg_label_seq_id: int,
+    end_label_seq_id: int,
+    beg_auth_seq_id: int,
+    end_auth_seq_id: int,
+    label_comp_id: str,
+    auth_comp_id: str,
+    /** 0-based residue index in the source file */
+    residue_index: int, // TODO this is defined in Python builder but not supported by Molstar yet
+    label_atom_id: str,
+    auth_atom_id: str,
+    type_symbol: str,
+    atom_id: int,
+    atom_index: int,
+    /** Instance identifier to distinguish instances of the same chain created by applying different symmetry operators,
+     * like 'ASM-X0-1' for assemblies or '1_555' for crystals */
+    instance_id: str,
+});
+export const ComponentExpressionT = _ComponentExpressionT;
+export const SchemaT = literal('whole_structure', 'entity', 'chain', 'auth_chain', 'residue', 'auth_residue', 'residue_range', 'auth_residue_range', 'atom', 'auth_atom', 'all_atomic');
+export const SchemaFormatT = literal('cif', 'bcif', 'json');
+export const Vector3 = tuple([float, float, float]);
+/** Parameter values for matrix params, e.g. `rotation` */
+export const Matrix = list(float); // TODO impl custom types Matrix3x3 and Matrix4x4
+export const LabelAttachments = literal('bottom-left', 'bottom-center', 'bottom-right', 'middle-left', 'middle-center', 'middle-right', 'top-left', 'top-center', 'top-right');
+/** Primitives-related types */
+const _PrimitiveComponentExpressionT = partial({
+    structure_ref: str,
+    expression_schema: SchemaT,
+    expressions: list(ComponentExpressionT),
+});
+export const PrimitiveComponentExpressionT = _PrimitiveComponentExpressionT;
+export const PrimitivePositionT = union(Vector3, ComponentExpressionT, PrimitiveComponentExpressionT);
+export const FloatList = list(float);
+export const IntList = list(int);
+export const StrList = list(str);
+export const HexColorT = new iots.Type('HexColor', ((value) => typeof value === 'string'), (value, ctx) => isHexColorT(value) ? { _tag: 'Right', right: value } : { _tag: 'Left', left: [{ value: value, context: ctx, message: `"${value}" is not a valid hex color string` }] }, value => value);
+/** Regular expression matching a hexadecimal color string, e.g. '#FF1100' or '#f10' */
+const hexColorRegex = /^#([0-9A-F]{3}){1,2}$/i;
+/** Decide if a string is a valid hexadecimal color string (6-digit or 3-digit, e.g. '#FF1100' or '#f10') */
+function isHexColorT(str) {
+    return typeof str === 'string' && hexColorRegex.test(str);
+}
+/** Named color string (e.g. 'red') for `color` parameter values for `color` node in MVS tree */
+export const ColorNameT = new iots.Type('ColorName', ((value) => typeof value === 'string'), (value, ctx) => isColorNameT(value) ? { _tag: 'Right', right: value } : { _tag: 'Left', left: [{ value: value, context: ctx, message: `"${value}" is not a valid color name` }] }, value => value);
+/** Decide if a string is a valid named color string */
+function isColorNameT(str) {
+    return str in ColorNames;
+}
+export const ColorT = union(ColorNameT, HexColorT);
+// Type helpers
+export function isVector3(x) {
+    return !!x && Array.isArray(x) && x.length === 3 && typeof x[0] === 'number';
+}
+export function isPrimitiveComponentExpressions(x) {
+    return !!x && Array.isArray(x.expressions);
+}
+export function isComponentExpression(x) {
+    return !!x && typeof x === 'object' && !x.expressions;
+}
+export const ColorListNameT = literal(
+// Color lists from https://observablehq.com/@d3/color-schemes (definitions: https://colorbrewer2.org/export/colorbrewer.js)
+// Sequential single-hue
+'Reds', 'Oranges', 'Greens', 'Blues', 'Purples', 'Greys', 
+// Sequential multi-hue
+'OrRd', 'BuGn', 'PuBuGn', 'GnBu', 'PuBu', 'BuPu', 'RdPu', 'PuRd', 'YlOrRd', 'YlOrBr', 'YlGn', 'YlGnBu', 'Magma', 'Inferno', 'Plasma', 'Viridis', 'Cividis', 'Turbo', 'Warm', 'Cool', 'CubehelixDefault', 
+// Cyclical
+'Rainbow', 'Sinebow', 
+// Diverging
+'RdBu', 'RdGy', 'PiYG', 'BrBG', 'PRGn', 'PuOr', 'RdYlGn', 'RdYlBu', 'Spectral', 
+// Categorical
+'Category10', 'Observable10', 'Tableau10', 'Set1', 'Set2', 'Set3', 'Pastel1', 'Pastel2', 'Dark2', 'Paired', 'Accent', 
+// Additional lists, not standard for visualization in general, but commonly used for structures
+'Chainbow');
+export const ColorDictNameT = literal('ElementSymbol', 'ResidueName', 'ResidueProperties', 'SecondaryStructure');
+const _CategoricalPalette = object({
+    kind: literal('categorical'),
+}, 
+// Optionals:
+{
+    colors: union(ColorListNameT, ColorDictNameT, list(ColorT), dict(str, ColorT)),
+    /** Repeat color list once all colors are depleted (only applies if `colors` is a list or a color list name). */
+    repeat_color_list: bool,
+    /** Sort actual annotation values before assigning colors from a list (none = take values in order of their first occurrence). */
+    sort: literal('none', 'lexical', 'numeric'),
+    /** Sort direction. */
+    sort_direction: literal('ascending', 'descending'),
+    /** Treat annotation values as case-insensitive strings. */
+    case_insensitive: bool,
+    /** Color to use when a) `colors` is a dictionary (or a color dictionary name) and given key is not present, or b) `colors` is a list (or a color list name) and there are more actual annotation values than listed colors and `repeat_color_list` is not true. */
+    missing_color: nullable(ColorT),
+});
+export const CategoricalPalette = _CategoricalPalette;
+export const CategoricalPaletteDefaults = {
+    kind: 'categorical',
+    colors: 'Category10', // this is also default for categorical in Matplotlib
+    repeat_color_list: false,
+    sort: 'none',
+    sort_direction: 'ascending',
+    case_insensitive: false,
+    missing_color: null,
+};
+const _DiscretePalette = object({
+    kind: literal('discrete'),
+}, 
+// Optionals:
+{
+    /** Define colors for the discrete color palette and optionally corresponding checkpoints.
+     * Checkpoints refer to the values normalized to interval [0, 1] if `mode` is `"normalized"` (default), or to the values directly if `mode` is `"absolute"`.
+     * If checkpoints are not provided, they will created automatically (uniformly distributed over interval [0, 1]).
+     * If 1 checkpoint is provided for each color, then the color applies to values from this checkpoint (inclusive) until the next listed checkpoint (exclusive); the last color applies until Infinity.
+     * If 2 checkpoints are provided for each color, then the color applies to values from the first until the second checkpoint (inclusive); null means +/-Infinity; if ranges overlap, the later listed takes precedence.
+     */
+    colors: union(ColorListNameT, list(ColorT), list(tuple([ColorT, float])), list(tuple([nullable(ColorT), nullable(float), nullable(float)]))),
+    /** Reverse order of `colors` list. Only has effect when `colors` is a color list name or a color list without explicit checkpoints. */
+    reverse: bool,
+    /** Defines whether the annotation values should be normalized before assigning color based on checkpoints in `colors` (`x_normalized = (x - x_min) / (x_max - x_min)`, where `[x_min, x_max]` are either `value_domain` if provided, or the lowest and the highest value encountered in the annotation). Default is `"normalized"`. */
+    mode: literal('normalized', 'absolute'),
+    /** Defines `x_min` and `x_max` for normalization of annotation values. Either can be `null`, meaning that minimum/maximum of the actual values will be used. Only used when `mode` is `"normalized"`. */
+    value_domain: tuple([nullable(float), nullable(float)]),
+});
+export const DiscretePalette = _DiscretePalette;
+export const DiscretePaletteDefaults = {
+    kind: 'discrete',
+    colors: 'YlGn', // YlGn was selected as default because (a) Matplotlib's default Viridis looks ugly in 3D and (b) YlGn does not contain white, so it's easier to see that it's doing something even when values are in wrong range
+    reverse: false,
+    mode: 'normalized',
+    value_domain: [null, null],
+};
+const _ContinuousPalette = object({
+    kind: literal('continuous'),
+}, 
+// Optionals:
+{
+    /** Define colors for the continuous color palette and optionally corresponding checkpoints (i.e. annotation values that are mapped to each color).
+     * Checkpoints refer to the values normalized to interval [0, 1] if `mode` is `"normalized"` (default), or to the values directly if `mode` is `"absolute"`.
+     * If checkpoints are not provided, they will created automatically (uniformly distributed over interval [0, 1]). */
+    colors: union(ColorListNameT, list(ColorT), list(tuple([ColorT, float]))),
+    /** Reverse order of `colors` list. Only has effect when `colors` is a color list name or a color list without explicit checkpoints. */
+    reverse: bool,
+    /** Defines whether the annotation values should be normalized before assigning color based on checkpoints in `colors` (`x_normalized = (x - x_min) / (x_max - x_min)`, where `[x_min, x_max]` are either `value_domain` if provided, or the lowest and the highest value encountered in the annotation). Default is `"normalized"`. */
+    mode: literal('normalized', 'absolute'),
+    /** Defines `x_min` and `x_max` for normalization of annotation values. Either can be `null`, meaning that minimum/maximum of the actual values will be used. Only used when `mode` is `"normalized"`. */
+    value_domain: tuple([nullable(float), nullable(float)]),
+    /** Color to use for values below the lowest checkpoint. 'auto' means color of the lowest checkpoint. */
+    underflow_color: nullable(union(literal('auto'), ColorT)),
+    /** Color to use for values above the highest checkpoint. 'auto' means color of the highest checkpoint. */
+    overflow_color: nullable(union(literal('auto'), ColorT)),
+});
+export const ContinuousPalette = _ContinuousPalette;
+export const ContinuousPaletteDefaults = {
+    kind: 'continuous',
+    colors: 'YlGn', // YlGn was selected as default because (a) Matplotlib's default Viridis looks ugly in 3D and (b) YlGn does not contain white, so it's easier to see that it's doing something even when values are in wrong range
+    reverse: false,
+    mode: 'normalized',
+    value_domain: [null, null],
+    underflow_color: null,
+    overflow_color: null,
+};
+// TODO consider spreading the palette param directly into color_from_uri/color_from_source params (though this will be tricky)
+// TODO consider implementing some kind of recursion for object-typed params to achieve smart error messages and default value handling
+export const Palette = union(CategoricalPalette, DiscretePalette, ContinuousPalette);

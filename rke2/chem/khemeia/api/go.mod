@@ -1,4 +1,4 @@
-module docking-controller
+module khemeia-controller
 
 go 1.21.0
 

@@ -12,7 +12,7 @@ spec:
     name: flux-webhook-token
   resources:
     - kind: ImageRepository
-      name: docking-controller
+      name: khemeia-controller
       namespace: chem
     - kind: ImageRepository
       name: result-writer

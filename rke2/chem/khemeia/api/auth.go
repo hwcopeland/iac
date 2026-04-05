@@ -1,4 +1,4 @@
-// Package main provides JWT authentication middleware for the docking controller API.
+// Package main provides JWT authentication middleware for the khemeia controller API.
 package main
 
 import (

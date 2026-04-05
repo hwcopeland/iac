@@ -1,14 +1,14 @@
-# RBAC Configuration for Docking Job Controller
+# RBAC Configuration for Khemeia Controller
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: docking-controller
+  name: khemeia-controller
   namespace: chem
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  name: docking-controller
+  name: khemeia-controller
   namespace: chem
 rules:
   - apiGroups: ["batch"]
@@ -27,13 +27,13 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: docking-controller
+  name: khemeia-controller
   namespace: chem
 subjects:
   - kind: ServiceAccount
-    name: docking-controller
+    name: khemeia-controller
     namespace: chem
 roleRef:
   kind: Role
-  name: docking-controller
+  name: khemeia-controller
   apiGroup: rbac.authorization.k8s.io

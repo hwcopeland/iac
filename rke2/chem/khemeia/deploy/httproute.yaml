@@ -32,7 +32,7 @@ spec:
     - backendRefs:
         - group: ""
           kind: Service
-          name: docking-controller
+          name: khemeia-controller
           port: 80
           weight: 1
       matches:
