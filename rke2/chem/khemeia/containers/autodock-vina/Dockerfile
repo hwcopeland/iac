@@ -58,8 +58,5 @@ RUN pip3 install --no-cache-dir -r requirements.txt
 # Copy script files using COPY instead of ADD
 COPY scripts/ ./scripts/
 
-# Convert CRLF to LF and set execute permissions for all .sh scripts
-RUN apt-get update && apt-get install -y sed && \
-    sed -i 's/\r$//' ./scripts/*.sh && \
-    chmod +x ./scripts/*.sh && \
-    rm -rf /var/lib/apt/lists/*
+# Ensure scripts are executable
+RUN chmod +x ./scripts/*.py 2>/dev/null || true
