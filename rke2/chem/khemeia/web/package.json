@@ -1,0 +1,29 @@
+{
+  "name": "khemeia-web",
+  "version": "1.0.0",
+  "description": "Khemeia molecular visualization and computation platform",
+  "type": "module",
+  "scripts": {
+    "dev": "vite dev",
+    "build": "vite build",
+    "preview": "vite preview",
+    "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@sveltejs/adapter-static": "^3.0.10",
+    "@sveltejs/kit": "^2.56.1",
+    "@sveltejs/vite-plugin-svelte": "^7.0.0",
+    "@tailwindcss/vite": "^4.2.2",
+    "molstar": "^5.8.0",
+    "svelte": "^5.55.1",
+    "tailwindcss": "^4.2.2",
+    "typescript": "^6.0.2",
+    "vite": "^8.0.3"
+  },
+  "devDependencies": {
+    "svelte-check": "^4.4.6"
+  }
+}
