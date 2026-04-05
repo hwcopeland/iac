@@ -12,8 +12,8 @@
 # ---------------------------------------------------------------------------
 # ARGs — pin every dependency version
 # ---------------------------------------------------------------------------
-ARG MODSHARP_VERSION="git-109"
-ARG MODSHARP_BUILD="109"
+ARG MODSHARP_VERSION="git-117"
+ARG MODSHARP_BUILD="117"
 
 # Plugins with GitHub releases (pinned versions)
 ARG ADVERTISEMENT_VERSION="v1.0.2"
@@ -92,7 +92,7 @@ RUN curl -fsSL "https://github.com/Kxnrl/modsharp-public/releases/download/${MOD
 # Result: /staging/sharp/{bin,core,configs,gamedata,locales,modules,shared}/
 
 # --- .NET 10.0 runtime (required by ModSharp — Steam RT3 can't use system .NET) ---
-ARG DOTNET_VERSION="10.0.0"
+ARG DOTNET_VERSION="10.0.5"
 RUN curl -fsSL "https://dotnetcli.azureedge.net/dotnet/Runtime/${DOTNET_VERSION}/dotnet-runtime-${DOTNET_VERSION}-linux-x64.tar.gz" \
         -o /tmp/dotnet-runtime.tar.gz \
     && mkdir -p /staging/sharp/runtime \
@@ -138,7 +138,7 @@ COPY --from=plugin-builder /build/out/timer-shared/ /staging/sharp/shared/Timer.
 RUN for mod in Timer Timer.RequestManager Timer.Shared MapChooserSharpMS TnmsAdminUtils; do \
       dir="/staging/sharp/modules/${mod}"; \
       if [ -d "${dir}" ] && [ ! -f "${dir}/${mod}.runtimeconfig.json" ]; then \
-        echo '{"runtimeOptions":{"tfm":"net10.0","framework":{"name":"Microsoft.NETCore.App","version":"10.0.0"}}}' > "${dir}/${mod}.runtimeconfig.json"; \
+        echo '{"runtimeOptions":{"tfm":"net10.0","framework":{"name":"Microsoft.NETCore.App","version":"10.0.5"}}}' > "${dir}/${mod}.runtimeconfig.json"; \
       fi; \
     done
 COPY --from=plugin-builder /build/timer/gamedata/ /staging/sharp/gamedata/
