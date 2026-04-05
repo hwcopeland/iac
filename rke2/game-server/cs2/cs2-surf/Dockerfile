@@ -19,12 +19,9 @@ ARG MODSHARP_BUILD="117"
 ARG ADVERTISEMENT_VERSION="v1.0.2"
 ARG RAMPFIX_VERSION="v1.0.6"
 ARG MSNOBLOCK_VERSION="MS-NoBlock-v.1.0.2"
-ARG TNMSADMIN_PLATFORM_VERSION="v0.0.2"
-
 # Plugins built from source (pinned commit SHAs)
 ARG SOURCE2SURF_TIMER_REF="master"
 ARG MAPCHOOSER_REF="main"
-ARG TNMSADMINUTILS_REF="main"
 
 # ---------------------------------------------------------------------------
 # Stage 1: Build plugins that have no release artifacts
@@ -34,8 +31,6 @@ FROM mcr.microsoft.com/dotnet/sdk:10.0 AS plugin-builder
 
 ARG SOURCE2SURF_TIMER_REF
 ARG MAPCHOOSER_REF
-ARG TNMSADMINUTILS_REF
-
 RUN apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /build
@@ -56,12 +51,6 @@ WORKDIR /build/mapchooser
 RUN dotnet publish MapChooserSharpMS/MapChooserSharpMS.csproj -c Release -r linux-x64 --no-self-contained -o /build/out/mapchooser && \
     dotnet publish MapChooserSharpMS.Shared/MapChooserSharpMS.Shared.csproj -c Release -r linux-x64 --no-self-contained -o /build/out/mapchooser-shared
 
-# --- TnmsAdminUtils ---
-RUN git clone --depth 1 --branch "${TNMSADMINUTILS_REF}" \
-        https://github.com/fltuna/TnmsAdminUtils.git /build/tnmsadminutils
-WORKDIR /build/tnmsadminutils
-RUN dotnet publish TnmsAdminUtils/TnmsAdminUtils.csproj -c Release -r linux-x64 --no-self-contained -o /build/out/tnmsadminutils
-
 # ---------------------------------------------------------------------------
 # Stage 2: Download and assemble the overlay
 # ---------------------------------------------------------------------------
@@ -72,8 +61,6 @@ ARG MODSHARP_BUILD
 ARG ADVERTISEMENT_VERSION
 ARG RAMPFIX_VERSION
 ARG MSNOBLOCK_VERSION
-ARG TNMSADMIN_PLATFORM_VERSION
-
 RUN apt-get update && apt-get install -y --no-install-recommends \
         curl unzip ca-certificates \
     && rm -rf /var/lib/apt/lists/*
@@ -124,18 +111,12 @@ RUN curl -fsSL "https://github.com/darkerz7/MS-NoBlock/releases/download/${MSNOB
     && unzip -qo /tmp/msnoblock.zip -d /staging/sharp/ \
     && rm /tmp/msnoblock.zip
 
-# --- TnmsAdministrationPlatform (zip has modules/ and shared/ — extract into sharp/) ---
-RUN curl -fsSL "https://github.com/fltuna/TnmsAdministrationPlatform/releases/download/${TNMSADMIN_PLATFORM_VERSION}/TnmsAdministrationPlatform.zip" \
-        -o /tmp/tnmsadmin.zip \
-    && unzip -qo /tmp/tnmsadmin.zip -d /staging/sharp/ \
-    && rm /tmp/tnmsadmin.zip
-
 # --- Source2Surf/Timer (built from source) ---
 COPY --from=plugin-builder /build/out/timer/ /staging/sharp/modules/Timer/
 COPY --from=plugin-builder /build/out/timer-rm/ /staging/sharp/modules/Timer.RequestManager/
 COPY --from=plugin-builder /build/out/timer-shared/ /staging/sharp/shared/Timer.Shared/
 # Generate runtimeconfig.json if missing (UseCommonOutputDirectory suppresses it)
-RUN for mod in Timer Timer.RequestManager Timer.Shared MapChooserSharpMS TnmsAdminUtils; do \
+RUN for mod in Timer Timer.RequestManager Timer.Shared MapChooserSharpMS; do \
       dir="/staging/sharp/modules/${mod}"; \
       if [ -d "${dir}" ] && [ ! -f "${dir}/${mod}.runtimeconfig.json" ]; then \
         echo '{"runtimeOptions":{"tfm":"net10.0","framework":{"name":"Microsoft.NETCore.App","version":"10.0.5"}}}' > "${dir}/${mod}.runtimeconfig.json"; \
@@ -147,9 +128,6 @@ COPY --from=plugin-builder /build/timer/sharp/ /staging/sharp/
 # --- MapChooserSharpMS (built from source) ---
 COPY --from=plugin-builder /build/out/mapchooser/ /staging/sharp/modules/MapChooserSharpMS/
 COPY --from=plugin-builder /build/out/mapchooser-shared/ /staging/sharp/shared/MapChooserSharpMS.Shared/
-
-# --- TnmsAdminUtils (built from source) ---
-COPY --from=plugin-builder /build/out/tnmsadminutils/ /staging/sharp/modules/TnmsAdminUtils/
 
 # ---------------------------------------------------------------------------
 # Stage 3: Final image
