@@ -19,18 +19,18 @@ ARG MODSHARP_BUILD="117"
 ARG ADVERTISEMENT_VERSION="v1.0.2"
 ARG RAMPFIX_VERSION="v1.0.6"
 ARG MSNOBLOCK_VERSION="MS-NoBlock-v.1.0.2"
+
 # Plugins built from source (pinned commit SHAs)
 ARG SOURCE2SURF_TIMER_REF="master"
-ARG MAPCHOOSER_REF="main"
 
 # ---------------------------------------------------------------------------
 # Stage 1: Build plugins that have no release artifacts
-# Source2Surf/Timer, MapChooserSharpMS, TnmsAdminUtils all target net10.0
+# Source2Surf/Timer targets net10.0
 # ---------------------------------------------------------------------------
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS plugin-builder
 
 ARG SOURCE2SURF_TIMER_REF
-ARG MAPCHOOSER_REF
+
 RUN apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /build
@@ -43,13 +43,6 @@ RUN sed -i '/<Target Name="PostBuild"/,/<\/Target>/d' Timer/Timer.csproj && \
     dotnet publish Timer/Timer.csproj -c Release -r linux-x64 --no-self-contained -o /build/out/timer && \
     dotnet publish Timer.RequestManager/Timer.RequestManager.csproj -c Release -r linux-x64 --no-self-contained -o /build/out/timer-rm && \
     dotnet publish Timer.Shared/Timer.Shared.csproj -c Release -r linux-x64 --no-self-contained -o /build/out/timer-shared
-
-# --- MapChooserSharpMS ---
-RUN git clone --depth 1 --branch "${MAPCHOOSER_REF}" \
-        https://github.com/fltuna/MapChooserSharpMS.git /build/mapchooser
-WORKDIR /build/mapchooser
-RUN dotnet publish MapChooserSharpMS/MapChooserSharpMS.csproj -c Release -r linux-x64 --no-self-contained -o /build/out/mapchooser && \
-    dotnet publish MapChooserSharpMS.Shared/MapChooserSharpMS.Shared.csproj -c Release -r linux-x64 --no-self-contained -o /build/out/mapchooser-shared
 
 # ---------------------------------------------------------------------------
 # Stage 2: Download and assemble the overlay
@@ -116,7 +109,7 @@ COPY --from=plugin-builder /build/out/timer/ /staging/sharp/modules/Timer/
 COPY --from=plugin-builder /build/out/timer-rm/ /staging/sharp/modules/Timer.RequestManager/
 COPY --from=plugin-builder /build/out/timer-shared/ /staging/sharp/shared/Timer.Shared/
 # Generate runtimeconfig.json if missing (UseCommonOutputDirectory suppresses it)
-RUN for mod in Timer Timer.RequestManager Timer.Shared MapChooserSharpMS; do \
+RUN for mod in Timer Timer.RequestManager Timer.Shared; do \
       dir="/staging/sharp/modules/${mod}"; \
       if [ -d "${dir}" ] && [ ! -f "${dir}/${mod}.runtimeconfig.json" ]; then \
         echo '{"runtimeOptions":{"tfm":"net10.0","framework":{"name":"Microsoft.NETCore.App","version":"10.0.5"}}}' > "${dir}/${mod}.runtimeconfig.json"; \
@@ -124,10 +117,6 @@ RUN for mod in Timer Timer.RequestManager Timer.Shared MapChooserSharpMS; do \
     done
 COPY --from=plugin-builder /build/timer/gamedata/ /staging/sharp/gamedata/
 COPY --from=plugin-builder /build/timer/sharp/ /staging/sharp/
-
-# --- MapChooserSharpMS (built from source) ---
-COPY --from=plugin-builder /build/out/mapchooser/ /staging/sharp/modules/MapChooserSharpMS/
-COPY --from=plugin-builder /build/out/mapchooser-shared/ /staging/sharp/shared/MapChooserSharpMS.Shared/
 
 # ---------------------------------------------------------------------------
 # Stage 3: Final image
