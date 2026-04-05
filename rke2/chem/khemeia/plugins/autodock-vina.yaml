@@ -1,0 +1,35 @@
+name: autodock-vina
+slug: docking
+version: "1.0"
+image: zot.hwcopeland.net/chem/autodock-vina:latest
+type: job
+database: docking
+
+input:
+  - name: pdbid
+    type: string
+    required: true
+    description: "PDB ID of target protein"
+  - name: ligand_db
+    type: string
+    required: true
+    description: "Ligand source database name"
+  - name: native_ligand
+    type: string
+    default: "TTT"
+  - name: chunk_size
+    type: int
+    default: 10000
+
+output:
+  - name: result_count
+    type: int
+  - name: best_affinity
+    type: float
+  - name: avg_affinity
+    type: float
+
+resources:
+  cpu: "1"
+  memory: "2048Mi"
+  timeout: 1h
