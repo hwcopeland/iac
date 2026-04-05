@@ -1,0 +1,105 @@
+# Job Templates for Docking Pipeline
+# These are reference templates — the controller creates jobs programmatically.
+
+---
+# Job 1: Prepare Receptor
+# Downloads PDB, removes native ligand, creates PDBQT + grid center.
+# Outputs receptor data as JSON to stdout for controller capture.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: prepare-receptor-{{ .WorkflowName }}
+  labels:
+    docking.khemia.io/job-type: prepare-receptor
+    docking.khemia.io/workflow: {{ .WorkflowName }}
+    docking.khemia.io/parent-job: {{ .WorkflowName }}
+spec:
+  ttlSecondsAfterFinished: 300
+  template:
+    metadata:
+      labels:
+        docking.khemia.io/job-type: prepare-receptor
+        docking.khemia.io/workflow: {{ .WorkflowName }}
+    spec:
+      restartPolicy: OnFailure
+      imagePullSecrets:
+        - name: zot-pull-secret
+      containers:
+        - name: prepare
+          image: {{ .Image }}
+          imagePullPolicy: Always
+          workingDir: /data
+          command: ["python3", "/autodock/scripts/proteinprepv2.py"]
+          args:
+            - "--protein_id"
+            - {{ .PdbId }}
+            - "--ligand_id"
+            - {{ .NativeLigand }}
+          volumeMounts:
+            - name: scratch
+              mountPath: /data
+      volumes:
+        - name: scratch
+          emptyDir: {}
+
+---
+# Job 2: Dock Batch
+# Reads pre-calculated ligand PDBQTs + receptor from MySQL.
+# Runs Vina docking. Writes results to staging table.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: dock-batch-{{ .WorkflowName }}-{{ .BatchIndex }}
+  labels:
+    docking.khemia.io/job-type: dock-batch
+    docking.khemia.io/workflow: {{ .WorkflowName }}
+    docking.khemia.io/parent-job: {{ .WorkflowName }}
+spec:
+  ttlSecondsAfterFinished: 300
+  template:
+    metadata:
+      labels:
+        docking.khemia.io/job-type: dock-batch
+        docking.khemia.io/workflow: {{ .WorkflowName }}
+    spec:
+      restartPolicy: OnFailure
+      imagePullSecrets:
+        - name: zot-pull-secret
+      containers:
+        - name: dock
+          image: {{ .Image }}
+          imagePullPolicy: Always
+          workingDir: /data
+          command: ["python3", "/autodock/scripts/dock_batch.py"]
+          env:
+            - name: WORKFLOW_NAME
+              value: {{ .WorkflowName }}
+            - name: PDBID
+              value: {{ .PdbId }}
+            - name: NATIVE_LIGAND
+              value: {{ .NativeLigand }}
+            - name: SOURCE_DB
+              value: {{ .SourceDb }}
+            - name: BATCH_OFFSET
+              value: "{{ .BatchOffset }}"
+            - name: BATCH_LIMIT
+              value: "{{ .BatchLimit }}"
+            - name: MYSQL_HOST
+              value: docking-mysql.chem.svc.cluster.local
+            - name: MYSQL_PORT
+              value: "3306"
+            - name: MYSQL_USER
+              value: root
+            - name: MYSQL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: docking-mysql-secret
+                  key: root-password
+            - name: MYSQL_DATABASE
+              value: docking
+          volumeMounts:
+            - name: scratch
+              mountPath: /data
+      volumes:
+        - name: scratch
+          emptyDir: {}

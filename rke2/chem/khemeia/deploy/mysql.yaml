@@ -1,0 +1,81 @@
+---
+# MySQL instance for storing docking results in the chem namespace.
+# ClusterIP only — accessible at docking-mysql.chem.svc.cluster.local:3306.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: pvc-docking-mysql
+  namespace: chem
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: longhorn
+  resources:
+    requests:
+      storage: 10Gi
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: docking-mysql
+  namespace: chem
+spec:
+  selector:
+    matchLabels:
+      app: docking-mysql
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: docking-mysql
+    spec:
+      containers:
+        - name: mysql
+          image: mysql:8.0
+          env:
+            - name: MYSQL_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: docking-mysql-secret
+                  key: root-password
+            - name: MYSQL_DATABASE
+              value: docking
+          ports:
+            - containerPort: 3306
+              name: mysql
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/mysql
+          readinessProbe:
+            exec:
+              command: ["mysqladmin", "ping", "-h", "localhost"]
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            exec:
+              command: ["mysqladmin", "ping", "-h", "localhost"]
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            timeoutSeconds: 5
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: pvc-docking-mysql
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: docking-mysql
+  namespace: chem
+spec:
+  selector:
+    app: docking-mysql
+  ports:
+    - port: 3306
+      targetPort: 3306
+      protocol: TCP
+  type: LoadBalancer
