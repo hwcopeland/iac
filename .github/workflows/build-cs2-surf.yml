@@ -1,8 +1,8 @@
 ---
-# Build and push the cs2-surf-server Docker image to GHCR.
+# Build and push the cs2-surf-server Docker image to local Zot registry.
 #
 # Runner: self-hosted ARC runner on the RKE2 cluster.
-# Registry: ghcr.io/hwcopeland/cs2-surf-server (GitHub Container Registry).
+# Registry: 10.44.0.6:5000/cs2-surf-server (Zot on-cluster).
 #
 # Image tag format: sha-<sha7> + latest.
 # GHA cache enabled (type=gha) for layer caching.
@@ -23,7 +23,6 @@ on:
 
 permissions:
   contents: read
-  packages: write
 
 jobs:
   build:
@@ -37,18 +36,11 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@b5ca514318bd6ebac0fb2aedd5d36ec1b5c232a2  # v3.10.0
 
-      - name: Log in to GHCR
-        uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772  # v3.4.0
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Extract metadata (tags, labels)
         id: meta
         uses: docker/metadata-action@902fa8ec7d6ecbf8d84d538b9b233a880e428804  # v5.7.0
         with:
-          images: ghcr.io/hwcopeland/cs2-surf-server
+          images: 10.44.0.6:5000/cs2-surf-server
           tags: |
             type=sha,prefix=sha-,format=short
             type=raw,value=latest
