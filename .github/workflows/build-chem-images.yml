@@ -1,24 +1,7 @@
 ---
-# Build and push all four chem Docker images to zot.hwcopeland.net/chem/.
+# Build and push Khemeia Docker images to zot.hwcopeland.net/chem/.
 #
 # Runner: self-hosted runner labeled arc-chem running on the RKE2 cluster.
-# The runner pod runs inside the cluster LAN and therefore has direct network
-# access to zot.hwcopeland.net — this is the solution to the private registry
-# network boundary (GitHub cloud runners cannot reach zot.hwcopeland.net).
-#
-# Registry credentials are stored as GitHub Actions encrypted repository secrets:
-#   ZOT_USERNAME — username for zot.hwcopeland.net (from Bitwarden 766ec5c7-...)
-#   ZOT_PASSWORD — password for zot.hwcopeland.net (from Bitwarden 766ec5c7-...)
-#
-# Cache strategy: registry-based layer cache (type=registry) with mode=max.
-# type=gha (GitHub Actions cache) does not work from on-cluster runners.
-#
-# Image tag format: build-<NNNNNN>-<sha7>
-# Zero-padded run number prefix guarantees lexicographic == chronological order,
-# which is required for Flux ImagePolicy alphabetical selection to pick the newest
-# build. Pure sha-<sha7> tags fail because hex digits are not monotonic
-# (e.g. sha-e063a72 beats sha-2398b71 alphabetically even though it is older).
-# Additionally pushes :latest for backward compatibility.
 
 name: Build and Push Chem Images
 
@@ -27,9 +10,10 @@ on:
     branches:
       - main
     paths:
-      - 'rke2/chem/compute-infrastructure/k8s-jobs/controller/**'
-      - 'rke2/chem/compute-infrastructure/k8s-jobs/result-writer/**'
-      - 'rke2/chem/compute-infrastructure/docker/autodock-vina/**'
+      - 'rke2/chem/khemeia/api/**'
+      - 'rke2/chem/khemeia/result-writer/**'
+      - 'rke2/chem/khemeia/containers/autodock-vina/**'
+      - 'rke2/chem/khemeia/plugins/**'
       - '.github/workflows/build-chem-images.yml'
   workflow_dispatch:
 
@@ -41,23 +25,20 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: docking-controller
-            image: zot.hwcopeland.net/chem/docking-controller
-            dockerfile: rke2/chem/compute-infrastructure/k8s-jobs/controller/Dockerfile
-            # Build context MUST be k8s-jobs/ (not k8s-jobs/controller/) because
-            # the Dockerfile uses: COPY controller/go.mod controller/go.sum ./
-            context: rke2/chem/compute-infrastructure/k8s-jobs/
+          - name: khemeia-controller
+            image: zot.hwcopeland.net/chem/khemeia-controller
+            dockerfile: rke2/chem/khemeia/api/Dockerfile
+            context: rke2/chem/khemeia/api/
 
           - name: autodock-vina
             image: zot.hwcopeland.net/chem/autodock-vina
-            dockerfile: rke2/chem/compute-infrastructure/docker/autodock-vina/Dockerfile
-            context: rke2/chem/compute-infrastructure/docker/autodock-vina/
+            dockerfile: rke2/chem/khemeia/containers/autodock-vina/Dockerfile
+            context: rke2/chem/khemeia/containers/autodock-vina/
 
-          - name: result-writer
-            image: zot.hwcopeland.net/chem/result-writer
-            dockerfile: rke2/chem/compute-infrastructure/k8s-jobs/result-writer/Dockerfile
-            context: rke2/chem/compute-infrastructure/k8s-jobs/result-writer/
-
+          - name: khemeia-result-writer
+            image: zot.hwcopeland.net/chem/khemeia-result-writer
+            dockerfile: rke2/chem/khemeia/result-writer/Dockerfile
+            context: rke2/chem/khemeia/result-writer/
 
     steps:
       - name: Checkout repository
@@ -80,7 +61,6 @@ jobs:
           RUN_NUM=$(printf '%06d' "${{ github.run_number }}")
           BUILD_TAG="build-${RUN_NUM}-${SHORT_SHA}"
           echo "build_tag=${BUILD_TAG}" >> "$GITHUB_OUTPUT"
-          echo "Building ${{ matrix.name }} with tag: ${BUILD_TAG}"
 
       - name: Build and push ${{ matrix.name }}
         uses: docker/build-push-action@14487ce63c7a62a4a324b0bfb37086795e31c6c1  # v6.16.0
@@ -92,7 +72,5 @@ jobs:
           tags: |
             ${{ matrix.image }}:${{ steps.tags.outputs.build_tag }}
             ${{ matrix.image }}:latest
-          # Registry-based layer cache with mode=max caches all intermediate layers.
-          # mode=max is required to cache multi-stage builder layers.
           cache-from: type=registry,ref=${{ matrix.image }}:cache
           cache-to: type=registry,ref=${{ matrix.image }}:cache,mode=max

@@ -12,4 +12,8 @@ resources:
   - image-policy-jupyter-chem.yaml
   - image-repository-result-writer.yaml
   - image-policy-result-writer.yaml
+  - image-repository-khemeia-controller.yaml
+  - image-policy-khemeia-controller.yaml
+  - image-repository-khemeia-result-writer.yaml
+  - image-policy-khemeia-result-writer.yaml
   - image-update-automation.yaml
