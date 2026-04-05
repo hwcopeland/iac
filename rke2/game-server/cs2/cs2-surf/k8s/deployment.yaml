@@ -104,7 +104,7 @@ spec:
             - name: TICKRATE
               value: "64"
             - name: MAP
-              value: "surf_kitsune"
+              value: "de_dust2"
             - name: SERVER_NAME
               value: "W4de Surf"
           resources:
@@ -124,7 +124,7 @@ spec:
               port: 27015
             initialDelaySeconds: 30
             periodSeconds: 10
-            failureThreshold: 60
+            failureThreshold: 120
           livenessProbe:
             tcpSocket:
               port: 27015
