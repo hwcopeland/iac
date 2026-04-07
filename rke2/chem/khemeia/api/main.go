@@ -442,7 +442,7 @@ func (c *Controller) startAPIServer() error {
 	mux.HandleFunc("/readyz", handler.ReadinessCheck)
 
 	log.Println("API server listening on :8080")
-	return http.ListenAndServe(":8080", corsMiddleware(mux))
+	return http.ListenAndServe(":8080", corsMiddleware(bodySizeMiddleware(mux)))
 }
 
 // allowedOrigins is the set of origins permitted by the CORS policy.
@@ -450,6 +450,14 @@ var allowedOrigins = map[string]bool{
 	"https://khemeia.net":             true,
 	"https://khemeia.hwcopeland.net":  true,
 	"http://localhost:5174":           true,
+}
+
+// bodySizeMiddleware limits the maximum request body size to prevent abuse.
+func bodySizeMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.Body = http.MaxBytesReader(w, r.Body, 10<<20) // 10MB max
+		next.ServeHTTP(w, r)
+	})
 }
 
 // corsMiddleware adds CORS headers to all responses.

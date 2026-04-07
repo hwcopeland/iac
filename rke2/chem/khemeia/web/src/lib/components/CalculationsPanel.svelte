@@ -3,6 +3,7 @@
   import { getPlugins, submitJob, getJobs, getJob } from '$lib/api';
   import type { Plugin, PluginInputField } from '$lib/api';
   import { getCurrentStructureText } from '$lib/viewer';
+  import { isAuthenticated } from '$lib/auth';
 
   let plugins = $state<Plugin[]>([]);
   let pluginsLoading = $state(true);
@@ -18,7 +19,11 @@
   let pollingJobs = $state<Set<string>>(new Set());
 
   $effect(() => {
-    loadPlugins();
+    if (isAuthenticated()) {
+      loadPlugins();
+    } else {
+      pluginsLoading = false;
+    }
   });
 
   async function loadPlugins() {
