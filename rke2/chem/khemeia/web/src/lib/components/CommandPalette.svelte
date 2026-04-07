@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { loadPdb, resetCamera, toggleSpin } from '$lib/viewer';
+  import { loadPdb, resetCamera } from '$lib/viewer';
 
   let { open = $bindable(false) }: { open: boolean } = $props();
   let query = $state('');
@@ -18,7 +18,6 @@
     { id: 'load-4hhb', label: 'Load Hemoglobin (4HHB)', hint: 'demo structure', handler: () => { loadPdb('4hhb'); close(); } },
     { id: 'load-1ubq', label: 'Load Ubiquitin (1UBQ)', hint: 'demo structure', handler: () => { loadPdb('1ubq'); close(); } },
     { id: 'reset', label: 'Reset Camera', hint: 'center view', handler: () => { resetCamera(); close(); } },
-    { id: 'spin', label: 'Toggle Spin', hint: 'rotate', handler: () => { toggleSpin(true); close(); } },
   ];
 
   let filtered = $derived(

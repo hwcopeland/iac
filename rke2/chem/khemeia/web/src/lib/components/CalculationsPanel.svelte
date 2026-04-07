@@ -1,20 +1,21 @@
 <script lang="ts">
   import Panel from './Panel.svelte';
-  import { getPlugins, submitJob, getJobs } from '$lib/api';
+  import { getPlugins, submitJob, getJobs, getJob } from '$lib/api';
   import type { Plugin, PluginInputField } from '$lib/api';
+  import { getCurrentStructureText } from '$lib/viewer';
 
   let plugins = $state<Plugin[]>([]);
   let pluginsLoading = $state(true);
   let pluginsError = $state('');
   let activePlugin = $state<string | null>(null);
 
-  // Form data per plugin slug
   let formData = $state<Record<string, Record<string, any>>>({});
   let submitting = $state<Record<string, boolean>>({});
   let submitErrors = $state<Record<string, string>>({});
   let jobs = $state<Record<string, any[]>>({});
   let jobsLoading = $state<Record<string, boolean>>({});
   let selectedJob = $state<Record<string, any> | null>(null);
+  let pollingJobs = $state<Set<string>>(new Set());
 
   $effect(() => {
     loadPlugins();
@@ -56,17 +57,72 @@
     formData[slug][name] = value;
   }
 
+  // Auto-fill structure data if available
+  function autoFillStructure(slug: string) {
+    const pdb = getCurrentStructureText();
+    if (!pdb) return;
+    const data = formData[slug];
+    if (!data) return;
+    // Look for fields that might accept structure data
+    for (const key of Object.keys(data)) {
+      const lower = key.toLowerCase();
+      if ((lower.includes('input_file') || lower.includes('structure') || lower.includes('pdb'))
+          && !data[key]) {
+        data[key] = pdb;
+      }
+    }
+  }
+
   async function handleSubmit(plugin: Plugin) {
+    autoFillStructure(plugin.slug);
     submitting[plugin.slug] = true;
     submitErrors[plugin.slug] = '';
     try {
-      await submitJob(plugin.slug, formData[plugin.slug] || {});
+      const result = await submitJob(plugin.slug, formData[plugin.slug] || {});
+      // Start polling this job
+      if (result.name) {
+        pollJob(plugin.slug, result.name);
+      }
       await loadJobs(plugin);
     } catch (e: any) {
       submitErrors[plugin.slug] = e.message || 'Submission failed';
     } finally {
       submitting[plugin.slug] = false;
     }
+  }
+
+  async function pollJob(slug: string, jobName: string) {
+    const key = `${slug}/${jobName}`;
+    pollingJobs.add(key);
+    pollingJobs = new Set(pollingJobs);
+
+    const poll = async () => {
+      try {
+        const detail = await getJob(slug, jobName);
+        // Update in job list
+        if (jobs[slug]) {
+          const idx = jobs[slug].findIndex((j: any) => j.name === jobName);
+          if (idx >= 0) jobs[slug][idx] = { ...jobs[slug][idx], ...detail };
+        }
+        // Update selected job if viewing this one
+        if (selectedJob?.name === jobName) {
+          selectedJob = detail;
+        }
+        // Stop polling if terminal
+        if (detail.status === 'Completed' || detail.status === 'Failed') {
+          pollingJobs.delete(key);
+          pollingJobs = new Set(pollingJobs);
+          await loadJobs(plugins.find(p => p.slug === slug)!);
+          return;
+        }
+        // Continue polling
+        setTimeout(poll, 3000);
+      } catch {
+        pollingJobs.delete(key);
+        pollingJobs = new Set(pollingJobs);
+      }
+    };
+    poll();
   }
 
   async function loadJobs(plugin: Plugin) {
@@ -81,9 +137,26 @@
     }
   }
 
-  function inputType(field: PluginInputField): string {
-    if (field.type === 'int' || field.type === 'float') return 'number';
-    return 'text';
+  async function viewJob(slug: string, job: any) {
+    try {
+      selectedJob = await getJob(slug, job.name);
+    } catch {
+      selectedJob = job;
+    }
+  }
+
+  function formatDate(d: string): string {
+    if (!d) return '';
+    const date = new Date(d);
+    return date.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  }
+
+  function statusClass(status: string): string {
+    const s = status?.toLowerCase();
+    if (s === 'completed') return 'completed';
+    if (s === 'failed') return 'failed';
+    if (s === 'running') return 'running';
+    return 'pending';
   }
 </script>
 
@@ -94,7 +167,7 @@
     <div class="error-box">
       <p class="error-title">Failed to load plugins</p>
       <p class="error-detail">{pluginsError}</p>
-      <button class="btn btn-small" onclick={loadPlugins}>Retry</button>
+      <button class="retry-btn" onclick={loadPlugins}>Retry</button>
     </div>
   {:else if plugins.length === 0}
     <div class="empty">No computation plugins available.</div>
@@ -104,7 +177,7 @@
         <button
           class="plugin-tab"
           class:active={activePlugin === plugin.slug}
-          onclick={() => (activePlugin = plugin.slug)}
+          onclick={() => { activePlugin = plugin.slug; loadJobs(plugin); }}
         >
           {plugin.name}
         </button>
@@ -113,7 +186,7 @@
 
     {#each plugins as plugin}
       {#if activePlugin === plugin.slug}
-        <Panel title="{plugin.name} Input">
+        <Panel title="Input">
           <form
             class="plugin-form"
             onsubmit={(e) => { e.preventDefault(); handleSubmit(plugin); }}
@@ -122,9 +195,7 @@
               <div class="form-field">
                 <label class="form-label" for="{plugin.slug}-{field.name}">
                   {field.name.replace(/_/g, ' ')}
-                  {#if field.required}
-                    <span class="required">*</span>
-                  {/if}
+                  {#if field.required}<span class="required">*</span>{/if}
                 </label>
                 {#if field.description}
                   <p class="form-desc">{field.description}</p>
@@ -178,7 +249,7 @@
 
             <button
               type="submit"
-              class="btn btn-accent btn-full"
+              class="submit-btn"
               disabled={submitting[plugin.slug]}
             >
               {submitting[plugin.slug] ? 'Submitting...' : 'Submit Job'}
@@ -190,33 +261,74 @@
           </form>
         </Panel>
 
-        <Panel title="Recent Jobs" collapsed={true}>
-          {#if jobsLoading[plugin.slug]}
-            <p class="loading-small">Loading jobs...</p>
+        <Panel title="Jobs" collapsed={false}>
+          <div class="jobs-header">
+            <button class="refresh-btn" onclick={() => loadJobs(plugin)} disabled={jobsLoading[plugin.slug]}>
+              {jobsLoading[plugin.slug] ? '...' : 'Refresh'}
+            </button>
+          </div>
+          {#if jobsLoading[plugin.slug] && !jobs[plugin.slug]?.length}
+            <p class="loading-small">Loading...</p>
           {:else if (jobs[plugin.slug]?.length ?? 0) === 0}
             <p class="empty-small">No jobs yet.</p>
           {:else}
-            <ul class="job-list">
+            <div class="job-list">
               {#each jobs[plugin.slug] as job}
-                <li>
-                  <button
-                    class="job-item"
-                    onclick={() => (selectedJob = job)}
-                  >
-                    <span class="job-id">{job.id || 'job'}</span>
-                    <span class="job-status" class:running={job.status === 'running'} class:completed={job.status === 'completed'} class:failed={job.status === 'failed'}>
-                      {job.status || 'unknown'}
-                    </span>
-                  </button>
-                </li>
+                <button
+                  class="job-item"
+                  class:selected={selectedJob?.name === job.name}
+                  onclick={() => viewJob(plugin.slug, job)}
+                >
+                  <div class="job-info">
+                    <span class="job-name">{job.name}</span>
+                    <span class="job-date">{formatDate(job.created_at)}</span>
+                  </div>
+                  <span class="job-status {statusClass(job.status)}">
+                    {#if pollingJobs.has(`${plugin.slug}/${job.name}`)}
+                      {job.status}...
+                    {:else}
+                      {job.status}
+                    {/if}
+                  </span>
+                </button>
               {/each}
-            </ul>
+            </div>
           {/if}
         </Panel>
 
         {#if selectedJob}
-          <Panel title="Job Output">
-            <pre class="job-output">{JSON.stringify(selectedJob, null, 2)}</pre>
+          <Panel title="Result">
+            <div class="result-section">
+              <div class="result-header">
+                <span class="result-name">{selectedJob.name}</span>
+                <span class="job-status {statusClass(selectedJob.status)}">{selectedJob.status}</span>
+              </div>
+
+              {#if selectedJob.output_data}
+                <div class="output-grid">
+                  {#each Object.entries(selectedJob.output_data) as [key, value]}
+                    <div class="output-row">
+                      <span class="output-key">{key.replace(/_/g, ' ')}</span>
+                      <span class="output-value">{typeof value === 'number' ? (value as number).toFixed(6) : value}</span>
+                    </div>
+                  {/each}
+                </div>
+              {/if}
+
+              {#if selectedJob.error_output}
+                <div class="error-output">
+                  <p class="error-label">Error</p>
+                  <pre class="error-pre">{selectedJob.error_output}</pre>
+                </div>
+              {/if}
+
+              {#if selectedJob.input_data}
+                <details class="input-details">
+                  <summary>Input</summary>
+                  <pre class="job-pre">{JSON.stringify(selectedJob.input_data, null, 2)}</pre>
+                </details>
+              {/if}
+            </div>
           </Panel>
         {/if}
       {/if}
@@ -230,27 +342,15 @@
     flex-direction: column;
   }
 
-  .loading {
-    color: var(--text-secondary);
+  .loading, .empty {
+    color: var(--text-muted, #484f58);
     font-size: 13px;
     padding: 16px;
     text-align: center;
   }
 
-  .loading-small {
-    color: var(--text-muted);
-    font-size: 12px;
-  }
-
-  .empty {
-    color: var(--text-muted);
-    font-size: 13px;
-    padding: 16px;
-    text-align: center;
-  }
-
-  .empty-small {
-    color: var(--text-muted);
+  .loading-small, .empty-small {
+    color: var(--text-muted, #484f58);
     font-size: 12px;
   }
 
@@ -260,20 +360,20 @@
   }
 
   .error-title {
-    color: var(--danger);
+    color: var(--danger, #f85149);
     font-weight: 600;
     font-size: 13px;
     margin-bottom: 4px;
   }
 
   .error-detail {
-    color: var(--text-secondary);
+    color: var(--text-secondary, #8b949e);
     font-size: 12px;
     margin-bottom: 8px;
   }
 
   .error-msg {
-    color: var(--danger);
+    color: var(--danger, #f85149);
     font-size: 12px;
     margin-top: 8px;
   }
@@ -288,26 +388,18 @@
   .plugin-tab {
     background: none;
     border: none;
-    color: var(--text-secondary);
+    color: var(--text-secondary, #8b949e);
     font-size: 12px;
     font-weight: 500;
     padding: 4px 10px;
-    border-radius: var(--radius-sm);
+    border-radius: 4px;
     cursor: pointer;
-    transition: all var(--transition-fast);
+    transition: all 0.15s;
     white-space: nowrap;
-    font-family: var(--font-sans);
   }
 
-  .plugin-tab:hover {
-    color: var(--text-primary);
-    background: var(--accent-subtle);
-  }
-
-  .plugin-tab.active {
-    color: var(--accent);
-    background: var(--accent-subtle);
-  }
+  .plugin-tab:hover { color: var(--text-primary, #e6edf3); background: rgba(88,166,255,0.1); }
+  .plugin-tab.active { color: var(--accent, #58a6ff); background: rgba(88,166,255,0.1); }
 
   .plugin-form {
     display: flex;
@@ -324,43 +416,33 @@
   .form-label {
     font-size: 11px;
     font-weight: 600;
-    color: var(--text-secondary);
+    color: var(--text-secondary, #8b949e);
     text-transform: uppercase;
     letter-spacing: 0.3px;
   }
 
-  .required {
-    color: var(--danger);
-  }
+  .required { color: var(--danger, #f85149); }
 
   .form-desc {
     font-size: 11px;
-    color: var(--text-muted);
+    color: var(--text-muted, #484f58);
   }
 
-  .form-input,
-  .form-select,
-  .form-textarea {
-    background: var(--bg-input);
-    border: 1px solid var(--border-default);
-    color: var(--text-primary);
-    font-family: var(--font-mono);
+  .form-input, .form-select, .form-textarea {
+    background: rgba(0,0,0,0.3);
+    border: 1px solid rgba(48,54,61,0.6);
+    color: var(--text-primary, #e6edf3);
+    font-family: 'SF Mono', monospace;
     font-size: 12px;
     padding: 6px 8px;
-    border-radius: var(--radius-sm);
-    transition: border-color var(--transition-fast);
+    border-radius: 4px;
+    outline: none;
+    transition: border-color 0.15s;
     width: 100%;
   }
 
-  .form-input:focus,
-  .form-select:focus,
-  .form-textarea:focus {
-    border-color: var(--border-focus);
-    outline: none;
-  }
-
-  .form-select {
-    cursor: pointer;
+  .form-input:focus, .form-select:focus, .form-textarea:focus {
+    border-color: var(--accent, #58a6ff);
   }
 
   .form-textarea {
@@ -370,56 +452,56 @@
 
   .field-hint {
     font-size: 10px;
-    color: var(--text-muted);
+    color: var(--text-muted, #484f58);
   }
 
-  .btn {
-    background: var(--accent-subtle);
-    border: 1px solid transparent;
-    color: var(--accent);
-    font-size: 12px;
-    font-weight: 500;
-    padding: 6px 12px;
-    border-radius: var(--radius-sm);
-    cursor: pointer;
-    transition: all var(--transition-fast);
-    font-family: var(--font-sans);
-  }
-
-  .btn:hover:not(:disabled) {
-    background: rgba(88, 166, 255, 0.25);
-  }
-
-  .btn:disabled {
-    opacity: 0.4;
-    cursor: not-allowed;
-  }
-
-  .btn-accent {
-    background: var(--accent);
-    color: var(--bg-base);
+  .submit-btn {
+    background: var(--accent, #58a6ff);
+    border: none;
+    color: #000;
+    font-size: 13px;
     font-weight: 600;
-  }
-
-  .btn-accent:hover:not(:disabled) {
-    background: var(--accent-hover);
-  }
-
-  .btn-full {
-    width: 100%;
     padding: 8px 12px;
+    border-radius: 6px;
+    cursor: pointer;
+    width: 100%;
   }
 
-  .btn-small {
+  .submit-btn:hover:not(:disabled) { opacity: 0.9; }
+  .submit-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  .retry-btn {
+    background: rgba(88,166,255,0.1);
+    border: 1px solid rgba(88,166,255,0.3);
+    color: var(--accent, #58a6ff);
     font-size: 11px;
     padding: 4px 10px;
+    border-radius: 4px;
+    cursor: pointer;
   }
 
+  .jobs-header {
+    display: flex;
+    justify-content: flex-end;
+    margin-bottom: 6px;
+  }
+
+  .refresh-btn {
+    background: none;
+    border: 1px solid rgba(48,54,61,0.6);
+    color: var(--text-secondary, #8b949e);
+    font-size: 10px;
+    padding: 2px 8px;
+    border-radius: 4px;
+    cursor: pointer;
+  }
+
+  .refresh-btn:hover { color: var(--text-primary, #e6edf3); }
+
   .job-list {
-    list-style: none;
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 3px;
   }
 
   .job-item {
@@ -428,23 +510,36 @@
     align-items: center;
     width: 100%;
     padding: 6px 8px;
-    background: var(--bg-input);
-    border: 1px solid var(--border-default);
-    border-radius: var(--radius-sm);
+    background: rgba(0,0,0,0.15);
+    border: 1px solid transparent;
+    border-radius: 4px;
     cursor: pointer;
-    transition: border-color var(--transition-fast);
-    font-family: var(--font-sans);
-    color: var(--text-primary);
-    font-size: 12px;
+    transition: all 0.15s;
+    text-align: left;
   }
 
-  .job-item:hover {
-    border-color: var(--accent);
+  .job-item:hover { background: rgba(255,255,255,0.05); border-color: rgba(48,54,61,0.6); }
+  .job-item.selected { border-color: var(--accent, #58a6ff); background: rgba(88,166,255,0.05); }
+
+  .job-info {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    overflow: hidden;
   }
 
-  .job-id {
-    font-family: var(--font-mono);
+  .job-name {
+    font-family: 'SF Mono', monospace;
     font-size: 11px;
+    color: var(--text-primary, #e6edf3);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .job-date {
+    font-size: 10px;
+    color: var(--text-muted, #484f58);
   }
 
   .job-status {
@@ -453,37 +548,103 @@
     text-transform: uppercase;
     padding: 1px 6px;
     border-radius: 3px;
-    background: var(--accent-subtle);
-    color: var(--accent);
+    white-space: nowrap;
+    flex-shrink: 0;
   }
 
-  .job-status.running {
-    background: rgba(210, 153, 34, 0.15);
-    color: var(--warning);
+  .job-status.pending { background: rgba(88,166,255,0.1); color: var(--accent, #58a6ff); }
+  .job-status.running { background: rgba(210,153,34,0.15); color: #d29922; }
+  .job-status.completed { background: rgba(63,185,80,0.15); color: #3fb950; }
+  .job-status.failed { background: rgba(248,81,73,0.15); color: #f85149; }
+
+  .result-section {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
   }
 
-  .job-status.completed {
-    background: rgba(63, 185, 80, 0.15);
-    color: var(--success);
+  .result-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
   }
 
-  .job-status.failed {
-    background: rgba(248, 81, 73, 0.15);
-    color: var(--danger);
-  }
-
-  .job-output {
-    background: var(--bg-input);
-    border: 1px solid var(--border-default);
-    border-radius: var(--radius-sm);
-    padding: 8px;
-    font-family: var(--font-mono);
+  .result-name {
+    font-family: 'SF Mono', monospace;
     font-size: 11px;
-    color: var(--text-secondary);
-    overflow-x: auto;
+    color: var(--text-secondary, #8b949e);
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .output-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+  }
+
+  .output-row {
+    display: flex;
+    justify-content: space-between;
+    padding: 4px 8px;
+    background: rgba(0,0,0,0.2);
+    border-radius: 4px;
+  }
+
+  .output-key {
+    font-size: 11px;
+    color: var(--text-secondary, #8b949e);
+    text-transform: capitalize;
+  }
+
+  .output-value {
+    font-family: 'SF Mono', monospace;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-primary, #e6edf3);
+  }
+
+  .error-output {
+    background: rgba(248,81,73,0.05);
+    border: 1px solid rgba(248,81,73,0.2);
+    border-radius: 4px;
+    padding: 8px;
+  }
+
+  .error-label {
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--danger, #f85149);
+    text-transform: uppercase;
+    margin-bottom: 4px;
+  }
+
+  .error-pre, .job-pre {
+    font-family: 'SF Mono', monospace;
+    font-size: 11px;
+    color: var(--text-secondary, #8b949e);
     white-space: pre-wrap;
     word-break: break-word;
-    max-height: 300px;
+    max-height: 200px;
     overflow-y: auto;
+    margin: 0;
+  }
+
+  .input-details {
+    margin-top: 4px;
+  }
+
+  .input-details summary {
+    font-size: 11px;
+    color: var(--text-secondary, #8b949e);
+    cursor: pointer;
+    user-select: none;
+  }
+
+  .input-details .job-pre {
+    margin-top: 4px;
+    background: rgba(0,0,0,0.2);
+    padding: 8px;
+    border-radius: 4px;
   }
 </style>

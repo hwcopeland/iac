@@ -58,6 +58,12 @@
     flex: 0 0 auto;
   }
 
+  .logo-img {
+    width: 24px;
+    height: 24px;
+    margin-right: 6px;
+  }
+
   .logo {
     font-family: var(--font-mono);
     font-size: 16px;
