@@ -1,7 +1,7 @@
 name: psi4
 slug: psi4
 version: "1.0"
-image: psi4/psi4:latest
+image: zot.hwcopeland.net/chem/psi4:latest
 type: job
 database: psi4
 

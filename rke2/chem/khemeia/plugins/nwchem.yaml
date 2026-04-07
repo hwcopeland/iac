@@ -1,7 +1,7 @@
 name: nwchem
 slug: nwchem
 version: "1.0"
-image: openchemistry/nwchem:latest
+image: zot.hwcopeland.net/chem/nwchem:latest
 type: job
 database: nwchem
 

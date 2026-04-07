@@ -16,6 +16,15 @@ name: E2E Test — Chem Job Cycle
 
 on:
   workflow_dispatch:
+    inputs:
+      run_api_tests:
+        description: "Run external API integration tests (includes HIV docking benchmark, ~15 min)"
+        type: boolean
+        default: true
+      api_url:
+        description: "Khemeia API URL for external tests"
+        type: string
+        default: "https://khemeia.hwcopeland.net"
 
 permissions:
   contents: read
@@ -202,3 +211,33 @@ jobs:
             curl -sf -X DELETE "$CONTROLLER_URL/api/v1/dockingjobs/$JOB_NAME" \
             && echo "Deleted workflow $JOB_NAME" || true
           # Test ligands remain in DB (idempotent via ON DUPLICATE KEY UPDATE)
+
+  # ─── External API Integration Tests (Health, Plugins, QE, HIV Docking Benchmark) ───
+  api-integration-test:
+    name: API integration tests (HIV docking benchmark)
+    if: github.event_name == 'workflow_dispatch' && inputs.run_api_tests
+    runs-on: [self-hosted, arc-chem]
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify test dependencies
+        run: |
+          echo "Checking required tools..."
+          for tool in curl jq bc kubectl; do
+            if command -v "$tool" &>/dev/null; then
+              echo "  $tool: $(command -v $tool)"
+            else
+              echo "ERROR: $tool not found on runner"
+              exit 1
+            fi
+          done
+
+      - name: Run API integration tests
+        env:
+          API_URL: ${{ inputs.api_url }}
+        run: |
+          chmod +x rke2/chem/khemeia/tests/api.test.sh
+          rke2/chem/khemeia/tests/api.test.sh "$API_URL"
