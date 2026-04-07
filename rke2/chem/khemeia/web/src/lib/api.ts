@@ -65,3 +65,7 @@ export async function submitJob(slug: string, data: Record<string, any>): Promis
 export async function getJobs(slug: string): Promise<any> {
   return api(`/api/v1/${slug}/jobs`);
 }
+
+export async function getJob(slug: string, jobName: string): Promise<any> {
+  return api(`/api/v1/${slug}/jobs/${jobName}`);
+}

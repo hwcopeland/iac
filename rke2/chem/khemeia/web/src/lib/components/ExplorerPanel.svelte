@@ -1,11 +1,12 @@
 <script lang="ts">
   import Panel from './Panel.svelte';
-  import { loadPdb, loadFile, resetCamera, toggleSpin, isReady } from '$lib/viewer';
+  import { loadPdb, loadFile, resetCamera, isReady } from '$lib/viewer';
+
+  let { onStructureLoad = () => {} }: { onStructureLoad?: () => void } = $props();
 
   let pdbId = $state('');
   let loading = $state(false);
   let error = $state('');
-  let spinning = $state(false);
   let fileInput = $state<HTMLInputElement>(undefined as unknown as HTMLInputElement);
 
   async function handleLoadPdb() {
@@ -14,6 +15,7 @@
     error = '';
     try {
       await loadPdb(pdbId.trim());
+      onStructureLoad();
     } catch (e: any) {
       error = e.message || 'Failed to load structure';
     } finally {
@@ -36,6 +38,7 @@
       const text = await file.text();
       const ext = file.name.split('.').pop()?.toLowerCase() || 'pdb';
       await loadFile(text, ext);
+      onStructureLoad();
     } catch (err: any) {
       error = err.message || 'Failed to load file';
     } finally {
@@ -47,13 +50,7 @@
     resetCamera();
   }
 
-  function handleSpin() {
-    spinning = !spinning;
-    toggleSpin(spinning);
-  }
 
-  const representations = ['Cartoon', 'Ball & Stick', 'Spacefill', 'Wireframe'] as const;
-  const colorSchemes = ['Element', 'Chain', 'Secondary Structure', 'Hydrophobicity'] as const;
 </script>
 
 <div class="explorer-panels">
@@ -85,28 +82,9 @@
     {/if}
   </Panel>
 
-  <Panel title="Representation">
-    <div class="btn-grid">
-      {#each representations as rep}
-        <button class="btn btn-small">{rep}</button>
-      {/each}
-    </div>
-  </Panel>
-
-  <Panel title="Color Scheme">
-    <div class="btn-grid">
-      {#each colorSchemes as scheme}
-        <button class="btn btn-small">{scheme}</button>
-      {/each}
-    </div>
-  </Panel>
-
   <Panel title="Controls">
     <div class="btn-row">
       <button class="btn btn-small" onclick={handleReset}>Reset View</button>
-      <button class="btn btn-small" class:active={spinning} onclick={handleSpin}>
-        {spinning ? 'Stop Spin' : 'Spin'}
-      </button>
     </div>
   </Panel>
 </div>
@@ -185,12 +163,6 @@
   .btn-small.active {
     background: var(--accent);
     color: var(--bg-base);
-  }
-
-  .btn-grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 4px;
   }
 
   .btn-row {
