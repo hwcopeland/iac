@@ -38,9 +38,8 @@ resources:
 
 command: |
   cd /scratch && cp /input/* . &&
-  echo "memory {{ .memory_gb }} gb" > input.in &&
-  cat input_file.txt >> input.in &&
-  psi4 -n {{ .num_threads }} input.in -o output.dat 2>&1;
+  echo "memory {{ .memory_gb }} gb" | cat - input.in > full_input.in &&
+  psi4 -n {{ .num_threads }} full_input.in -o output.dat 2>&1;
   PSI4_RC=$?;
   echo "Psi4 exit code: $PSI4_RC";
   cat output.dat 2>/dev/null || echo "No output.dat produced";
