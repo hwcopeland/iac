@@ -46,10 +46,79 @@ log "Overlay version mismatch (image: ${IMAGE_VERSION}, installed: ${INSTALLED_V
 # before steamcmd app_update, but the entrypoint runs steamcmd first)
 mkdir -p "${CS2_DIR}/game/csgo"
 
+# ── Clean up kus remnants from PVC ──────────────────────────────────────────
+# Remove .disabled module dirs left by kus-era disable/enable toggling
+SHARP_MODULES="${CS2_DIR}/game/sharp/modules"
+if [ -d "${SHARP_MODULES}" ]; then
+    disabled_count=0
+    for d in "${SHARP_MODULES}"/*.disabled; do
+        [ -d "$d" ] && rm -rf "$d" && disabled_count=$((disabled_count + 1))
+    done
+    [ "$disabled_count" -gt 0 ] && log "Removed ${disabled_count} .disabled module dirs from PVC"
+fi
+
+# Wipe kus cfg files (25-mode configs: 1v1, aim, awp, bhop, comp, etc.)
+# Keep only Valve defaults (boot.vcfg, banned_*.cfg) and our server.cfg
+CFG_DIR="${CS2_DIR}/game/csgo/cfg"
+if [ -d "${CFG_DIR}" ]; then
+    kus_count=0
+    for f in "${CFG_DIR}"/*.cfg; do
+        [ ! -f "$f" ] && continue
+        fname="$(basename "$f")"
+        case "${fname}" in
+            server.cfg|banned_ip.cfg|banned_user.cfg) continue ;;
+        esac
+        rm -f "$f" && kus_count=$((kus_count + 1))
+    done
+    # Remove kus game-mode subdirs
+    for d in cs2-executes cs2-retakes sharptimer; do
+        [ -d "${CFG_DIR}/${d}" ] && rm -rf "${CFG_DIR}/${d}" && kus_count=$((kus_count + 1))
+    done
+    # Remove kus GeoIP database
+    rm -f "${CFG_DIR}/GeoLite2-Country.mmdb" && kus_count=$((kus_count + 1))
+    [ "$kus_count" -gt 0 ] && log "Cleaned ${kus_count} kus-era files/dirs from cfg/"
+fi
+
 # Copy overlay contents into the game directory
 # ModSharp installs to game/sharp/ (NOT game/csgo/sharp/)
 # The zip extracts as sharp/ which goes directly under game/
 cp -rf "${OVERLAY_DIR}/." "${CS2_DIR}/game/"
+
+# ── Deploy baked-in configs to PVC ──────────────────────────────────────────
+CONFIGS_DIR="/opt/cs2-surf/configs"
+
+# server.cfg → csgo/cfg/
+if [ -f "${CONFIGS_DIR}/server.cfg" ]; then
+    mkdir -p "${CS2_DIR}/game/csgo/cfg"
+    cp -f "${CONFIGS_DIR}/server.cfg" "${CS2_DIR}/game/csgo/cfg/server.cfg"
+    log "Deployed server.cfg"
+fi
+
+# gamemodes_server.txt → csgo/
+if [ -f "${CONFIGS_DIR}/gamemodes_server.txt" ]; then
+    cp -f "${CONFIGS_DIR}/gamemodes_server.txt" "${CS2_DIR}/game/csgo/gamemodes_server.txt"
+    log "Deployed gamemodes_server.txt"
+fi
+
+# subscribed_file_ids.txt → csgo/ (workshop maps)
+if [ -f "${CONFIGS_DIR}/subscribed_file_ids.txt" ]; then
+    cp -f "${CONFIGS_DIR}/subscribed_file_ids.txt" "${CS2_DIR}/game/csgo/subscribed_file_ids.txt"
+    log "Deployed subscribed_file_ids.txt"
+fi
+
+# timer-replay.jsonc → sharp/configs/ (disable replay bot spam)
+if [ -f "${CONFIGS_DIR}/timer-replay.jsonc" ]; then
+    mkdir -p "${CS2_DIR}/game/sharp/configs"
+    cp -f "${CONFIGS_DIR}/timer-replay.jsonc" "${CS2_DIR}/game/sharp/configs/timer-replay.jsonc"
+    log "Deployed timer-replay.jsonc"
+fi
+
+# admins.jsonc → sharp/configs/ (ModSharp admin system)
+if [ -f "${CONFIGS_DIR}/admins.jsonc" ]; then
+    mkdir -p "${CS2_DIR}/game/sharp/configs"
+    cp -f "${CONFIGS_DIR}/admins.jsonc" "${CS2_DIR}/game/sharp/configs/admins.jsonc"
+    log "Deployed admins.jsonc"
+fi
 
 # Patch gameinfo.gi: add "Game sharp" before "Game csgo" per ModSharp docs
 # Also strip any leftover Metamod/CSS entries from kus

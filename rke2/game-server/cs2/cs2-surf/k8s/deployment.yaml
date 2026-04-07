@@ -102,9 +102,9 @@ spec:
             - name: MAXPLAYERS
               value: "32"
             - name: TICKRATE
-              value: "64"
+              value: "128"
             - name: MAP
-              value: "de_dust2"
+              value: "surf_kitsune"
             - name: SERVER_NAME
               value: "W4de Surf"
           resources:
