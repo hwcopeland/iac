@@ -17,9 +17,12 @@ name: E2E Test — Chem Job Cycle
 on:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 env:
   CONTROLLER_URL: http://docking-controller.chem.svc.cluster.local
-  FLUX_WEBHOOK_URL: http://webhook-receiver.tooling.svc.cluster.local/hook/af49d0fcea89a1eb9c7cb24c3cb716ce5f28138bd071ea530bc5123fb1f94241
+  FLUX_WEBHOOK_URL: ${{ secrets.FLUX_WEBHOOK_URL }}
 
 jobs:
   e2e-test:
