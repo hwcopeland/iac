@@ -213,6 +213,11 @@ func (c *Controller) initPluginDB(p Plugin) error {
 		log.Printf("Warning: failed to create api_tokens table in %s: %v", p.Database, err)
 	}
 
+	// Create the basis_sets table (shared across all plugins).
+	if err := EnsureBasisSetSchema(db); err != nil {
+		log.Printf("Warning: failed to create basis_sets table in %s: %v", p.Database, err)
+	}
+
 	return nil
 }
 
@@ -362,6 +367,42 @@ func (c *Controller) startAPIServer() error {
 			handler.UploadPseudopotential(w, r)
 		case http.MethodGet:
 			handler.ListPseudopotentials(w, r)
+		default:
+			writeError(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+	}))
+
+	// Basis set management — shared across all plugins.
+	mux.HandleFunc("/api/v1/basis-sets/search", wrap(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			handler.SearchBasisSets(w, r)
+		} else {
+			writeError(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+	}))
+	mux.HandleFunc("/api/v1/basis-sets/import", wrap(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			handler.ImportBasisSet(w, r)
+		} else {
+			writeError(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+	}))
+	mux.HandleFunc("/api/v1/basis-sets", wrap(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			handler.ListBasisSets(w, r)
+		case http.MethodPost:
+			handler.UploadBasisSet(w, r)
+		default:
+			writeError(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+	}))
+	mux.HandleFunc("/api/v1/basis-sets/", wrap(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			handler.GetBasisSet(w, r)
+		case http.MethodDelete:
+			handler.DeleteBasisSet(w, r)
 		default:
 			writeError(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
