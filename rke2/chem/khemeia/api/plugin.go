@@ -6,9 +6,11 @@ package main
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -40,10 +42,15 @@ type PluginInput struct {
 }
 
 // PluginOutput defines an output field for a plugin.
+// Reduce controls how multiple regex matches are aggregated:
+//   - "last" (default): use the last match (e.g., final SCF iteration)
+//   - "min": use the minimum value (e.g., best binding affinity)
+//   - "max": use the maximum value
 type PluginOutput struct {
-	Name  string `yaml:"name" json:"name"`
-	Type  string `yaml:"type" json:"type"`
-	Parse string `yaml:"parse,omitempty" json:"parse,omitempty"`
+	Name   string `yaml:"name" json:"name"`
+	Type   string `yaml:"type" json:"type"`
+	Parse  string `yaml:"parse,omitempty" json:"parse,omitempty"`
+	Reduce string `yaml:"reduce,omitempty" json:"reduce,omitempty"`
 }
 
 // PluginResources defines resource constraints for a plugin's K8s jobs.
@@ -170,6 +177,11 @@ func (p *Plugin) ExpandResource(template string, data map[string]interface{}) st
 
 // ParseOutput applies the plugin's output parse regexes to the given text
 // and returns a map of parsed output values.
+//
+// When multiple matches exist, the Reduce field controls aggregation:
+//   - "min": keep the minimum numeric value (e.g., best binding affinity)
+//   - "max": keep the maximum numeric value
+//   - "last" or "": keep the last match (default, e.g., final SCF iteration)
 func (p *Plugin) ParseOutput(text string) map[string]interface{} {
 	result := make(map[string]interface{})
 	for _, out := range p.Output {
@@ -180,16 +192,40 @@ func (p *Plugin) ParseOutput(text string) map[string]interface{} {
 		if err != nil {
 			continue
 		}
-		// Use FindAllStringSubmatch and take the last match (for iterative values).
 		matches := re.FindAllStringSubmatch(text, -1)
 		if len(matches) == 0 {
 			continue
 		}
-		lastMatch := matches[len(matches)-1]
-		if len(lastMatch) < 2 {
-			continue
+
+		switch out.Reduce {
+		case "min", "max":
+			bestVal := math.NaN()
+			bestStr := ""
+			for _, m := range matches {
+				if len(m) < 2 {
+					continue
+				}
+				f, err := strconv.ParseFloat(m[1], 64)
+				if err != nil {
+					continue
+				}
+				if math.IsNaN(bestVal) ||
+					(out.Reduce == "min" && f < bestVal) ||
+					(out.Reduce == "max" && f > bestVal) {
+					bestVal = f
+					bestStr = m[1]
+				}
+			}
+			if bestStr != "" {
+				result[out.Name] = bestStr
+			}
+		default:
+			// "last" or empty: take the last match (backward-compatible default).
+			lastMatch := matches[len(matches)-1]
+			if len(lastMatch) >= 2 {
+				result[out.Name] = lastMatch[1]
+			}
 		}
-		result[out.Name] = lastMatch[1]
 	}
 	return result
 }

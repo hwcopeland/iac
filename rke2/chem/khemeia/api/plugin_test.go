@@ -372,6 +372,97 @@ func TestPluginParseOutputMultipleMatches(t *testing.T) {
 	}
 }
 
+func TestPluginParseOutputReduceMin(t *testing.T) {
+	// Docking output: multiple affinity values, reduce: min should pick the
+	// most negative (best binding affinity).
+	p := Plugin{
+		Output: []PluginOutput{
+			{
+				Name:   "best_affinity",
+				Type:   "float",
+				Parse:  `affinity=([-\d.]+)`,
+				Reduce: "min",
+			},
+		},
+	}
+
+	output := `
+affinity=-6.2
+affinity=-8.9
+affinity=-7.1
+affinity=-5.4
+`
+
+	result := p.ParseOutput(output)
+	if result["best_affinity"] != "-8.9" {
+		t.Errorf("best_affinity: expected %q, got %v", "-8.9", result["best_affinity"])
+	}
+}
+
+func TestPluginParseOutputReduceMax(t *testing.T) {
+	p := Plugin{
+		Output: []PluginOutput{
+			{
+				Name:   "worst_affinity",
+				Type:   "float",
+				Parse:  `affinity=([-\d.]+)`,
+				Reduce: "max",
+			},
+		},
+	}
+
+	output := `
+affinity=-6.2
+affinity=-8.9
+affinity=-7.1
+affinity=-5.4
+`
+
+	result := p.ParseOutput(output)
+	if result["worst_affinity"] != "-5.4" {
+		t.Errorf("worst_affinity: expected %q, got %v", "-5.4", result["worst_affinity"])
+	}
+}
+
+func TestPluginParseOutputReduceSingleMatch(t *testing.T) {
+	// With reduce: min and only one match, that match should be returned.
+	p := Plugin{
+		Output: []PluginOutput{
+			{
+				Name:   "best_affinity",
+				Type:   "float",
+				Parse:  `affinity=([-\d.]+)`,
+				Reduce: "min",
+			},
+		},
+	}
+
+	result := p.ParseOutput("affinity=-7.3")
+	if result["best_affinity"] != "-7.3" {
+		t.Errorf("best_affinity: expected %q, got %v", "-7.3", result["best_affinity"])
+	}
+}
+
+func TestPluginParseOutputReduceDefaultIsLast(t *testing.T) {
+	// No reduce field: should use last match (backward compat).
+	p := Plugin{
+		Output: []PluginOutput{
+			{
+				Name:  "value",
+				Type:  "float",
+				Parse: `val=([-\d.]+)`,
+			},
+		},
+	}
+
+	output := "val=-10.0\nval=-3.0\nval=-5.0\n"
+	result := p.ParseOutput(output)
+	// Last match is -5.0, not the min (-10.0).
+	if result["value"] != "-5.0" {
+		t.Errorf("value: expected %q (last match), got %v", "-5.0", result["value"])
+	}
+}
+
 func TestPluginParseOutputNoMatch(t *testing.T) {
 	p := Plugin{
 		Output: []PluginOutput{
