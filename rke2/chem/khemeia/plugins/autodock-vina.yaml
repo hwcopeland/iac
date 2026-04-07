@@ -28,6 +28,7 @@ output:
   - name: best_affinity
     type: float
     parse: 'affinity=([-\d.]+)'
+    reduce: min
   - name: log
     type: text
 
