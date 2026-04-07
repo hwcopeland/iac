@@ -80,6 +80,45 @@ type LigandImportRequest struct {
 	SourceDb   string `json:"source_db"`
 }
 
+// ListLigandDatabases handles GET /api/v1/ligand-databases.
+// Returns distinct source_db values from the ligands table with counts.
+func (h *APIHandler) ListLigandDatabases(w http.ResponseWriter, r *http.Request) {
+	db := h.pluginDB("docking")
+	if db == nil {
+		writeError(w, "docking database not available", http.StatusInternalServerError)
+		return
+	}
+
+	rows, err := db.QueryContext(r.Context(),
+		`SELECT source_db, COUNT(*) as count FROM ligands GROUP BY source_db ORDER BY source_db`)
+	if err != nil {
+		writeError(w, fmt.Sprintf("failed to query ligand databases: %v", err), http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	type LigandDB struct {
+		Name  string `json:"name"`
+		Count int    `json:"count"`
+	}
+	var dbs []LigandDB
+	for rows.Next() {
+		var d LigandDB
+		if err := rows.Scan(&d.Name, &d.Count); err != nil {
+			continue
+		}
+		dbs = append(dbs, d)
+	}
+	if dbs == nil {
+		dbs = []LigandDB{}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"databases": dbs,
+	})
+}
+
 // ImportLigands handles POST /api/v1/ligands.
 // Accepts a JSON array of ligands and upserts them into the ligands table.
 func (h *APIHandler) ImportLigands(w http.ResponseWriter, r *http.Request) {
