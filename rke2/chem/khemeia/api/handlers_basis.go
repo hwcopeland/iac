@@ -357,6 +357,9 @@ func (h *APIHandler) ImportBasisSet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	log.Printf("[basis-import] BSE response: status=%d, content_length=%d, first_100=%q",
+		resp.StatusCode, len(content), string(content[:min(100, len(content))]))
+
 	// Store in the database.
 	elementsCSV := strings.Join(req.Elements, ",")
 	description := fmt.Sprintf("Imported from BSE (%s)", req.Name)
