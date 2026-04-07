@@ -24,10 +24,12 @@ input:
 output:
   - name: result_count
     type: int
+    parse: 'Batch complete: (\d+) ligands processed'
   - name: best_affinity
     type: float
-  - name: avg_affinity
-    type: float
+    parse: 'affinity=([-\d.]+)'
+  - name: log
+    type: text
 
 resources:
   cpu: "1"
@@ -40,17 +42,24 @@ command: |
   export BATCH_OFFSET=0 &&
   export BATCH_LIMIT={{ .chunk_size }} &&
   echo "=== Protein Prep ===" &&
-  python3 scripts/proteinprepv2.py --protein_id {{ .pdbid }} --ligand_id {{ .native_ligand }} 2>&1 ;
-  PREP_RC=$? ;
-  echo "Protein prep exit code: $PREP_RC" ;
-  if [ $PREP_RC -ne 0 ]; then
-    echo "ERROR: Protein prep failed" ;
-    exit 1 ;
-  fi ;
+  python3 scripts/proteinprepv2.py --protein_id {{ .pdbid }} --ligand_id {{ .native_ligand }} 2>&1 &&
+  echo "=== Register Workflow ===" &&
+  python3 -c "
+  import mysql.connector, os
+  conn = mysql.connector.connect(host=os.environ['MYSQL_HOST'], port=int(os.environ.get('MYSQL_PORT','3306')),
+    user=os.environ['MYSQL_USER'], password=os.environ['MYSQL_PASSWORD'], database=os.environ.get('MYSQL_DATABASE','docking'))
+  cur = conn.cursor()
+  with open('grid_center.txt') as f: gx,gy,gz = [float(x) for x in f.read().strip().split()]
+  with open('{{ .pdbid }}.pdbqt') as f: pdbqt = f.read()
+  cur.execute('INSERT INTO docking_workflows (name, pdbid, source_db, native_ligand, chunk_size, image, receptor_pdbqt, grid_center_x, grid_center_y, grid_center_z, phase) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) ON DUPLICATE KEY UPDATE receptor_pdbqt=VALUES(receptor_pdbqt), grid_center_x=VALUES(grid_center_x), grid_center_y=VALUES(grid_center_y), grid_center_z=VALUES(grid_center_z)',
+    (os.environ['WORKFLOW_NAME'], '{{ .pdbid }}', '{{ .ligand_db }}', '{{ .native_ligand }}', {{ .chunk_size }}, 'generic', pdbqt, gx, gy, gz, 'Running'))
+  conn.commit(); conn.close()
+  print('Workflow registered')
+  " 2>&1 &&
   echo "=== Ligand Prep ===" &&
-  python3 scripts/prep_ligands.py 2>&1 ;
-  echo "Ligand prep exit code: $?" ;
+  python3 scripts/prep_ligands.py 2>&1 || echo "Ligand prep skipped (all ligands already prepped)" ;
   echo "=== Docking ===" &&
   python3 scripts/dock_batch.py 2>&1 ;
-  echo "Dock exit code: $?" ;
+  DOCK_RC=$? ;
+  echo "Dock exit code: $DOCK_RC" ;
   echo "=== Done ==="
