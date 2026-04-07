@@ -1,0 +1,112 @@
+{
+  "PermissionCollection": {
+    "admin": [
+      "admin:ban",
+      "admin:unban",
+      "admin:mute",
+      "admin:silence",
+      "admin:gag",
+      "admin:kick",
+      "admin:say",
+      "admin:csay",
+      "admin:hsay",
+      "admin:psay",
+      "admin:noclip",
+      "admin:speed",
+      "admin:gravity",
+      "admin:tp",
+      "admin:bring",
+      "admin:freeze",
+      "admin:unfreeze",
+      "admin:slay",
+      "admin:slap",
+      "admin:hp",
+      "admin:respawn",
+      "admin:god",
+      "admin:give",
+      "admin:strip",
+      "admin:rename",
+      "admin:team",
+      "admin:money",
+      "admin:map",
+      "admin:rcon",
+      "admin:cvar"
+    ]
+  },
+  "Roles": [
+    {
+      "Name": "root",
+      "Immunity": 255,
+      "Permissions": [
+        "*"
+      ]
+    },
+    {
+      "Name": "admin",
+      "Immunity": 60,
+      "Permissions": [
+        "@admin"
+      ]
+    },
+    {
+      "Name": "moderator",
+      "Immunity": 40,
+      "Permissions": [
+        "admin:kick",
+        "admin:mute",
+        "admin:slay",
+        "admin:map"
+      ]
+    }
+  ],
+  "Admins": [
+    {
+      // Hamp
+      "Identity": 76561198808592972,
+      "Immunity": 255,
+      "Permissions": [
+        "@root"
+      ]
+    },
+    {
+      // Defacto
+      "Identity": 76561198047424687,
+      "Immunity": 60,
+      "Permissions": [
+        "@admin"
+      ]
+    },
+    {
+      // caYabo
+      "Identity": 76561197987522730,
+      "Immunity": 60,
+      "Permissions": [
+        "@admin"
+      ]
+    },
+    {
+      // Cam
+      "Identity": 76561198795419638,
+      "Immunity": 60,
+      "Permissions": [
+        "@admin"
+      ]
+    },
+    {
+      // Raden
+      "Identity": 76561199024854792,
+      "Immunity": 60,
+      "Permissions": [
+        "@admin"
+      ]
+    },
+    {
+      // Acelink
+      "Identity": 76561198166513184,
+      "Immunity": 60,
+      "Permissions": [
+        "@admin"
+      ]
+    }
+  ]
+}
