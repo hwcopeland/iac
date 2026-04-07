@@ -11,9 +11,9 @@ from Bio.PDB import PDBParser, PDBIO, Select
 AUTOGRID = "/autodock/autogrid4"  # Adjust if your AutoGrid executable path is different
 
 def run_command(command):
-    """Execute a shell command."""
+    """Execute a command without invoking a shell."""
     try:
-        subprocess.run(command, shell=True, check=True)
+        subprocess.run(command.split(), check=True)
     except subprocess.CalledProcessError as e:
         print(f"Error executing command: {command}")
         print(e)
