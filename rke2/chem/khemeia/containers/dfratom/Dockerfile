@@ -11,11 +11,11 @@ RUN apt-get update && apt-get install -y \
     libblas-dev \
     && rm -rf /var/lib/apt/lists/*
 
-COPY src/ /opt/dfratom-src/
+COPY src/dfratom.f /opt/dfratom-src/dfratom.f
 WORKDIR /opt/dfratom-src
-RUN make clean || true && \
-    make DFRATOM && \
-    strip DFRATOM.exe || true
+RUN gfortran -fallow-argument-mismatch -mcmodel=large -O2 \
+    dfratom.f -o DFRATOM.exe -llapack -lblas && \
+    strip DFRATOM.exe
 
 # Stage 2: Minimal runtime
 FROM ubuntu:24.04
