@@ -1,5 +1,5 @@
 # Base image for building
-FROM ubuntu:20.04 AS builder
+FROM zot.hwcopeland.net/library/ubuntu:20.04 AS builder
 ENV DEBIAN_FRONTEND=noninteractive
 ENV TZ=Etc/UTC
 WORKDIR /autodock/
@@ -23,7 +23,7 @@ RUN wget --no-check-certificate -q \
     tar xzvf autodock_vina_1_1_2_linux_x86.tgz
 
 # Runtime image
-FROM ubuntu:20.04
+FROM zot.hwcopeland.net/library/ubuntu:20.04
 ENV DEBIAN_FRONTEND=noninteractive
 ENV TZ=Etc/UTC
 

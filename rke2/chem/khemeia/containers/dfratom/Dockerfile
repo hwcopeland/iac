@@ -2,7 +2,7 @@
 # Relativistic atomic structure calculations for heavy elements
 
 # Stage 1: Compile DFRATOM from Fortran source
-FROM ubuntu:24.04 AS builder
+FROM zot.hwcopeland.net/library/ubuntu:24.04 AS builder
 
 RUN apt-get update && apt-get install -y \
     gfortran \
@@ -18,7 +18,7 @@ RUN gfortran -fallow-argument-mismatch -mcmodel=large -O2 \
     strip DFRATOM.exe
 
 # Stage 2: Minimal runtime
-FROM ubuntu:24.04
+FROM zot.hwcopeland.net/library/ubuntu:24.04
 
 RUN apt-get update && apt-get install -y \
     libgfortran5 \
