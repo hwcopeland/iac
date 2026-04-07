@@ -11,6 +11,7 @@ on:
       - main
     paths:
       - 'rke2/chem/khemeia/api/**'
+      - 'rke2/chem/khemeia/web/**'
       - 'rke2/chem/khemeia/result-writer/**'
       - 'rke2/chem/khemeia/containers/autodock-vina/**'
       - 'rke2/chem/khemeia/plugins/**'
@@ -39,6 +40,11 @@ jobs:
             image: zot.hwcopeland.net/chem/khemeia-result-writer
             dockerfile: rke2/chem/khemeia/result-writer/Dockerfile
             context: rke2/chem/khemeia/result-writer/
+
+          - name: khemeia-web
+            image: zot.hwcopeland.net/chem/khemeia-web
+            dockerfile: rke2/chem/khemeia/web/Dockerfile
+            context: rke2/chem/khemeia/web/
 
     steps:
       - name: Checkout repository
