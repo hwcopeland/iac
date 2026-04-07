@@ -8,25 +8,13 @@ database: atomic
 input:
   - name: input_file
     type: text
-    required: false
-    description: "Pre-built DFRATOM input file (overrides parameter-based generation)"
-  - name: atom_type
-    type: string
     required: true
-    description: "Element symbol (C, Sn, Te, Po, At, etc.)"
-  - name: charge
-    type: int
-    required: true
-    description: "Atomic charge (0, -1, -2, etc.)"
-  - name: basis_set
-    type: string
-    default: "UGBS"
-    description: "Basis set name"
+    description: "DFRATOM input file (includes basis set exponents and occupation numbers)"
 
 output:
   - name: total_energy
     type: float
-    parse: 'TOTAL\s+([-\d.Ee+-]+)'
+    parse: 'TOTAL\s+(-?\d+\.\d+E[+-]\d+)'
     reduce: last
   - name: converged
     type: string
@@ -45,12 +33,7 @@ resources:
 
 command: |
   cd /scratch &&
-  if [ -f /input/input.in ]; then
-    cp /input/input.in input.dat;
-  else
-    python3 /app/input_gen.py $ATOM_TYPE $CHARGE $BASIS_SET > input.dat;
-  fi &&
-  cat input.dat &&
+  cp /input/input.in input.dat &&
   echo "=== DFRATOM OUTPUT ===" &&
   /opt/dfratom/DFRATOM.exe < input.dat 2>&1 |
   sed 's/D+/E+/g; s/D-/E-/g'
