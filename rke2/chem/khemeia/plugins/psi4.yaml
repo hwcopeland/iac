@@ -27,7 +27,8 @@ output:
     parse: '(?:@(?:RHF|UHF|RKS|UKS|ROHF) Final Energy:|Total Energy\s*=)\s+([-\d.]+)'
   - name: wall_time_sec
     type: float
-    parse: 'Psi4 wall time for execution:\s+([\d.]+)\s+seconds'
+    optional: true
+    parse: '(?:Psi4 wall time for execution:|Total time:)\s+([\d.]+)\s+seconds?'
   - name: output_file
     type: text
 

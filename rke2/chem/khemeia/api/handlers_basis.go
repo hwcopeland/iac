@@ -295,6 +295,35 @@ func (h *APIHandler) UploadBasisSet(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// fetchBSE fetches content from a BSE API URL. Returns the content bytes on
+// success, or an error if the request fails or returns a non-200 status.
+// Returns nil content (no error) if the response body is empty, allowing the
+// caller to try a fallback URL.
+func fetchBSE(client *http.Client, bseURL string) ([]byte, error) {
+	resp, err := client.Get(bseURL)
+	if err != nil {
+		return nil, fmt.Errorf("failed to contact BSE API: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		return nil, fmt.Errorf("BSE API returned HTTP %d: %s", resp.StatusCode, string(body))
+	}
+
+	content, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read BSE response: %w", err)
+	}
+
+	if len(content) == 0 {
+		// Empty body — signal the caller to try fallback.
+		return nil, nil
+	}
+
+	return content, nil
+}
+
 // ImportBasisSet handles POST /api/v1/basis-sets/import.
 // Fetches a basis set from the BSE REST API and stores it in the database.
 func (h *APIHandler) ImportBasisSet(w http.ResponseWriter, r *http.Request) {
@@ -330,35 +359,39 @@ func (h *APIHandler) ImportBasisSet(w http.ResponseWriter, r *http.Request) {
 	// Build the BSE API URL.
 	// BSE expects lowercase basis name with URL encoding for special chars.
 	bseName := url.PathEscape(strings.ToLower(req.Name))
-	bseURL := fmt.Sprintf("http://www.basissetexchange.org/api/basis/%s/format/%s/?elements=%s",
-		bseName, url.PathEscape(req.Format), strings.Join(atomicNumbers, ","))
+	elementsParam := strings.Join(atomicNumbers, ",")
+
+	// Use HTTPS first; the BSE site may redirect HTTP->HTTPS and lose the body.
+	bseURL := fmt.Sprintf("https://www.basissetexchange.org/api/basis/%s/format/%s/?elements=%s",
+		bseName, url.PathEscape(req.Format), elementsParam)
 
 	log.Printf("[basis-import] Fetching from BSE: %s", bseURL)
 
-	// Call the BSE API.
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Get(bseURL)
+	// Configure client to follow all redirects (including HTTPS->HTTP downgrades).
+	client := &http.Client{
+		Timeout: 30 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return nil // follow all redirects
+		},
+	}
+
+	content, err := fetchBSE(client, bseURL)
 	if err != nil {
-		writeError(w, fmt.Sprintf("failed to contact BSE API: %v", err), http.StatusBadGateway)
-		return
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-		writeError(w, fmt.Sprintf("BSE API returned HTTP %d: %s", resp.StatusCode, string(body)),
-			http.StatusBadGateway)
-		return
-	}
-
-	content, err := io.ReadAll(resp.Body)
-	if err != nil {
-		writeError(w, fmt.Sprintf("failed to read BSE response: %v", err), http.StatusInternalServerError)
-		return
+		// Fallback: try HTTP if HTTPS failed or returned empty content.
+		httpURL := fmt.Sprintf("http://www.basissetexchange.org/api/basis/%s/format/%s/?elements=%s",
+			bseName, url.PathEscape(req.Format), elementsParam)
+		log.Printf("[basis-import] HTTPS attempt failed or empty, trying HTTP: %s", httpURL)
+		content, err = fetchBSE(client, httpURL)
+		if err != nil {
+			writeError(w, fmt.Sprintf("failed to fetch from BSE API: %v", err), http.StatusBadGateway)
+			return
+		}
 	}
 
-	log.Printf("[basis-import] BSE response: status=%d, content_length=%d, first_100=%q",
-		resp.StatusCode, len(content), string(content[:min(100, len(content))]))
+	if len(content) == 0 {
+		writeError(w, "BSE API returned empty content for the requested basis set", http.StatusBadGateway)
+		return
+	}
 
 	// Store in the database.
 	elementsCSV := strings.Join(req.Elements, ",")
