@@ -69,3 +69,7 @@ export async function getJobs(slug: string): Promise<any> {
 export async function getJob(slug: string, jobName: string): Promise<any> {
   return api(`/api/v1/${slug}/jobs/${jobName}`);
 }
+
+export async function getLigandDatabases(): Promise<{ databases: { name: string; count: number }[] }> {
+  return api('/api/v1/ligand-databases');
+}

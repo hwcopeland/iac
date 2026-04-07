@@ -366,6 +366,15 @@ func (c *Controller) startAPIServer() error {
 		}
 	}))
 
+	// List available ligand databases (distinct source_db values).
+	mux.HandleFunc("/api/v1/ligand-databases", wrap(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			handler.ListLigandDatabases(w, r)
+		} else {
+			writeError(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+	}))
+
 	// Ligand prep — uses the docking plugin's database.
 	mux.HandleFunc("/api/v1/prep", wrap(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost {

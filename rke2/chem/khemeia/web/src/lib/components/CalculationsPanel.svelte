@@ -1,6 +1,6 @@
 <script lang="ts">
   import Panel from './Panel.svelte';
-  import { getPlugins, submitJob, getJobs, getJob } from '$lib/api';
+  import { getPlugins, submitJob, getJobs, getJob, getLigandDatabases } from '$lib/api';
   import type { Plugin, PluginInputField } from '$lib/api';
   import { getCurrentStructureText } from '$lib/viewer';
   import { isAuthenticated } from '$lib/auth';
@@ -8,6 +8,7 @@
   let plugins = $state<Plugin[]>([]);
   let pluginsLoading = $state(true);
   let pluginsError = $state('');
+  let ligandDBs = $state<string[]>([]);
   let activePlugin = $state<string | null>(null);
 
   let formData = $state<Record<string, Record<string, any>>>({});
@@ -21,10 +22,18 @@
   $effect(() => {
     if (isAuthenticated()) {
       loadPlugins();
+      loadLigandDBs();
     } else {
       pluginsLoading = false;
     }
   });
+
+  async function loadLigandDBs() {
+    try {
+      const res = await getLigandDatabases();
+      ligandDBs = res.databases.map(d => d.name);
+    } catch { ligandDBs = []; }
+  }
 
   async function loadPlugins() {
     pluginsLoading = true;
@@ -206,7 +215,20 @@
                   <p class="form-desc">{field.description}</p>
                 {/if}
 
-                {#if field.type === 'text'}
+                {#if field.name === 'ligand_db' && ligandDBs.length > 0}
+                  <select
+                    id="{plugin.slug}-{field.name}"
+                    class="form-select"
+                    value={getFieldValue(plugin.slug, field.name)}
+                    onchange={(e) => setFieldValue(plugin.slug, field.name, (e.target as HTMLSelectElement).value)}
+                    required={field.required}
+                  >
+                    <option value="">Select ligand database...</option>
+                    {#each ligandDBs as db}
+                      <option value={db}>{db}</option>
+                    {/each}
+                  </select>
+                {:else if field.type === 'text'}
                   <textarea
                     id="{plugin.slug}-{field.name}"
                     class="form-textarea"
