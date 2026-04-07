@@ -19,7 +19,7 @@ vrrp_instance RKE2_VIP {
 
   authentication {
     auth_type PASS
-    auth_pass {{ rke2_ha_password | default('rke2ha') }}
+    auth_pass {{ rke2_ha_password }}
   }
 
   virtual_ipaddress {

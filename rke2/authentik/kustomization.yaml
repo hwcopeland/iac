@@ -3,6 +3,7 @@ kind: Kustomization
 resources:
   - blueprints-configmap.yaml
   - external-secret.yaml
+  - externalsecret-postgres.yaml
   - github-oauth-secret.yaml
   - httproute.yaml
   - reference-grants.yaml

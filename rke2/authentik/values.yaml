@@ -63,7 +63,7 @@ postgresql:
     auth:
         username: authentik
         database: authentik
-        password: "***REDACTED***"
+        existingSecret: authentik-postgresql
     primary:
       persistence:
         enabled: true
