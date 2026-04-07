@@ -13,7 +13,7 @@ on:
       - 'rke2/chem/khemeia/api/**'
       - 'rke2/chem/khemeia/web/**'
       - 'rke2/chem/khemeia/result-writer/**'
-      - 'rke2/chem/khemeia/containers/autodock-vina/**'
+      - 'rke2/chem/khemeia/containers/**'
       - 'rke2/chem/khemeia/plugins/**'
       - '.github/workflows/build-chem-images.yml'
   workflow_dispatch:
@@ -40,6 +40,11 @@ jobs:
             image: zot.hwcopeland.net/chem/khemeia-result-writer
             dockerfile: rke2/chem/khemeia/result-writer/Dockerfile
             context: rke2/chem/khemeia/result-writer/
+
+          - name: dfratom
+            image: zot.hwcopeland.net/chem/dfratom
+            dockerfile: rke2/chem/khemeia/containers/dfratom/Dockerfile
+            context: rke2/chem/khemeia/containers/dfratom/
 
           - name: khemeia-web
             image: zot.hwcopeland.net/chem/khemeia-web

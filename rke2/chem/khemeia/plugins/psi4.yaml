@@ -1,0 +1,47 @@
+name: psi4
+slug: psi4
+version: "1.0"
+image: psi4/psi4:latest
+type: job
+database: psi4
+
+input:
+  - name: input_file
+    type: text
+    required: true
+    description: "Psi4 input file content (Python-like syntax)"
+  - name: num_threads
+    type: int
+    default: 1
+    max: 20
+    description: "Number of threads for Psi4"
+  - name: memory_gb
+    type: int
+    default: 2
+    max: 32
+    description: "Memory in GB"
+
+output:
+  - name: total_energy
+    type: float
+    parse: '(?:@(?:RHF|UHF|RKS|UKS|ROHF) Final Energy:|Total Energy\s*=)\s+([-\d.]+)'
+  - name: wall_time_sec
+    type: float
+    parse: 'Psi4 wall time for execution:\s+([\d.]+)\s+seconds'
+  - name: output_file
+    type: text
+
+resources:
+  cpu: "{{ .num_threads }}"
+  memory: "{{ .memory_gb }}Gi"
+  timeout: 4h
+
+command: |
+  cd /scratch && cp /input/* . &&
+  echo "memory {{ .memory_gb }} gb" > input.in &&
+  cat input_file.txt >> input.in &&
+  psi4 -n {{ .num_threads }} input.in -o output.dat 2>&1;
+  PSI4_RC=$?;
+  echo "Psi4 exit code: $PSI4_RC";
+  cat output.dat 2>/dev/null || echo "No output.dat produced";
+  echo "=== Done ==="
