@@ -33,3 +33,24 @@ resources:
   cpu: "1"
   memory: "2048Mi"
   timeout: 1h
+
+command: |
+  cd /autodock &&
+  export SOURCE_DB="{{ .ligand_db }}" &&
+  export BATCH_OFFSET=0 &&
+  export BATCH_LIMIT={{ .chunk_size }} &&
+  echo "=== Protein Prep ===" &&
+  python3 scripts/proteinprepv2.py --protein_id {{ .pdbid }} --ligand_id {{ .native_ligand }} 2>&1 ;
+  PREP_RC=$? ;
+  echo "Protein prep exit code: $PREP_RC" ;
+  if [ $PREP_RC -ne 0 ]; then
+    echo "ERROR: Protein prep failed" ;
+    exit 1 ;
+  fi ;
+  echo "=== Ligand Prep ===" &&
+  python3 scripts/prep_ligands.py 2>&1 ;
+  echo "Ligand prep exit code: $?" ;
+  echo "=== Docking ===" &&
+  python3 scripts/dock_batch.py 2>&1 ;
+  echo "Dock exit code: $?" ;
+  echo "=== Done ==="
