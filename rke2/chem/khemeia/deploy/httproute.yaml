@@ -38,4 +38,20 @@ spec:
       matches:
         - path:
             type: PathPrefix
+            value: /api/
+        - path:
+            type: PathPrefix
+            value: /health
+        - path:
+            type: PathPrefix
+            value: /readyz
+    - backendRefs:
+        - group: ""
+          kind: Service
+          name: khemeia-web
+          port: 80
+          weight: 1
+      matches:
+        - path:
+            type: PathPrefix
             value: /

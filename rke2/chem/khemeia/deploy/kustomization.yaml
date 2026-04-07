@@ -4,6 +4,7 @@ resources:
   - rbac.yaml
   - plugins-configmap.yaml
   - api-deployment.yaml
+  - web-deployment.yaml
   - result-writer.yaml
   - mysql.yaml
   - mysql-secret.yaml
