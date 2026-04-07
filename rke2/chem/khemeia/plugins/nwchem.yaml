@@ -1,0 +1,56 @@
+name: nwchem
+slug: nwchem
+version: "1.0"
+image: nwchemgit/nwchem-832.nwchem:latest
+type: job
+database: nwchem
+
+input:
+  - name: input_file
+    type: text
+    required: true
+    description: "NWChem input file content"
+  - name: num_cpus
+    type: int
+    default: 1
+    max: 20
+  - name: memory_mb
+    type: int
+    default: 2048
+    max: 32768
+
+output:
+  - name: total_energy
+    type: float
+    parse: 'Total (?:DFT|SCF) energy\s+=\s+([-\d.]+)'
+  - name: wall_time_sec
+    type: float
+    parse: 'wall:\s+([\d.]+)s'
+  - name: output_file
+    type: text
+
+resources:
+  cpu: "{{ .num_cpus }}"
+  memory: "{{ .memory_mb }}Mi"
+  timeout: 4h
+
+# NWChem reads from a named input file. Copy inputs to /scratch,
+# then run nwchem with mpirun for parallel or directly for single-cpu.
+# Standard NWChem test: water molecule HF/6-31G* energy calculation:
+#   start water
+#   geometry
+#     O  0.000  0.000  0.117
+#     H  0.000  0.756 -0.467
+#     H  0.000 -0.756 -0.467
+#   end
+#   basis
+#     * library 6-31g*
+#   end
+#   task scf energy
+command: |
+  cd /scratch && cp /input/* . &&
+  if [ {{ .num_cpus }} -gt 1 ]; then
+    mpirun --allow-run-as-root -np {{ .num_cpus }} nwchem input.in 2>&1;
+  else
+    nwchem input.in 2>&1;
+  fi

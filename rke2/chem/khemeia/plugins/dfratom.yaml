@@ -1,0 +1,56 @@
+name: dfratom
+slug: dfratom
+version: "1.0"
+image: zot.hwcopeland.net/chem/dfratom:latest
+type: job
+database: atomic
+
+input:
+  - name: input_file
+    type: text
+    required: false
+    description: "Pre-built DFRATOM input file (overrides parameter-based generation)"
+  - name: atom_type
+    type: string
+    required: true
+    description: "Element symbol (C, Sn, Te, Po, At, etc.)"
+  - name: charge
+    type: int
+    required: true
+    description: "Atomic charge (0, -1, -2, etc.)"
+  - name: basis_set
+    type: string
+    default: "UGBS"
+    description: "Basis set name"
+
+output:
+  - name: total_energy
+    type: float
+    parse: 'TOTAL\s+([-\d.Ee+-]+)'
+    reduce: last
+  - name: converged
+    type: string
+    parse: 'CONVERGED ON (.+)'
+  - name: iterations
+    type: int
+    parse: 'SCF ITERATION NO\s+(\d+)'
+    reduce: last
+  - name: log
+    type: text
+
+resources:
+  cpu: "2"
+  memory: "4096Mi"
+  timeout: 1h
+
+command: |
+  cd /scratch &&
+  if [ -f /input/input.in ]; then
+    cp /input/input.in input.dat;
+  else
+    python3 /app/input_gen.py $ATOM_TYPE $CHARGE $BASIS_SET > input.dat;
+  fi &&
+  cat input.dat &&
+  echo "=== DFRATOM OUTPUT ===" &&
+  /opt/dfratom/DFRATOM.exe < input.dat 2>&1 |
+  sed 's/D+/E+/g; s/D-/E-/g'
