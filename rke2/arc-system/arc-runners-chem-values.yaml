@@ -32,7 +32,7 @@ runnerScaleSetName: "arc-chem"
 
 # Scaling: minimum 0 runners when idle (no cost), scale to max 4 for parallel matrix jobs.
 # The build-and-push.yml matrix has 4 parallel jobs (one per image).
-minRunners: 0
+minRunners: 1
 maxRunners: 4
 
 # Runner pod template.

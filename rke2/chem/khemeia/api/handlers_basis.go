@@ -84,13 +84,13 @@ func EnsureBasisSetSchema(db *sql.DB) error {
 	_, err := db.Exec(`CREATE TABLE IF NOT EXISTS basis_sets (
 		id          INT AUTO_INCREMENT PRIMARY KEY,
 		name        VARCHAR(255) NOT NULL,
-		elements    VARCHAR(1024) NOT NULL,
+		elements    VARCHAR(512) NOT NULL,
 		format      VARCHAR(64) NOT NULL,
 		source      VARCHAR(64) NOT NULL,
 		description TEXT,
 		content     LONGTEXT NOT NULL,
 		created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-		UNIQUE KEY uq_basis (name, elements, format)
+		UNIQUE KEY uq_basis (name, elements(255), format)
 	)`)
 	return err
 }
