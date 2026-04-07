@@ -1,9 +1,13 @@
 <script lang="ts">
+  import { isAuthenticated, getUser, login, logout } from '$lib/auth';
+  import type { UserInfo } from '$lib/auth';
+
   type Tab = 'explorer' | 'builder' | 'calculations';
 
-  let { activeTab = $bindable('explorer'), onCommandPalette }: {
+  let { activeTab = $bindable('explorer'), onCommandPalette, authReady = false }: {
     activeTab: Tab;
     onCommandPalette?: () => void;
+    authReady?: boolean;
   } = $props();
 
   const tabs: { id: Tab; label: string }[] = [
@@ -14,6 +18,10 @@
 
   const isMac = typeof navigator !== 'undefined' && navigator.platform?.includes('Mac');
   const modKey = isMac ? '\u2318' : 'Ctrl';
+
+  function getUserDisplay(u: UserInfo): string {
+    return u.name || u.preferred_username || u.email || u.sub;
+  }
 </script>
 
 <header class="toolbar">
@@ -37,6 +45,22 @@
     <button class="cmd-hint" onclick={() => onCommandPalette?.()}>
       {modKey}+K
     </button>
+
+    {#if authReady}
+      {#if isAuthenticated()}
+        {@const u = getUser()}
+        {#if u}
+          <span class="user-display">{getUserDisplay(u)}</span>
+        {/if}
+        <button class="auth-btn" onclick={() => { logout(); window.location.reload(); }}>
+          Sign Out
+        </button>
+      {:else}
+        <button class="auth-btn auth-btn-primary" onclick={() => login()}>
+          Sign In
+        </button>
+      {/if}
+    {/if}
   </div>
 </header>
 
@@ -103,6 +127,9 @@
 
   .toolbar-right {
     margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 0;
   }
 
   .cmd-hint {
@@ -120,5 +147,40 @@
   .cmd-hint:hover {
     color: var(--text-secondary);
     border-color: var(--text-muted);
+  }
+
+  .user-display {
+    color: var(--text-secondary);
+    font-size: 13px;
+    margin-left: 12px;
+  }
+
+  .auth-btn {
+    background: none;
+    border: 1px solid var(--border-default);
+    color: var(--text-secondary);
+    font-family: var(--font-sans);
+    font-size: 12px;
+    padding: 4px 12px;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    margin-left: 8px;
+    transition: all var(--transition-fast);
+  }
+
+  .auth-btn:hover {
+    color: var(--text-primary);
+    border-color: var(--text-muted);
+  }
+
+  .auth-btn-primary {
+    background: var(--accent-subtle);
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+
+  .auth-btn-primary:hover {
+    background: var(--accent);
+    color: var(--bg-base);
   }
 </style>

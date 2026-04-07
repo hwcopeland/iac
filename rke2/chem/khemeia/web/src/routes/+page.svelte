@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import { init, onHover, onClick } from '$lib/viewer';
   import type { AtomInfo } from '$lib/viewer';
+  import { restoreSession } from '$lib/auth';
   import Toolbar from '$lib/components/Toolbar.svelte';
   import ExplorerPanel from '$lib/components/ExplorerPanel.svelte';
   import StructureBrowser from '$lib/components/StructureBrowser.svelte';
@@ -21,10 +22,12 @@
   let commandPaletteOpen = $state(false);
   let panelVisible = $state(true);
   let structureBrowser = $state<StructureBrowser>(undefined as unknown as StructureBrowser);
+  let authReady = $state(false);
 
   onMount(() => {
     initViewer();
     setupKeybinds();
+    restoreSession().finally(() => { authReady = true; });
   });
 
   async function initViewer() {
@@ -63,7 +66,7 @@
 </script>
 
 <div class="app">
-  <Toolbar bind:activeTab onCommandPalette={() => (commandPaletteOpen = true)} />
+  <Toolbar bind:activeTab onCommandPalette={() => (commandPaletteOpen = true)} {authReady} />
 
   <div class="main">
     <div class="viewer-area">
