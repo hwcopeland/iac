@@ -31,19 +31,19 @@ type Plugin struct {
 
 // PluginInput defines an input field for a plugin.
 type PluginInput struct {
-	Name        string      `yaml:"name"`
-	Type        string      `yaml:"type"`
-	Required    bool        `yaml:"required"`
-	Default     interface{} `yaml:"default,omitempty"`
-	Max         interface{} `yaml:"max,omitempty"`
-	Description string      `yaml:"description,omitempty"`
+	Name        string      `yaml:"name" json:"name"`
+	Type        string      `yaml:"type" json:"type"`
+	Required    bool        `yaml:"required" json:"required"`
+	Default     interface{} `yaml:"default,omitempty" json:"default,omitempty"`
+	Max         interface{} `yaml:"max,omitempty" json:"max,omitempty"`
+	Description string      `yaml:"description,omitempty" json:"description,omitempty"`
 }
 
 // PluginOutput defines an output field for a plugin.
 type PluginOutput struct {
-	Name  string `yaml:"name"`
-	Type  string `yaml:"type"`
-	Parse string `yaml:"parse,omitempty"`
+	Name  string `yaml:"name" json:"name"`
+	Type  string `yaml:"type" json:"type"`
+	Parse string `yaml:"parse,omitempty" json:"parse,omitempty"`
 }
 
 // PluginResources defines resource constraints for a plugin's K8s jobs.

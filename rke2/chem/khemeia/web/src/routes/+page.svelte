@@ -4,6 +4,7 @@
   import type { AtomInfo } from '$lib/viewer';
   import Toolbar from '$lib/components/Toolbar.svelte';
   import ExplorerPanel from '$lib/components/ExplorerPanel.svelte';
+  import StructureBrowser from '$lib/components/StructureBrowser.svelte';
   import BuilderPanel from '$lib/components/BuilderPanel.svelte';
   import CalculationsPanel from '$lib/components/CalculationsPanel.svelte';
   import SelectionInfo from '$lib/components/SelectionInfo.svelte';
@@ -19,6 +20,7 @@
   let selectionInfo = $state<AtomInfo | null>(null);
   let commandPaletteOpen = $state(false);
   let panelVisible = $state(true);
+  let structureBrowser = $state<StructureBrowser>(undefined as unknown as StructureBrowser);
 
   onMount(() => {
     initViewer();
@@ -78,7 +80,8 @@
       <aside class="side-panel">
         <div class="side-panel-scroll">
           {#if activeTab === 'explorer'}
-            <ExplorerPanel />
+            <ExplorerPanel onStructureLoad={() => structureBrowser?.refresh()} />
+            <StructureBrowser bind:this={structureBrowser} />
           {:else if activeTab === 'builder'}
             <BuilderPanel />
           {:else if activeTab === 'calculations'}

@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">
+  <!-- Regular heptagon centered at (100,100), radius 90 -->
+  <polygon
+    points="100.0,10.0 170.3,43.9 187.7,120.0 139.2,181.2 60.8,181.2 12.3,120.0 29.7,43.9"
+    fill="#326ce5"
+    stroke="#4a8af4"
+    stroke-width="2"
+    stroke-linejoin="round"
+  />
+
+  <!-- Benzene hexagon centered at (100,100), radius 56 -->
+  <polygon
+    points="100,44 148.5,72 148.5,128 100,156 51.5,128 51.5,72"
+    fill="none"
+    stroke="#ffffff"
+    stroke-width="3.5"
+    stroke-linejoin="round"
+  />
+
+  <!-- Double bonds (alternating inner edges, radius 43) -->
+  <line x1="106" y1="55" x2="141" y2="76" stroke="#ffffff" stroke-width="2" stroke-opacity="0.5" />
+  <line x1="141" y1="124" x2="106" y2="145" stroke="#ffffff" stroke-width="2" stroke-opacity="0.5" />
+  <line x1="59" y1="124" x2="59" y2="76" stroke="#ffffff" stroke-width="2" stroke-opacity="0.5" />
+
+  <!-- Kh text centered at (100,100) -->
+  <text
+    x="100"
+    y="100"
+    text-anchor="middle"
+    dominant-baseline="central"
+    font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif"
+    font-size="46"
+    font-weight="700"
+    fill="#ffffff"
+  >Kh</text>
+</svg>
