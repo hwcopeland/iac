@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"os"
 	"strings"
 	"time"
 
@@ -119,7 +120,8 @@ func (c *Controller) RunPluginJob(plugin Plugin, jobName string, input map[strin
 			BackoffLimit:            &backoffLimit,
 			Template: corev1.PodTemplateSpec{
 				Spec: corev1.PodSpec{
-					RestartPolicy: corev1.RestartPolicyNever,
+					RestartPolicy:    corev1.RestartPolicyNever,
+					ImagePullSecrets: []corev1.LocalObjectReference{{Name: "zot-pull-secret"}},
 					Containers: []corev1.Container{
 						{
 							Name:            plugin.Slug,
@@ -127,6 +129,7 @@ func (c *Controller) RunPluginJob(plugin Plugin, jobName string, input map[strin
 							ImagePullPolicy: corev1.PullIfNotPresent,
 							Command:         []string{"/bin/sh", "-c"},
 							Args:            []string{expandedCommand},
+							Env:             buildJobEnv(plugin, jobName, input),
 							Resources: corev1.ResourceRequirements{
 								Requests: corev1.ResourceList{
 									corev1.ResourceCPU:    resource.MustParse(cpuStr),
@@ -269,6 +272,38 @@ func failPluginJob(db *sql.DB, plugin Plugin, jobName, message string) {
 		message, jobName); err != nil {
 		log.Printf("[%s] CRITICAL: failed to mark job as Failed: %v", jobName, err)
 	}
+}
+
+// buildJobEnv creates environment variables for the job container.
+// Passes through MySQL connection info and all non-text input fields as uppercase env vars.
+func buildJobEnv(plugin Plugin, jobName string, input map[string]interface{}) []corev1.EnvVar {
+	envs := []corev1.EnvVar{
+		{Name: "JOB_NAME", Value: jobName},
+		{Name: "WORKFLOW_NAME", Value: jobName},
+		{Name: "MYSQL_HOST", Value: os.Getenv("MYSQL_HOST")},
+		{Name: "MYSQL_PORT", Value: os.Getenv("MYSQL_PORT")},
+		{Name: "MYSQL_USER", Value: os.Getenv("MYSQL_USER")},
+		{Name: "MYSQL_PASSWORD", Value: os.Getenv("MYSQL_PASSWORD")},
+		{Name: "MYSQL_DATABASE", Value: plugin.Database},
+	}
+
+	// Pass input fields as env vars (uppercase names).
+	for _, field := range plugin.Input {
+		val, exists := input[field.Name]
+		if !exists || val == nil {
+			continue
+		}
+		if field.Type == "text" {
+			continue // text fields are mounted as files, not env vars
+		}
+		envName := strings.ToUpper(field.Name)
+		envs = append(envs, corev1.EnvVar{
+			Name:  envName,
+			Value: fmt.Sprintf("%v", val),
+		})
+	}
+
+	return envs
 }
 
 // loadPseudopotentials finds .UPF references in a QE input file and loads them
