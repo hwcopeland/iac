@@ -499,6 +499,53 @@ data:
       model: authentik_policies.policybinding
       permissions: []
       state: present
+  providers-khemeia.yaml: |
+    version: 1
+    metadata:
+      name: Khemeia Provider and Application
+    entries:
+    - attrs:
+        access_code_validity: minutes=1
+        access_token_validity: minutes=5
+        authorization_flow: !Find [authentik_flows.flow, [slug, default-provider-authorization-implicit-consent]]
+        client_id: khemeia
+        client_type: public
+        include_claims_in_id_token: true
+        invalidation_flow: !Find [authentik_flows.flow, [slug, default-provider-invalidation-flow]]
+        issuer_mode: per_provider
+        name: Khemeia
+        property_mappings:
+        - !Find [authentik_providers_oauth2.scopemapping, [scope_name, email]]
+        - !Find [authentik_providers_oauth2.scopemapping, [scope_name, profile]]
+        - !Find [authentik_providers_oauth2.scopemapping, [scope_name, openid]]
+        redirect_uris:
+        - matching_mode: strict
+          url: https://khemeia.net/auth/callback
+        - matching_mode: strict
+          url: https://khemeia.hwcopeland.net/auth/callback
+        - matching_mode: strict
+          url: http://localhost:5174/auth/callback
+        refresh_token_validity: days=30
+        signing_key: !Find [authentik_crypto.certificatekeypair, [name, authentik Self-signed Certificate]]
+        sub_mode: hashed_user_id
+      conditions: []
+      identifiers:
+        pk: 10
+      model: authentik_providers_oauth2.oauth2provider
+      permissions: []
+      state: present
+    - attrs:
+        meta_launch_url: https://khemeia.net
+        name: Khemeia
+        policy_engine_mode: any
+        provider: !Find [authentik_providers_oauth2.oauth2provider, [name, Khemeia]]
+        slug: khemeia
+      conditions: []
+      identifiers:
+        pk: b2c3d4e5-f6a7-8901-bcde-f12345678901
+      model: authentik_core.application
+      permissions: []
+      state: present
 kind: ConfigMap
 metadata:
   creationTimestamp: null
