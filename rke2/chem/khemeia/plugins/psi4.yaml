@@ -37,6 +37,7 @@ resources:
   timeout: 4h
 
 command: |
+  export PATH="/opt/conda/bin:$PATH" &&
   cd /scratch && cp /input/* . &&
   echo "memory {{ .memory_gb }} gb" | cat - input.in > full_input.in &&
   psi4 -n {{ .num_threads }} full_input.in -o output.dat 2>&1;
