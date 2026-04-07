@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"regexp"
 	"syscall"
 	"time"
 
@@ -110,8 +111,17 @@ func NewController() (*Controller, error) {
 	return controller, nil
 }
 
+// validDBName matches only safe SQL identifiers (alphanumeric + underscore).
+var validDBName = regexp.MustCompile(`^[a-zA-Z0-9_]+$`)
+
 // initPluginDB creates the database and tables for a single plugin.
 func (c *Controller) initPluginDB(p Plugin) error {
+	// Validate the database name to prevent SQL injection — it is interpolated
+	// into a CREATE DATABASE statement that cannot use parameterized queries.
+	if !validDBName.MatchString(p.Database) {
+		return fmt.Errorf("invalid database name %q: must match [a-zA-Z0-9_]+", p.Database)
+	}
+
 	// Connect to MySQL without a specific database to create the plugin's database.
 	adminDSN := fmt.Sprintf("%s:%s@tcp(%s:%s)/?parseTime=true",
 		c.mysqlUser, c.mysqlPassword, c.mysqlHost, c.mysqlPort)
@@ -435,10 +445,21 @@ func (c *Controller) startAPIServer() error {
 	return http.ListenAndServe(":8080", corsMiddleware(mux))
 }
 
+// allowedOrigins is the set of origins permitted by the CORS policy.
+var allowedOrigins = map[string]bool{
+	"https://khemeia.net":             true,
+	"https://khemeia.hwcopeland.net":  true,
+	"http://localhost:5174":           true,
+}
+
 // corsMiddleware adds CORS headers to all responses.
 func corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
+		origin := r.Header.Get("Origin")
+		if allowedOrigins[origin] {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Vary", "Origin")
+		}
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 		if r.Method == http.MethodOptions {
