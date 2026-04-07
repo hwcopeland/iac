@@ -330,7 +330,7 @@ func (h *APIHandler) ImportBasisSet(w http.ResponseWriter, r *http.Request) {
 	// Build the BSE API URL.
 	// BSE expects lowercase basis name with URL encoding for special chars.
 	bseName := url.PathEscape(strings.ToLower(req.Name))
-	bseURL := fmt.Sprintf("https://www.basissetexchange.org/api/basis/%s/format/%s?elements=%s",
+	bseURL := fmt.Sprintf("https://www.basissetexchange.org/api/basis/%s/format/%s/?elements=%s",
 		bseName, url.PathEscape(req.Format), strings.Join(atomicNumbers, ","))
 
 	log.Printf("[basis-import] Fetching from BSE: %s", bseURL)
