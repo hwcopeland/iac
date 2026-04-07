@@ -42,6 +42,10 @@ type Controller struct {
 	mysqlPort     string
 	mysqlUser     string
 	mysqlPassword string
+
+	// sharedDB is a stable reference to a single database used for shared tables
+	// (basis_sets, api_tokens). Set once during init to avoid Go map iteration randomness.
+	sharedDB *sql.DB
 }
 
 // NewController creates a new Controller, initializing K8s client, MySQL connections,
@@ -218,14 +222,18 @@ func (c *Controller) initPluginDB(p Plugin) error {
 
 	c.pluginDBs[p.Slug] = db
 
-	// Also create the api_tokens table in the first database (for auth).
-	if err := EnsureAPITokenSchema(db); err != nil {
-		log.Printf("Warning: failed to create api_tokens table in %s: %v", p.Database, err)
-	}
-
-	// Create the basis_sets table (shared across all plugins).
-	if err := EnsureBasisSetSchema(db); err != nil {
-		log.Printf("Warning: failed to create basis_sets table in %s: %v", p.Database, err)
+	// Set the shared DB to the first successfully connected database.
+	// This is used for shared tables (basis_sets, api_tokens) to avoid
+	// Go map iteration randomness in firstDB().
+	if c.sharedDB == nil {
+		c.sharedDB = db
+		if err := EnsureAPITokenSchema(db); err != nil {
+			log.Printf("Warning: failed to create api_tokens table in %s: %v", p.Database, err)
+		}
+		if err := EnsureBasisSetSchema(db); err != nil {
+			log.Printf("Warning: failed to create basis_sets table in %s: %v", p.Database, err)
+		}
+		log.Printf("Shared tables (api_tokens, basis_sets) created in %s database", p.Database)
 	}
 
 	return nil
@@ -245,12 +253,9 @@ func (c *Controller) closeAllDBs() {
 	}
 }
 
-// firstDB returns the first available plugin database (used for auth token storage).
+// firstDB returns the shared database used for cross-plugin tables (basis_sets, api_tokens).
 func (c *Controller) firstDB() *sql.DB {
-	for _, db := range c.pluginDBs {
-		return db
-	}
-	return nil
+	return c.sharedDB
 }
 
 func getConfig() (*rest.Config, error) {
