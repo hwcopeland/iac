@@ -1,4 +1,4 @@
-const API_BASE = 'https://khemeia.hwcopeland.net';
+const API_BASE = '';
 let token: string | null = null;
 
 export function setToken(t: string) {
