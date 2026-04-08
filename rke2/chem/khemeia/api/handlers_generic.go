@@ -16,6 +16,15 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+// ArtifactSummary is the metadata view of a job artifact (excludes binary content).
+type ArtifactSummary struct {
+	ID          int       `json:"id"`
+	Filename    string    `json:"filename"`
+	ContentType string    `json:"content_type"`
+	SizeBytes   int       `json:"size_bytes"`
+	CreatedAt   time.Time `json:"created_at"`
+}
+
 // PluginJobSummary is the list-level view (omits large JSON fields for performance).
 type PluginJobSummary struct {
 	ID          int        `json:"id"`
@@ -29,16 +38,25 @@ type PluginJobSummary struct {
 
 // PluginJobDetail is the full view returned by PluginGet.
 type PluginJobDetail struct {
-	ID          int                    `json:"id"`
-	Name        string                 `json:"name"`
-	Status      string                 `json:"status"`
-	SubmittedBy *string                `json:"submitted_by,omitempty"`
-	InputData   map[string]interface{} `json:"input_data,omitempty"`
-	OutputData  map[string]interface{} `json:"output_data,omitempty"`
-	ErrorOutput *string                `json:"error_output,omitempty"`
-	CreatedAt   time.Time              `json:"created_at"`
-	StartedAt   *time.Time             `json:"started_at,omitempty"`
-	CompletedAt *time.Time             `json:"completed_at,omitempty"`
+	ID             int                    `json:"id"`
+	Name           string                 `json:"name"`
+	Status         string                 `json:"status"`
+	SubmittedBy    *string                `json:"submitted_by,omitempty"`
+	InputData      map[string]interface{} `json:"input_data,omitempty"`
+	OutputData     map[string]interface{} `json:"output_data,omitempty"`
+	ErrorOutput    *string                `json:"error_output,omitempty"`
+	CreatedAt      time.Time              `json:"created_at"`
+	StartedAt      *time.Time             `json:"started_at,omitempty"`
+	CompletedAt    *time.Time             `json:"completed_at,omitempty"`
+	Artifacts      []ArtifactSummary      `json:"artifacts,omitempty"`
+	DockingResults []DockingResult        `json:"docking_results,omitempty"`
+}
+
+// DockingResult represents a single docking result row from the docking_results table.
+type DockingResult struct {
+	CompoundID string  `json:"compound_id"`
+	Affinity   float64 `json:"affinity_kcal_mol"`
+	LigandID   int     `json:"ligand_id"`
 }
 
 // PluginSubmit returns a handler that accepts job submissions for the given plugin.
@@ -211,6 +229,47 @@ func (h *APIHandler) PluginGet(plugin Plugin) http.HandlerFunc {
 			json.Unmarshal([]byte(outputJSON.String), &j.OutputData)
 		}
 
+		// Fetch artifact metadata for this job (excludes binary content).
+		artifactRows, err := db.QueryContext(r.Context(),
+			`SELECT id, filename, content_type, size_bytes, created_at FROM job_artifacts WHERE job_name = ?`, jobName)
+		if err != nil {
+			log.Printf("[%s] Warning: failed to query artifacts for job %s: %v", plugin.Slug, jobName, err)
+		} else {
+			defer artifactRows.Close()
+			for artifactRows.Next() {
+				var a ArtifactSummary
+				if err := artifactRows.Scan(&a.ID, &a.Filename, &a.ContentType, &a.SizeBytes, &a.CreatedAt); err != nil {
+					log.Printf("[%s] Warning: failed to scan artifact row: %v", plugin.Slug, err)
+					continue
+				}
+				j.Artifacts = append(j.Artifacts, a)
+			}
+		}
+
+		// For docking jobs, fetch ranked results from the docking_results table.
+		// The workflow_name in docking_results matches the job name (set via WORKFLOW_NAME env var).
+		if plugin.Slug == "docking" {
+			dockRows, err := db.QueryContext(r.Context(),
+				`SELECT compound_id, affinity_kcal_mol, ligand_id
+				 FROM docking_results
+				 WHERE workflow_name = ?
+				 ORDER BY affinity_kcal_mol ASC
+				 LIMIT 200`, jobName)
+			if err != nil {
+				log.Printf("[docking] Warning: failed to query docking results for job %s: %v", jobName, err)
+			} else {
+				defer dockRows.Close()
+				for dockRows.Next() {
+					var dr DockingResult
+					if err := dockRows.Scan(&dr.CompoundID, &dr.Affinity, &dr.LigandID); err != nil {
+						log.Printf("[docking] Warning: failed to scan docking result: %v", err)
+						continue
+					}
+					j.DockingResults = append(j.DockingResults, dr)
+				}
+			}
+		}
+
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(j)
 	}
@@ -255,6 +314,111 @@ func (h *APIHandler) PluginDelete(plugin Plugin) http.HandlerFunc {
 		}
 
 		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+// PluginListArtifacts returns a handler that lists artifact metadata for a specific job.
+// GET /api/v1/{slug}/artifacts/{jobName}
+func (h *APIHandler) PluginListArtifacts(plugin Plugin) http.HandlerFunc {
+	basePath := fmt.Sprintf("/api/v1/%s/artifacts/", plugin.Slug)
+
+	return func(w http.ResponseWriter, r *http.Request) {
+		// Parse: /api/v1/{slug}/artifacts/{jobName}
+		remainder := strings.TrimPrefix(r.URL.Path, basePath)
+		remainder = strings.TrimRight(remainder, "/")
+		if remainder == "" {
+			writeError(w, "job name required", http.StatusBadRequest)
+			return
+		}
+
+		// If there is a slash, the first segment is the job name, the rest is a filename.
+		// This handler only handles the list case (no filename segment).
+		if strings.Contains(remainder, "/") {
+			writeError(w, "use the download endpoint for individual artifacts", http.StatusBadRequest)
+			return
+		}
+		jobName := remainder
+
+		db := h.pluginDB(plugin.Slug)
+		if db == nil {
+			writeError(w, fmt.Sprintf("database not available for plugin %s", plugin.Slug), http.StatusInternalServerError)
+			return
+		}
+
+		rows, err := db.QueryContext(r.Context(),
+			`SELECT id, filename, content_type, size_bytes, created_at FROM job_artifacts WHERE job_name = ?`, jobName)
+		if err != nil {
+			writeError(w, fmt.Sprintf("failed to query artifacts: %v", err), http.StatusInternalServerError)
+			return
+		}
+		defer rows.Close()
+
+		var artifacts []ArtifactSummary
+		for rows.Next() {
+			var a ArtifactSummary
+			if err := rows.Scan(&a.ID, &a.Filename, &a.ContentType, &a.SizeBytes, &a.CreatedAt); err != nil {
+				writeError(w, fmt.Sprintf("failed to scan artifact: %v", err), http.StatusInternalServerError)
+				return
+			}
+			artifacts = append(artifacts, a)
+		}
+		if err := rows.Err(); err != nil {
+			writeError(w, fmt.Sprintf("failed to iterate artifacts: %v", err), http.StatusInternalServerError)
+			return
+		}
+
+		if artifacts == nil {
+			artifacts = []ArtifactSummary{}
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"artifacts": artifacts,
+			"count":     len(artifacts),
+		})
+	}
+}
+
+// PluginDownloadArtifact returns a handler that serves a single artifact's binary content.
+// GET /api/v1/{slug}/artifacts/{jobName}/{filename}
+func (h *APIHandler) PluginDownloadArtifact(plugin Plugin) http.HandlerFunc {
+	basePath := fmt.Sprintf("/api/v1/%s/artifacts/", plugin.Slug)
+
+	return func(w http.ResponseWriter, r *http.Request) {
+		// Parse: /api/v1/{slug}/artifacts/{jobName}/{filename}
+		remainder := strings.TrimPrefix(r.URL.Path, basePath)
+		slashIdx := strings.Index(remainder, "/")
+		if slashIdx < 0 || slashIdx == len(remainder)-1 {
+			writeError(w, "job name and filename required", http.StatusBadRequest)
+			return
+		}
+		jobName := remainder[:slashIdx]
+		filename := remainder[slashIdx+1:]
+
+		db := h.pluginDB(plugin.Slug)
+		if db == nil {
+			writeError(w, fmt.Sprintf("database not available for plugin %s", plugin.Slug), http.StatusInternalServerError)
+			return
+		}
+
+		var contentType string
+		var content []byte
+		err := db.QueryRowContext(r.Context(),
+			`SELECT content_type, content FROM job_artifacts WHERE job_name = ? AND filename = ?`,
+			jobName, filename).Scan(&contentType, &content)
+		if err == sql.ErrNoRows {
+			writeError(w, "artifact not found", http.StatusNotFound)
+			return
+		}
+		if err != nil {
+			writeError(w, fmt.Sprintf("failed to get artifact: %v", err), http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", contentType)
+		w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(content)))
+		w.Write(content)
 	}
 }
 
