@@ -1,5 +1,5 @@
 <script lang="ts">
-  let { job, pluginSlug }: { job: any; pluginSlug: string } = $props();
+  let { job, pluginSlug, onView3D }: { job: any; pluginSlug: string; onView3D?: () => void } = $props();
 
   /** Fields to skip in the summary table (arrays, text blobs, raw output) */
   const SKIP_FIELDS = new Set([
@@ -183,6 +183,12 @@
         </table>
       </div>
     </div>
+  {/if}
+
+  {#if onView3D && job.status?.toLowerCase() === 'completed'}
+    <button class="view-3d-btn" onclick={onView3D}>
+      View Molecule & Artifacts
+    </button>
   {/if}
 
   {#if job.error_output}
@@ -425,6 +431,28 @@
 
   th.col-affinity {
     text-align: right;
+  }
+
+  .view-3d-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    width: 100%;
+    padding: 8px 12px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--accent, #58a6ff);
+    background: rgba(88,166,255,0.08);
+    border: 1px solid rgba(88,166,255,0.2);
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+
+  .view-3d-btn:hover {
+    background: rgba(88,166,255,0.15);
+    border-color: rgba(88,166,255,0.4);
   }
 
   .error-box {

@@ -7,6 +7,10 @@
 
   let { job, pluginSlug }: { job: any; pluginSlug: string } = $props();
 
+  function switchTo3D() {
+    if (hasArtifacts) activeTab = '3d';
+  }
+
   type TabId = 'summary' | 'charts' | '3d' | 'raw';
   let activeTab = $state<TabId>('summary');
 
@@ -58,7 +62,7 @@
 
     <div class="tab-content">
       {#if activeTab === 'summary'}
-        <SummaryTab {job} {pluginSlug} />
+        <SummaryTab {job} {pluginSlug} onView3D={hasArtifacts ? switchTo3D : undefined} />
       {:else if activeTab === 'charts'}
         <ChartsTab {job} />
       {:else if activeTab === '3d'}
