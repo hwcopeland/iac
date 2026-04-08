@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/base64"
 	"os"
 	"path/filepath"
 	"testing"
@@ -743,5 +744,343 @@ func TestPluginParseOutputReduceAllDFRATOM(t *testing.T) {
 	}
 	if values[2] != "-1.2351E+02" {
 		t.Errorf("last iter: expected %q, got %q", "-1.2351E+02", values[2])
+	}
+}
+
+func TestPluginParseOutputDFRATOMEnergyDecomposition(t *testing.T) {
+	// Verify the DFRATOM energy decomposition regexes parse the ENERGIES section
+	// correctly. The output has been through sed D->E conversion.
+	p := Plugin{
+		Output: []PluginOutput{
+			{
+				Name:  "total_energy",
+				Type:  "float",
+				Parse: `TOTAL\s+(-?\d+\.\d+E[+-]\d+)`,
+			},
+			{
+				Name:  "kinetic_energy",
+				Type:  "float",
+				Parse: `KINETIC <T>\s*([-\d.E+-]+)`,
+			},
+			{
+				Name:  "potential_energy",
+				Type:  "float",
+				Parse: `POTENTIAL <V>\s*([-\d.E+-]+)`,
+			},
+			{
+				Name:  "virial_ratio",
+				Type:  "float",
+				Parse: `VIRIAL\s+.*\s+([-\d.E+-]+)`,
+			},
+			{
+				Name:  "rest_mass_energy",
+				Type:  "float",
+				Parse: `REST MASS\s*([-\d.E+-]+)`,
+			},
+		},
+	}
+
+	// Simulate DFRATOM output after sed D->E conversion.
+	// Fortran FORMAT: ' TOTAL      ',D26.14/' REST MASS  ',D26.14/
+	//                 ' KINETIC <T>',D26.14/' POTENTIAL <V>',D24.14
+	// VIRIAL <V>/<T> with D24.14
+	output := `
+ENERGIES
+ TOTAL       -3.76760357418128E+01
+ REST MASS   -3.76760432775822E+01
+ KINETIC <T>  7.53848058503390E+01
+ POTENTIAL <V>-7.53847983145696E+01
+
+VIRIAL <V>/<T> -1.99999990017786E+00
+
+SCF ITERATION NO    42
+`
+
+	result := p.ParseOutput(output)
+
+	if result["total_energy"] != "-3.76760357418128E+01" {
+		t.Errorf("total_energy: expected %q, got %v", "-3.76760357418128E+01", result["total_energy"])
+	}
+	if result["kinetic_energy"] != "7.53848058503390E+01" {
+		t.Errorf("kinetic_energy: expected %q, got %v", "7.53848058503390E+01", result["kinetic_energy"])
+	}
+	if result["potential_energy"] != "-7.53847983145696E+01" {
+		t.Errorf("potential_energy: expected %q, got %v", "-7.53847983145696E+01", result["potential_energy"])
+	}
+	if result["virial_ratio"] != "-1.99999990017786E+00" {
+		t.Errorf("virial_ratio: expected %q, got %v", "-1.99999990017786E+00", result["virial_ratio"])
+	}
+	if result["rest_mass_energy"] != "-3.76760432775822E+01" {
+		t.Errorf("rest_mass_energy: expected %q, got %v", "-3.76760432775822E+01", result["rest_mass_energy"])
+	}
+}
+
+func TestPluginParseOutputDFRATOMVirialFiniteNucleus(t *testing.T) {
+	// The virial regex should also match the finite-sphere nucleus variant.
+	p := Plugin{
+		Output: []PluginOutput{
+			{
+				Name:  "virial_ratio",
+				Type:  "float",
+				Parse: `VIRIAL\s+.*\s+([-\d.E+-]+)`,
+			},
+		},
+	}
+
+	output := `VIRIAL (<V>+CORRECTION)/<T> -1.99999850012345E+00`
+
+	result := p.ParseOutput(output)
+	if result["virial_ratio"] != "-1.99999850012345E+00" {
+		t.Errorf("virial_ratio (finite nucleus): expected %q, got %v",
+			"-1.99999850012345E+00", result["virial_ratio"])
+	}
+}
+
+// --- Artifact extraction and content type tests ---
+
+func TestExtractArtifactsSingleFile(t *testing.T) {
+	content := []byte("hello world")
+	b64 := base64.StdEncoding.EncodeToString(content)
+
+	logOutput := "some log line\n===ARTIFACT:output.cube===\n" + b64 + "\n===END_ARTIFACT===\nmore log\n"
+
+	artifacts := extractArtifacts(logOutput)
+	if len(artifacts) != 1 {
+		t.Fatalf("expected 1 artifact, got %d", len(artifacts))
+	}
+	got, ok := artifacts["output.cube"]
+	if !ok {
+		t.Fatal("artifact output.cube not found")
+	}
+	if string(got) != "hello world" {
+		t.Errorf("expected %q, got %q", "hello world", string(got))
+	}
+}
+
+func TestExtractArtifactsMultipleFiles(t *testing.T) {
+	cube := base64.StdEncoding.EncodeToString([]byte("cube data"))
+	molden := base64.StdEncoding.EncodeToString([]byte("molden data"))
+
+	logOutput := "header\n" +
+		"===ARTIFACT:density.cube===\n" + cube + "\n===END_ARTIFACT===\n" +
+		"middle log\n" +
+		"===ARTIFACT:orbitals.molden===\n" + molden + "\n===END_ARTIFACT===\n" +
+		"footer\n"
+
+	artifacts := extractArtifacts(logOutput)
+	if len(artifacts) != 2 {
+		t.Fatalf("expected 2 artifacts, got %d", len(artifacts))
+	}
+	if string(artifacts["density.cube"]) != "cube data" {
+		t.Errorf("density.cube: expected %q, got %q", "cube data", string(artifacts["density.cube"]))
+	}
+	if string(artifacts["orbitals.molden"]) != "molden data" {
+		t.Errorf("orbitals.molden: expected %q, got %q", "molden data", string(artifacts["orbitals.molden"]))
+	}
+}
+
+func TestExtractArtifactsNoArtifacts(t *testing.T) {
+	logOutput := "just regular log output\nno markers here\n"
+	artifacts := extractArtifacts(logOutput)
+	if len(artifacts) != 0 {
+		t.Errorf("expected 0 artifacts, got %d", len(artifacts))
+	}
+}
+
+func TestExtractArtifactsMissingEndMarker(t *testing.T) {
+	content := base64.StdEncoding.EncodeToString([]byte("truncated"))
+	logOutput := "===ARTIFACT:broken.dat===\n" + content + "\n"
+
+	artifacts := extractArtifacts(logOutput)
+	if len(artifacts) != 0 {
+		t.Errorf("expected 0 artifacts for missing end marker, got %d", len(artifacts))
+	}
+}
+
+func TestExtractArtifactsInvalidBase64(t *testing.T) {
+	logOutput := "===ARTIFACT:bad.dat===\nnot-valid-base64!!!\n===END_ARTIFACT===\n"
+	artifacts := extractArtifacts(logOutput)
+	if len(artifacts) != 0 {
+		t.Errorf("expected 0 artifacts for invalid base64, got %d", len(artifacts))
+	}
+}
+
+func TestExtractArtifactsEmptyFilename(t *testing.T) {
+	content := base64.StdEncoding.EncodeToString([]byte("data"))
+	logOutput := "===ARTIFACT:===\n" + content + "\n===END_ARTIFACT===\n"
+	artifacts := extractArtifacts(logOutput)
+	if len(artifacts) != 0 {
+		t.Errorf("expected 0 artifacts for empty filename, got %d", len(artifacts))
+	}
+}
+
+func TestExtractArtifactsMultiLineBase64(t *testing.T) {
+	// Large content gets split across multiple lines by base64 encoders.
+	data := make([]byte, 200)
+	for i := range data {
+		data[i] = byte(i % 256)
+	}
+	b64 := base64.StdEncoding.EncodeToString(data)
+	// Split into 76-char lines (standard base64 line length).
+	var b64Lines []string
+	for len(b64) > 76 {
+		b64Lines = append(b64Lines, b64[:76])
+		b64 = b64[76:]
+	}
+	if len(b64) > 0 {
+		b64Lines = append(b64Lines, b64)
+	}
+
+	logOutput := "===ARTIFACT:big.dat===\n"
+	for _, line := range b64Lines {
+		logOutput += line + "\n"
+	}
+	logOutput += "===END_ARTIFACT===\n"
+
+	artifacts := extractArtifacts(logOutput)
+	if len(artifacts) != 1 {
+		t.Fatalf("expected 1 artifact, got %d", len(artifacts))
+	}
+	got := artifacts["big.dat"]
+	if len(got) != len(data) {
+		t.Errorf("expected %d bytes, got %d", len(data), len(got))
+	}
+	for i := range data {
+		if got[i] != data[i] {
+			t.Errorf("byte %d: expected %d, got %d", i, data[i], got[i])
+			break
+		}
+	}
+}
+
+func TestStripArtifactBlocks(t *testing.T) {
+	content := base64.StdEncoding.EncodeToString([]byte("data"))
+	input := "line1\nline2\n===ARTIFACT:file.cube===\n" + content + "\n===END_ARTIFACT===\nline3\n"
+	got := stripArtifactBlocks(input)
+	if contains(got, "===ARTIFACT") {
+		t.Error("stripped output still contains ARTIFACT marker")
+	}
+	if contains(got, content) {
+		t.Error("stripped output still contains base64 content")
+	}
+	if !contains(got, "line1") || !contains(got, "line2") || !contains(got, "line3") {
+		t.Errorf("stripped output missing non-artifact lines: %q", got)
+	}
+}
+
+func TestStripArtifactBlocksNoArtifacts(t *testing.T) {
+	input := "line1\nline2\nline3\n"
+	got := stripArtifactBlocks(input)
+	if got != input {
+		t.Errorf("expected unchanged output, got %q", got)
+	}
+}
+
+func TestStripArtifactBlocksMultiple(t *testing.T) {
+	b641 := base64.StdEncoding.EncodeToString([]byte("a"))
+	b642 := base64.StdEncoding.EncodeToString([]byte("b"))
+
+	input := "before\n" +
+		"===ARTIFACT:a.dat===\n" + b641 + "\n===END_ARTIFACT===\n" +
+		"middle\n" +
+		"===ARTIFACT:b.dat===\n" + b642 + "\n===END_ARTIFACT===\n" +
+		"after\n"
+
+	got := stripArtifactBlocks(input)
+	if contains(got, "===ARTIFACT") {
+		t.Error("stripped output still contains ARTIFACT markers")
+	}
+	if !contains(got, "before") || !contains(got, "middle") || !contains(got, "after") {
+		t.Errorf("stripped output missing non-artifact lines: %q", got)
+	}
+}
+
+func TestGuessContentType(t *testing.T) {
+	tests := []struct {
+		filename string
+		want     string
+	}{
+		{"density.cube", "chemical/x-cube"},
+		{"orbitals.molden", "chemical/x-molden"},
+		{"docked.pdbqt", "chemical/x-pdbqt"},
+		{"output.json", "application/json"},
+		{"dos.dat", "text/plain"},
+		{"freq.hess", "application/octet-stream"},
+		{"unknown.xyz", "application/octet-stream"},
+		{"no_extension", "application/octet-stream"},
+		// Case insensitivity.
+		{"DENSITY.CUBE", "chemical/x-cube"},
+		{"output.JSON", "application/json"},
+	}
+
+	for _, tt := range tests {
+		got := guessContentType(tt.filename)
+		if got != tt.want {
+			t.Errorf("guessContentType(%q) = %q, want %q", tt.filename, got, tt.want)
+		}
+	}
+}
+
+func TestLoadPluginsArtifacts(t *testing.T) {
+	// Verify that artifact definitions are loaded from the plugin YAMLs.
+	pluginsDir := filepath.Join("..", "plugins")
+	if _, err := os.Stat(pluginsDir); os.IsNotExist(err) {
+		t.Skipf("plugins directory %s not found, skipping", pluginsDir)
+	}
+
+	plugins, err := LoadPlugins(pluginsDir)
+	if err != nil {
+		t.Fatalf("LoadPlugins failed: %v", err)
+	}
+
+	// Build a lookup map.
+	bySlug := make(map[string]*Plugin)
+	for i := range plugins {
+		bySlug[plugins[i].Slug] = &plugins[i]
+	}
+
+	// QE should have cube and dat artifacts.
+	qe := bySlug["qe"]
+	if qe == nil {
+		t.Fatal("QE plugin not found")
+	}
+	if len(qe.Artifacts) != 2 {
+		t.Errorf("QE artifacts: expected 2, got %d", len(qe.Artifacts))
+	}
+
+	// Psi4 should have cube, molden, and json artifacts.
+	psi4 := bySlug["psi4"]
+	if psi4 == nil {
+		t.Fatal("Psi4 plugin not found")
+	}
+	if len(psi4.Artifacts) != 3 {
+		t.Errorf("Psi4 artifacts: expected 3, got %d", len(psi4.Artifacts))
+	}
+
+	// NWChem should have molden and hess artifacts.
+	nwchem := bySlug["nwchem"]
+	if nwchem == nil {
+		t.Fatal("NWChem plugin not found")
+	}
+	if len(nwchem.Artifacts) != 2 {
+		t.Errorf("NWChem artifacts: expected 2, got %d", len(nwchem.Artifacts))
+	}
+
+	// DFRATOM should have dat artifacts.
+	dfratom := bySlug["dfratom"]
+	if dfratom == nil {
+		t.Fatal("DFRATOM plugin not found")
+	}
+	if len(dfratom.Artifacts) != 1 {
+		t.Errorf("DFRATOM artifacts: expected 1, got %d", len(dfratom.Artifacts))
+	}
+
+	// Docking should have pdbqt artifacts.
+	docking := bySlug["docking"]
+	if docking == nil {
+		t.Fatal("docking plugin not found")
+	}
+	if len(docking.Artifacts) != 1 {
+		t.Errorf("docking artifacts: expected 1, got %d", len(docking.Artifacts))
 	}
 }

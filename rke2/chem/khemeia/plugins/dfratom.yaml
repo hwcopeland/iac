@@ -27,6 +27,22 @@ output:
     type: int
     parse: 'SCF ITERATION NO\s+(\d+)'
     reduce: last
+  - name: kinetic_energy
+    type: float
+    parse: 'KINETIC <T>\s*([-\d.E+-]+)'
+    description: "Kinetic energy <T> in Hartree"
+  - name: potential_energy
+    type: float
+    parse: 'POTENTIAL <V>\s*([-\d.E+-]+)'
+    description: "Potential energy <V> in Hartree"
+  - name: virial_ratio
+    type: float
+    parse: 'VIRIAL\s+.*\s+([-\d.E+-]+)'
+    description: "Virial ratio <V>/<T> (point nucleus) or (<V>+correction)/<T> (finite nucleus)"
+  - name: rest_mass_energy
+    type: float
+    parse: 'REST MASS\s*([-\d.E+-]+)'
+    description: "Rest mass energy in Hartree"
   - name: log
     type: text
 
