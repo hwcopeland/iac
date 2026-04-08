@@ -22,12 +22,45 @@
     return String(value);
   }
 
+  /** Fields that appear in the DFRATOM energy decomposition table instead of the generic table */
+  const DFRATOM_ENERGY_FIELDS = new Set([
+    'total_energy', 'rest_mass_energy', 'kinetic_energy', 'potential_energy', 'virial_ratio',
+  ]);
+
+  /** DFRATOM energy decomposition rows: [display label, field key, unit] */
+  const DFRATOM_ENERGY_ROWS: [string, string, string][] = [
+    ['Total Energy', 'total_energy', 'Ha'],
+    ['Rest Mass Energy', 'rest_mass_energy', 'Ha'],
+    ['Kinetic Energy <T>', 'kinetic_energy', 'Ha'],
+    ['Potential Energy <V>', 'potential_energy', 'Ha'],
+    ['Virial Ratio', 'virial_ratio', ''],
+  ];
+
+  /** Whether this job has DFRATOM energy decomposition data */
+  let hasDfratomEnergies = $derived(
+    pluginSlug === 'dfratom' &&
+    job?.output_data &&
+    (job.output_data.kinetic_energy != null || job.output_data.potential_energy != null)
+  );
+
+  /** Format an energy value: parse scientific notation string, display with full precision */
+  function formatEnergy(value: any): string {
+    if (value == null) return '--';
+    const s = String(value);
+    const n = Number(s);
+    if (isNaN(n)) return s;
+    // Show 10 significant digits for Hartree energies
+    return n.toPrecision(10);
+  }
+
   /** Filter output_data to scalar fields only */
   let scalarFields = $derived.by(() => {
     const data = job?.output_data;
     if (!data || typeof data !== 'object') return [];
     return Object.entries(data).filter(([key, value]) => {
       if (SKIP_FIELDS.has(key)) return false;
+      // Hide energy fields from generic table when shown in DFRATOM decomposition
+      if (hasDfratomEnergies && DFRATOM_ENERGY_FIELDS.has(key)) return false;
       if (Array.isArray(value)) return false;
       if (typeof value === 'object' && value !== null) return false;
       if (typeof value === 'string' && value.length > 200) return false;
@@ -87,6 +120,25 @@
     </div>
   </div>
 
+  {#if hasDfratomEnergies}
+    <div class="energy-decomposition">
+      <div class="table-header">
+        <span>Energy Decomposition</span>
+        <span>Value</span>
+      </div>
+      {#each DFRATOM_ENERGY_ROWS as [label, key, unit], i}
+        {#if job.output_data[key] != null}
+          <div class="table-row" class:alt={i % 2 === 1} class:virial={key === 'virial_ratio'}>
+            <span class="row-label">{label}</span>
+            <span class="row-value">
+              {formatEnergy(job.output_data[key])}{#if unit}&nbsp;{unit}{/if}
+            </span>
+          </div>
+        {/if}
+      {/each}
+    </div>
+  {/if}
+
   {#if scalarFields.length > 0}
     <div class="summary-table">
       <div class="table-header">
@@ -100,8 +152,37 @@
         </div>
       {/each}
     </div>
-  {:else if !job.error_output}
+  {:else if !job.error_output && !hasDfratomEnergies}
     <p class="no-data">No output data available.</p>
+  {/if}
+
+  {#if job.docking_results?.length}
+    <div class="docking-results">
+      <div class="docking-header">
+        <h4 class="docking-title">Docking Results</h4>
+        <span class="docking-count">{job.docking_results.length} compounds</span>
+      </div>
+      <div class="results-table-wrap">
+        <table class="results-table">
+          <thead>
+            <tr>
+              <th class="col-rank">#</th>
+              <th class="col-compound">Compound</th>
+              <th class="col-affinity">Affinity (kcal/mol)</th>
+            </tr>
+          </thead>
+          <tbody>
+            {#each job.docking_results as result, i}
+              <tr class:top-hit={i < 3} class:alt={i % 2 === 1}>
+                <td class="col-rank">{i + 1}</td>
+                <td class="col-compound mono">{result.compound_id}</td>
+                <td class="col-affinity mono">{result.affinity_kcal_mol.toFixed(2)}</td>
+              </tr>
+            {/each}
+          </tbody>
+        </table>
+      </div>
+    </div>
   {/if}
 
   {#if job.error_output}
@@ -215,11 +296,135 @@
     color: var(--text-primary, #e6edf3);
   }
 
+  .energy-decomposition {
+    display: flex;
+    flex-direction: column;
+    border: 1px solid rgba(88,166,255,0.2);
+    border-radius: 6px;
+    overflow: hidden;
+    background: rgba(88,166,255,0.03);
+  }
+
+  .table-row.virial {
+    border-top: 1px solid rgba(48,54,61,0.4);
+  }
+
   .no-data {
     font-size: 12px;
     color: var(--text-muted, #484f58);
     text-align: center;
     padding: 12px 0;
+  }
+
+  .docking-results {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .docking-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+
+  .docking-title {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-secondary, #8b949e);
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    margin: 0;
+  }
+
+  .docking-count {
+    font-size: 10px;
+    color: var(--text-muted, #484f58);
+  }
+
+  .results-table-wrap {
+    border: 1px solid rgba(48,54,61,0.4);
+    border-radius: 6px;
+    overflow: hidden;
+    max-height: 400px;
+    overflow-y: auto;
+  }
+
+  .results-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 11px;
+  }
+
+  .results-table thead {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+  }
+
+  .results-table th {
+    background: rgba(0,0,0,0.3);
+    padding: 5px 10px;
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--text-muted, #484f58);
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    text-align: left;
+  }
+
+  .results-table td {
+    padding: 4px 10px;
+    color: var(--text-primary, #e6edf3);
+    transition: background 0.1s;
+  }
+
+  .results-table td.mono {
+    font-family: 'SF Mono', monospace;
+    font-size: 11px;
+  }
+
+  .results-table tr:hover td {
+    background: rgba(255,255,255,0.03);
+  }
+
+  .results-table tr.alt td {
+    background: rgba(0,0,0,0.15);
+  }
+
+  .results-table tr.alt:hover td {
+    background: rgba(0,0,0,0.25);
+  }
+
+  .results-table tr.top-hit td {
+    background: rgba(63,185,80,0.08);
+  }
+
+  .results-table tr.top-hit:hover td {
+    background: rgba(63,185,80,0.14);
+  }
+
+  .results-table tr.top-hit.alt td {
+    background: rgba(63,185,80,0.06);
+  }
+
+  .results-table tr.top-hit.alt:hover td {
+    background: rgba(63,185,80,0.12);
+  }
+
+  .col-rank {
+    width: 36px;
+    text-align: center;
+  }
+
+  .col-affinity {
+    text-align: right;
+    width: 120px;
+    font-weight: 600;
+  }
+
+  th.col-affinity {
+    text-align: right;
   }
 
   .error-box {
