@@ -33,6 +33,16 @@ output:
   - name: output_file
     type: text
 
+artifacts:
+  - name: molden_files
+    pattern: "*.molden"
+    content_type: "chemical/x-molden"
+    description: "Molden files for orbital and geometry visualization"
+  - name: hessian_files
+    pattern: "*.hess"
+    content_type: "application/octet-stream"
+    description: "Hessian matrix files from frequency calculations"
+
 resources:
   cpu: "{{ .num_cpus }}"
   memory: "{{ .memory_mb }}Mi"

@@ -36,6 +36,20 @@ output:
   - name: output_file
     type: text
 
+artifacts:
+  - name: cube_files
+    pattern: "*.cube"
+    content_type: "chemical/x-cube"
+    description: "Gaussian cube files for orbital/density visualization"
+  - name: molden_files
+    pattern: "*.molden"
+    content_type: "chemical/x-molden"
+    description: "Molden files for orbital and geometry visualization"
+  - name: json_data
+    pattern: "*.json"
+    content_type: "application/json"
+    description: "Psi4 JSON output data"
+
 resources:
   cpu: "{{ .num_threads }}"
   memory: "{{ .memory_gb }}Gi"

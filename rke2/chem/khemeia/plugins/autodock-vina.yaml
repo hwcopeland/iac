@@ -32,6 +32,12 @@ output:
   - name: log
     type: text
 
+artifacts:
+  - name: docked_poses
+    pattern: "*.pdbqt"
+    content_type: "chemical/x-pdbqt"
+    description: "Docked ligand poses in PDBQT format"
+
 resources:
   cpu: "1"
   memory: "2048Mi"

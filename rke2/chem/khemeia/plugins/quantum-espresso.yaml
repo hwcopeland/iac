@@ -37,6 +37,16 @@ output:
     type: float
     parse: 'PWSCF\s+:\s+[\d.]+s CPU\s+([\d.]+)s WALL'
 
+artifacts:
+  - name: cube_files
+    pattern: "*.cube"
+    content_type: "chemical/x-cube"
+    description: "Gaussian cube files for charge density and orbital visualization"
+  - name: dos_data
+    pattern: "*.dat"
+    content_type: "text/plain"
+    description: "Density of states and charge density data files"
+
 resources:
   cpu: "{{ .num_cpus }}"
   memory: "{{ .memory_mb }}Mi"

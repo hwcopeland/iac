@@ -30,6 +30,12 @@ output:
   - name: log
     type: text
 
+artifacts:
+  - name: dat_files
+    pattern: "*.dat"
+    content_type: "text/plain"
+    description: "DFRATOM output data files"
+
 resources:
   cpu: "2"
   memory: "4096Mi"

@@ -1,5 +1,6 @@
 <script lang="ts">
   import Panel from './Panel.svelte';
+  import ResultsPanel from './results/ResultsPanel.svelte';
   import { getPlugins, submitJob, getJobs, getJob, getLigandDatabases } from '$lib/api';
   import type { Plugin, PluginInputField } from '$lib/api';
   import { getCurrentStructureText } from '$lib/viewer';
@@ -324,39 +325,7 @@
         </Panel>
 
         {#if selectedJob}
-          <Panel title="Result">
-            <div class="result-section">
-              <div class="result-header">
-                <span class="result-name">{selectedJob.name}</span>
-                <span class="job-status {statusClass(selectedJob.status)}">{selectedJob.status}</span>
-              </div>
-
-              {#if selectedJob.output_data}
-                <div class="output-grid">
-                  {#each Object.entries(selectedJob.output_data) as [key, value]}
-                    <div class="output-row">
-                      <span class="output-key">{key.replace(/_/g, ' ')}</span>
-                      <span class="output-value">{typeof value === 'number' ? (value as number).toFixed(6) : value}</span>
-                    </div>
-                  {/each}
-                </div>
-              {/if}
-
-              {#if selectedJob.error_output}
-                <div class="error-output">
-                  <p class="error-label">Error</p>
-                  <pre class="error-pre">{selectedJob.error_output}</pre>
-                </div>
-              {/if}
-
-              {#if selectedJob.input_data}
-                <details class="input-details">
-                  <summary>Input</summary>
-                  <pre class="job-pre">{JSON.stringify(selectedJob.input_data, null, 2)}</pre>
-                </details>
-              {/if}
-            </div>
-          </Panel>
+          <ResultsPanel job={selectedJob} pluginSlug={activePlugin} />
         {/if}
       {/if}
     {/each}
@@ -584,94 +553,4 @@
   .job-status.completed { background: rgba(63,185,80,0.15); color: #3fb950; }
   .job-status.failed { background: rgba(248,81,73,0.15); color: #f85149; }
 
-  .result-section {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-  }
-
-  .result-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-  }
-
-  .result-name {
-    font-family: 'SF Mono', monospace;
-    font-size: 11px;
-    color: var(--text-secondary, #8b949e);
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  .output-grid {
-    display: flex;
-    flex-direction: column;
-    gap: 3px;
-  }
-
-  .output-row {
-    display: flex;
-    justify-content: space-between;
-    padding: 4px 8px;
-    background: rgba(0,0,0,0.2);
-    border-radius: 4px;
-  }
-
-  .output-key {
-    font-size: 11px;
-    color: var(--text-secondary, #8b949e);
-    text-transform: capitalize;
-  }
-
-  .output-value {
-    font-family: 'SF Mono', monospace;
-    font-size: 12px;
-    font-weight: 600;
-    color: var(--text-primary, #e6edf3);
-  }
-
-  .error-output {
-    background: rgba(248,81,73,0.05);
-    border: 1px solid rgba(248,81,73,0.2);
-    border-radius: 4px;
-    padding: 8px;
-  }
-
-  .error-label {
-    font-size: 10px;
-    font-weight: 600;
-    color: var(--danger, #f85149);
-    text-transform: uppercase;
-    margin-bottom: 4px;
-  }
-
-  .error-pre, .job-pre {
-    font-family: 'SF Mono', monospace;
-    font-size: 11px;
-    color: var(--text-secondary, #8b949e);
-    white-space: pre-wrap;
-    word-break: break-word;
-    max-height: 200px;
-    overflow-y: auto;
-    margin: 0;
-  }
-
-  .input-details {
-    margin-top: 4px;
-  }
-
-  .input-details summary {
-    font-size: 11px;
-    color: var(--text-secondary, #8b949e);
-    cursor: pointer;
-    user-select: none;
-  }
-
-  .input-details .job-pre {
-    margin-top: 4px;
-    background: rgba(0,0,0,0.2);
-    padding: 8px;
-    border-radius: 4px;
-  }
 </style>

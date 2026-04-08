@@ -6,10 +6,12 @@ package main
 import (
 	"context"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -186,6 +188,26 @@ func (c *Controller) RunPluginJob(plugin Plugin, jobName string, input map[strin
 		return
 	}
 
+	// 7a. Extract base64-encoded artifacts from stdout markers and store them.
+	artifacts := extractArtifacts(output)
+	if len(artifacts) > 0 {
+		for filename, data := range artifacts {
+			contentType := guessContentType(filename)
+			_, err := db.ExecContext(ctx,
+				`INSERT INTO job_artifacts (job_name, filename, content_type, size_bytes, content)
+				 VALUES (?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE content = VALUES(content), size_bytes = VALUES(size_bytes)`,
+				jobName, filename, contentType, len(data), data)
+			if err != nil {
+				log.Printf("[%s] Warning: failed to store artifact %s: %v", jobName, filename, err)
+			}
+		}
+		log.Printf("[%s] Stored %d artifacts", jobName, len(artifacts))
+	}
+
+	// 7b. Strip artifact blocks from stdout before regex parsing so base64 data
+	// doesn't confuse the output parsers.
+	output = stripArtifactBlocks(output)
+
 	// 8. Parse output using plugin's output regex patterns.
 	parsedOutput := plugin.ParseOutput(output)
 
@@ -324,5 +346,129 @@ func loadPseudopotentials(db *sql.DB, jobName, inputFile string, cmBinary map[st
 				}
 			}
 		}
+	}
+}
+
+// extractArtifacts scans log output for base64-encoded artifact blocks delimited
+// by marker lines. Plugin commands emit artifacts between:
+//
+//	===ARTIFACT:<filename>===
+//	<base64-encoded content>
+//	===END_ARTIFACT===
+//
+// Returns a map of filename to decoded binary content. Malformed or undecodable
+// blocks are logged and skipped.
+func extractArtifacts(logOutput string) map[string][]byte {
+	artifacts := make(map[string][]byte)
+
+	const startPrefix = "===ARTIFACT:"
+	const startSuffix = "==="
+	const endMarker = "===END_ARTIFACT==="
+
+	lines := strings.Split(logOutput, "\n")
+	i := 0
+	for i < len(lines) {
+		line := strings.TrimSpace(lines[i])
+
+		// Look for ===ARTIFACT:<filename>===
+		if !strings.HasPrefix(line, startPrefix) {
+			i++
+			continue
+		}
+
+		// Extract filename from the marker line.
+		rest := line[len(startPrefix):]
+		if !strings.HasSuffix(rest, startSuffix) {
+			i++
+			continue
+		}
+		filename := rest[:len(rest)-len(startSuffix)]
+		if filename == "" {
+			i++
+			continue
+		}
+
+		// Collect base64 content lines until the end marker.
+		i++
+		var b64Lines []string
+		found := false
+		for i < len(lines) {
+			trimmed := strings.TrimSpace(lines[i])
+			if trimmed == endMarker {
+				found = true
+				i++
+				break
+			}
+			b64Lines = append(b64Lines, trimmed)
+			i++
+		}
+
+		if !found {
+			log.Printf("Warning: artifact %q missing end marker, skipping", filename)
+			continue
+		}
+
+		// Decode the base64 content.
+		b64Content := strings.Join(b64Lines, "")
+		decoded, err := base64.StdEncoding.DecodeString(b64Content)
+		if err != nil {
+			log.Printf("Warning: artifact %q has invalid base64: %v, skipping", filename, err)
+			continue
+		}
+
+		artifacts[filename] = decoded
+	}
+
+	return artifacts
+}
+
+// stripArtifactBlocks removes artifact marker blocks (===ARTIFACT:...=== through
+// ===END_ARTIFACT===) from log output so the base64 data does not interfere with
+// the plugin's output regex parsers.
+func stripArtifactBlocks(output string) string {
+	const startPrefix = "===ARTIFACT:"
+	const endMarker = "===END_ARTIFACT==="
+
+	lines := strings.Split(output, "\n")
+	var result []string
+	i := 0
+	for i < len(lines) {
+		trimmed := strings.TrimSpace(lines[i])
+		if strings.HasPrefix(trimmed, startPrefix) {
+			// Skip lines until we find the end marker or run out of input.
+			i++
+			for i < len(lines) {
+				if strings.TrimSpace(lines[i]) == endMarker {
+					i++
+					break
+				}
+				i++
+			}
+			continue
+		}
+		result = append(result, lines[i])
+		i++
+	}
+
+	return strings.Join(result, "\n")
+}
+
+// guessContentType maps file extensions to MIME content types for artifact storage.
+func guessContentType(filename string) string {
+	switch strings.ToLower(filepath.Ext(filename)) {
+	case ".cube":
+		return "chemical/x-cube"
+	case ".molden":
+		return "chemical/x-molden"
+	case ".pdbqt":
+		return "chemical/x-pdbqt"
+	case ".json":
+		return "application/json"
+	case ".dat":
+		return "text/plain"
+	case ".hess":
+		return "application/octet-stream"
+	default:
+		return "application/octet-stream"
 	}
 }
