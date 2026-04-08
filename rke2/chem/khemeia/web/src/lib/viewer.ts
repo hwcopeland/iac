@@ -428,14 +428,24 @@ export function getTrajectoryLength(): number {
 
 export async function loadCubeFile(cubeData: string): Promise<void> {
   if (!viewerInstance) throw new Error('Viewer not initialized');
-  const blob = new Blob([cubeData], { type: 'text/plain' });
-  const url = URL.createObjectURL(blob);
-  try {
-    await viewerInstance.loadVolumeFromUrl({ url, format: 'cube', isBinary: false });
-    applyCanvasProps();
-  } finally {
-    setTimeout(() => URL.revokeObjectURL(url), 5000);
-  }
+
+  // Use Molstar's built-in cube format provider which handles both
+  // the molecular structure and volumetric data (orbital isosurfaces).
+  const p = plugin;
+  const cubeFormat = p.dataFormats.get('cube');
+  if (!cubeFormat) throw new Error('Cube format not registered');
+
+  await p.dataTransaction(async () => {
+    // Load string data into the state tree
+    const data = await p.builders.data.rawData({ data: cubeData, label: 'Cube File' });
+    // Parse cube → volume + structure, then add default visuals
+    const parsed = await cubeFormat.parse(p, data);
+    if (cubeFormat.visuals) {
+      await cubeFormat.visuals(p, parsed);
+    }
+  });
+
+  applyCanvasProps();
 }
 
 // ─── Structure Overlay (Docking Poses) ───
