@@ -1,6 +1,7 @@
 <script lang="ts">
   import EnergyConvergenceChart from '../charts/EnergyConvergenceChart.svelte';
   import SpectrumChart from '../charts/SpectrumChart.svelte';
+  import NMRChart from '../charts/NMRChart.svelte';
 
   let { job }: { job: any } = $props();
 
@@ -20,7 +21,12 @@
     job.output_data.raman_frequencies.length > 0
   );
 
-  let hasAnyChart = $derived(hasScfEnergies || hasIrSpectrum || hasRamanSpectrum);
+  let hasNmrShieldings = $derived(
+    Array.isArray(job?.output_data?.nmr_shieldings) &&
+    job.output_data.nmr_shieldings.length > 0
+  );
+
+  let hasAnyChart = $derived(hasScfEnergies || hasIrSpectrum || hasRamanSpectrum || hasNmrShieldings);
 </script>
 
 <div class="charts-tab">
@@ -49,6 +55,15 @@
           frequencies={job.output_data.raman_frequencies}
           intensities={job.output_data.raman_intensities}
           type="raman"
+        />
+      </div>
+    {/if}
+
+    {#if hasNmrShieldings}
+      <div class="chart-section">
+        <NMRChart
+          shifts={job.output_data.nmr_shieldings.map(Number)}
+          labels={job.output_data.nmr_labels ?? job.output_data.nmr_shieldings.map((_: string, i: number) => `Atom ${i + 1}`)}
         />
       </div>
     {/if}
