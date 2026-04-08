@@ -390,6 +390,40 @@ export async function toggleIsolateComponent(comp: StructureComponent): Promise<
   }
 }
 
+// ─── Trajectory Support ───
+
+/**
+ * Load a multi-frame trajectory into the viewer.
+ * Concatenates individual frame strings into a single multi-model file.
+ * For XYZ format: frames are joined directly (each has its own atom count header).
+ * For PDB format: each frame is wrapped in MODEL/ENDMDL records.
+ */
+export async function loadTrajectory(frames: string[], format: string = 'xyz'): Promise<void> {
+  if (!viewerInstance) throw new Error('Viewer not initialized');
+  if (frames.length === 0) return;
+
+  let combined: string;
+  if (format === 'pdb') {
+    combined = frames.map((f, i) => `MODEL     ${i + 1}\n${f}\nENDMDL`).join('\n');
+  } else {
+    // XYZ and other formats: frames concatenate directly
+    combined = frames.join('\n');
+  }
+  await loadFile(combined, format);
+}
+
+/**
+ * Get the number of models (frames) in the currently loaded structure.
+ * Returns 0 if no structure is loaded or models cannot be determined.
+ */
+export function getTrajectoryLength(): number {
+  try {
+    const structures = plugin?.managers?.structure?.hierarchy?.current?.structures;
+    if (!structures?.length) return 0;
+    return structures[0]?.cell?.obj?.data?.models?.length ?? 0;
+  } catch { return 0; }
+}
+
 // ─── Volume Data (Cube Files) ───
 
 export async function loadCubeFile(cubeData: string): Promise<void> {
