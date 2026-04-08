@@ -61,4 +61,12 @@ command: |
     mpirun --allow-run-as-root -np {{ .num_cpus }} {{ .executable }} -in input.in 2>&1 || true;
   else
     {{ .executable }} -in input.in 2>&1;
-  fi
+  fi;
+  # Artifact collection
+  for f in /scratch/*.cube /scratch/*.dat; do
+    [ -f "$f" ] || continue;
+    fn=$(basename "$f");
+    echo "===ARTIFACT:${fn}===";
+    base64 "$f";
+    echo "===END_ARTIFACT===";
+  done
