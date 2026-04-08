@@ -33,6 +33,18 @@ output:
     type: float
     optional: true
     parse: '(?:Psi4 wall time for execution:|Total time:)\s+([\d.]+)\s+seconds?'
+  - name: ir_frequencies
+    type: array
+    parse: 'Frequency:\s+([\d.]+)'
+    reduce: all
+  - name: ir_intensities
+    type: array
+    parse: 'IR Intensity:\s+([\d.]+)'
+    reduce: all
+  - name: nmr_shieldings
+    type: array
+    parse: 'Isotropic:\s+([-\d.]+)'
+    reduce: all
   - name: output_file
     type: text
 

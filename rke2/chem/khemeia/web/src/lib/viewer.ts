@@ -389,3 +389,58 @@ export async function toggleIsolateComponent(comp: StructureComponent): Promise<
     isolatedComponentId = comp.id;
   }
 }
+
+// ─── Volume Data (Cube Files) ───
+
+export async function loadCubeFile(cubeData: string): Promise<void> {
+  if (!viewerInstance) throw new Error('Viewer not initialized');
+  const blob = new Blob([cubeData], { type: 'text/plain' });
+  const url = URL.createObjectURL(blob);
+  try {
+    await viewerInstance.loadVolumeFromUrl({ url, format: 'cube', isBinary: false });
+    applyCanvasProps();
+  } finally {
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+  }
+}
+
+// ─── Structure Overlay (Docking Poses) ───
+
+// Convert PDBQT to PDB by stripping the charge/type columns (71-79)
+function pdbqtToPdb(pdbqt: string): string {
+  return pdbqt
+    .split('\n')
+    .map((line) => {
+      if (line.startsWith('ATOM') || line.startsWith('HETATM')) {
+        return line.substring(0, 66).padEnd(80);
+      }
+      return line;
+    })
+    .join('\n');
+}
+
+export async function overlayStructure(data: string, format: string): Promise<void> {
+  if (!viewerInstance) throw new Error('Viewer not initialized');
+  const formatMap: Record<string, string> = {
+    pdb: 'pdb',
+    pdbqt: 'pdb',
+    mol: 'mol',
+    mol2: 'mol2',
+    sdf: 'sdf',
+    xyz: 'xyz',
+    cif: 'mmcif',
+    mmcif: 'mmcif',
+  };
+  const lowerFmt = format.toLowerCase();
+  const content = lowerFmt === 'pdbqt' ? pdbqtToPdb(data) : data;
+  const fmt = formatMap[lowerFmt] || format;
+  const blob = new Blob([content], { type: 'text/plain' });
+  const url = URL.createObjectURL(blob);
+  try {
+    // Don't clear existing structures -- overlay on top
+    await viewerInstance.loadStructureFromUrl(url, fmt, false);
+    applyCanvasProps();
+  } finally {
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+  }
+}

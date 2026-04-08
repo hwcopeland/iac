@@ -30,6 +30,14 @@ output:
   - name: wall_time_sec
     type: float
     parse: 'wall:\s+([\d.]+)s'
+  - name: ir_frequencies
+    type: array
+    parse: 'P\.Frequency\s+([\d.]+)'
+    reduce: all
+  - name: ir_intensities
+    type: array
+    parse: 'Infrared Intensity\s+([\d.]+)'
+    reduce: all
   - name: output_file
     type: text
 
