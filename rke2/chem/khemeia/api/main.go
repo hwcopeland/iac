@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/signal"
 	"regexp"
+	"strings"
 	"syscall"
 	"time"
 
@@ -338,6 +339,25 @@ func (c *Controller) startAPIServer() error {
 			}
 		}))
 
+		// GET /api/v1/{slug}/artifacts/{jobName} — list artifacts
+		// GET /api/v1/{slug}/artifacts/{jobName}/{filename} — download artifact
+		// Must be registered before /api/v1/{slug}/jobs/ to avoid prefix conflicts.
+		mux.HandleFunc(fmt.Sprintf("/api/v1/%s/artifacts/", plugin.Slug), wrap(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodGet {
+				writeError(w, "method not allowed", http.StatusMethodNotAllowed)
+				return
+			}
+			// Dispatch based on path depth: job name only = list, job name + filename = download.
+			basePath := fmt.Sprintf("/api/v1/%s/artifacts/", plugin.Slug)
+			remainder := strings.TrimPrefix(r.URL.Path, basePath)
+			remainder = strings.TrimRight(remainder, "/")
+			if strings.Contains(remainder, "/") {
+				handler.PluginDownloadArtifact(plugin)(w, r)
+			} else {
+				handler.PluginListArtifacts(plugin)(w, r)
+			}
+		}))
+
 		// GET/DELETE /api/v1/{slug}/jobs/{name}
 		mux.HandleFunc(fmt.Sprintf("/api/v1/%s/jobs/", plugin.Slug), wrap(func(w http.ResponseWriter, r *http.Request) {
 			switch r.Method {
@@ -350,7 +370,7 @@ func (c *Controller) startAPIServer() error {
 			}
 		}))
 
-		log.Printf("Registered routes for plugin %s: /api/v1/%s/{submit,jobs,jobs/{name}}", plugin.Name, plugin.Slug)
+		log.Printf("Registered routes for plugin %s: /api/v1/%s/{submit,jobs,jobs/{name},artifacts/{name}/{file}}", plugin.Name, plugin.Slug)
 	}
 
 	// Plugin registry endpoint.

@@ -73,3 +73,31 @@ export async function getJob(slug: string, jobName: string): Promise<any> {
 export async function getLigandDatabases(): Promise<{ databases: { name: string; count: number }[] }> {
   return api('/api/v1/ligand-databases');
 }
+
+// --- Artifact API ---
+
+export interface ArtifactSummary {
+  id: number;
+  filename: string;
+  content_type: string;
+  size_bytes: number;
+  created_at: string;
+}
+
+export async function getJobArtifacts(slug: string, jobName: string): Promise<{ artifacts: ArtifactSummary[] }> {
+  return api(`/api/v1/${slug}/artifacts/${jobName}`);
+}
+
+export function getArtifactUrl(slug: string, jobName: string, filename: string): string {
+  return `/api/v1/${slug}/artifacts/${jobName}/${encodeURIComponent(filename)}`;
+}
+
+export async function downloadArtifact(slug: string, jobName: string, filename: string): Promise<ArrayBuffer> {
+  const url = getArtifactUrl(slug, jobName, filename);
+  const headers: Record<string, string> = {};
+  const t = getToken();
+  if (t) headers['Authorization'] = `Bearer ${t}`;
+  const res = await fetch(url, { headers });
+  if (!res.ok) throw new Error(`Artifact download failed: ${res.statusText}`);
+  return res.arrayBuffer();
+}
