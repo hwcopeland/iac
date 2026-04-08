@@ -25,6 +25,10 @@ output:
   - name: total_energy
     type: float
     parse: '(?:@(?:RHF|UHF|RKS|UKS|ROHF) Final Energy:|Total Energy\s*=)\s+([-\d.]+)'
+  - name: scf_energies
+    type: float
+    parse: '@R(?:HF|KS|OHF|UHF|UKS) iter\s+\d+:\s+([-\d.]+)'
+    reduce: all
   - name: wall_time_sec
     type: float
     optional: true

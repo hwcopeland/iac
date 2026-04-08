@@ -16,6 +16,10 @@ output:
     type: float
     parse: 'TOTAL\s+(-?\d+\.\d+E[+-]\d+)'
     reduce: last
+  - name: scf_energies
+    type: float
+    parse: 'TOTAL ENERGY = ([-\d.E+-]+)'
+    reduce: all
   - name: converged
     type: string
     parse: 'CONVERGED ON (.+)'

@@ -53,8 +53,8 @@ func TestLoadPlugins(t *testing.T) {
 	if len(qe.Input) != 4 {
 		t.Errorf("QE inputs: expected 4, got %d", len(qe.Input))
 	}
-	if len(qe.Output) != 3 {
-		t.Errorf("QE outputs: expected 3, got %d", len(qe.Output))
+	if len(qe.Output) != 4 {
+		t.Errorf("QE outputs: expected 4, got %d", len(qe.Output))
 	}
 	if qe.Command == "" {
 		t.Error("QE command should not be empty")
@@ -542,5 +542,206 @@ func TestPluginInputTypes(t *testing.T) {
 	})
 	if err == nil {
 		t.Error("expected error for float field with string value")
+	}
+}
+
+func TestPluginParseOutputReduceAll(t *testing.T) {
+	// reduce: all should collect every match as a []string.
+	p := Plugin{
+		Output: []PluginOutput{
+			{
+				Name:   "scf_energies",
+				Type:   "float",
+				Parse:  `total energy\s+=\s+([-\d.]+)\s+Ry`,
+				Reduce: "all",
+			},
+		},
+	}
+
+	output := `
+     total energy          =     -30.00000000 Ry
+     total energy          =     -31.50000000 Ry
+!    total   energy        =     -32.44928392 Ry
+     total energy          =     -32.44928392 Ry
+`
+
+	result := p.ParseOutput(output)
+	values, ok := result["scf_energies"].([]string)
+	if !ok {
+		t.Fatalf("scf_energies: expected []string, got %T", result["scf_energies"])
+	}
+	if len(values) != 3 {
+		t.Fatalf("scf_energies: expected 3 values, got %d: %v", len(values), values)
+	}
+
+	expected := []string{"-30.00000000", "-31.50000000", "-32.44928392"}
+	for i, want := range expected {
+		if values[i] != want {
+			t.Errorf("scf_energies[%d]: expected %q, got %q", i, want, values[i])
+		}
+	}
+}
+
+func TestPluginParseOutputReduceAllSingleMatch(t *testing.T) {
+	// reduce: all with a single match should still produce a []string with one element.
+	p := Plugin{
+		Output: []PluginOutput{
+			{
+				Name:   "scf_energies",
+				Type:   "float",
+				Parse:  `energy=([-\d.]+)`,
+				Reduce: "all",
+			},
+		},
+	}
+
+	result := p.ParseOutput("energy=-42.5")
+	values, ok := result["scf_energies"].([]string)
+	if !ok {
+		t.Fatalf("scf_energies: expected []string, got %T", result["scf_energies"])
+	}
+	if len(values) != 1 {
+		t.Fatalf("expected 1 value, got %d", len(values))
+	}
+	if values[0] != "-42.5" {
+		t.Errorf("expected %q, got %q", "-42.5", values[0])
+	}
+}
+
+func TestPluginParseOutputReduceAllNoMatch(t *testing.T) {
+	// reduce: all with no matches should not set the field.
+	p := Plugin{
+		Output: []PluginOutput{
+			{
+				Name:   "scf_energies",
+				Type:   "float",
+				Parse:  `energy=([-\d.]+)`,
+				Reduce: "all",
+			},
+		},
+	}
+
+	result := p.ParseOutput("nothing here")
+	if _, exists := result["scf_energies"]; exists {
+		t.Error("expected no scf_energies entry when there are no matches")
+	}
+}
+
+func TestPluginParseOutputReduceAllPsi4SCF(t *testing.T) {
+	// Verify the Psi4 scf_energies regex against realistic Psi4 output.
+	p := Plugin{
+		Output: []PluginOutput{
+			{
+				Name:   "scf_energies",
+				Type:   "float",
+				Parse:  `@R(?:HF|KS|OHF|UHF|UKS) iter\s+\d+:\s+([-\d.]+)`,
+				Reduce: "all",
+			},
+		},
+	}
+
+	output := `
+   ==> Iterations <==
+
+                        Total Energy        Delta E     RMS |[F,P]|
+
+   @RHF iter   1:   -75.98012345   -7.59801e+01   6.34e-02
+   @RHF iter   2:   -76.00123456   -2.11111e-02   7.89e-03
+   @RHF iter   3:   -76.01060209   -9.36753e-03   1.23e-03
+   @RHF iter   4:   -76.01090000   -2.97910e-04   2.45e-04
+
+   ==> Post-Iterations <==
+`
+
+	result := p.ParseOutput(output)
+	values, ok := result["scf_energies"].([]string)
+	if !ok {
+		t.Fatalf("scf_energies: expected []string, got %T", result["scf_energies"])
+	}
+	if len(values) != 4 {
+		t.Fatalf("expected 4 values, got %d: %v", len(values), values)
+	}
+	if values[0] != "-75.98012345" {
+		t.Errorf("first iter: expected %q, got %q", "-75.98012345", values[0])
+	}
+	if values[3] != "-76.01090000" {
+		t.Errorf("last iter: expected %q, got %q", "-76.01090000", values[3])
+	}
+}
+
+func TestPluginParseOutputReduceAllNWChemSCF(t *testing.T) {
+	// Verify the NWChem scf_energies regex against realistic NWChem output.
+	p := Plugin{
+		Output: []PluginOutput{
+			{
+				Name:   "scf_energies",
+				Type:   "float",
+				Parse:  `Total (?:DFT|SCF) energy\s+=\s+([-\d.]+)`,
+				Reduce: "all",
+			},
+		},
+	}
+
+	// NWChem geometry optimization: multiple SCF cycles, each ending with
+	// a "Total DFT energy" line.
+	output := `
+         Total DFT energy =      -76.010602091174
+      ...geometry step 2...
+         Total DFT energy =      -76.012345678901
+      ...geometry step 3...
+         Total DFT energy =      -76.013000000000
+`
+
+	result := p.ParseOutput(output)
+	values, ok := result["scf_energies"].([]string)
+	if !ok {
+		t.Fatalf("scf_energies: expected []string, got %T", result["scf_energies"])
+	}
+	if len(values) != 3 {
+		t.Fatalf("expected 3 values, got %d: %v", len(values), values)
+	}
+	if values[0] != "-76.010602091174" {
+		t.Errorf("first cycle: expected %q, got %q", "-76.010602091174", values[0])
+	}
+	if values[2] != "-76.013000000000" {
+		t.Errorf("last cycle: expected %q, got %q", "-76.013000000000", values[2])
+	}
+}
+
+func TestPluginParseOutputReduceAllDFRATOM(t *testing.T) {
+	// Verify the DFRATOM scf_energies regex against realistic DFRATOM output.
+	p := Plugin{
+		Output: []PluginOutput{
+			{
+				Name:   "scf_energies",
+				Type:   "float",
+				Parse:  `TOTAL ENERGY = ([-\d.E+-]+)`,
+				Reduce: "all",
+			},
+		},
+	}
+
+	output := `
+ SCF ITERATION NO   1
+ NOTE - TOTAL ENERGY = -1.2345E+02
+ SCF ITERATION NO   2
+ NOTE - TOTAL ENERGY = -1.2350E+02
+ SCF ITERATION NO   3
+ NOTE - TOTAL ENERGY = -1.2351E+02
+`
+
+	result := p.ParseOutput(output)
+	values, ok := result["scf_energies"].([]string)
+	if !ok {
+		t.Fatalf("scf_energies: expected []string, got %T", result["scf_energies"])
+	}
+	if len(values) != 3 {
+		t.Fatalf("expected 3 values, got %d: %v", len(values), values)
+	}
+	if values[0] != "-1.2345E+02" {
+		t.Errorf("first iter: expected %q, got %q", "-1.2345E+02", values[0])
+	}
+	if values[2] != "-1.2351E+02" {
+		t.Errorf("last iter: expected %q, got %q", "-1.2351E+02", values[2])
 	}
 }

@@ -29,6 +29,10 @@ output:
   - name: total_energy
     type: float
     parse: '!\s+total\s+energy\s+=\s+([-\d.]+)\s+Ry'
+  - name: scf_energies
+    type: float
+    parse: 'total energy\s+=\s+([-\d.]+)\s+Ry'
+    reduce: all
   - name: wall_time_sec
     type: float
     parse: 'PWSCF\s+:\s+[\d.]+s CPU\s+([\d.]+)s WALL'

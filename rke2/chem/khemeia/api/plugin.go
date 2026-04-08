@@ -5,6 +5,7 @@
 package main
 
 import (
+	"database/sql"
 	"fmt"
 	"math"
 	"os"
@@ -25,10 +26,21 @@ type Plugin struct {
 	Image    string         `yaml:"image"`
 	Type     string         `yaml:"type"`
 	Database string         `yaml:"database"`
-	Input    []PluginInput  `yaml:"input"`
-	Output   []PluginOutput `yaml:"output"`
+	Input     []PluginInput    `yaml:"input"`
+	Output    []PluginOutput   `yaml:"output"`
+	Artifacts []PluginArtifact `yaml:"artifacts,omitempty" json:"artifacts,omitempty"`
 	Resources PluginResources `yaml:"resources"`
 	Command  string         `yaml:"command"`
+}
+
+// PluginArtifact defines a file artifact that a plugin's jobs may produce.
+// Artifacts are declared in the plugin YAML and used to identify, collect,
+// and store output files from completed jobs.
+type PluginArtifact struct {
+	Name        string `yaml:"name" json:"name"`
+	Pattern     string `yaml:"pattern" json:"pattern"`
+	ContentType string `yaml:"content_type" json:"content_type"`
+	Description string `yaml:"description,omitempty" json:"description,omitempty"`
 }
 
 // PluginInput defines an input field for a plugin.
@@ -46,6 +58,7 @@ type PluginInput struct {
 //   - "last" (default): use the last match (e.g., final SCF iteration)
 //   - "min": use the minimum value (e.g., best binding affinity)
 //   - "max": use the maximum value
+//   - "all": collect all matches as a []string (e.g., SCF convergence trace)
 type PluginOutput struct {
 	Name   string `yaml:"name" json:"name"`
 	Type   string `yaml:"type" json:"type"`
@@ -179,6 +192,7 @@ func (p *Plugin) ExpandResource(template string, data map[string]interface{}) st
 // and returns a map of parsed output values.
 //
 // When multiple matches exist, the Reduce field controls aggregation:
+//   - "all": collect all matches as a []string (e.g., SCF convergence trace)
 //   - "min": keep the minimum numeric value (e.g., best binding affinity)
 //   - "max": keep the maximum numeric value
 //   - "last" or "": keep the last match (default, e.g., final SCF iteration)
@@ -198,6 +212,16 @@ func (p *Plugin) ParseOutput(text string) map[string]interface{} {
 		}
 
 		switch out.Reduce {
+		case "all":
+			var values []string
+			for _, m := range matches {
+				if len(m) >= 2 {
+					values = append(values, m[1])
+				}
+			}
+			if len(values) > 0 {
+				result[out.Name] = values
+			}
 		case "min", "max":
 			bestVal := math.NaN()
 			bestStr := ""
@@ -291,4 +315,21 @@ func toFloat64(v interface{}) (float64, bool) {
 	default:
 		return 0, false
 	}
+}
+
+// EnsureArtifactSchema creates the job_artifacts table if it doesn't exist.
+// This table stores binary file artifacts produced by completed jobs.
+func EnsureArtifactSchema(db *sql.DB) error {
+	_, err := db.Exec(`CREATE TABLE IF NOT EXISTS job_artifacts (
+		id           INT AUTO_INCREMENT PRIMARY KEY,
+		job_name     VARCHAR(255) NOT NULL,
+		filename     VARCHAR(255) NOT NULL,
+		content_type VARCHAR(128) NOT NULL DEFAULT 'application/octet-stream',
+		size_bytes   INT NOT NULL,
+		content      LONGBLOB NOT NULL,
+		created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+		INDEX idx_artifact_job (job_name),
+		UNIQUE KEY uq_artifact_file (job_name, filename)
+	)`)
+	return err
 }
