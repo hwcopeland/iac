@@ -23,6 +23,10 @@ output:
   - name: total_energy
     type: float
     parse: 'Total (?:DFT|SCF) energy\s+=\s+([-\d.]+)'
+  - name: scf_energies
+    type: float
+    parse: 'Total (?:DFT|SCF) energy\s+=\s+([-\d.]+)'
+    reduce: all
   - name: wall_time_sec
     type: float
     parse: 'wall:\s+([\d.]+)s'

@@ -161,6 +161,12 @@ func (c *Controller) initPluginDB(p Plugin) error {
 		return fmt.Errorf("failed to create table %s: %w", p.TableName(), err)
 	}
 
+	// Create the job_artifacts table for storing output files from completed jobs.
+	if err := EnsureArtifactSchema(db); err != nil {
+		db.Close()
+		return fmt.Errorf("failed to create job_artifacts table in %s: %w", p.Database, err)
+	}
+
 	// For QE plugin, also create the pseudopotentials table.
 	if p.Slug == "qe" {
 		if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS pseudopotentials (

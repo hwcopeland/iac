@@ -19,6 +19,7 @@
     "@sveltejs/vite-plugin-svelte": "^7.0.0",
     "@tailwindcss/vite": "^4.2.2",
     "molstar": "^5.8.0",
+    "plotly.js-dist-min": "^3.5.0",
     "svelte": "^5.55.1",
     "tailwindcss": "^4.2.2",
     "typescript": "^6.0.2",
