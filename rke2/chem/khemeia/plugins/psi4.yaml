@@ -63,4 +63,12 @@ command: |
   PSI4_RC=$?;
   echo "Psi4 exit code: $PSI4_RC";
   cat output.dat 2>/dev/null || echo "No output.dat produced";
-  echo "=== Done ==="
+  echo "=== Done ===";
+  # Artifact collection
+  for f in /scratch/*.cube /scratch/*.molden /scratch/*.dat; do
+    [ -f "$f" ] || continue;
+    fn=$(basename "$f");
+    echo "===ARTIFACT:${fn}===";
+    base64 "$f";
+    echo "===END_ARTIFACT===";
+  done

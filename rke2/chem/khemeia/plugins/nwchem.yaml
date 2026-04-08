@@ -67,4 +67,12 @@ command: |
     mpirun --allow-run-as-root -np {{ .num_cpus }} nwchem input.in 2>&1;
   else
     nwchem input.in 2>&1;
-  fi
+  fi;
+  # Artifact collection
+  for f in /scratch/*.molden /scratch/*.hess /scratch/*.cube; do
+    [ -f "$f" ] || continue;
+    fn=$(basename "$f");
+    echo "===ARTIFACT:${fn}===";
+    base64 "$f";
+    echo "===END_ARTIFACT===";
+  done

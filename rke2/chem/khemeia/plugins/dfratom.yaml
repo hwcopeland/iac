@@ -62,4 +62,12 @@ command: |
   cp /input/input.in input.dat &&
   echo "=== DFRATOM OUTPUT ===" &&
   /opt/dfratom/DFRATOM.exe < input.dat 2>&1 |
-  sed 's/D+/E+/g; s/D-/E-/g'
+  sed 's/D+/E+/g; s/D-/E-/g';
+  # Artifact collection
+  for f in /scratch/*.dat; do
+    [ -f "$f" ] && [ "$f" != "/scratch/input.dat" ] || continue;
+    fn=$(basename "$f");
+    echo "===ARTIFACT:${fn}===";
+    base64 "$f";
+    echo "===END_ARTIFACT===";
+  done
