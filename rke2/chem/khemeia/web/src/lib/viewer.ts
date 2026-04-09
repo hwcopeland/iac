@@ -450,21 +450,35 @@ export async function loadCubeFile(cubeData: string): Promise<void> {
 
 // ─── ESP-Mapped Density Surface ───
 
-/** Parse a Gaussian cube file into grid metadata and flat data array. */
+// 1 Bohr = 0.529177 Angstrom. Cube files are in Bohr, Molstar renders in Angstrom.
+const BOHR_TO_ANG = 0.529177210903;
+
+/** Parse a Gaussian cube file into grid metadata and flat data array.
+ *  Converts all coordinates from Bohr to Angstrom for compatibility with Molstar. */
 function parseCubeGrid(cubeText: string) {
   const lines = cubeText.split('\n');
   let idx = 2; // skip 2 comment lines
 
   const headerLine = lines[idx++].trim().split(/\s+/);
   const natoms = Math.abs(parseInt(headerLine[0]));
-  const origin = [parseFloat(headerLine[1]), parseFloat(headerLine[2]), parseFloat(headerLine[3])];
+  // Origin in Bohr → convert to Angstrom
+  const origin = [
+    parseFloat(headerLine[1]) * BOHR_TO_ANG,
+    parseFloat(headerLine[2]) * BOHR_TO_ANG,
+    parseFloat(headerLine[3]) * BOHR_TO_ANG,
+  ];
 
   const axes: number[][] = [];
   const dims: number[] = [];
   for (let a = 0; a < 3; a++) {
     const parts = lines[idx++].trim().split(/\s+/);
     dims.push(parseInt(parts[0]));
-    axes.push([parseFloat(parts[1]), parseFloat(parts[2]), parseFloat(parts[3])]);
+    // Axis vectors in Bohr → convert to Angstrom
+    axes.push([
+      parseFloat(parts[1]) * BOHR_TO_ANG,
+      parseFloat(parts[2]) * BOHR_TO_ANG,
+      parseFloat(parts[3]) * BOHR_TO_ANG,
+    ]);
   }
 
   // Skip atom lines
@@ -474,24 +488,37 @@ function parseCubeGrid(cubeText: string) {
   const data = new Float64Array(dims[0] * dims[1] * dims[2]);
   let di = 0;
   for (; idx < lines.length && di < data.length; idx++) {
-    const vals = lines[idx].trim().split(/\s+/);
+    const line = lines[idx].trim();
+    if (!line) continue;
+    const vals = line.split(/\s+/);
     for (const v of vals) {
       if (di < data.length) data[di++] = parseFloat(v);
     }
   }
 
-  return { origin, axes, dims, data };
+  // Compute ESP value range for adaptive color scaling
+  let vmin = Infinity, vmax = -Infinity;
+  for (let i = 0; i < data.length; i++) {
+    const v = data[i];
+    if (isFinite(v)) {
+      if (v < vmin) vmin = v;
+      if (v > vmax) vmax = v;
+    }
+  }
+
+  return { origin, axes, dims, data, vmin, vmax };
 }
 
-/** Trilinear interpolation on a parsed cube grid. Returns NaN if out of bounds. */
+/** Trilinear interpolation on a parsed cube grid.
+ *  Input positions are in Angstrom (Molstar coordinates). Returns NaN if out of bounds. */
 function makeCubeSampler(grid: ReturnType<typeof parseCubeGrid>) {
   const { origin, axes, dims, data } = grid;
-  // Step sizes (Bohr)
+  // Step sizes in Angstrom (already converted)
   const dx = axes[0][0], dy = axes[1][1], dz = axes[2][2];
   const ni = dims[0], nj = dims[1], nk = dims[2];
 
   return (x: number, y: number, z: number): number => {
-    // Convert Cartesian to fractional grid coordinates
+    // Fractional grid coordinates (positions already in Angstrom, grid already in Angstrom)
     const fi = (x - origin[0]) / dx;
     const fj = (y - origin[1]) / dy;
     const fk = (z - origin[2]) / dz;
@@ -500,33 +527,24 @@ function makeCubeSampler(grid: ReturnType<typeof parseCubeGrid>) {
     if (i0 < 0 || i0 >= ni - 1 || j0 < 0 || j0 >= nj - 1 || k0 < 0 || k0 >= nk - 1) return NaN;
 
     const di = fi - i0, dj = fj - j0, dk = fk - k0;
-    const idx = (i: number, j: number, k: number) => i * nj * nk + j * nk + k;
-
-    // Trilinear interpolation
-    const c000 = data[idx(i0, j0, k0)];
-    const c001 = data[idx(i0, j0, k0 + 1)];
-    const c010 = data[idx(i0, j0 + 1, k0)];
-    const c011 = data[idx(i0, j0 + 1, k0 + 1)];
-    const c100 = data[idx(i0 + 1, j0, k0)];
-    const c101 = data[idx(i0 + 1, j0, k0 + 1)];
-    const c110 = data[idx(i0 + 1, j0 + 1, k0)];
-    const c111 = data[idx(i0 + 1, j0 + 1, k0 + 1)];
+    const at = (i: number, j: number, k: number) => i * nj * nk + j * nk + k;
 
     return (
-      c000 * (1 - di) * (1 - dj) * (1 - dk) +
-      c001 * (1 - di) * (1 - dj) * dk +
-      c010 * (1 - di) * dj * (1 - dk) +
-      c011 * (1 - di) * dj * dk +
-      c100 * di * (1 - dj) * (1 - dk) +
-      c101 * di * (1 - dj) * dk +
-      c110 * di * dj * (1 - dk) +
-      c111 * di * dj * dk
+      data[at(i0, j0, k0)] * (1 - di) * (1 - dj) * (1 - dk) +
+      data[at(i0, j0, k0 + 1)] * (1 - di) * (1 - dj) * dk +
+      data[at(i0, j0 + 1, k0)] * (1 - di) * dj * (1 - dk) +
+      data[at(i0, j0 + 1, k0 + 1)] * (1 - di) * dj * dk +
+      data[at(i0 + 1, j0, k0)] * di * (1 - dj) * (1 - dk) +
+      data[at(i0 + 1, j0, k0 + 1)] * di * (1 - dj) * dk +
+      data[at(i0 + 1, j0 + 1, k0)] * di * dj * (1 - dk) +
+      data[at(i0 + 1, j0 + 1, k0 + 1)] * di * dj * dk
     );
   };
 }
 
-// Global ESP sampler and theme registration state
+// Global ESP sampler, range, and theme registration state
 let _espSampler: ((x: number, y: number, z: number) => number) | null = null;
+let _espRange = 0.05; // symmetric range for color mapping (Hartree)
 let _espThemeRegistered = false;
 
 /** Register a custom 'esp-on-density' color theme with Molstar. */
@@ -542,31 +560,27 @@ function ensureESPTheme() {
     category: 'Misc',
     factory: (_ctx: any, props: any) => {
       const sampler = _espSampler;
+      const range = _espRange;
       if (!sampler) {
         return { factory: provider.factory, granularity: 'uniform' as const, color: () => 0xcccccc, props, description: 'ESP' };
       }
 
-      // Red (negative) → White (zero) → Blue (positive) palette
+      // Red (negative/nucleophilic) → White (neutral) → Blue (positive/electrophilic)
       const colorFn = (location: any) => {
-        if (!location || location.kind !== 'position-location') return 0xcccccc;
-        const val = sampler(location.position[0], location.position[1], location.position[2]);
-        if (isNaN(val)) return 0xcccccc;
-        // Clamp to [-0.05, 0.05] Hartree (typical ESP range)
-        const t = Math.max(-1, Math.min(1, val / 0.05));
+        if (!location || !location.position) return 0xcccccc;
+        const pos = location.position;
+        const val = sampler(pos[0], pos[1], pos[2]);
+        if (!isFinite(val)) return 0xcccccc;
+        // Map to [-1, 1] using adaptive range from actual ESP data
+        const t = Math.max(-1, Math.min(1, val / range));
         if (t < 0) {
-          // Red → White
-          const f = 1 + t; // 0 → 1
-          const r = 255;
-          const g = Math.round(f * 255);
-          const b = Math.round(f * 255);
-          return (r << 16) | (g << 8) | b;
+          // Negative ESP → Red (nucleophilic)
+          const f = 1 + t; // 0 at most negative → 1 at zero
+          return (255 << 16) | (Math.round(f * 255) << 8) | Math.round(f * 255);
         } else {
-          // White → Blue
-          const f = 1 - t; // 1 → 0
-          const r = Math.round(f * 255);
-          const g = Math.round(f * 255);
-          const b = 255;
-          return (r << 16) | (g << 8) | b;
+          // Positive ESP → Blue (electrophilic)
+          const f = 1 - t; // 1 at zero → 0 at most positive
+          return (Math.round(f * 255) << 16) | (Math.round(f * 255) << 8) | 255;
         }
       };
 
@@ -599,9 +613,12 @@ export async function loadDensityWithESP(densityCube: string, espCube: string): 
   const cubeFormat = p.dataFormats.get('cube');
   if (!cubeFormat) throw new Error('Cube format not registered');
 
-  // 1. Parse ESP cube into our sampler
+  // 1. Parse ESP cube into our sampler with adaptive range
   const espGrid = parseCubeGrid(espCube);
   _espSampler = makeCubeSampler(espGrid);
+  // Use symmetric range based on actual data (clamped to reasonable bounds)
+  const absMax = Math.max(Math.abs(espGrid.vmin), Math.abs(espGrid.vmax));
+  _espRange = Math.max(0.01, Math.min(absMax * 0.8, 0.1)); // 80% of max, capped
 
   // 2. Register the ESP color theme (once)
   ensureESPTheme();
