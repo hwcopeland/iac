@@ -647,10 +647,13 @@ export async function loadDensityWithESP(densityCube: string, espCube: string): 
         .apply(StateTransforms.Representation.VolumeRepresentation3D, {
           type: {
             name: 'isosurface',
-            params: { isoValue, alpha: 0.85, visuals: ['solid'] },
+            params: { isoValue, alpha: 0.9, visuals: ['solid'] },
           },
           colorTheme: { name: 'esp-on-density', params: {} },
           sizeTheme: { name: 'uniform', params: {} },
+          quality: 'highest',
+          doubleSided: true,
+          flatShaded: false,
         });
     }
 
