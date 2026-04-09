@@ -1,7 +1,7 @@
 <script lang="ts">
   import { downloadArtifact } from '$lib/api';
   import type { ArtifactSummary } from '$lib/api';
-  import { loadCubeFile, overlayStructure, isReady } from '$lib/viewer';
+  import { loadCubeFile, loadDensityWithESP, overlayStructure, isReady } from '$lib/viewer';
   import TrajectoryPlayer from './TrajectoryPlayer.svelte';
 
   let { job, pluginSlug }: { job: any; pluginSlug: string } = $props();
@@ -39,6 +39,35 @@
   let cubeArtifacts = $derived(artifacts.filter(a => getArtifactType(a.filename) === 'cube'));
   let poseArtifacts = $derived(artifacts.filter(a => getArtifactType(a.filename) === 'pose'));
   let otherArtifacts = $derived(artifacts.filter(a => getArtifactType(a.filename) === 'other'));
+
+  // Detect density + ESP cube pair for ESP-mapped surface
+  let hasDensityCube = $derived(artifacts.some(a => a.filename === 'Dt.cube'));
+  let hasESPCube = $derived(artifacts.some(a => a.filename === 'ESP.cube'));
+  let canRenderESPSurface = $derived(hasDensityCube && hasESPCube);
+  let loadingESP = $state(false);
+
+  async function renderESPSurface() {
+    if (!isReady()) {
+      errorMsg = 'Viewer not initialized.';
+      return;
+    }
+    loadingESP = true;
+    errorMsg = '';
+    try {
+      const [densityBuf, espBuf] = await Promise.all([
+        downloadArtifact(pluginSlug, job.name, 'Dt.cube'),
+        downloadArtifact(pluginSlug, job.name, 'ESP.cube'),
+      ]);
+      const densityText = new TextDecoder().decode(densityBuf);
+      const espText = new TextDecoder().decode(espBuf);
+      await loadDensityWithESP(densityText, espText);
+    } catch (e: any) {
+      errorMsg = `Failed to render ESP surface: ${e.message || e}`;
+      console.error('ESP surface error:', e);
+    } finally {
+      loadingESP = false;
+    }
+  }
 
   // ─── Trajectory Support ───
 
@@ -149,6 +178,17 @@
         </p>
       </div>
     </div>
+  {/if}
+
+  {#if canRenderESPSurface}
+    <button
+      class="esp-surface-btn"
+      disabled={loadingESP}
+      onclick={renderESPSurface}
+    >
+      {loadingESP ? 'Loading...' : 'Render ESP Surface'}
+    </button>
+    <p class="esp-hint">Electron density isosurface colored by electrostatic potential</p>
   {/if}
 
   {#if cubeArtifacts.length > 0}
@@ -344,6 +384,36 @@
     padding: 6px 10px;
     margin: 0;
     border-top: 1px solid rgba(48,54,61,0.3);
+  }
+
+  .esp-surface-btn {
+    width: 100%;
+    padding: 10px 14px;
+    font-size: 13px;
+    font-weight: 600;
+    color: #e6edf3;
+    background: linear-gradient(135deg, rgba(187,51,51,0.25), rgba(51,98,178,0.25));
+    border: 1px solid rgba(136,136,255,0.3);
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+
+  .esp-surface-btn:hover:not(:disabled) {
+    background: linear-gradient(135deg, rgba(187,51,51,0.4), rgba(51,98,178,0.4));
+    border-color: rgba(136,136,255,0.5);
+  }
+
+  .esp-surface-btn:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+
+  .esp-hint {
+    font-size: 10px;
+    color: var(--text-muted, #484f58);
+    text-align: center;
+    margin: -6px 0 0 0;
   }
 
   .no-artifacts {
