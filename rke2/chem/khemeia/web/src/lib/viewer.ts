@@ -448,6 +448,212 @@ export async function loadCubeFile(cubeData: string): Promise<void> {
   applyCanvasProps();
 }
 
+// ─── ESP-Mapped Density Surface ───
+
+/** Parse a Gaussian cube file into grid metadata and flat data array. */
+function parseCubeGrid(cubeText: string) {
+  const lines = cubeText.split('\n');
+  let idx = 2; // skip 2 comment lines
+
+  const headerLine = lines[idx++].trim().split(/\s+/);
+  const natoms = Math.abs(parseInt(headerLine[0]));
+  const origin = [parseFloat(headerLine[1]), parseFloat(headerLine[2]), parseFloat(headerLine[3])];
+
+  const axes: number[][] = [];
+  const dims: number[] = [];
+  for (let a = 0; a < 3; a++) {
+    const parts = lines[idx++].trim().split(/\s+/);
+    dims.push(parseInt(parts[0]));
+    axes.push([parseFloat(parts[1]), parseFloat(parts[2]), parseFloat(parts[3])]);
+  }
+
+  // Skip atom lines
+  idx += natoms;
+
+  // Read volumetric data
+  const data = new Float64Array(dims[0] * dims[1] * dims[2]);
+  let di = 0;
+  for (; idx < lines.length && di < data.length; idx++) {
+    const vals = lines[idx].trim().split(/\s+/);
+    for (const v of vals) {
+      if (di < data.length) data[di++] = parseFloat(v);
+    }
+  }
+
+  return { origin, axes, dims, data };
+}
+
+/** Trilinear interpolation on a parsed cube grid. Returns NaN if out of bounds. */
+function makeCubeSampler(grid: ReturnType<typeof parseCubeGrid>) {
+  const { origin, axes, dims, data } = grid;
+  // Step sizes (Bohr)
+  const dx = axes[0][0], dy = axes[1][1], dz = axes[2][2];
+  const ni = dims[0], nj = dims[1], nk = dims[2];
+
+  return (x: number, y: number, z: number): number => {
+    // Convert Cartesian to fractional grid coordinates
+    const fi = (x - origin[0]) / dx;
+    const fj = (y - origin[1]) / dy;
+    const fk = (z - origin[2]) / dz;
+
+    const i0 = Math.floor(fi), j0 = Math.floor(fj), k0 = Math.floor(fk);
+    if (i0 < 0 || i0 >= ni - 1 || j0 < 0 || j0 >= nj - 1 || k0 < 0 || k0 >= nk - 1) return NaN;
+
+    const di = fi - i0, dj = fj - j0, dk = fk - k0;
+    const idx = (i: number, j: number, k: number) => i * nj * nk + j * nk + k;
+
+    // Trilinear interpolation
+    const c000 = data[idx(i0, j0, k0)];
+    const c001 = data[idx(i0, j0, k0 + 1)];
+    const c010 = data[idx(i0, j0 + 1, k0)];
+    const c011 = data[idx(i0, j0 + 1, k0 + 1)];
+    const c100 = data[idx(i0 + 1, j0, k0)];
+    const c101 = data[idx(i0 + 1, j0, k0 + 1)];
+    const c110 = data[idx(i0 + 1, j0 + 1, k0)];
+    const c111 = data[idx(i0 + 1, j0 + 1, k0 + 1)];
+
+    return (
+      c000 * (1 - di) * (1 - dj) * (1 - dk) +
+      c001 * (1 - di) * (1 - dj) * dk +
+      c010 * (1 - di) * dj * (1 - dk) +
+      c011 * (1 - di) * dj * dk +
+      c100 * di * (1 - dj) * (1 - dk) +
+      c101 * di * (1 - dj) * dk +
+      c110 * di * dj * (1 - dk) +
+      c111 * di * dj * dk
+    );
+  };
+}
+
+// Global ESP sampler and theme registration state
+let _espSampler: ((x: number, y: number, z: number) => number) | null = null;
+let _espThemeRegistered = false;
+
+/** Register a custom 'esp-on-density' color theme with Molstar. */
+function ensureESPTheme() {
+  if (_espThemeRegistered || !plugin) return;
+
+  const { Volume } = getLib().volume;
+  const themeRegistry = plugin.representation.volume.themes.colorThemeRegistry;
+
+  const provider = {
+    name: 'esp-on-density',
+    label: 'ESP on Density',
+    category: 'Misc',
+    factory: (_ctx: any, props: any) => {
+      const sampler = _espSampler;
+      if (!sampler) {
+        return { factory: provider.factory, granularity: 'uniform' as const, color: () => 0xcccccc, props, description: 'ESP' };
+      }
+
+      // Red (negative) → White (zero) → Blue (positive) palette
+      const colorFn = (location: any) => {
+        if (!location || location.kind !== 'position-location') return 0xcccccc;
+        const val = sampler(location.position[0], location.position[1], location.position[2]);
+        if (isNaN(val)) return 0xcccccc;
+        // Clamp to [-0.05, 0.05] Hartree (typical ESP range)
+        const t = Math.max(-1, Math.min(1, val / 0.05));
+        if (t < 0) {
+          // Red → White
+          const f = 1 + t; // 0 → 1
+          const r = 255;
+          const g = Math.round(f * 255);
+          const b = Math.round(f * 255);
+          return (r << 16) | (g << 8) | b;
+        } else {
+          // White → Blue
+          const f = 1 - t; // 1 → 0
+          const r = Math.round(f * 255);
+          const g = Math.round(f * 255);
+          const b = 255;
+          return (r << 16) | (g << 8) | b;
+        }
+      };
+
+      return {
+        factory: provider.factory,
+        granularity: 'vertex' as const,
+        preferSmoothing: true,
+        color: colorFn,
+        props,
+        description: 'Electrostatic potential mapped onto density surface',
+      };
+    },
+    getParams: () => ({}),
+    defaultValues: {},
+    isApplicable: (ctx: any) => !!ctx.volume && !Volume.Segmentation?.get?.(ctx.volume),
+  };
+
+  themeRegistry.add(provider);
+  _espThemeRegistered = true;
+}
+
+/**
+ * Load electron density isosurface colored by electrostatic potential.
+ * Renders Dt.cube as an isosurface with colors from ESP.cube.
+ */
+export async function loadDensityWithESP(densityCube: string, espCube: string): Promise<void> {
+  if (!viewerInstance) throw new Error('Viewer not initialized');
+
+  const p = plugin;
+  const cubeFormat = p.dataFormats.get('cube');
+  if (!cubeFormat) throw new Error('Cube format not registered');
+
+  // 1. Parse ESP cube into our sampler
+  const espGrid = parseCubeGrid(espCube);
+  _espSampler = makeCubeSampler(espGrid);
+
+  // 2. Register the ESP color theme (once)
+  ensureESPTheme();
+
+  // 3. Clear and load density cube
+  await p.clear();
+
+  await p.dataTransaction(async () => {
+    const data = await p.builders.data.rawData({ data: densityCube, label: 'Electron Density' });
+    const parsed = await cubeFormat.parse(p, data);
+
+    // Get the volume data to compute a good isovalue
+    const volumeData = parsed.volume?.cell?.obj?.data;
+    const { StateTransforms } = getLib().plugin;
+
+    // Build representations manually: density isosurface + molecule
+    const builder = p.build();
+
+    // Density isosurface colored by ESP
+    if (volumeData) {
+      const { Volume } = getLib().volume;
+      const isoValue = Volume.IsoValue.absolute(0.02); // typical density isovalue
+
+      builder
+        .to(parsed.volume)
+        .apply(StateTransforms.Representation.VolumeRepresentation3D, {
+          type: {
+            name: 'isosurface',
+            params: { isoValue, alpha: 0.85, visuals: ['solid'] },
+          },
+          colorTheme: { name: 'esp-on-density', params: {} },
+          sizeTheme: { name: 'uniform', params: {} },
+        });
+    }
+
+    // Molecule as ball-and-stick
+    if (parsed.structure) {
+      builder
+        .to(parsed.structure)
+        .apply(StateTransforms.Representation.StructureRepresentation3D, {
+          type: { name: 'ball-and-stick', params: { sizeFactor: 0.2 } },
+          colorTheme: { name: 'element-symbol', params: {} },
+          sizeTheme: { name: 'physical', params: {} },
+        });
+    }
+
+    await builder.commit();
+  });
+
+  applyCanvasProps();
+}
+
 // ─── Structure Overlay (Docking Poses) ───
 
 // Convert PDBQT to PDB by stripping the charge/type columns (71-79)
