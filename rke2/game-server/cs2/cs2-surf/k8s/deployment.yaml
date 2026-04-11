@@ -106,7 +106,9 @@ spec:
             - name: TICKRATE
               value: "128"
             - name: MAP
-              value: "surf_lt_omnific"
+              value: "de_dust2"
+            - name: STARTUP_MAP
+              value: "3660894345"
             - name: SERVER_NAME
               value: "W4de Surf"
           resources:
