@@ -175,7 +175,7 @@ USER steam
 
 # Default environment variables — all overridable via K8s env/ConfigMap
 ENV PORT="27015" \
-    MAP="surf_lt_omnific" \
+    MAP="de_dust2" \
     MAXPLAYERS="32" \
     GAME_TYPE="0" \
     GAME_MODE="0" \
