@@ -100,6 +100,12 @@ if [ -f "${CONFIGS_DIR}/gamemodes_server.txt" ]; then
     log "Deployed gamemodes_server.txt"
 fi
 
+# mapcycle.txt → csgo/ (native CS2 map rotation)
+if [ -f "${CONFIGS_DIR}/mapcycle.txt" ]; then
+    cp -f "${CONFIGS_DIR}/mapcycle.txt" "${CS2_DIR}/game/csgo/mapcycle.txt"
+    log "Deployed mapcycle.txt"
+fi
+
 # subscribed_file_ids.txt → csgo/ (workshop maps)
 if [ -f "${CONFIGS_DIR}/subscribed_file_ids.txt" ]; then
     cp -f "${CONFIGS_DIR}/subscribed_file_ids.txt" "${CS2_DIR}/game/csgo/subscribed_file_ids.txt"
