@@ -18,6 +18,8 @@ metadata:
     app: cs2-surf-server
 spec:
   replicas: 1
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: cs2-surf-server
