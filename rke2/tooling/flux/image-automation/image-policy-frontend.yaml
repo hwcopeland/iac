@@ -16,3 +16,4 @@ spec:
     alphabetical:
       order: asc
   digestReflectionPolicy: Always
+  interval: 1m0s
