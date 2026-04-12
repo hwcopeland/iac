@@ -156,16 +156,16 @@ RUN curl -fsSL "https://github.com/darkerz7/MS-NoBlock/releases/download/${MSNOB
     && unzip -qo /tmp/msnoblock.zip -d /staging/sharp/ \
     && rm /tmp/msnoblock.zip
 
-# --- AddonManager (handles -dual_addon workshop extraction to sharp/assets) ---
-# Replaces the manual entrypoint RCON host_workshop_map switch. With AddonManager
-# installed, CS2 launched with -dual_addon <ids> auto-downloads and extracts the
-# addon content into sharp/assets at startup.
-# NOTE: AddonManager.zip internally has its own `sharp/` prefix, so extract
-# into /staging/ (not /staging/sharp/) to avoid sharp/sharp/modules/.
-RUN curl -fsSL "https://github.com/Ariiisu/AddonManager/releases/download/${ADDONMANAGER_VERSION}/AddonManager.zip" \
-        -o /tmp/addonmanager.zip \
-    && unzip -qo /tmp/addonmanager.zip -d /staging/ \
-    && rm /tmp/addonmanager.zip
+# --- AddonManager (DISABLED) ---
+# AddonManager's constructor hard-requires `-dual_addon` in the startup args
+# and throws if it's missing, which crashes the module with a TargetInvocation
+# exception and prevents the entire module from loading. We reverted to the
+# RCON host_workshop_map pattern (no -dual_addon), so AddonManager would just
+# error on every boot. Leaving the ARG in place but not fetching the zip.
+# RUN curl -fsSL "https://github.com/Ariiisu/AddonManager/releases/download/${ADDONMANAGER_VERSION}/AddonManager.zip" \
+#         -o /tmp/addonmanager.zip \
+#     && unzip -qo /tmp/addonmanager.zip -d /staging/ \
+#     && rm /tmp/addonmanager.zip
 
 # --- Tnms runtime shared libs (required by MapChooserSharpMS) ---
 # TnmsLocalizationPlatform ships both a module and a shared lib.
