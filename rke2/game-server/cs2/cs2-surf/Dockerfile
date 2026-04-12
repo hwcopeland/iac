@@ -44,9 +44,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends git && rm -rf /
 
 WORKDIR /build
 
-# --- Source2Surf/Timer ---
+# --- Source2Surf/Timer (hwcopeland fork with surf patches) ---
+# Fork carries: bhop enabled in start zone (upstream hard-disables it),
+# WR → SR rename in user-facing strings, earlier nav-patch try/catch.
 RUN git clone --depth 1 --branch "${SOURCE2SURF_TIMER_REF}" \
-        https://github.com/Source2Surf/Timer.git /build/timer
+        https://github.com/hwcopeland/Timer.git /build/timer
 WORKDIR /build/timer
 RUN sed -i '/<Target Name="PostBuild"/,/<\/Target>/d' Timer/Timer.csproj && \
     dotnet publish Timer/Timer.csproj -c Release -r linux-x64 --no-self-contained -o /build/out/timer && \
