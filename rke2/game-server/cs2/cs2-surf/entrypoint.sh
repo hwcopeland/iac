@@ -68,6 +68,27 @@ fi
 log "Checking plugin overlay..."
 /opt/cs2-surf/scripts/apply-overlay.sh
 
+# ── Step 2b: Inject Steam Web API key into AddonManager config ──────────────
+# AddonManager (Ariiisu/AddonManager) uses the Steam Web API to download
+# workshop items requested via -dual_addon. Its config file ships with an
+# empty steam_api_key; without a key, it silently no-ops and -dual_addon boots
+# stall forever waiting for an addon that never arrives. Write the key from
+# the API_KEY env var (same Steam Web API key we pass to CS2 via -authkey).
+ADDONMGR_CFG="${CS2_DIR}/game/sharp/configs/addon_manager.jsonc"
+if [ -n "${API_KEY:-}" ]; then
+    mkdir -p "$(dirname "${ADDONMGR_CFG}")"
+    # Strip any CR/LF from the secret — k8s secret values sometimes have a
+    # trailing newline, which embeds a literal 0x0A into the JSON string and
+    # crashes AddonManager's Utf8Json parser (config then falls back to the
+    # empty-key default and workshop downloads silently no-op).
+    CLEAN_API_KEY=$(printf '%s' "${API_KEY}" | tr -d '\r\n')
+    printf '{\n    "steam_api_key": "%s",\n    "remove_obsolete_files": false,\n    "remove_vpk": false,\n    "check_interval": 5\n}\n' \
+        "${CLEAN_API_KEY}" > "${ADDONMGR_CFG}"
+    log "Wrote AddonManager config with Steam Web API key"
+else
+    warn "API_KEY env is empty — AddonManager will not be able to download workshop addons"
+fi
+
 # ── Step 3: Database config substitution ────────────────────────────────────
 # The database.json template lives at /opt/cs2-surf/configs/database.json
 # or can be mounted via ConfigMap at /opt/cs2-surf/configs/.
@@ -110,29 +131,47 @@ if [ -d "${ENGINE_BIN}" ] && [ -d "${CSGO_BIN}" ]; then
 fi
 
 log "Starting CS2 surf server..."
+log "  Map:        ${MAP:-de_dust2} (startup: built-in)"
 log "  Port:       ${PORT:-27015}"
 log "  MaxPlayers: ${MAXPLAYERS:-32}"
 log "  Tickrate:   ${TICKRATE:-128}"
-
-# Map / addon selection.
-#
-# With AddonManager installed into sharp/modules, passing -dual_addon <ids>
-# makes CS2 auto-download the workshop addon(s) and extract their content into
-# sharp/assets at startup — no post-boot RCON host_workshop_map hack required.
-#
-# STARTUP_MAP is the workshop item id (e.g. 3660894345 for surf_lt_omnific).
-# If it's set, we boot directly onto that workshop map via -dual_addon + +map.
-# Otherwise fall back to MAP (defaults to de_dust2).
-LAUNCH_MAP="${MAP:-de_dust2}"
-DUAL_ADDON_ARGS=()
 if [ -n "${STARTUP_MAP:-}" ]; then
-    log "  Addon:      workshop ${STARTUP_MAP} (via -dual_addon)"
-    DUAL_ADDON_ARGS=(-dual_addon "${STARTUP_MAP}")
-    # +map still needs a real map name; AddonManager extracts the workshop vpk
-    # into sharp/assets so the addon's map name resolves. If you want to boot
-    # directly onto it, set MAP to the map name (e.g. surf_lt_omnific).
+    log "  StartupMap: workshop ${STARTUP_MAP} (will switch after server is ready)"
 fi
-log "  Map:        ${LAUNCH_MAP}"
+
+# Workshop map post-boot switch.
+#
+# We tried booting directly onto the workshop map with -dual_addon + AddonManager,
+# but when the addon isn't already mounted the engine sleeps forever before
+# binding a port. Falling back to the proven pattern: boot onto de_dust2 so the
+# port binds fast, then RCON host_workshop_map once the server is listening.
+# (CS2 has the workshop vpk on disk from an earlier subscribe.)
+if [ -n "${STARTUP_MAP:-}" ] && [ -n "${RCON_PASSWORD:-}" ]; then
+    (
+        sleep 45  # wait for server to fully start and mount workshop content
+        for i in $(seq 1 30); do
+            if bash -c "echo > /dev/tcp/127.0.0.1/${PORT:-27015}" 2>/dev/null; then
+                log "Server ready — switching to workshop map ${STARTUP_MAP}"
+                python3 -c "
+import socket, struct
+def rcon(host, port, pw, cmd):
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.settimeout(10)
+    s.connect((host, port))
+    payload = struct.pack('<ii', 1, 3) + pw.encode() + b'\x00\x00'
+    s.sendall(struct.pack('<i', len(payload)) + payload)
+    s.recv(4096)
+    payload = struct.pack('<ii', 2, 2) + cmd.encode() + b'\x00\x00'
+    s.sendall(struct.pack('<i', len(payload)) + payload)
+    s.close()
+rcon('127.0.0.1', ${PORT:-27015}, '${RCON_PASSWORD}', 'host_workshop_map ${STARTUP_MAP}')
+" 2>/dev/null && log "Map switch command sent" && break
+                sleep 5
+            fi
+            sleep 10
+        done
+    ) &
+fi
 
 exec "${CS2_DIR}/game/bin/linuxsteamrt64/cs2" \
     -dedicated \
@@ -142,8 +181,7 @@ exec "${CS2_DIR}/game/bin/linuxsteamrt64/cs2" \
     -port "${PORT:-27015}" \
     -tickrate "${TICKRATE:-128}" \
     -authkey "${API_KEY}" \
-    "${DUAL_ADDON_ARGS[@]}" \
-    +map "${LAUNCH_MAP}" \
+    +map "${MAP:-de_dust2}" \
     +sv_setsteamaccount "${STEAM_ACCOUNT}" \
     +rcon_password "${RCON_PASSWORD}" \
     +sv_visiblemaxplayers "${MAXPLAYERS:-32}" \

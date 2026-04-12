@@ -20,6 +20,12 @@ ARG ADVERTISEMENT_VERSION="v1.0.2"
 ARG RAMPFIX_VERSION="v1.0.6"
 ARG MSNOBLOCK_VERSION="MS-NoBlock-v.1.0.2"
 ARG ADDONMANAGER_VERSION="v1.0.1"
+# Tnms shared libs — required at runtime by MapChooserSharpMS (transitively
+# through TnmsPluginFoundation NuGet package).
+ARG TNMS_LOCALIZATION_VERSION="v0.0.2"
+ARG TNMS_ADMINISTRATION_VERSION="v0.0.2"
+ARG TNMS_TARGETING_VERSION="v0.1.1"
+ARG TNMS_FOUNDATION_VERSION="v0.0.6"
 
 # Plugins built from source (pinned refs)
 ARG SOURCE2SURF_TIMER_REF="master"
@@ -49,10 +55,29 @@ RUN sed -i '/<Target Name="PostBuild"/,/<\/Target>/d' Timer/Timer.csproj && \
 
 # --- MapChooserSharpMS (RTV, map vote, nominations, map cycle) ---
 # Provides !map, !nominate, !rtv chat commands on top of ModSharp.
-# Targets net10.0 via config.props (not net9.0 like build.bat suggests).
+#
+# Upstream MCS csproj has two bugs that make it fail to load at runtime:
+#   1. Pins ModSharp.Sharp.Shared 2.1.100 while TnmsPluginFoundation 0.0.6
+#      (and ModSharp core git-118) target 2.1.117 — ABI mismatch means MCS's
+#      class hierarchy doesn't resolve against the runtime, and ModSharp's
+#      module scanner silently filters it out.
+#   2. TnmsPluginFoundation is referenced as a plain PackageReference without
+#      ExcludeAssets="runtime", so dotnet publish bundles TnmsPluginFoundation.dll
+#      into the module output dir — duplicating the one in sharp/shared/ and
+#      creating a type-identity mismatch in the AssemblyLoadContext.
+#
+# We patch both at build time with sed, then post-publish delete the Shared
+# DLLs that should live in sharp/shared/ (the project-reference Shared is
+# always bundled by dotnet publish regardless of Private/ExcludeAssets).
 RUN git clone --depth 1 --branch "${MAPCHOOSER_REF}" \
         https://github.com/fltuna/MapChooserSharpMS.git /build/mcs
 WORKDIR /build/mcs
+RUN sed -i \
+        -e 's|ModSharp.Sharp.Shared" Version="2.1.100"|ModSharp.Sharp.Shared" Version="2.1.117"|' \
+        -e 's|"TnmsPluginFoundation" Version="0.0.6" />|"TnmsPluginFoundation" Version="0.0.6" ExcludeAssets="runtime" />|' \
+        MapChooserSharpMS/MapChooserSharpMS.csproj && \
+    echo "--- patched MCS csproj ---" && \
+    cat MapChooserSharpMS/MapChooserSharpMS.csproj
 RUN dotnet publish MapChooserSharpMS.Shared/MapChooserSharpMS.Shared.csproj \
         -c Release -r linux-x64 --no-self-contained \
         -p:DebugType=None -p:DebugSymbols=false \
@@ -60,7 +85,11 @@ RUN dotnet publish MapChooserSharpMS.Shared/MapChooserSharpMS.Shared.csproj \
     dotnet publish MapChooserSharpMS/MapChooserSharpMS.csproj \
         -c Release -r linux-x64 --no-self-contained \
         -p:DebugType=None -p:DebugSymbols=false \
-        -o /build/out/mcs
+        -o /build/out/mcs && \
+    # Strip shared DLLs from the module dir — they live in sharp/shared/ and
+    # bundling locally creates the duplicate-ALC / type-identity bug.
+    rm -f /build/out/mcs/MapChooserSharpMS.Shared.dll \
+          /build/out/mcs/TnmsPluginFoundation.dll
 
 # ---------------------------------------------------------------------------
 # Stage 2: Download and assemble the overlay
@@ -73,6 +102,10 @@ ARG ADVERTISEMENT_VERSION
 ARG RAMPFIX_VERSION
 ARG MSNOBLOCK_VERSION
 ARG ADDONMANAGER_VERSION
+ARG TNMS_LOCALIZATION_VERSION
+ARG TNMS_ADMINISTRATION_VERSION
+ARG TNMS_TARGETING_VERSION
+ARG TNMS_FOUNDATION_VERSION
 RUN apt-get update && apt-get install -y --no-install-recommends \
         curl unzip ca-certificates \
     && rm -rf /var/lib/apt/lists/*
@@ -127,10 +160,33 @@ RUN curl -fsSL "https://github.com/darkerz7/MS-NoBlock/releases/download/${MSNOB
 # Replaces the manual entrypoint RCON host_workshop_map switch. With AddonManager
 # installed, CS2 launched with -dual_addon <ids> auto-downloads and extracts the
 # addon content into sharp/assets at startup.
+# NOTE: AddonManager.zip internally has its own `sharp/` prefix, so extract
+# into /staging/ (not /staging/sharp/) to avoid sharp/sharp/modules/.
 RUN curl -fsSL "https://github.com/Ariiisu/AddonManager/releases/download/${ADDONMANAGER_VERSION}/AddonManager.zip" \
         -o /tmp/addonmanager.zip \
-    && unzip -qo /tmp/addonmanager.zip -d /staging/sharp/ \
+    && unzip -qo /tmp/addonmanager.zip -d /staging/ \
     && rm /tmp/addonmanager.zip
+
+# --- Tnms runtime shared libs (required by MapChooserSharpMS) ---
+# TnmsLocalizationPlatform ships both a module and a shared lib.
+# TnmsPluginFoundation (Core) is a shared lib only.
+# Both zips use the modules/ + shared/ layout, so extract into /staging/sharp/.
+RUN curl -fsSL "https://github.com/fltuna/TnmsLocalizationPlatform/releases/download/${TNMS_LOCALIZATION_VERSION}/TnmsLocalizationPlatform.zip" \
+        -o /tmp/tlp.zip \
+    && unzip -qo /tmp/tlp.zip -d /staging/sharp/ \
+    && rm /tmp/tlp.zip
+RUN curl -fsSL "https://github.com/fltuna/TnmsAdministrationPlatform/releases/download/${TNMS_ADMINISTRATION_VERSION}/TnmsAdministrationPlatform.zip" \
+        -o /tmp/tap.zip \
+    && unzip -qo /tmp/tap.zip -d /staging/sharp/ \
+    && rm /tmp/tap.zip
+RUN curl -fsSL "https://github.com/fltuna/TnmsExtendableTargeting/releases/download/${TNMS_TARGETING_VERSION}/TnmsExtendableTargeting.zip" \
+        -o /tmp/tet.zip \
+    && unzip -qo /tmp/tet.zip -d /staging/sharp/ \
+    && rm /tmp/tet.zip
+RUN curl -fsSL "https://github.com/fltuna/TNMSPluginFoundation/releases/download/${TNMS_FOUNDATION_VERSION}/TnmsPluginFoundation-Core.zip" \
+        -o /tmp/tpf.zip \
+    && unzip -qo /tmp/tpf.zip -d /staging/sharp/ \
+    && rm /tmp/tpf.zip
 
 # --- Source2Surf/Timer (built from source) ---
 COPY --from=plugin-builder /build/out/timer/ /staging/sharp/modules/Timer/
@@ -141,8 +197,10 @@ COPY --from=plugin-builder /build/out/timer-shared/ /staging/sharp/shared/Timer.
 COPY --from=plugin-builder /build/out/mcs/ /staging/sharp/modules/MapChooserSharpMS/
 COPY --from=plugin-builder /build/out/mcs-shared/ /staging/sharp/shared/MapChooserSharpMS.Shared/
 
-# Generate runtimeconfig.json if missing (UseCommonOutputDirectory suppresses it)
-RUN for mod in Timer Timer.RequestManager Timer.Shared MapChooserSharpMS MapChooserSharpMS.Shared; do \
+# Generate runtimeconfig.json if missing (UseCommonOutputDirectory suppresses
+# it for some source-built modules; AddonManager's release zip doesn't ship
+# one either — without it, ModSharp silently skips the module).
+RUN for mod in Timer Timer.RequestManager Timer.Shared MapChooserSharpMS MapChooserSharpMS.Shared AddonManager; do \
       for base in /staging/sharp/modules /staging/sharp/shared; do \
         dir="${base}/${mod}"; \
         if [ -d "${dir}" ] && [ ! -f "${dir}/${mod}.runtimeconfig.json" ]; then \
@@ -199,8 +257,11 @@ COPY --chown=steam:steam scripts/ /opt/cs2-surf/scripts/
 
 RUN chmod +x /opt/cs2-surf/entrypoint.sh /opt/cs2-surf/scripts/*.sh
 
-# Write image version stamp — used by apply-overlay.sh to skip redundant copies
-RUN echo "${MODSHARP_VERSION}" > /opt/cs2-surf/VERSION
+# Write image version stamp — used by apply-overlay.sh to skip redundant copies.
+# Include a build timestamp so every image rebuild busts the PVC stamp and
+# re-applies the overlay. Without this, plugin additions/removals after the
+# initial git-NNN tag would be silently skipped on the next pod start.
+RUN echo "${MODSHARP_VERSION}-$(date -u +%Y%m%d%H%M%S)" > /opt/cs2-surf/VERSION
 
 # Ensure the steam user owns all our files
 RUN chown -R steam:steam /opt/cs2-surf
