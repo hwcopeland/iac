@@ -72,20 +72,30 @@ jobs:
     runs-on: arc-chem
 
     steps:
-      # The ARC runner lives inside the cluster and already has kubectl on
-      # PATH. The prior implementation used steebchen/kubectl@v2.0.0 but
-      # that action's args handling silently no-op'd — jobs reported
-      # "success" after 8 seconds without ever running the rollout, so new
-      # images kept being built but pods never picked them up.
+      # The ARC runner doesn't have kubectl on PATH and the previous
+      # steebchen/kubectl@v2.0.0 action silently no-op'd (its args input
+      # didn't reach the entrypoint, so every "success" run was actually
+      # just the container printing help text). Install a pinned kubectl
+      # binary in a step-local temp dir and drive it directly with the
+      # KUBECONFIG_BASE64 secret.
       - name: Restart deployment and wait for rollout
         env:
-          KUBE_CONFIG_DATA: ${{ secrets.KUBE_CONFIG_DATA }}
+          KUBECONFIG_BASE64: ${{ secrets.KUBECONFIG_BASE64 }}
         run: |
           set -euo pipefail
+
+          # Install kubectl
+          KUBECTL_VERSION="v1.31.2"
+          curl -fsSL -o /tmp/kubectl \
+            "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl"
+          chmod +x /tmp/kubectl
+
+          # Materialize kubeconfig from secret
           mkdir -p "$HOME/.kube"
-          echo "$KUBE_CONFIG_DATA" | base64 -d > "$HOME/.kube/config"
+          echo "$KUBECONFIG_BASE64" | base64 -d > "$HOME/.kube/config"
           chmod 600 "$HOME/.kube/config"
-          kubectl -n game-server rollout restart deployment/cs2-surf-server
-          kubectl -n game-server rollout status deployment/cs2-surf-server --timeout=300s
-          kubectl -n game-server get pod -l app=cs2-surf-server \
+
+          /tmp/kubectl -n game-server rollout restart deployment/cs2-surf-server
+          /tmp/kubectl -n game-server rollout status deployment/cs2-surf-server --timeout=300s
+          /tmp/kubectl -n game-server get pod -l app=cs2-surf-server \
             -o jsonpath='{.items[0].metadata.name}{"  "}{.items[0].status.containerStatuses[0].imageID}{"\n"}'
