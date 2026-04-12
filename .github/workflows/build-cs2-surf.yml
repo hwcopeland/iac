@@ -72,16 +72,20 @@ jobs:
     runs-on: arc-chem
 
     steps:
-      - name: Restart deployment
-        uses: steebchen/kubectl@v2.0.0
+      # The ARC runner lives inside the cluster and already has kubectl on
+      # PATH. The prior implementation used steebchen/kubectl@v2.0.0 but
+      # that action's args handling silently no-op'd — jobs reported
+      # "success" after 8 seconds without ever running the rollout, so new
+      # images kept being built but pods never picked them up.
+      - name: Restart deployment and wait for rollout
         env:
           KUBE_CONFIG_DATA: ${{ secrets.KUBE_CONFIG_DATA }}
-        with:
-          args: rollout restart deployment/cs2-surf-server -n game-server
-
-      - name: Wait for rollout
-        uses: steebchen/kubectl@v2.0.0
-        env:
-          KUBE_CONFIG_DATA: ${{ secrets.KUBE_CONFIG_DATA }}
-        with:
-          args: rollout status deployment/cs2-surf-server -n game-server --timeout=300s
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.kube"
+          echo "$KUBE_CONFIG_DATA" | base64 -d > "$HOME/.kube/config"
+          chmod 600 "$HOME/.kube/config"
+          kubectl -n game-server rollout restart deployment/cs2-surf-server
+          kubectl -n game-server rollout status deployment/cs2-surf-server --timeout=300s
+          kubectl -n game-server get pod -l app=cs2-surf-server \
+            -o jsonpath='{.items[0].metadata.name}{"  "}{.items[0].status.containerStatuses[0].imageID}{"\n"}'
