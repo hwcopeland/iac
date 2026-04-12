@@ -110,43 +110,29 @@ if [ -d "${ENGINE_BIN}" ] && [ -d "${CSGO_BIN}" ]; then
 fi
 
 log "Starting CS2 surf server..."
-log "  Map:        ${MAP:-de_dust2} (startup: built-in)"
 log "  Port:       ${PORT:-27015}"
 log "  MaxPlayers: ${MAXPLAYERS:-32}"
 log "  Tickrate:   ${TICKRATE:-128}"
-if [ -n "${STARTUP_MAP:-}" ]; then
-    log "  StartupMap: workshop ${STARTUP_MAP} (will switch after server is ready)"
-fi
 
-# If STARTUP_MAP is set, launch a background task that waits for the server
-# to start listening, then switches to the workshop map via RCON.
-if [ -n "${STARTUP_MAP:-}" ] && [ -n "${RCON_PASSWORD:-}" ]; then
-    (
-        sleep 45  # wait for server to fully start and download workshop maps
-        for i in $(seq 1 30); do
-            if bash -c "echo > /dev/tcp/127.0.0.1/${PORT:-27015}" 2>/dev/null; then
-                log "Server ready — switching to workshop map ${STARTUP_MAP}"
-                # Use the CS2 client command interface via RCON
-                python3 -c "
-import socket, struct
-def rcon(host, port, pw, cmd):
-    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    s.settimeout(10)
-    s.connect((host, port))
-    payload = struct.pack('<ii', 1, 3) + pw.encode() + b'\x00\x00'
-    s.sendall(struct.pack('<i', len(payload)) + payload)
-    s.recv(4096)
-    payload = struct.pack('<ii', 2, 2) + cmd.encode() + b'\x00\x00'
-    s.sendall(struct.pack('<i', len(payload)) + payload)
-    s.close()
-rcon('127.0.0.1', ${PORT:-27015}, '${RCON_PASSWORD}', 'host_workshop_map ${STARTUP_MAP}')
-" 2>/dev/null && log "Map switch command sent" && break
-                sleep 5
-            fi
-            sleep 10
-        done
-    ) &
+# Map / addon selection.
+#
+# With AddonManager installed into sharp/modules, passing -dual_addon <ids>
+# makes CS2 auto-download the workshop addon(s) and extract their content into
+# sharp/assets at startup — no post-boot RCON host_workshop_map hack required.
+#
+# STARTUP_MAP is the workshop item id (e.g. 3660894345 for surf_lt_omnific).
+# If it's set, we boot directly onto that workshop map via -dual_addon + +map.
+# Otherwise fall back to MAP (defaults to de_dust2).
+LAUNCH_MAP="${MAP:-de_dust2}"
+DUAL_ADDON_ARGS=()
+if [ -n "${STARTUP_MAP:-}" ]; then
+    log "  Addon:      workshop ${STARTUP_MAP} (via -dual_addon)"
+    DUAL_ADDON_ARGS=(-dual_addon "${STARTUP_MAP}")
+    # +map still needs a real map name; AddonManager extracts the workshop vpk
+    # into sharp/assets so the addon's map name resolves. If you want to boot
+    # directly onto it, set MAP to the map name (e.g. surf_lt_omnific).
 fi
+log "  Map:        ${LAUNCH_MAP}"
 
 exec "${CS2_DIR}/game/bin/linuxsteamrt64/cs2" \
     -dedicated \
@@ -156,7 +142,8 @@ exec "${CS2_DIR}/game/bin/linuxsteamrt64/cs2" \
     -port "${PORT:-27015}" \
     -tickrate "${TICKRATE:-128}" \
     -authkey "${API_KEY}" \
-    +map "${MAP:-de_dust2}" \
+    "${DUAL_ADDON_ARGS[@]}" \
+    +map "${LAUNCH_MAP}" \
     +sv_setsteamaccount "${STEAM_ACCOUNT}" \
     +rcon_password "${RCON_PASSWORD}" \
     +sv_visiblemaxplayers "${MAXPLAYERS:-32}" \

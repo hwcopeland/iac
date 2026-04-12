@@ -105,8 +105,11 @@ spec:
               value: "32"
             - name: TICKRATE
               value: "128"
+            # With AddonManager + -dual_addon, CS2 extracts the workshop addon
+            # into sharp/assets before map load, so MAP can be the actual map
+            # name and the server boots straight onto it — no RCON hand-off.
             - name: MAP
-              value: "de_dust2"
+              value: "surf_lt_omnific"
             - name: STARTUP_MAP
               value: "3660894345"
             - name: SERVER_NAME

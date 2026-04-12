@@ -126,6 +126,17 @@ if [ -f "${CONFIGS_DIR}/admins.jsonc" ]; then
     log "Deployed admins.jsonc"
 fi
 
+# mapchooser.toml → sharp/modules/MapChooserSharpMS/ (RTV, map vote, nominations)
+# MCS reads its TOML config from the module's own directory; deploy on every
+# overlay apply so edits to the repo copy land on the PVC.
+if [ -f "${CONFIGS_DIR}/mapchooser.toml" ]; then
+    MCS_DIR="${CS2_DIR}/game/sharp/modules/MapChooserSharpMS"
+    if [ -d "${MCS_DIR}" ]; then
+        cp -f "${CONFIGS_DIR}/mapchooser.toml" "${MCS_DIR}/mapchooser.toml"
+        log "Deployed mapchooser.toml to ${MCS_DIR}"
+    fi
+fi
+
 # Patch gameinfo.gi: add "Game sharp" before "Game csgo" per ModSharp docs
 # Also strip any leftover Metamod/CSS entries from kus
 GAMEINFO="${CS2_DIR}/game/csgo/gameinfo.gi"
