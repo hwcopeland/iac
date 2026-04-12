@@ -135,6 +135,9 @@ if [ -n "${STARTUP_MAP:-}" ] && [ -n "${RCON_PASSWORD:-}" ]; then
         for i in $(seq 1 30); do
             if bash -c "echo > /dev/tcp/${SERVER_IP}/${PORT:-27015}" 2>/dev/null; then
                 log "Server ready at ${SERVER_IP}:${PORT:-27015} — switching to workshop map ${STARTUP_MAP}"
+                # Step 1: flip to the workshop map. host_workshop_map kills the
+                # current netsession, so the next RCON burst needs a fresh TCP
+                # connection after the new map has fully loaded.
                 python3 -c "
 import socket, struct
 def rcon(host, port, pw, cmd):
@@ -152,6 +155,45 @@ rcon('${SERVER_IP}', ${PORT:-27015}, '${RCON_PASSWORD}', 'host_workshop_map ${ST
                 sleep 5
             fi
             sleep 10
+        done
+
+        # Step 2: map change resets surf movement cvars back to CS2 defaults.
+        # Force them back (and re-exec server.cfg for everything else) ~20s
+        # after the switch, when the new map is loaded and RCON is accepting
+        # commands again. Retry a few times in case the map is still loading.
+        sleep 20
+        for i in 1 2 3 4 5; do
+            if bash -c "echo > /dev/tcp/${SERVER_IP}/${PORT:-27015}" 2>/dev/null; then
+                log "Forcing surf cvars post-map-change"
+                python3 -c "
+import socket, struct
+def rcon(host, port, pw, cmd):
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.settimeout(10)
+    s.connect((host, port))
+    s.sendall(struct.pack('<iii', len(pw)+10, 0, 3) + pw.encode() + b'\x00\x00')
+    s.recv(4096)
+    s.sendall(struct.pack('<iii', len(cmd)+10, 1, 2) + cmd.encode() + b'\x00\x00')
+    s.close()
+cmds = [
+    'sv_enablebunnyhopping 1',
+    'sv_autobunnyhopping 1',
+    'sv_airaccelerate 150',
+    'sv_accelerate 10',
+    'sv_friction 4',
+    'sv_staminamax 0',
+    'sv_staminajumpcost 0',
+    'sv_staminalandcost 0',
+    'sv_gravity 800',
+    'sv_maxvelocity 3500',
+    'sv_enablebunnyhopping 1',
+    'exec server.cfg',
+]
+for c in cmds:
+    rcon('${SERVER_IP}', ${PORT:-27015}, '${RCON_PASSWORD}', c)
+" 2>/dev/null && log "Surf cvars forced" && break
+            fi
+            sleep 5
         done
     ) &
 fi
