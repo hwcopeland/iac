@@ -19,9 +19,11 @@ ARG MODSHARP_BUILD="118"
 ARG ADVERTISEMENT_VERSION="v1.0.2"
 ARG RAMPFIX_VERSION="v1.0.6"
 ARG MSNOBLOCK_VERSION="MS-NoBlock-v.1.0.2"
+ARG ADDONMANAGER_VERSION="v1.0.1"
 
-# Plugins built from source (pinned commit SHAs)
+# Plugins built from source (pinned refs)
 ARG SOURCE2SURF_TIMER_REF="master"
+ARG MAPCHOOSER_REF="main"
 
 # ---------------------------------------------------------------------------
 # Stage 1: Build plugins that have no release artifacts
@@ -30,6 +32,7 @@ ARG SOURCE2SURF_TIMER_REF="master"
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS plugin-builder
 
 ARG SOURCE2SURF_TIMER_REF
+ARG MAPCHOOSER_REF
 
 RUN apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*
 
@@ -44,6 +47,21 @@ RUN sed -i '/<Target Name="PostBuild"/,/<\/Target>/d' Timer/Timer.csproj && \
     dotnet publish Timer.RequestManager/Timer.RequestManager.csproj -c Release -r linux-x64 --no-self-contained -o /build/out/timer-rm && \
     dotnet publish Timer.Shared/Timer.Shared.csproj -c Release -r linux-x64 --no-self-contained -o /build/out/timer-shared
 
+# --- MapChooserSharpMS (RTV, map vote, nominations, map cycle) ---
+# Provides !map, !nominate, !rtv chat commands on top of ModSharp.
+# Targets net10.0 via config.props (not net9.0 like build.bat suggests).
+RUN git clone --depth 1 --branch "${MAPCHOOSER_REF}" \
+        https://github.com/fltuna/MapChooserSharpMS.git /build/mcs
+WORKDIR /build/mcs
+RUN dotnet publish MapChooserSharpMS.Shared/MapChooserSharpMS.Shared.csproj \
+        -c Release -r linux-x64 --no-self-contained \
+        -p:DebugType=None -p:DebugSymbols=false \
+        -o /build/out/mcs-shared && \
+    dotnet publish MapChooserSharpMS/MapChooserSharpMS.csproj \
+        -c Release -r linux-x64 --no-self-contained \
+        -p:DebugType=None -p:DebugSymbols=false \
+        -o /build/out/mcs
+
 # ---------------------------------------------------------------------------
 # Stage 2: Download and assemble the overlay
 # ---------------------------------------------------------------------------
@@ -54,6 +72,7 @@ ARG MODSHARP_BUILD
 ARG ADVERTISEMENT_VERSION
 ARG RAMPFIX_VERSION
 ARG MSNOBLOCK_VERSION
+ARG ADDONMANAGER_VERSION
 RUN apt-get update && apt-get install -y --no-install-recommends \
         curl unzip ca-certificates \
     && rm -rf /var/lib/apt/lists/*
@@ -104,16 +123,32 @@ RUN curl -fsSL "https://github.com/darkerz7/MS-NoBlock/releases/download/${MSNOB
     && unzip -qo /tmp/msnoblock.zip -d /staging/sharp/ \
     && rm /tmp/msnoblock.zip
 
+# --- AddonManager (handles -dual_addon workshop extraction to sharp/assets) ---
+# Replaces the manual entrypoint RCON host_workshop_map switch. With AddonManager
+# installed, CS2 launched with -dual_addon <ids> auto-downloads and extracts the
+# addon content into sharp/assets at startup.
+RUN curl -fsSL "https://github.com/Ariiisu/AddonManager/releases/download/${ADDONMANAGER_VERSION}/AddonManager.zip" \
+        -o /tmp/addonmanager.zip \
+    && unzip -qo /tmp/addonmanager.zip -d /staging/sharp/ \
+    && rm /tmp/addonmanager.zip
+
 # --- Source2Surf/Timer (built from source) ---
 COPY --from=plugin-builder /build/out/timer/ /staging/sharp/modules/Timer/
 COPY --from=plugin-builder /build/out/timer-rm/ /staging/sharp/modules/Timer.RequestManager/
 COPY --from=plugin-builder /build/out/timer-shared/ /staging/sharp/shared/Timer.Shared/
+
+# --- MapChooserSharpMS (built from source) ---
+COPY --from=plugin-builder /build/out/mcs/ /staging/sharp/modules/MapChooserSharpMS/
+COPY --from=plugin-builder /build/out/mcs-shared/ /staging/sharp/shared/MapChooserSharpMS.Shared/
+
 # Generate runtimeconfig.json if missing (UseCommonOutputDirectory suppresses it)
-RUN for mod in Timer Timer.RequestManager Timer.Shared; do \
-      dir="/staging/sharp/modules/${mod}"; \
-      if [ -d "${dir}" ] && [ ! -f "${dir}/${mod}.runtimeconfig.json" ]; then \
-        echo '{"runtimeOptions":{"tfm":"net10.0","framework":{"name":"Microsoft.NETCore.App","version":"10.0.5"}}}' > "${dir}/${mod}.runtimeconfig.json"; \
-      fi; \
+RUN for mod in Timer Timer.RequestManager Timer.Shared MapChooserSharpMS MapChooserSharpMS.Shared; do \
+      for base in /staging/sharp/modules /staging/sharp/shared; do \
+        dir="${base}/${mod}"; \
+        if [ -d "${dir}" ] && [ ! -f "${dir}/${mod}.runtimeconfig.json" ]; then \
+          echo '{"runtimeOptions":{"tfm":"net10.0","framework":{"name":"Microsoft.NETCore.App","version":"10.0.5"},"rollForward":"Major"}}' > "${dir}/${mod}.runtimeconfig.json"; \
+        fi; \
+      done; \
     done
 COPY --from=plugin-builder /build/timer/gamedata/ /staging/sharp/gamedata/
 COPY --from=plugin-builder /build/timer/sharp/ /staging/sharp/
