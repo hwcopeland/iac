@@ -45,22 +45,21 @@
     if (hbdMax) params.hbd_max = hbdMax;
     if (hbaMax) params.hba_max = hbaMax;
     if (maxPhase) params.max_phase = maxPhase;
-    if (ro5Only) params.ro5_violations = '0';
+    if (ro5Only) params.ro5 = 'true';
     return params;
   }
 
-  function scheduleSearch() {
+  // Reactive derived that captures all filter values as a single string key.
+  // When any filter changes, this string changes, triggering the effect below.
+  let filterKey = $derived(
+    `${mwMin}|${mwMax}|${logpMin}|${logpMax}|${hbdMax}|${hbaMax}|${maxPhase}|${ro5Only}|${textQuery}`
+  );
+
+  $effect(() => {
+    // Read filterKey to establish reactive dependency on all filters
+    const _key = filterKey;
     if (debounceTimer) clearTimeout(debounceTimer);
     debounceTimer = setTimeout(() => doSearch(), 500);
-  }
-
-  $effect(() => {
-    // Re-run search when any filter changes (reactive deps picked up automatically)
-    void [mwMin, mwMax, logpMin, logpMax, hbdMax, hbaMax, maxPhase, ro5Only, textQuery];
-    scheduleSearch();
-  });
-
-  $effect(() => {
     return () => {
       if (debounceTimer) clearTimeout(debounceTimer);
     };
