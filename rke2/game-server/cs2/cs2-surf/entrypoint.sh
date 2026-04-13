@@ -161,11 +161,12 @@ rcon('${SERVER_IP}', ${PORT:-27015}, '${RCON_PASSWORD}', 'host_workshop_map ${ST
         # Force them back (and re-exec server.cfg for everything else) ~20s
         # after the switch, when the new map is loaded and RCON is accepting
         # commands again. Retry a few times in case the map is still loading.
-        sleep 20
-        for i in 1 2 3 4 5; do
-            if bash -c "echo > /dev/tcp/${SERVER_IP}/${PORT:-27015}" 2>/dev/null; then
-                log "Forcing surf cvars post-map-change"
-                python3 -c "
+        force_surf_cvars() {
+            local retries=5
+            local i
+            for i in $(seq 1 $retries); do
+                if bash -c "echo > /dev/tcp/${SERVER_IP}/${PORT:-27015}" 2>/dev/null; then
+                    python3 -c "
 import socket, struct
 def rcon(host, port, pw, cmd):
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -186,15 +187,67 @@ cmds = [
     'sv_staminalandcost 0',
     'sv_gravity 800',
     'sv_maxvelocity 3500',
-    'sv_enablebunnyhopping 1',
     'exec server.cfg',
 ]
 for c in cmds:
     rcon('${SERVER_IP}', ${PORT:-27015}, '${RCON_PASSWORD}', c)
-" 2>/dev/null && log "Surf cvars forced" && break
-            fi
-            sleep 5
-        done
+" 2>/dev/null && return 0
+                fi
+                sleep 5
+            done
+            return 1
+        }
+
+        rcon_cmd() {
+            local cmd="$1"
+            python3 -c "
+import socket, struct
+s = socket.socket()
+s.settimeout(10)
+s.connect(('${SERVER_IP}', ${PORT:-27015}))
+pw = '${RCON_PASSWORD}'
+cmd = '${cmd}'
+s.sendall(struct.pack('<iii', len(pw)+10, 0, 3) + pw.encode() + b'\x00\x00')
+s.recv(4096)
+s.sendall(struct.pack('<iii', len(cmd)+10, 1, 2) + cmd.encode() + b'\x00\x00')
+s.close()
+" 2>/dev/null
+        }
+
+        sleep 20
+        if force_surf_cvars; then
+            log "Surf cvars forced"
+        fi
+
+        # ── Map rotation loop ────────────────────────────────────────────
+        # Reads configs/maprotation.txt on the PVC every tick so the list
+        # can be edited without a rebuild. Rotates every MAP_ROTATION_MINUTES
+        # (default 30) via host_workshop_map RCON. Re-forces surf cvars
+        # ~20s after every rotation since map changes wipe them.
+        ROTATION_FILE="${CS2_DIR}/game/sharp/configs/maprotation.txt"
+        ROTATION_MIN="${MAP_ROTATION_MINUTES:-30}"
+        if [ -f "${ROTATION_FILE}" ] && [ "${ROTATION_MIN}" -gt 0 ] 2>/dev/null; then
+            log "Map rotation enabled: every ${ROTATION_MIN} min from ${ROTATION_FILE}"
+            rotation_index=0
+            while true; do
+                sleep "$((ROTATION_MIN * 60))"
+                # Read non-comment non-empty lines fresh each time
+                mapfile -t ids < <(grep -vE '^\s*(#|$)' "${ROTATION_FILE}" 2>/dev/null || true)
+                count=${#ids[@]}
+                if [ "$count" -eq 0 ]; then
+                    warn "maprotation.txt is empty, skipping rotation"
+                    continue
+                fi
+                rotation_index=$(( (rotation_index + 1) % count ))
+                next_id="${ids[$rotation_index]}"
+                log "Rotating to workshop map ${next_id} (${rotation_index}/${count})"
+                rcon_cmd "host_workshop_map ${next_id}"
+                sleep 20
+                force_surf_cvars && log "Surf cvars re-forced after rotation"
+            done
+        else
+            log "Map rotation disabled (file missing or MAP_ROTATION_MINUTES=0)"
+        fi
     ) &
 fi
 

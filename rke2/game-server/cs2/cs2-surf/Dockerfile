@@ -16,20 +16,11 @@ ARG MODSHARP_VERSION="git-118"
 ARG MODSHARP_BUILD="118"
 
 # Plugins with GitHub releases (pinned versions)
-ARG ADVERTISEMENT_VERSION="v1.0.2"
 ARG RAMPFIX_VERSION="v1.0.6"
 ARG MSNOBLOCK_VERSION="MS-NoBlock-v.1.0.2"
-ARG ADDONMANAGER_VERSION="v1.0.1"
-# Tnms shared libs — required at runtime by MapChooserSharpMS (transitively
-# through TnmsPluginFoundation NuGet package).
-ARG TNMS_LOCALIZATION_VERSION="v0.0.2"
-ARG TNMS_ADMINISTRATION_VERSION="v0.0.2"
-ARG TNMS_TARGETING_VERSION="v0.1.1"
-ARG TNMS_FOUNDATION_VERSION="v0.0.6"
 
 # Plugins built from source (pinned refs)
 ARG SOURCE2SURF_TIMER_REF="master"
-ARG MAPCHOOSER_REF="main"
 
 # ---------------------------------------------------------------------------
 # Stage 1: Build plugins that have no release artifacts
@@ -38,7 +29,6 @@ ARG MAPCHOOSER_REF="main"
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS plugin-builder
 
 ARG SOURCE2SURF_TIMER_REF
-ARG MAPCHOOSER_REF
 
 RUN apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*
 
@@ -46,7 +36,8 @@ WORKDIR /build
 
 # --- Source2Surf/Timer (hwcopeland fork with surf patches) ---
 # Fork carries: bhop enabled in start zone (upstream hard-disables it),
-# WR → SR rename in user-facing strings, earlier nav-patch try/catch.
+# prejump velocity limiter removed entirely, WR → SR rename in user-facing
+# strings, graceful nav-patch failure.
 RUN git clone --depth 1 --branch "${SOURCE2SURF_TIMER_REF}" \
         https://github.com/hwcopeland/Timer.git /build/timer
 WORKDIR /build/timer
@@ -55,43 +46,20 @@ RUN sed -i '/<Target Name="PostBuild"/,/<\/Target>/d' Timer/Timer.csproj && \
     dotnet publish Timer.RequestManager/Timer.RequestManager.csproj -c Release -r linux-x64 --no-self-contained -o /build/out/timer-rm && \
     dotnet publish Timer.Shared/Timer.Shared.csproj -c Release -r linux-x64 --no-self-contained -o /build/out/timer-shared
 
-# --- MapChooserSharpMS (RTV, map vote, nominations, map cycle) ---
-# Provides !map, !nominate, !rtv chat commands on top of ModSharp.
-#
-# Upstream MCS csproj has two bugs that make it fail to load at runtime:
-#   1. Pins ModSharp.Sharp.Shared 2.1.100 while TnmsPluginFoundation 0.0.6
-#      (and ModSharp core git-118) target 2.1.117 — ABI mismatch means MCS's
-#      class hierarchy doesn't resolve against the runtime, and ModSharp's
-#      module scanner silently filters it out.
-#   2. TnmsPluginFoundation is referenced as a plain PackageReference without
-#      ExcludeAssets="runtime", so dotnet publish bundles TnmsPluginFoundation.dll
-#      into the module output dir — duplicating the one in sharp/shared/ and
-#      creating a type-identity mismatch in the AssemblyLoadContext.
-#
-# We patch both at build time with sed, then post-publish delete the Shared
-# DLLs that should live in sharp/shared/ (the project-reference Shared is
-# always bundled by dotnet publish regardless of Private/ExcludeAssets).
-RUN git clone --depth 1 --branch "${MAPCHOOSER_REF}" \
-        https://github.com/fltuna/MapChooserSharpMS.git /build/mcs
-WORKDIR /build/mcs
-RUN sed -i \
-        -e 's|ModSharp.Sharp.Shared" Version="2.1.100"|ModSharp.Sharp.Shared" Version="2.1.117"|' \
-        -e 's|"TnmsPluginFoundation" Version="0.0.6" />|"TnmsPluginFoundation" Version="0.0.6" ExcludeAssets="runtime" />|' \
-        MapChooserSharpMS/MapChooserSharpMS.csproj && \
-    echo "--- patched MCS csproj ---" && \
-    cat MapChooserSharpMS/MapChooserSharpMS.csproj
-RUN dotnet publish MapChooserSharpMS.Shared/MapChooserSharpMS.Shared.csproj \
-        -c Release -r linux-x64 --no-self-contained \
-        -p:DebugType=None -p:DebugSymbols=false \
-        -o /build/out/mcs-shared && \
-    dotnet publish MapChooserSharpMS/MapChooserSharpMS.csproj \
-        -c Release -r linux-x64 --no-self-contained \
-        -p:DebugType=None -p:DebugSymbols=false \
-        -o /build/out/mcs && \
-    # Strip shared DLLs from the module dir — they live in sharp/shared/ and
-    # bundling locally creates the duplicate-ALC / type-identity bug.
-    rm -f /build/out/mcs/MapChooserSharpMS.Shared.dll \
-          /build/out/mcs/TnmsPluginFoundation.dll
+# MapChooserSharpMS REMOVED:
+#   The fltuna/MapChooserSharpMS repo is a CS#→ModSharp port that's ~5%
+#   done — the main class TnmsOnPluginLoad is a literal TODO comment, and
+#   the command files (nomination, RTV, random picking) are explicitly
+#   excluded from the csproj because they still use CounterStrikeSharp
+#   APIs. Compiling it gave us a useless empty stub that pulled in four
+#   Tnms runtime shared libs (TPF, TLP, TAP, TET), all of which were only
+#   needed for MCS and which throw NullReferenceException on every player
+#   connect because their DB init fails (Npgsql not shipped). Net effect
+#   was noise, broken chat handling, and zero map-chooser features.
+#   Map rotation now runs from entrypoint.sh via RCON; !map can be
+#   re-added later as a minimal ModSharp module if chat control is
+#   required (ModSharp's native Sharp.Modules.AdminCommands already
+#   provides ms_map via console/RCON for admins).
 
 # ---------------------------------------------------------------------------
 # Stage 2: Download and assemble the overlay
@@ -100,14 +68,8 @@ FROM debian:bookworm-slim AS assembler
 
 ARG MODSHARP_VERSION
 ARG MODSHARP_BUILD
-ARG ADVERTISEMENT_VERSION
 ARG RAMPFIX_VERSION
 ARG MSNOBLOCK_VERSION
-ARG ADDONMANAGER_VERSION
-ARG TNMS_LOCALIZATION_VERSION
-ARG TNMS_ADMINISTRATION_VERSION
-ARG TNMS_TARGETING_VERSION
-ARG TNMS_FOUNDATION_VERSION
 RUN apt-get update && apt-get install -y --no-install-recommends \
         curl unzip ca-certificates \
     && rm -rf /var/lib/apt/lists/*
@@ -140,12 +102,6 @@ RUN curl -fsSL "https://github.com/Kxnrl/modsharp-public/releases/download/${MOD
     && unzip -q /tmp/modsharp-ext.zip -d /staging/sharp/extensions/ \
     && rm /tmp/modsharp-ext.zip
 
-# --- ms-advertisement DISABLED — spams chat/screen ads ---
-# RUN curl -fsSL "https://github.com/partiusfabaa/ms-advertisement/releases/download/${ADVERTISEMENT_VERSION}/Advertisement.zip" \
-#         -o /tmp/advertisement.zip \
-#     && unzip -qo /tmp/advertisement.zip -d /staging/ \
-#     && rm /tmp/advertisement.zip
-
 # --- Rampfix (zip has modules/ and gamedata/ — extract into sharp/) ---
 RUN curl -fsSL "https://github.com/Nukoooo/Rampfix/releases/download/${RAMPFIX_VERSION}/RampFix-${RAMPFIX_VERSION}.zip" \
         -o /tmp/rampfix.zip \
@@ -158,51 +114,14 @@ RUN curl -fsSL "https://github.com/darkerz7/MS-NoBlock/releases/download/${MSNOB
     && unzip -qo /tmp/msnoblock.zip -d /staging/sharp/ \
     && rm /tmp/msnoblock.zip
 
-# --- AddonManager (DISABLED) ---
-# AddonManager's constructor hard-requires `-dual_addon` in the startup args
-# and throws if it's missing, which crashes the module with a TargetInvocation
-# exception and prevents the entire module from loading. We reverted to the
-# RCON host_workshop_map pattern (no -dual_addon), so AddonManager would just
-# error on every boot. Leaving the ARG in place but not fetching the zip.
-# RUN curl -fsSL "https://github.com/Ariiisu/AddonManager/releases/download/${ADDONMANAGER_VERSION}/AddonManager.zip" \
-#         -o /tmp/addonmanager.zip \
-#     && unzip -qo /tmp/addonmanager.zip -d /staging/ \
-#     && rm /tmp/addonmanager.zip
-
-# --- Tnms runtime shared libs (required by MapChooserSharpMS) ---
-# TnmsLocalizationPlatform ships both a module and a shared lib.
-# TnmsPluginFoundation (Core) is a shared lib only.
-# Both zips use the modules/ + shared/ layout, so extract into /staging/sharp/.
-RUN curl -fsSL "https://github.com/fltuna/TnmsLocalizationPlatform/releases/download/${TNMS_LOCALIZATION_VERSION}/TnmsLocalizationPlatform.zip" \
-        -o /tmp/tlp.zip \
-    && unzip -qo /tmp/tlp.zip -d /staging/sharp/ \
-    && rm /tmp/tlp.zip
-RUN curl -fsSL "https://github.com/fltuna/TnmsAdministrationPlatform/releases/download/${TNMS_ADMINISTRATION_VERSION}/TnmsAdministrationPlatform.zip" \
-        -o /tmp/tap.zip \
-    && unzip -qo /tmp/tap.zip -d /staging/sharp/ \
-    && rm /tmp/tap.zip
-RUN curl -fsSL "https://github.com/fltuna/TnmsExtendableTargeting/releases/download/${TNMS_TARGETING_VERSION}/TnmsExtendableTargeting.zip" \
-        -o /tmp/tet.zip \
-    && unzip -qo /tmp/tet.zip -d /staging/sharp/ \
-    && rm /tmp/tet.zip
-RUN curl -fsSL "https://github.com/fltuna/TNMSPluginFoundation/releases/download/${TNMS_FOUNDATION_VERSION}/TnmsPluginFoundation-Core.zip" \
-        -o /tmp/tpf.zip \
-    && unzip -qo /tmp/tpf.zip -d /staging/sharp/ \
-    && rm /tmp/tpf.zip
-
 # --- Source2Surf/Timer (built from source) ---
 COPY --from=plugin-builder /build/out/timer/ /staging/sharp/modules/Timer/
 COPY --from=plugin-builder /build/out/timer-rm/ /staging/sharp/modules/Timer.RequestManager/
 COPY --from=plugin-builder /build/out/timer-shared/ /staging/sharp/shared/Timer.Shared/
 
-# --- MapChooserSharpMS (built from source) ---
-COPY --from=plugin-builder /build/out/mcs/ /staging/sharp/modules/MapChooserSharpMS/
-COPY --from=plugin-builder /build/out/mcs-shared/ /staging/sharp/shared/MapChooserSharpMS.Shared/
-
 # Generate runtimeconfig.json if missing (UseCommonOutputDirectory suppresses
-# it for some source-built modules; AddonManager's release zip doesn't ship
-# one either — without it, ModSharp silently skips the module).
-RUN for mod in Timer Timer.RequestManager Timer.Shared MapChooserSharpMS MapChooserSharpMS.Shared AddonManager; do \
+# it for source-built modules; without it ModSharp silently skips the module).
+RUN for mod in Timer Timer.RequestManager Timer.Shared; do \
       for base in /staging/sharp/modules /staging/sharp/shared; do \
         dir="${base}/${mod}"; \
         if [ -d "${dir}" ] && [ ! -f "${dir}/${mod}.runtimeconfig.json" ]; then \

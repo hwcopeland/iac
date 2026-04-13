@@ -126,16 +126,34 @@ if [ -f "${CONFIGS_DIR}/admins.jsonc" ]; then
     log "Deployed admins.jsonc"
 fi
 
-# mapchooser.toml → sharp/modules/MapChooserSharpMS/ (RTV, map vote, nominations)
-# MCS reads its TOML config from the module's own directory; deploy on every
-# overlay apply so edits to the repo copy land on the PVC.
-if [ -f "${CONFIGS_DIR}/mapchooser.toml" ]; then
-    MCS_DIR="${CS2_DIR}/game/sharp/modules/MapChooserSharpMS"
-    if [ -d "${MCS_DIR}" ]; then
-        cp -f "${CONFIGS_DIR}/mapchooser.toml" "${MCS_DIR}/mapchooser.toml"
-        log "Deployed mapchooser.toml to ${MCS_DIR}"
-    fi
+# maprotation.txt → sharp/configs/ (workshop ID rotation list)
+# entrypoint's rotation loop reads this every tick.
+if [ -f "${CONFIGS_DIR}/maprotation.txt" ]; then
+    mkdir -p "${CS2_DIR}/game/sharp/configs"
+    cp -f "${CONFIGS_DIR}/maprotation.txt" "${CS2_DIR}/game/sharp/configs/maprotation.txt"
+    log "Deployed maprotation.txt"
 fi
+
+# Clean up modules dropped from the image (MCS, AddonManager, the Tnms set).
+# apply-overlay does cp -rf which adds + overwrites but doesn't remove, so
+# deletions upstream in the image need explicit cleanup here.
+for dead in MapChooserSharpMS AddonManager TnmsLocalizationPlatform \
+            TnmsAdministrationPlatform TnmsExtendableTargeting; do
+    if [ -d "${CS2_DIR}/game/sharp/modules/${dead}" ]; then
+        rm -rf "${CS2_DIR}/game/sharp/modules/${dead}"
+        log "Removed stale module ${dead}"
+    fi
+done
+for dead in MapChooserSharpMS.Shared TnmsLocalizationPlatform.Shared \
+            TnmsAdministrationPlatform.Shared TnmsExtendableTargeting.Shared \
+            TnmsPluginFoundation; do
+    if [ -d "${CS2_DIR}/game/sharp/shared/${dead}" ]; then
+        rm -rf "${CS2_DIR}/game/sharp/shared/${dead}"
+        log "Removed stale shared ${dead}"
+    fi
+done
+# addon_manager.jsonc is also dead
+rm -f "${CS2_DIR}/game/sharp/configs/addon_manager.jsonc"
 
 # Patch gameinfo.gi: add "Game sharp" before "Game csgo" per ModSharp docs
 # Also strip any leftover Metamod/CSS entries from kus
