@@ -1084,3 +1084,382 @@ func TestLoadPluginsArtifacts(t *testing.T) {
 		t.Errorf("docking artifacts: expected 1, got %d", len(docking.Artifacts))
 	}
 }
+
+// --- Additional extractArtifacts edge cases ---
+
+func TestExtractArtifactsMalformedStartMarker(t *testing.T) {
+	// Start marker missing trailing "===" should be skipped.
+	content := base64.StdEncoding.EncodeToString([]byte("data"))
+	logOutput := "===ARTIFACT:broken.dat\n" + content + "\n===END_ARTIFACT===\n"
+
+	artifacts := extractArtifacts(logOutput)
+	if len(artifacts) != 0 {
+		t.Errorf("expected 0 artifacts for malformed start marker, got %d", len(artifacts))
+	}
+}
+
+func TestExtractArtifactsPartialPrefix(t *testing.T) {
+	// A line that starts with "===ARTIFACT" but has no colon should not match.
+	logOutput := "===ARTIFACT===\nsome data\n===END_ARTIFACT===\n"
+
+	artifacts := extractArtifacts(logOutput)
+	if len(artifacts) != 0 {
+		t.Errorf("expected 0 artifacts for partial prefix, got %d", len(artifacts))
+	}
+}
+
+func TestExtractArtifactsEmptyContent(t *testing.T) {
+	// Artifact block with no content lines between start and end markers.
+	// base64 decode of empty string produces empty []byte.
+	logOutput := "===ARTIFACT:empty.dat===\n===END_ARTIFACT===\n"
+
+	artifacts := extractArtifacts(logOutput)
+	if len(artifacts) != 1 {
+		t.Fatalf("expected 1 artifact, got %d", len(artifacts))
+	}
+	got := artifacts["empty.dat"]
+	if len(got) != 0 {
+		t.Errorf("expected empty content, got %d bytes", len(got))
+	}
+}
+
+func TestExtractArtifactsWhitespaceOnlyContent(t *testing.T) {
+	// Artifact block where all content lines are whitespace. After trimming
+	// and joining, this is an empty string which is valid empty base64.
+	logOutput := "===ARTIFACT:ws.dat===\n   \n  \n===END_ARTIFACT===\n"
+
+	artifacts := extractArtifacts(logOutput)
+	if len(artifacts) != 1 {
+		t.Fatalf("expected 1 artifact, got %d", len(artifacts))
+	}
+	got := artifacts["ws.dat"]
+	if len(got) != 0 {
+		t.Errorf("expected empty content from whitespace-only lines, got %d bytes", len(got))
+	}
+}
+
+func TestExtractArtifactsConsecutiveBlocks(t *testing.T) {
+	// Two artifact blocks back to back with no separating log line.
+	a := base64.StdEncoding.EncodeToString([]byte("first"))
+	b := base64.StdEncoding.EncodeToString([]byte("second"))
+
+	logOutput := "===ARTIFACT:a.dat===\n" + a + "\n===END_ARTIFACT===\n" +
+		"===ARTIFACT:b.dat===\n" + b + "\n===END_ARTIFACT===\n"
+
+	artifacts := extractArtifacts(logOutput)
+	if len(artifacts) != 2 {
+		t.Fatalf("expected 2 artifacts, got %d", len(artifacts))
+	}
+	if string(artifacts["a.dat"]) != "first" {
+		t.Errorf("a.dat: expected %q, got %q", "first", string(artifacts["a.dat"]))
+	}
+	if string(artifacts["b.dat"]) != "second" {
+		t.Errorf("b.dat: expected %q, got %q", "second", string(artifacts["b.dat"]))
+	}
+}
+
+func TestExtractArtifactsDuplicateFilename(t *testing.T) {
+	// Two blocks with the same filename. The second should overwrite the first.
+	a := base64.StdEncoding.EncodeToString([]byte("old"))
+	b := base64.StdEncoding.EncodeToString([]byte("new"))
+
+	logOutput := "===ARTIFACT:dup.dat===\n" + a + "\n===END_ARTIFACT===\n" +
+		"===ARTIFACT:dup.dat===\n" + b + "\n===END_ARTIFACT===\n"
+
+	artifacts := extractArtifacts(logOutput)
+	if len(artifacts) != 1 {
+		t.Fatalf("expected 1 artifact (deduped), got %d", len(artifacts))
+	}
+	if string(artifacts["dup.dat"]) != "new" {
+		t.Errorf("dup.dat: expected %q (second value), got %q", "new", string(artifacts["dup.dat"]))
+	}
+}
+
+func TestExtractArtifactsWithLeadingWhitespace(t *testing.T) {
+	// Artifact markers may have leading whitespace in log output (indentation).
+	content := base64.StdEncoding.EncodeToString([]byte("indented"))
+	logOutput := "  ===ARTIFACT:indented.dat===\n  " + content + "\n  ===END_ARTIFACT===\n"
+
+	artifacts := extractArtifacts(logOutput)
+	if len(artifacts) != 1 {
+		t.Fatalf("expected 1 artifact with leading whitespace, got %d", len(artifacts))
+	}
+	if string(artifacts["indented.dat"]) != "indented" {
+		t.Errorf("indented.dat: expected %q, got %q", "indented", string(artifacts["indented.dat"]))
+	}
+}
+
+func TestExtractArtifactsFilenameWithPath(t *testing.T) {
+	// Filename containing path separators should be preserved as-is.
+	content := base64.StdEncoding.EncodeToString([]byte("nested"))
+	logOutput := "===ARTIFACT:output/results/density.cube===\n" + content + "\n===END_ARTIFACT===\n"
+
+	artifacts := extractArtifacts(logOutput)
+	if len(artifacts) != 1 {
+		t.Fatalf("expected 1 artifact, got %d", len(artifacts))
+	}
+	if _, ok := artifacts["output/results/density.cube"]; !ok {
+		t.Error("artifact with path filename not found")
+	}
+}
+
+// --- Additional stripArtifactBlocks edge cases ---
+
+func TestStripArtifactBlocksMissingEndMarker(t *testing.T) {
+	// When end marker is missing, strip should consume from start marker through EOF.
+	content := base64.StdEncoding.EncodeToString([]byte("data"))
+	input := "before\n===ARTIFACT:orphan.dat===\n" + content + "\ntrailing line\n"
+
+	got := stripArtifactBlocks(input)
+	if contains(got, "===ARTIFACT") {
+		t.Error("stripped output still contains ARTIFACT marker")
+	}
+	if contains(got, content) {
+		t.Error("stripped output still contains base64 content")
+	}
+	if !contains(got, "before") {
+		t.Error("stripped output missing 'before' line")
+	}
+	// "trailing line" comes after the start marker without an end marker,
+	// so it should be consumed as part of the artifact block.
+	if contains(got, "trailing line") {
+		t.Error("trailing line after unclosed artifact should be stripped")
+	}
+}
+
+func TestStripArtifactBlocksEmptyInput(t *testing.T) {
+	got := stripArtifactBlocks("")
+	if got != "" {
+		t.Errorf("expected empty output, got %q", got)
+	}
+}
+
+func TestStripArtifactBlocksAtStart(t *testing.T) {
+	// Artifact block as the very first content in the output.
+	content := base64.StdEncoding.EncodeToString([]byte("first"))
+	input := "===ARTIFACT:first.dat===\n" + content + "\n===END_ARTIFACT===\nafter\n"
+
+	got := stripArtifactBlocks(input)
+	if contains(got, "===ARTIFACT") {
+		t.Error("stripped output still contains ARTIFACT marker")
+	}
+	if !contains(got, "after") {
+		t.Error("stripped output missing 'after' line")
+	}
+}
+
+func TestStripArtifactBlocksAtEnd(t *testing.T) {
+	// Artifact block as the very last content, no trailing newline.
+	content := base64.StdEncoding.EncodeToString([]byte("last"))
+	input := "before\n===ARTIFACT:last.dat===\n" + content + "\n===END_ARTIFACT==="
+
+	got := stripArtifactBlocks(input)
+	if contains(got, "===ARTIFACT") {
+		t.Error("stripped output still contains ARTIFACT marker")
+	}
+	if !contains(got, "before") {
+		t.Error("stripped output missing 'before' line")
+	}
+}
+
+func TestStripArtifactBlocksPreservesExactNonArtifactContent(t *testing.T) {
+	// Verify that non-artifact content including blank lines is preserved exactly.
+	input := "line1\n\nline3\n===ARTIFACT:x.dat===\nZGF0YQ==\n===END_ARTIFACT===\n\nline5\n"
+
+	got := stripArtifactBlocks(input)
+	if contains(got, "===ARTIFACT") {
+		t.Error("stripped output still contains ARTIFACT marker")
+	}
+	if !contains(got, "line1") || !contains(got, "line3") || !contains(got, "line5") {
+		t.Errorf("stripped output missing expected lines: %q", got)
+	}
+}
+
+// --- buildJobEnv tests ---
+
+func TestBuildJobEnvBasic(t *testing.T) {
+	plugin := Plugin{
+		Slug:     "qe",
+		Database: "qe",
+		Input: []PluginInput{
+			{Name: "input_file", Type: "text"},
+			{Name: "num_cpus", Type: "int"},
+			{Name: "executable", Type: "string"},
+		},
+	}
+
+	input := map[string]interface{}{
+		"input_file": "some content",
+		"num_cpus":   4,
+		"executable": "pw.x",
+	}
+
+	envs := buildJobEnv(plugin, "test-job-1", input)
+
+	// Build a lookup map for easier assertion.
+	envMap := make(map[string]string)
+	for _, e := range envs {
+		envMap[e.Name] = e.Value
+	}
+
+	// Standard env vars should always be present.
+	if envMap["JOB_NAME"] != "test-job-1" {
+		t.Errorf("JOB_NAME: expected %q, got %q", "test-job-1", envMap["JOB_NAME"])
+	}
+	if envMap["WORKFLOW_NAME"] != "test-job-1" {
+		t.Errorf("WORKFLOW_NAME: expected %q, got %q", "test-job-1", envMap["WORKFLOW_NAME"])
+	}
+	if envMap["MYSQL_DATABASE"] != "qe" {
+		t.Errorf("MYSQL_DATABASE: expected %q, got %q", "qe", envMap["MYSQL_DATABASE"])
+	}
+
+	// Non-text input fields should be passed as uppercase env vars.
+	if envMap["NUM_CPUS"] != "4" {
+		t.Errorf("NUM_CPUS: expected %q, got %q", "4", envMap["NUM_CPUS"])
+	}
+	if envMap["EXECUTABLE"] != "pw.x" {
+		t.Errorf("EXECUTABLE: expected %q, got %q", "pw.x", envMap["EXECUTABLE"])
+	}
+}
+
+func TestBuildJobEnvTextFieldsExcluded(t *testing.T) {
+	// Text fields are mounted as files, not env vars.
+	plugin := Plugin{
+		Slug:     "test",
+		Database: "test",
+		Input: []PluginInput{
+			{Name: "input_file", Type: "text"},
+			{Name: "config", Type: "text"},
+		},
+	}
+
+	input := map[string]interface{}{
+		"input_file": "large text content",
+		"config":     "config content",
+	}
+
+	envs := buildJobEnv(plugin, "job-1", input)
+
+	envMap := make(map[string]string)
+	for _, e := range envs {
+		envMap[e.Name] = e.Value
+	}
+
+	if _, exists := envMap["INPUT_FILE"]; exists {
+		t.Error("text field INPUT_FILE should not be in env vars")
+	}
+	if _, exists := envMap["CONFIG"]; exists {
+		t.Error("text field CONFIG should not be in env vars")
+	}
+}
+
+func TestBuildJobEnvNilValuesSkipped(t *testing.T) {
+	plugin := Plugin{
+		Slug:     "test",
+		Database: "test",
+		Input: []PluginInput{
+			{Name: "optional_field", Type: "string"},
+			{Name: "present_field", Type: "string"},
+		},
+	}
+
+	input := map[string]interface{}{
+		"optional_field": nil,
+		"present_field":  "value",
+	}
+
+	envs := buildJobEnv(plugin, "job-1", input)
+
+	envMap := make(map[string]string)
+	for _, e := range envs {
+		envMap[e.Name] = e.Value
+	}
+
+	if _, exists := envMap["OPTIONAL_FIELD"]; exists {
+		t.Error("nil-valued field should not be in env vars")
+	}
+	if envMap["PRESENT_FIELD"] != "value" {
+		t.Errorf("PRESENT_FIELD: expected %q, got %q", "value", envMap["PRESENT_FIELD"])
+	}
+}
+
+func TestBuildJobEnvMissingInputSkipped(t *testing.T) {
+	// Input fields defined in the plugin spec but absent from the input map.
+	plugin := Plugin{
+		Slug:     "test",
+		Database: "test",
+		Input: []PluginInput{
+			{Name: "defined_but_missing", Type: "int"},
+		},
+	}
+
+	input := map[string]interface{}{}
+
+	envs := buildJobEnv(plugin, "job-1", input)
+
+	envMap := make(map[string]string)
+	for _, e := range envs {
+		envMap[e.Name] = e.Value
+	}
+
+	if _, exists := envMap["DEFINED_BUT_MISSING"]; exists {
+		t.Error("missing input field should not produce an env var")
+	}
+}
+
+func TestBuildJobEnvNoInputFields(t *testing.T) {
+	// Plugin with no input fields should still produce the standard env vars.
+	plugin := Plugin{
+		Slug:     "minimal",
+		Database: "minimal",
+		Input:    nil,
+	}
+
+	envs := buildJobEnv(plugin, "job-1", map[string]interface{}{})
+
+	if len(envs) < 5 {
+		t.Errorf("expected at least 5 standard env vars, got %d", len(envs))
+	}
+
+	envMap := make(map[string]string)
+	for _, e := range envs {
+		envMap[e.Name] = e.Value
+	}
+
+	for _, required := range []string{"JOB_NAME", "WORKFLOW_NAME", "MYSQL_HOST", "MYSQL_PORT", "MYSQL_USER", "MYSQL_PASSWORD", "MYSQL_DATABASE"} {
+		if _, exists := envMap[required]; !exists {
+			t.Errorf("missing required env var %s", required)
+		}
+	}
+}
+
+func TestBuildJobEnvNumericFormatting(t *testing.T) {
+	// Verify numeric values are formatted properly via fmt.Sprintf("%v", ...).
+	plugin := Plugin{
+		Slug:     "test",
+		Database: "test",
+		Input: []PluginInput{
+			{Name: "count", Type: "int"},
+			{Name: "threshold", Type: "float"},
+		},
+	}
+
+	input := map[string]interface{}{
+		"count":     float64(8),
+		"threshold": float64(3.14),
+	}
+
+	envs := buildJobEnv(plugin, "job-1", input)
+
+	envMap := make(map[string]string)
+	for _, e := range envs {
+		envMap[e.Name] = e.Value
+	}
+
+	if envMap["COUNT"] != "8" {
+		t.Errorf("COUNT: expected %q, got %q", "8", envMap["COUNT"])
+	}
+	if envMap["THRESHOLD"] != "3.14" {
+		t.Errorf("THRESHOLD: expected %q, got %q", "3.14", envMap["THRESHOLD"])
+	}
+}

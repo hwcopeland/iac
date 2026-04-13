@@ -26,11 +26,21 @@ type Plugin struct {
 	Image    string         `yaml:"image"`
 	Type     string         `yaml:"type"`
 	Database string         `yaml:"database"`
+	Visible  *bool          `yaml:"visible,omitempty"`
 	Input     []PluginInput    `yaml:"input"`
 	Output    []PluginOutput   `yaml:"output"`
 	Artifacts []PluginArtifact `yaml:"artifacts,omitempty" json:"artifacts,omitempty"`
 	Resources PluginResources `yaml:"resources"`
 	Command  string         `yaml:"command"`
+}
+
+// IsVisible returns whether this plugin should appear in the UI.
+// Defaults to true if not specified in the YAML.
+func (p Plugin) IsVisible() bool {
+	if p.Visible == nil {
+		return true
+	}
+	return *p.Visible
 }
 
 // PluginArtifact defines a file artifact that a plugin's jobs may produce.

@@ -4,6 +4,7 @@ version: "1.0"
 image: costrouc/quantum-espresso:latest
 type: job
 database: qe
+visible: false
 
 input:
   - name: input_file

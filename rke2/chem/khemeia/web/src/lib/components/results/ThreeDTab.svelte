@@ -46,6 +46,22 @@
   let canRenderESPSurface = $derived(hasDensityCube && hasESPCube);
   let loadingESP = $state(false);
 
+  // Density cube filenames (Da=alpha, Db=beta, Ds=spin, Dt=total, ESP=electrostatic potential)
+  const DENSITY_CUBE_NAMES = new Set(['Da.cube', 'Db.cube', 'Ds.cube', 'Dt.cube', 'ESP.cube']);
+
+  /** When ESP surface is available, split cubes into primary (orbital etc.) and density groups */
+  let primaryCubes = $derived(
+    canRenderESPSurface
+      ? cubeArtifacts.filter(a => !DENSITY_CUBE_NAMES.has(a.filename))
+      : cubeArtifacts
+  );
+  let densityCubes = $derived(
+    canRenderESPSurface
+      ? cubeArtifacts.filter(a => DENSITY_CUBE_NAMES.has(a.filename))
+      : []
+  );
+  let densityCubesOpen = $state(false);
+
   async function renderESPSurface() {
     if (!isReady()) {
       errorMsg = 'Viewer not initialized.';
@@ -191,10 +207,10 @@
     <p class="esp-hint">Electron density isosurface colored by electrostatic potential</p>
   {/if}
 
-  {#if cubeArtifacts.length > 0}
+  {#if primaryCubes.length > 0}
     <div class="artifact-group">
       <p class="group-label">Volumetric Data</p>
-      {#each cubeArtifacts as artifact}
+      {#each primaryCubes as artifact}
         <div class="artifact-row">
           <div class="artifact-info">
             <span class="artifact-name">{artifact.filename}</span>
@@ -209,6 +225,36 @@
           </button>
         </div>
       {/each}
+    </div>
+  {/if}
+
+  {#if densityCubes.length > 0}
+    <div class="artifact-group collapsible-group">
+      <button
+        class="group-toggle"
+        onclick={() => { densityCubesOpen = !densityCubesOpen; }}
+      >
+        <span class="toggle-arrow" class:open={densityCubesOpen}></span>
+        <span class="toggle-label">Individual Density Cubes</span>
+        <span class="toggle-count">{densityCubes.length}</span>
+      </button>
+      {#if densityCubesOpen}
+        {#each densityCubes as artifact}
+          <div class="artifact-row">
+            <div class="artifact-info">
+              <span class="artifact-name">{artifact.filename}</span>
+              <span class="artifact-size">{formatSize(artifact.size_bytes)}</span>
+            </div>
+            <button
+              class="action-btn"
+              disabled={loading === artifact.filename}
+              onclick={() => renderCube(artifact)}
+            >
+              {loading === artifact.filename ? 'Loading...' : 'Render'}
+            </button>
+          </div>
+        {/each}
+      {/if}
     </div>
   {/if}
 
@@ -376,6 +422,56 @@
   .action-btn:disabled {
     opacity: 0.5;
     cursor: default;
+  }
+
+  .collapsible-group {
+    border-color: rgba(48,54,61,0.3);
+  }
+
+  .group-toggle {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    width: 100%;
+    padding: 6px 10px;
+    background: rgba(0,0,0,0.2);
+    border: none;
+    cursor: pointer;
+    transition: background 0.1s;
+  }
+
+  .group-toggle:hover {
+    background: rgba(0,0,0,0.3);
+  }
+
+  .toggle-arrow {
+    display: inline-block;
+    width: 0;
+    height: 0;
+    border-left: 4px solid var(--text-muted, #484f58);
+    border-top: 3px solid transparent;
+    border-bottom: 3px solid transparent;
+    transition: transform 0.15s;
+    flex-shrink: 0;
+  }
+
+  .toggle-arrow.open {
+    transform: rotate(90deg);
+  }
+
+  .toggle-label {
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--text-muted, #484f58);
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+  }
+
+  .toggle-count {
+    font-size: 10px;
+    color: var(--text-muted, #484f58);
+    opacity: 0.7;
+    margin-left: auto;
   }
 
   .hint-text {

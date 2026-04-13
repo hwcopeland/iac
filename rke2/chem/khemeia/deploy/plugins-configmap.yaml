@@ -4,6 +4,232 @@ metadata:
   name: khemeia-plugins
   namespace: chem
 data:
+  nwchem.yaml: |
+    name: nwchem
+    slug: nwchem
+    version: "1.0"
+    image: zot.hwcopeland.net/chem/nwchem:latest
+    type: job
+    database: nwchem
+    visible: false
+    input:
+      - name: input_file
+        type: text
+        required: true
+        description: "NWChem input file content"
+      - name: num_cpus
+        type: int
+        default: 1
+        max: 20
+      - name: memory_mb
+        type: int
+        default: 2048
+        max: 32768
+    output:
+      - name: total_energy
+        type: float
+        parse: 'Total (?:DFT|SCF) energy\s+=\s+([-\d.]+)'
+      - name: scf_energies
+        type: float
+        parse: 'Total (?:DFT|SCF) energy\s+=\s+([-\d.]+)'
+        reduce: all
+      - name: wall_time_sec
+        type: float
+        parse: 'wall:\s+([\d.]+)s'
+      - name: ir_frequencies
+        type: array
+        parse: 'P\.Frequency\s+([\d.]+)'
+        reduce: all
+      - name: ir_intensities
+        type: array
+        parse: 'Infrared Intensity\s+([\d.]+)'
+        reduce: all
+      - name: output_file
+        type: text
+    artifacts:
+      - name: molden_files
+        pattern: "*.molden"
+        content_type: "chemical/x-molden"
+        description: "Molden files for orbital and geometry visualization"
+      - name: hessian_files
+        pattern: "*.hess"
+        content_type: "application/octet-stream"
+        description: "Hessian matrix files from frequency calculations"
+    resources:
+      cpu: "{{ .num_cpus }}"
+      memory: "{{ .memory_mb }}Mi"
+      timeout: 4h
+    command: |
+      cd /scratch && cp /input/* . &&
+      if [ {{ .num_cpus }} -gt 1 ]; then
+        mpirun --allow-run-as-root -np {{ .num_cpus }} nwchem input.in 2>&1;
+      else
+        nwchem input.in 2>&1;
+      fi;
+      # Artifact collection
+      for f in /scratch/*.molden /scratch/*.hess /scratch/*.cube; do
+        [ -f "$f" ] || continue;
+        fn=$(basename "$f");
+        echo "===ARTIFACT:${fn}===";
+        base64 "$f";
+        echo "===END_ARTIFACT===";
+      done
+
+  psi4.yaml: |
+    name: psi4
+    slug: psi4
+    version: "1.0"
+    image: zot.hwcopeland.net/chem/psi4:latest
+    type: job
+    database: psi4
+    visible: false
+    input:
+      - name: input_file
+        type: text
+        required: true
+        description: "Psi4 input file content (Python-like syntax)"
+      - name: num_threads
+        type: int
+        default: 1
+        max: 20
+        description: "Number of threads for Psi4"
+      - name: memory_gb
+        type: int
+        default: 2
+        max: 32
+        description: "Memory in GB"
+    output:
+      - name: total_energy
+        type: float
+        parse: '(?:@(?:RHF|UHF|RKS|UKS|ROHF) Final Energy:|Total Energy\s*=)\s+([-\d.]+)'
+      - name: scf_energies
+        type: float
+        parse: '@R(?:HF|KS|OHF|UHF|UKS) iter\s+\d+:\s+([-\d.]+)'
+        reduce: all
+      - name: wall_time_sec
+        type: float
+        optional: true
+        parse: '(?:Psi4 wall time for execution:|Total time:)\s+([\d.]+)\s+seconds?'
+      - name: ir_frequencies
+        type: array
+        parse: 'Frequency:\s+([\d.]+)'
+        reduce: all
+      - name: ir_intensities
+        type: array
+        parse: 'IR Intensity:\s+([\d.]+)'
+        reduce: all
+      - name: nmr_shieldings
+        type: array
+        parse: 'Isotropic:\s+([-\d.]+)'
+        reduce: all
+      - name: output_file
+        type: text
+    artifacts:
+      - name: cube_files
+        pattern: "*.cube"
+        content_type: "chemical/x-cube"
+        description: "Gaussian cube files for orbital/density visualization"
+      - name: molden_files
+        pattern: "*.molden"
+        content_type: "chemical/x-molden"
+        description: "Molden files for orbital and geometry visualization"
+      - name: json_data
+        pattern: "*.json"
+        content_type: "application/json"
+        description: "Psi4 JSON output data"
+    resources:
+      cpu: "{{ .num_threads }}"
+      memory: "{{ .memory_gb }}Gi"
+      timeout: 4h
+    command: |
+      export PATH="/opt/conda/bin:$PATH" &&
+      cd /scratch && cp /input/* . &&
+      echo "memory {{ .memory_gb }} gb" | cat - input.in > full_input.in &&
+      psi4 -n {{ .num_threads }} full_input.in -o output.dat 2>&1;
+      PSI4_RC=$?;
+      echo "Psi4 exit code: $PSI4_RC";
+      cat output.dat 2>/dev/null || echo "No output.dat produced";
+      echo "=== Done ===";
+      # Artifact collection
+      for f in /scratch/*.cube /scratch/*.molden /scratch/*.dat; do
+        [ -f "$f" ] || continue;
+        fn=$(basename "$f");
+        echo "===ARTIFACT:${fn}===";
+        base64 "$f";
+        echo "===END_ARTIFACT===";
+      done
+
+  dfratom.yaml: |
+    name: dfratom
+    slug: dfratom
+    version: "1.0"
+    image: zot.hwcopeland.net/chem/dfratom:latest
+    type: job
+    database: atomic
+    visible: false
+    input:
+      - name: input_file
+        type: text
+        required: true
+        description: "DFRATOM input file (includes basis set exponents and occupation numbers)"
+    output:
+      - name: total_energy
+        type: float
+        parse: 'TOTAL\s+(-?\d+\.\d+E[+-]\d+)'
+        reduce: last
+      - name: scf_energies
+        type: float
+        parse: 'TOTAL ENERGY = ([-\d.E+-]+)'
+        reduce: all
+      - name: converged
+        type: string
+        parse: 'CONVERGED ON (.+)'
+      - name: iterations
+        type: int
+        parse: 'SCF ITERATION NO\s+(\d+)'
+        reduce: last
+      - name: kinetic_energy
+        type: float
+        parse: 'KINETIC <T>\s*([-\d.E+-]+)'
+        description: "Kinetic energy <T> in Hartree"
+      - name: potential_energy
+        type: float
+        parse: 'POTENTIAL <V>\s*([-\d.E+-]+)'
+        description: "Potential energy <V> in Hartree"
+      - name: virial_ratio
+        type: float
+        parse: 'VIRIAL\s+.*\s+([-\d.E+-]+)'
+        description: "Virial ratio <V>/<T>"
+      - name: rest_mass_energy
+        type: float
+        parse: 'REST MASS\s*([-\d.E+-]+)'
+        description: "Rest mass energy in Hartree"
+      - name: log
+        type: text
+    artifacts:
+      - name: dat_files
+        pattern: "*.dat"
+        content_type: "text/plain"
+        description: "DFRATOM output data files"
+    resources:
+      cpu: "2"
+      memory: "4096Mi"
+      timeout: 1h
+    command: |
+      cd /scratch &&
+      cp /input/input.in input.dat &&
+      echo "=== DFRATOM OUTPUT ===" &&
+      /opt/dfratom/DFRATOM.exe < input.dat 2>&1 |
+      sed 's/D+/E+/g; s/D-/E-/g';
+      # Artifact collection
+      for f in /scratch/*.dat; do
+        [ -f "$f" ] && [ "$f" != "/scratch/input.dat" ] || continue;
+        fn=$(basename "$f");
+        echo "===ARTIFACT:${fn}===";
+        base64 "$f";
+        echo "===END_ARTIFACT===";
+      done
+
   quantum-espresso.yaml: |
     name: quantum-espresso
     slug: qe
@@ -11,6 +237,7 @@ data:
     image: costrouc/quantum-espresso:latest
     type: job
     database: qe
+    visible: false
     input:
       - name: input_file
         type: text
@@ -34,9 +261,22 @@ data:
       - name: total_energy
         type: float
         parse: '!\s+total\s+energy\s+=\s+([-\d.]+)\s+Ry'
+      - name: scf_energies
+        type: float
+        parse: 'total energy\s+=\s+([-\d.]+)\s+Ry'
+        reduce: all
       - name: wall_time_sec
         type: float
         parse: 'PWSCF\s+:\s+[\d.]+s CPU\s+([\d.]+)s WALL'
+    artifacts:
+      - name: cube_files
+        pattern: "*.cube"
+        content_type: "chemical/x-cube"
+        description: "Gaussian cube files for charge density and orbital visualization"
+      - name: dos_data
+        pattern: "*.dat"
+        content_type: "text/plain"
+        description: "Density of states and charge density data files"
     resources:
       cpu: "{{ .num_cpus }}"
       memory: "{{ .memory_mb }}Mi"
@@ -50,7 +290,15 @@ data:
         mpirun --allow-run-as-root -np {{ .num_cpus }} {{ .executable }} -in input.in 2>&1 || true;
       else
         {{ .executable }} -in input.in 2>&1;
-      fi
+      fi;
+      # Artifact collection
+      for f in /scratch/*.cube /scratch/*.dat; do
+        [ -f "$f" ] || continue;
+        fn=$(basename "$f");
+        echo "===ARTIFACT:${fn}===";
+        base64 "$f";
+        echo "===END_ARTIFACT===";
+      done
 
   autodock-vina.yaml: |
     name: autodock-vina
@@ -77,11 +325,46 @@ data:
     output:
       - name: result_count
         type: int
+        parse: 'Batch complete: (\d+) ligands processed'
       - name: best_affinity
         type: float
-      - name: avg_affinity
-        type: float
+        parse: 'affinity=([-\d.]+)'
+        reduce: min
+      - name: log
+        type: text
+    artifacts:
+      - name: docked_poses
+        pattern: "*.pdbqt"
+        content_type: "chemical/x-pdbqt"
+        description: "Docked ligand poses in PDBQT format"
     resources:
       cpu: "1"
       memory: "2048Mi"
       timeout: 1h
+    command: |
+      cd /autodock &&
+      export SOURCE_DB="{{ .ligand_db }}" &&
+      export BATCH_OFFSET=0 &&
+      export BATCH_LIMIT={{ .chunk_size }} &&
+      echo "=== Protein Prep ===" &&
+      python3 scripts/proteinprepv2.py --protein_id {{ .pdbid }} --ligand_id {{ .native_ligand }} 2>&1 &&
+      echo "=== Register Workflow ===" &&
+      python3 -c "
+      import mysql.connector, os
+      conn = mysql.connector.connect(host=os.environ['MYSQL_HOST'], port=int(os.environ.get('MYSQL_PORT','3306')),
+        user=os.environ['MYSQL_USER'], password=os.environ['MYSQL_PASSWORD'], database=os.environ.get('MYSQL_DATABASE','docking'))
+      cur = conn.cursor()
+      with open('grid_center.txt') as f: gx,gy,gz = [float(x) for x in f.read().strip().split()]
+      with open('{{ .pdbid }}.pdbqt') as f: pdbqt = f.read()
+      cur.execute('INSERT INTO docking_workflows (name, pdbid, source_db, native_ligand, chunk_size, image, receptor_pdbqt, grid_center_x, grid_center_y, grid_center_z, phase) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) ON DUPLICATE KEY UPDATE receptor_pdbqt=VALUES(receptor_pdbqt), grid_center_x=VALUES(grid_center_x), grid_center_y=VALUES(grid_center_y), grid_center_z=VALUES(grid_center_z)',
+        (os.environ['WORKFLOW_NAME'], '{{ .pdbid }}', '{{ .ligand_db }}', '{{ .native_ligand }}', {{ .chunk_size }}, 'generic', pdbqt, gx, gy, gz, 'Running'))
+      conn.commit(); conn.close()
+      print('Workflow registered')
+      " 2>&1 &&
+      echo "=== Ligand Prep ===" &&
+      python3 scripts/prep_ligands.py 2>&1 || echo "Ligand prep skipped (all ligands already prepped)" ;
+      echo "=== Docking ===" &&
+      python3 scripts/dock_batch.py 2>&1 ;
+      DOCK_RC=$? ;
+      echo "Dock exit code: $DOCK_RC" ;
+      echo "=== Done ==="

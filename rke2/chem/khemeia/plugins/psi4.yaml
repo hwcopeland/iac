@@ -4,6 +4,7 @@ version: "1.0"
 image: zot.hwcopeland.net/chem/psi4:latest
 type: job
 database: psi4
+visible: false
 
 input:
   - name: input_file

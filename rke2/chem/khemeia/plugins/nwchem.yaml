@@ -4,6 +4,7 @@ version: "1.0"
 image: zot.hwcopeland.net/chem/nwchem:latest
 type: job
 database: nwchem
+visible: false
 
 input:
   - name: input_file
