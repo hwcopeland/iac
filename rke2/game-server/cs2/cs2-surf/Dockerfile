@@ -46,20 +46,20 @@ RUN sed -i '/<Target Name="PostBuild"/,/<\/Target>/d' Timer/Timer.csproj && \
     dotnet publish Timer.RequestManager/Timer.RequestManager.csproj -c Release -r linux-x64 --no-self-contained -o /build/out/timer-rm && \
     dotnet publish Timer.Shared/Timer.Shared.csproj -c Release -r linux-x64 --no-self-contained -o /build/out/timer-shared
 
-# MapChooserSharpMS REMOVED:
-#   The fltuna/MapChooserSharpMS repo is a CS#→ModSharp port that's ~5%
-#   done — the main class TnmsOnPluginLoad is a literal TODO comment, and
-#   the command files (nomination, RTV, random picking) are explicitly
-#   excluded from the csproj because they still use CounterStrikeSharp
-#   APIs. Compiling it gave us a useless empty stub that pulled in four
-#   Tnms runtime shared libs (TPF, TLP, TAP, TET), all of which were only
-#   needed for MCS and which throw NullReferenceException on every player
-#   connect because their DB init fails (Npgsql not shipped). Net effect
-#   was noise, broken chat handling, and zero map-chooser features.
-#   Map rotation now runs from entrypoint.sh via RCON; !map can be
-#   re-added later as a minimal ModSharp module if chat control is
-#   required (ModSharp's native Sharp.Modules.AdminCommands already
-#   provides ms_map via console/RCON for admins).
+# --- SurfMapCommand (in-repo, minimum-viable !map chat plugin) ---
+# Native ModSharp module implementing IClientListener.OnClientSayCommand.
+# ~100 lines total; built from plugins/SurfMapCommand/ in this repo.
+COPY plugins/SurfMapCommand /build/surf-map-command
+WORKDIR /build/surf-map-command
+RUN dotnet publish SurfMapCommand.csproj \
+        -c Release -r linux-x64 --no-self-contained \
+        -p:DebugType=None -p:DebugSymbols=false \
+        -o /build/out/surf-map-command
+
+# MapChooserSharpMS removed entirely — see git log for rationale. TL;DR:
+# upstream CS#→ModSharp port was ~5% done, pulled in 4 broken Tnms libs,
+# and provided zero actual functionality. SurfMapCommand above replaces
+# the only feature we actually needed (!map in chat).
 
 # ---------------------------------------------------------------------------
 # Stage 2: Download and assemble the overlay
@@ -119,9 +119,12 @@ COPY --from=plugin-builder /build/out/timer/ /staging/sharp/modules/Timer/
 COPY --from=plugin-builder /build/out/timer-rm/ /staging/sharp/modules/Timer.RequestManager/
 COPY --from=plugin-builder /build/out/timer-shared/ /staging/sharp/shared/Timer.Shared/
 
+# --- SurfMapCommand (in-repo native !map plugin) ---
+COPY --from=plugin-builder /build/out/surf-map-command/ /staging/sharp/modules/SurfMapCommand/
+
 # Generate runtimeconfig.json if missing (UseCommonOutputDirectory suppresses
 # it for source-built modules; without it ModSharp silently skips the module).
-RUN for mod in Timer Timer.RequestManager Timer.Shared; do \
+RUN for mod in Timer Timer.RequestManager Timer.Shared SurfMapCommand; do \
       for base in /staging/sharp/modules /staging/sharp/shared; do \
         dir="${base}/${mod}"; \
         if [ -d "${dir}" ] && [ ! -f "${dir}/${mod}.runtimeconfig.json" ]; then \
