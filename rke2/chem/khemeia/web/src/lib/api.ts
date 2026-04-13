@@ -142,3 +142,10 @@ export async function importFromChEMBL(chemblIds: string[], sourceDb: string): P
     body: JSON.stringify({ chembl_ids: chemblIds, source_db: sourceDb }),
   });
 }
+
+export async function importFromFilter(params: Record<string, any>): Promise<ImportResponse> {
+  return api<ImportResponse>('/api/v1/ligands/import-from-filter', {
+    method: 'POST',
+    body: JSON.stringify(params),
+  });
+}

@@ -452,6 +452,15 @@ func (c *Controller) startAPIServer() error {
 		}
 	}))
 
+	// Import all ChEMBL compounds matching search filters into the docking ligand database.
+	mux.HandleFunc("/api/v1/ligands/import-from-filter", wrap(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			handler.ImportFromFilter(w, r)
+		} else {
+			writeError(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+	}))
+
 	// Ligand prep — uses the docking plugin's database.
 	mux.HandleFunc("/api/v1/prep", wrap(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost {
