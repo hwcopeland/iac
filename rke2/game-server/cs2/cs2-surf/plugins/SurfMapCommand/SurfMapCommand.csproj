@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <AssemblyName>SurfMapCommand</AssemblyName>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>13</LangVersion>
+    <DebugType>None</DebugType>
+    <DebugSymbols>false</DebugSymbols>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Pin to the same Sharp.Shared version ModSharp git-118 ships with.
+         ExcludeAssets="runtime" so we don't bundle the DLL into the module
+         output dir — sharp/core/ already has it. -->
+    <PackageReference Include="ModSharp.Sharp.Shared"
+                      Version="2.1.117"
+                      ExcludeAssets="runtime" />
+  </ItemGroup>
+
+</Project>
