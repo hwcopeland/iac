@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
   import Panel from './Panel.svelte';
   import PlotlyChart from './charts/PlotlyChart.svelte';
   import { searchLigands, importFromFilter } from '$lib/api';
@@ -49,20 +50,17 @@
     return params;
   }
 
-  // Reactive derived that captures all filter values as a single string key.
-  // When any filter changes, this string changes, triggering the effect below.
-  let filterKey = $derived(
-    `${mwMin}|${mwMax}|${logpMin}|${logpMax}|${hbdMax}|${hbaMax}|${maxPhase}|${ro5Only}|${textQuery}`
-  );
-
-  $effect(() => {
-    // Read filterKey to establish reactive dependency on all filters
-    const _key = filterKey;
+  // Fire search on mount and whenever filters change.
+  // Using onchange handlers on inputs instead of $effect to avoid Svelte 5
+  // reactivity issues with $derived in effects.
+  function onFilterChange() {
     if (debounceTimer) clearTimeout(debounceTimer);
-    debounceTimer = setTimeout(() => doSearch(), 500);
-    return () => {
-      if (debounceTimer) clearTimeout(debounceTimer);
-    };
+    debounceTimer = setTimeout(() => doSearch(), 400);
+  }
+
+  // Initial search on mount
+  onMount(() => {
+    doSearch();
   });
 
   async function doSearch() {
@@ -246,31 +244,31 @@
     <div class="filter-bar">
       <div class="filter-group">
         <label class="filter-label">MW</label>
-        <input type="number" class="filter-input" bind:value={mwMin} placeholder="min" />
+        <input type="number" class="filter-input" bind:value={mwMin} placeholder="min" oninput={onFilterChange} />
         <span class="filter-sep">&ndash;</span>
-        <input type="number" class="filter-input" bind:value={mwMax} placeholder="max" />
+        <input type="number" class="filter-input" bind:value={mwMax} placeholder="max" oninput={onFilterChange} />
       </div>
 
       <div class="filter-group">
         <label class="filter-label">LogP</label>
-        <input type="number" class="filter-input" step="0.1" bind:value={logpMin} placeholder="min" />
+        <input type="number" class="filter-input" step="0.1" bind:value={logpMin} placeholder="min" oninput={onFilterChange} />
         <span class="filter-sep">&ndash;</span>
-        <input type="number" class="filter-input" step="0.1" bind:value={logpMax} placeholder="max" />
+        <input type="number" class="filter-input" step="0.1" bind:value={logpMax} placeholder="max" oninput={onFilterChange} />
       </div>
 
       <div class="filter-group">
         <label class="filter-label">HBD</label>
-        <input type="number" class="filter-input filter-input-narrow" bind:value={hbdMax} placeholder="max" />
+        <input type="number" class="filter-input filter-input-narrow" bind:value={hbdMax} placeholder="max" oninput={onFilterChange} />
       </div>
 
       <div class="filter-group">
         <label class="filter-label">HBA</label>
-        <input type="number" class="filter-input filter-input-narrow" bind:value={hbaMax} placeholder="max" />
+        <input type="number" class="filter-input filter-input-narrow" bind:value={hbaMax} placeholder="max" oninput={onFilterChange} />
       </div>
 
       <div class="filter-group">
         <label class="filter-label">Phase</label>
-        <select class="filter-select" bind:value={maxPhase}>
+        <select class="filter-select" bind:value={maxPhase} onchange={onFilterChange}>
           <option value="">Any</option>
           <option value="0">0</option>
           <option value="1">1</option>
@@ -281,7 +279,7 @@
       </div>
 
       <label class="filter-checkbox">
-        <input type="checkbox" bind:checked={ro5Only} />
+        <input type="checkbox" bind:checked={ro5Only} onchange={onFilterChange} />
         Ro5
       </label>
 
@@ -291,6 +289,7 @@
           class="filter-input filter-input-search"
           placeholder="Name or ID..."
           bind:value={textQuery}
+          oninput={onFilterChange}
         />
       </div>
 
