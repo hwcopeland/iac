@@ -1,6 +1,7 @@
 <script lang="ts">
   import Panel from './Panel.svelte';
   import ResultsPanel from './results/ResultsPanel.svelte';
+  import LigandSearch from './LigandSearch.svelte';
   import { getPlugins, submitJob, getJobs, getJob, getLigandDatabases } from '$lib/api';
   import type { Plugin, PluginInputField } from '$lib/api';
   import { getCurrentStructureText } from '$lib/viewer';
@@ -19,6 +20,7 @@
   let jobsLoading = $state<Record<string, boolean>>({});
   let selectedJob = $state<Record<string, any> | null>(null);
   let pollingJobs = $state<Set<string>>(new Set());
+  let showLigandSearch = $state(false);
 
   $effect(() => {
     if (isAuthenticated()) {
@@ -34,6 +36,15 @@
       const res = await getLigandDatabases();
       ligandDBs = res.databases.map(d => d.name);
     } catch { ligandDBs = []; }
+  }
+
+  async function handleChemblImported(dbName: string) {
+    await loadLigandDBs();
+    // Auto-select the newly imported database in any active plugin form
+    if (activePlugin) {
+      setFieldValue(activePlugin, 'ligand_db', dbName);
+    }
+    showLigandSearch = false;
   }
 
   async function loadPlugins() {
@@ -187,17 +198,19 @@
   {:else if plugins.length === 0}
     <div class="empty">No computation plugins available.</div>
   {:else}
-    <div class="plugin-tabs">
-      {#each plugins as plugin}
-        <button
-          class="plugin-tab"
-          class:active={activePlugin === plugin.slug}
-          onclick={() => { activePlugin = plugin.slug; loadJobs(plugin); }}
-        >
-          {plugin.name}
-        </button>
-      {/each}
-    </div>
+    {#if plugins.length > 1}
+      <div class="plugin-tabs">
+        {#each plugins as plugin}
+          <button
+            class="plugin-tab"
+            class:active={activePlugin === plugin.slug}
+            onclick={() => { activePlugin = plugin.slug; loadJobs(plugin); }}
+          >
+            {plugin.name}
+          </button>
+        {/each}
+      </div>
+    {/if}
 
     {#each plugins as plugin}
       {#if activePlugin === plugin.slug}
@@ -217,18 +230,27 @@
                 {/if}
 
                 {#if field.name === 'ligand_db' && ligandDBs.length > 0}
-                  <select
-                    id="{plugin.slug}-{field.name}"
-                    class="form-select"
-                    value={getFieldValue(plugin.slug, field.name)}
-                    onchange={(e) => setFieldValue(plugin.slug, field.name, (e.target as HTMLSelectElement).value)}
-                    required={field.required}
-                  >
-                    <option value="">Select ligand database...</option>
-                    {#each ligandDBs as db}
-                      <option value={db}>{db}</option>
-                    {/each}
-                  </select>
+                  <div class="ligand-db-row">
+                    <select
+                      id="{plugin.slug}-{field.name}"
+                      class="form-select"
+                      value={getFieldValue(plugin.slug, field.name)}
+                      onchange={(e) => setFieldValue(plugin.slug, field.name, (e.target as HTMLSelectElement).value)}
+                      required={field.required}
+                    >
+                      <option value="">Select ligand database...</option>
+                      {#each ligandDBs as db}
+                        <option value={db}>{db}</option>
+                      {/each}
+                    </select>
+                    <button
+                      type="button"
+                      class="chembl-btn"
+                      onclick={() => (showLigandSearch = !showLigandSearch)}
+                    >
+                      {showLigandSearch ? 'Close' : 'Browse ChEMBL'}
+                    </button>
+                  </div>
                 {:else if field.type === 'text'}
                   <textarea
                     id="{plugin.slug}-{field.name}"
@@ -288,6 +310,10 @@
             {/if}
           </form>
         </Panel>
+
+        {#if showLigandSearch}
+          <LigandSearch onImported={handleChemblImported} />
+        {/if}
 
         <Panel title="Jobs" collapsed={false}>
           <div class="jobs-header">
@@ -552,5 +578,32 @@
   .job-status.running { background: rgba(210,153,34,0.15); color: #d29922; }
   .job-status.completed { background: rgba(63,185,80,0.15); color: #3fb950; }
   .job-status.failed { background: rgba(248,81,73,0.15); color: #f85149; }
+
+  .ligand-db-row {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+  }
+
+  .ligand-db-row .form-select {
+    flex: 1;
+  }
+
+  .chembl-btn {
+    background: rgba(88,166,255,0.1);
+    border: 1px solid rgba(88,166,255,0.3);
+    color: var(--accent, #58a6ff);
+    font-size: 11px;
+    font-weight: 500;
+    padding: 5px 10px;
+    border-radius: 4px;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: all 0.15s;
+  }
+
+  .chembl-btn:hover {
+    background: rgba(88,166,255,0.2);
+  }
 
 </style>

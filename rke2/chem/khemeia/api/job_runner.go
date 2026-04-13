@@ -181,14 +181,22 @@ func (c *Controller) RunPluginJob(plugin Plugin, jobName string, input map[strin
 	}
 	streamCancel()
 
-	// 7. Capture output from pod logs.
+	// 7. Process the completed job: read logs, extract artifacts, parse output, store results.
+	c.processCompletedJob(plugin, jobName, db)
+}
+
+// processCompletedJob reads pod logs, extracts artifacts, parses output, and
+// marks the job as Completed. Used by both RunPluginJob and reconciliation.
+func (c *Controller) processCompletedJob(plugin Plugin, jobName string, db *sql.DB) {
+	ctx := context.Background()
+
 	output, err := c.readPodLogs(jobName)
 	if err != nil {
 		failPluginJob(db, plugin, jobName, fmt.Sprintf("failed to read pod logs: %v", err))
 		return
 	}
 
-	// 7a. Extract base64-encoded artifacts from stdout markers and store them.
+	// Extract base64-encoded artifacts from stdout markers and store them.
 	artifacts := extractArtifacts(output)
 	if len(artifacts) > 0 {
 		for filename, data := range artifacts {
@@ -204,21 +212,18 @@ func (c *Controller) RunPluginJob(plugin Plugin, jobName string, input map[strin
 		log.Printf("[%s] Stored %d artifacts", jobName, len(artifacts))
 	}
 
-	// 7b. Strip artifact blocks from stdout before regex parsing so base64 data
-	// doesn't confuse the output parsers.
+	// Strip artifact blocks from stdout before regex parsing.
 	output = stripArtifactBlocks(output)
 
-	// 8. Parse output using plugin's output regex patterns.
+	// Parse output using plugin's output regex patterns.
 	parsedOutput := plugin.ParseOutput(output)
 
-	// For text output fields without a parse regex, store the full log output.
 	for _, outField := range plugin.Output {
 		if outField.Type == "text" && outField.Parse == "" {
 			parsedOutput[outField.Name] = output
 		}
 	}
 
-	// 9. Store output as JSON.
 	outputJSON, err := json.Marshal(parsedOutput)
 	if err != nil {
 		log.Printf("[%s] Warning: failed to marshal output: %v", jobName, err)
@@ -233,6 +238,100 @@ func (c *Controller) RunPluginJob(plugin Plugin, jobName string, input map[strin
 	}
 
 	log.Printf("[%s] Job completed successfully", jobName)
+}
+
+// reconcileOrphanedJobs recovers jobs stuck with status='Running' after a
+// controller restart. For each orphaned job, it checks the K8s Job state and
+// either re-processes completed jobs, re-attaches to still-running jobs, or
+// marks missing jobs as failed.
+func (c *Controller) reconcileOrphanedJobs() {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	var recovered, failed, reattached int
+
+	for _, plugin := range c.plugins {
+		db := c.pluginDB(plugin.Slug)
+		if db == nil {
+			continue
+		}
+
+		rows, err := db.QueryContext(ctx,
+			fmt.Sprintf(`SELECT name FROM %s WHERE status = 'Running'`, plugin.TableName()))
+		if err != nil {
+			log.Printf("[reconcile] Failed to query running jobs for %s: %v", plugin.Slug, err)
+			continue
+		}
+
+		var orphanedJobs []string
+		for rows.Next() {
+			var name string
+			if err := rows.Scan(&name); err == nil {
+				orphanedJobs = append(orphanedJobs, name)
+			}
+		}
+		rows.Close()
+
+		if len(orphanedJobs) == 0 {
+			continue
+		}
+
+		log.Printf("[reconcile] Found %d orphaned Running job(s) for plugin %s", len(orphanedJobs), plugin.Slug)
+
+		for _, jobName := range orphanedJobs {
+			k8sJob, err := c.jobClient.Get(ctx, jobName, metav1.GetOptions{})
+			if err != nil {
+				if errors.IsNotFound(err) {
+					// K8s Job is gone (TTL cleaned up). Check if pod still exists.
+					pods, perr := c.client.CoreV1().Pods(c.namespace).List(ctx, metav1.ListOptions{
+						LabelSelector: fmt.Sprintf("job-name=%s", jobName),
+					})
+					if perr == nil && len(pods.Items) > 0 && pods.Items[0].Status.Phase == corev1.PodSucceeded {
+						// Pod exists with logs — try to recover
+						log.Printf("[reconcile] %s: K8s Job gone but pod exists, recovering from logs", jobName)
+						c.processCompletedJob(plugin, jobName, db)
+						recovered++
+					} else {
+						log.Printf("[reconcile] %s: K8s Job and pod gone, marking failed", jobName)
+						failPluginJob(db, plugin, jobName, "controller restarted, job resource no longer exists")
+						failed++
+					}
+					continue
+				}
+				log.Printf("[reconcile] %s: failed to get K8s Job: %v", jobName, err)
+				continue
+			}
+
+			// K8s Job exists — check its status
+			if k8sJob.Status.Succeeded > 0 {
+				// Job completed successfully — recover from logs
+				log.Printf("[reconcile] %s: K8s Job succeeded, recovering from logs", jobName)
+				c.processCompletedJob(plugin, jobName, db)
+				recovered++
+			} else if k8sJob.Status.Failed > 0 {
+				log.Printf("[reconcile] %s: K8s Job failed", jobName)
+				failPluginJob(db, plugin, jobName, "job failed (detected during reconciliation)")
+				failed++
+			} else {
+				// Job is still active — re-attach a goroutine to wait for it
+				log.Printf("[reconcile] %s: K8s Job still running, re-attaching", jobName)
+				reattached++
+				go func(p Plugin, name string) {
+					if err := c.waitForPluginJobCompletion(name, p.TimeoutDuration()); err != nil {
+						failPluginJob(db, p, name, fmt.Sprintf("job failed after re-attach: %v", err))
+						return
+					}
+					c.processCompletedJob(p, name, db)
+				}(plugin, jobName)
+			}
+		}
+	}
+
+	if recovered+failed+reattached > 0 {
+		log.Printf("[reconcile] Summary: %d recovered, %d failed, %d re-attached", recovered, failed, reattached)
+	} else {
+		log.Println("[reconcile] No orphaned jobs found")
+	}
 }
 
 // waitForPluginJobCompletion polls for job completion with the given timeout.

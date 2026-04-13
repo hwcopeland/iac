@@ -101,3 +101,44 @@ export async function downloadArtifact(slug: string, jobName: string, filename: 
   if (!res.ok) throw new Error(`Artifact download failed: ${res.statusText}`);
   return res.arrayBuffer();
 }
+
+// --- Ligand Search API ---
+
+export interface Compound {
+  chembl_id: string;
+  pref_name: string;
+  smiles: string;
+  mw: number;
+  logp: number;
+  hba: number;
+  hbd: number;
+  psa: number;
+  ro5_violations: number;
+  qed: number;
+  max_phase: number;
+  formula: string;
+}
+
+export interface SearchResponse {
+  compounds: Compound[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface ImportResponse {
+  source_db: string;
+  imported: number;
+}
+
+export async function searchLigands(params: Record<string, string>): Promise<SearchResponse> {
+  const qs = new URLSearchParams(params).toString();
+  return api<SearchResponse>(`/api/v1/ligands/search?${qs}`);
+}
+
+export async function importFromChEMBL(chemblIds: string[], sourceDb: string): Promise<ImportResponse> {
+  return api<ImportResponse>('/api/v1/ligands/import-from-chembl', {
+    method: 'POST',
+    body: JSON.stringify({ chembl_ids: chemblIds, source_db: sourceDb }),
+  });
+}

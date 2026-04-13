@@ -47,6 +47,10 @@ type Controller struct {
 	// sharedDB is a stable reference to a single database used for shared tables
 	// (basis_sets, api_tokens). Set once during init to avoid Go map iteration randomness.
 	sharedDB *sql.DB
+
+	// chemblDB is an optional read-only connection to the ChEMBL compound database.
+	// Used for ligand search/filtering. Nil if ChEMBL is not available.
+	chemblDB *sql.DB
 }
 
 // NewController creates a new Controller, initializing K8s client, MySQL connections,
@@ -112,6 +116,32 @@ func NewController() (*Controller, error) {
 		}
 	}
 	log.Println("All plugin databases initialized")
+
+	// Connect to ChEMBL database (optional — used for ligand search).
+	chemblHost := os.Getenv("CHEMBL_MYSQL_HOST")
+	if chemblHost == "" {
+		chemblHost = "chembl-mysql.chem.svc.cluster.local"
+	}
+	chemblDB := os.Getenv("CHEMBL_DATABASE")
+	if chemblDB == "" {
+		chemblDB = "chembl_36"
+	}
+	chemblDSN := fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?parseTime=true",
+		mysqlUser, mysqlPassword, chemblHost, mysqlPort, chemblDB)
+	cdb, err := sql.Open("mysql", chemblDSN)
+	if err == nil {
+		cdb.SetMaxOpenConns(5)
+		cdb.SetConnMaxLifetime(5 * time.Minute)
+		if err := cdb.Ping(); err != nil {
+			log.Printf("Warning: ChEMBL database not reachable (%v) — ligand search disabled", err)
+			cdb.Close()
+		} else {
+			controller.chemblDB = cdb
+			log.Println("ChEMBL database connection established")
+		}
+	} else {
+		log.Printf("Warning: failed to open ChEMBL database (%v) — ligand search disabled", err)
+	}
 
 	return controller, nil
 }
@@ -277,6 +307,9 @@ func getConfig() (*rest.Config, error) {
 func (c *Controller) Run(ctx context.Context) error {
 	log.Println("Starting Khemeia API Controller...")
 
+	// Recover any jobs orphaned by a previous controller restart.
+	c.reconcileOrphanedJobs()
+
 	go func() {
 		if err := c.startAPIServer(); err != nil && err != http.ErrServerClosed {
 			log.Printf("API server error: %v", err)
@@ -396,6 +429,24 @@ func (c *Controller) startAPIServer() error {
 	mux.HandleFunc("/api/v1/ligand-databases", wrap(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet {
 			handler.ListLigandDatabases(w, r)
+		} else {
+			writeError(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+	}))
+
+	// ChEMBL compound search.
+	mux.HandleFunc("/api/v1/ligands/search", wrap(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			handler.SearchLigands(w, r)
+		} else {
+			writeError(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+	}))
+
+	// Import compounds from ChEMBL into the docking ligand database.
+	mux.HandleFunc("/api/v1/ligands/import-from-chembl", wrap(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			handler.ImportFromChEMBL(w, r)
 		} else {
 			writeError(w, "method not allowed", http.StatusMethodNotAllowed)
 		}

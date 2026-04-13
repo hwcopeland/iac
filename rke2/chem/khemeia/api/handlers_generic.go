@@ -440,11 +440,16 @@ type PluginInfo struct {
 	Output    []PluginOutput `json:"output"`
 }
 
-// ListPlugins handles GET /api/v1/plugins — returns all loaded plugins with their
+// ListPlugins handles GET /api/v1/plugins — returns visible plugins with their
 // input/output schemas for dynamic frontend form generation.
+// Plugins with visible: false in their YAML are hidden from the UI but their
+// API routes remain active for direct access and testing.
 func (h *APIHandler) ListPlugins(w http.ResponseWriter, r *http.Request) {
 	var infos []PluginInfo
 	for _, p := range h.controller.plugins {
+		if !p.IsVisible() {
+			continue
+		}
 		infos = append(infos, PluginInfo{
 			Name:    p.Name,
 			Slug:    p.Slug,

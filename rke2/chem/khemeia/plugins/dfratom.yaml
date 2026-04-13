@@ -4,6 +4,7 @@ version: "1.0"
 image: zot.hwcopeland.net/chem/dfratom:latest
 type: job
 database: atomic
+visible: false
 
 input:
   - name: input_file

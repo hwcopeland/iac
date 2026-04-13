@@ -1,11 +1,12 @@
 <script lang="ts">
   let { job, pluginSlug, onView3D }: { job: any; pluginSlug: string; onView3D?: () => void } = $props();
 
-  /** Fields to skip in the summary table (arrays, text blobs, raw output) */
+  /** Fields to skip in the summary table (arrays, text blobs, raw output, specially displayed) */
   const SKIP_FIELDS = new Set([
     'log', 'output_file', 'scf_energies', 'ir_frequencies', 'ir_intensities',
     'raman_frequencies', 'raman_intensities', 'nmr_shifts', 'nmr_elements',
     'trajectory', 'coordinates', 'atoms', 'orbitals',
+    'wall_time_sec',
   ]);
 
   /** Convert snake_case field name to a readable label */
@@ -83,6 +84,24 @@
     return `${hrs}h ${mins % 60}m`;
   });
 
+  /** Format seconds into a human-readable duration string */
+  function formatDuration(sec: number): string {
+    if (sec < 0.1) return `${(sec * 1000).toFixed(0)}ms`;
+    if (sec < 60) return `${sec.toFixed(1)}s`;
+    const mins = Math.floor(sec / 60);
+    const secs = Math.round(sec % 60);
+    if (mins < 60) return `${mins}m ${secs}s`;
+    const hrs = Math.floor(mins / 60);
+    return `${hrs}h ${mins % 60}m`;
+  }
+
+  /** Wall-clock compute time reported by the backend (Psi4/NWChem) */
+  let wallTime = $derived.by(() => {
+    const wt = job?.output_data?.wall_time_sec;
+    if (wt == null || typeof wt !== 'number' || wt <= 0) return null;
+    return formatDuration(wt);
+  });
+
   function statusClass(status: string): string {
     const s = status?.toLowerCase();
     if (s === 'completed') return 'completed';
@@ -112,6 +131,12 @@
       <div class="meta-row">
         <span class="meta-label">Duration</span>
         <span class="meta-value mono">{elapsed}</span>
+      </div>
+    {/if}
+    {#if wallTime}
+      <div class="meta-row">
+        <span class="meta-label">Compute Time</span>
+        <span class="meta-value mono">{wallTime}</span>
       </div>
     {/if}
     <div class="meta-row">

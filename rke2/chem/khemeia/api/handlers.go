@@ -27,6 +27,7 @@ type APIHandler struct {
 	namespace  string
 	controller *Controller
 	pluginDBs  map[string]*sql.DB
+	chemblDB   *sql.DB
 }
 
 // NewAPIHandler creates a new API handler.
@@ -36,6 +37,7 @@ func NewAPIHandler(client *kubernetes.Clientset, namespace string, controller *C
 		namespace:  namespace,
 		controller: controller,
 		pluginDBs:  pluginDBs,
+		chemblDB:   controller.chemblDB,
 	}
 }
 
