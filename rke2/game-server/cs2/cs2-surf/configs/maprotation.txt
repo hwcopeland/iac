@@ -1,0 +1,32 @@
+# Map rotation list for cs2-surf-server. One workshop ID per line.
+# Lines starting with '#' are ignored. Lines are rotated in order and
+# loop back to the top when the list ends.
+#
+# The entrypoint's rotation loop reads this file every tick, so it can be
+# edited on the running PVC (via apply-overlay.sh deploy) without a rebuild.
+#
+# Rotation interval defaults to 30 minutes; override with the
+# MAP_ROTATION_MINUTES env var on the deployment.
+
+# surf_lt_omnific  (startup map)
+3660894345
+# additional surf maps downloaded via subscribed_file_ids.txt
+3076153623
+3073875025
+3070321829
+3076980482
+3080544577
+3082548297
+3098972556
+3088413071
+3133346713
+3129698096
+3296258256
+3079877518
+3459997959
+3404344161
+3255589335
+3165517928
+3125360522
+3426610799
+3404193171
