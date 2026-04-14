@@ -1,21 +1,23 @@
 /*
- * SurfMapCommand — native ModSharp module providing !map, !rtv, !nominate.
+ * SurfMapCommand — native ModSharp module providing all server map commands.
  *
- * Hooks IClientListener.OnClientSayCommand and handles surf-server admin
- * commands + RTV vote without any Tnms / CS# / MCS baggage. ~200 lines,
- * one NuGet dep (ModSharp.Sharp.Shared).
+ *   !map <id|name>   admin:map — immediate change
+ *   !rtv             any player — majority vote rotates immediately
+ *   !nominate <id>   any player — stores workshop id as the next vote pick
+ *   !extend          any player — majority vote pushes rotation deadline
+ *                    by MAP_EXTEND_MINUTES; capped at MAP_MAX_EXTENDS per map
  *
- * Commands:
- *   !map <workshopid_or_name>   admin:map — change map immediately
- *   !rtv                        any player — vote to rock-the-vote;
- *                               when > 50% of connected players have
- *                               RTV'd, triggers next-in-rotation
- *   !nominate <workshopid>      any player — adds a workshop id to the
- *                               RTV queue (MVP: just stores last nom)
+ * Map rotation runs inside the plugin on a self-rescheduling ModSharp
+ * timer, so !extend and !rtv can mutate the single _nextRotationAt
+ * DateTime rather than coordinating with a shell-level rotation loop.
  *
- * Diagnostic: every OnClientSayCommand invocation is logged at Info level
- * with teamOnly / isCommand / commandName / message so we can see exactly
- * what the chat parser delivers.
+ * Config via env vars (read once at PostInit):
+ *   MAP_ROTATION_MINUTES   default 30
+ *   MAP_EXTEND_MINUTES     default 15
+ *   MAP_MAX_EXTENDS        default 3
+ *
+ * Map list: configs/maprotation.txt on the PVC, one workshop ID per line,
+ * comments with '#'. Rotation cycles through sequentially.
  */
 
 using System;
@@ -28,6 +30,7 @@ using Sharp.Shared.Enums;
 using Sharp.Shared.Listeners;
 using Sharp.Shared.Managers;
 using Sharp.Shared.Objects;
+using Sharp.Shared.Types;
 using Sharp.Shared.Units;
 
 namespace Cs2Surf.MapCommand;
@@ -42,11 +45,20 @@ public sealed class SurfMapCommand : IModSharpModule, IClientListener
     private readonly IClientManager          _clientManager;
     private readonly string                  _sharpPath;
 
-    // RTV state. Resets every map change (we detect via a dead-simple
-    // "cleared on first say after N seconds of silence" approach — if it
-    // becomes a problem, wire up a game listener later).
-    private readonly HashSet<SteamID> _rtvVoters      = [];
+    // --- RTV / extend vote state ---
+    private readonly HashSet<SteamID> _rtvVoters    = [];
+    private readonly HashSet<SteamID> _extendVoters = [];
     private          string?         _lastNomination;
+    private          int             _extendsUsed;
+
+    // --- Rotation state ---
+    private DateTime _nextRotationAt;
+    private int      _rotationIndex;
+
+    // Config
+    private int _rotationMinutes = 30;
+    private int _extendMinutes   = 15;
+    private int _maxExtends      = 3;
 
     public SurfMapCommand(ISharedSystem sharedSystem,
                           string        dllPath,
@@ -65,9 +77,18 @@ public sealed class SurfMapCommand : IModSharpModule, IClientListener
 
     public void PostInit()
     {
+        _rotationMinutes = ReadIntEnv("MAP_ROTATION_MINUTES", 30);
+        _extendMinutes   = ReadIntEnv("MAP_EXTEND_MINUTES",   15);
+        _maxExtends      = ReadIntEnv("MAP_MAX_EXTENDS",       3);
+
+        _nextRotationAt = DateTime.UtcNow.AddMinutes(_rotationMinutes);
+
         _clientManager.InstallClientListener(this);
+        ScheduleTick();
+
         _logger.LogInformation(
-            "SurfMapCommand loaded — !map (admin), !rtv, !nominate available");
+            "SurfMapCommand loaded — rotation={Rotation}m extend={Extend}m maxExtends={MaxExt}; next rotation at {NextAt:u}",
+            _rotationMinutes, _extendMinutes, _maxExtends, _nextRotationAt);
     }
 
     public void Shutdown()
@@ -78,16 +99,20 @@ public sealed class SurfMapCommand : IModSharpModule, IClientListener
     int IClientListener.ListenerVersion  => IClientListener.ApiVersion;
     int IClientListener.ListenerPriority => 0;
 
+    // ------------------------------------------------------------------
+    // Chat dispatch
+    // ------------------------------------------------------------------
+
     public ECommandAction OnClientSayCommand(IGameClient client,
                                              bool        teamOnly,
                                              bool        isCommand,
                                              string      commandName,
                                              string      message)
     {
-        // Brute-force diagnostic so we can see exactly what the parser delivers
-        // for every chat line. Strip once we confirm !map / !rtv routing works.
+        // Brute-force diagnostic so the first failed !map after a deploy is
+        // obvious in logs. Remove once chat routing is known-good.
         _logger.LogInformation(
-            "SAY from {SteamId} team={Team} isCmd={IsCmd} cmd={Cmd!r} msg={Msg!r}",
+            "SAY from {SteamId} team={Team} isCmd={IsCmd} cmd={Cmd} msg={Msg}",
             client.SteamId, teamOnly, isCommand, commandName, message);
 
         if (!isCommand)
@@ -98,7 +123,7 @@ public sealed class SurfMapCommand : IModSharpModule, IClientListener
         var cmd = (commandName ?? string.Empty).ToLowerInvariant();
         var arg = (message    ?? string.Empty).Trim();
 
-        // Some parsers include the command word in `message` too; strip it.
+        // Some parsers include the full "!cmd arg" in message; strip "!cmd"/".cmd".
         if (arg.StartsWith("!" + cmd, StringComparison.OrdinalIgnoreCase)
             || arg.StartsWith("." + cmd, StringComparison.OrdinalIgnoreCase))
         {
@@ -118,12 +143,16 @@ public sealed class SurfMapCommand : IModSharpModule, IClientListener
             case "nom":
                 return HandleNominate(client, arg);
 
+            case "extend":
+            case "ext":
+                return HandleExtend(client);
+
             default:
                 return ECommandAction.Skipped;
         }
     }
 
-    // --- !map <id_or_name> --------------------------------------------------
+    // --- !map ---------------------------------------------------------------
 
     private ECommandAction HandleMap(IGameClient client, string arg)
     {
@@ -141,69 +170,42 @@ public sealed class SurfMapCommand : IModSharpModule, IClientListener
             return ECommandAction.Handled;
         }
 
-        var modSharp = _shared.GetModSharp();
-        if (long.TryParse(arg, out _))
-        {
-            _logger.LogInformation(
-                "Admin {SteamId} → host_workshop_map {WorkshopId}", client.SteamId, arg);
-            modSharp.ServerCommand($"host_workshop_map {arg}");
-        }
-        else
-        {
-            _logger.LogInformation(
-                "Admin {SteamId} → changelevel {Map}", client.SteamId, arg);
-            modSharp.ServerCommand($"changelevel {arg}");
-        }
-
-        _rtvVoters.Clear();
+        ChangeMap(arg);
+        ResetVoteState(resetRotation: true);
         return ECommandAction.Handled;
     }
 
     // --- !rtv ---------------------------------------------------------------
-    //
-    // Counts distinct voters by SteamID. Threshold: floor(connected/2)+1.
-    // When reached, rotate to the next workshop ID from maprotation.txt.
 
     private ECommandAction HandleRtv(IGameClient client)
     {
         _rtvVoters.Add(client.SteamId);
 
         var connected = CountConnectedPlayers();
-        var needed    = Math.Max(1, (connected / 2) + 1);
-        var have      = _rtvVoters.Count;
+        var needed    = VotesNeeded(connected);
 
         _logger.LogInformation(
             "!rtv {SteamId}: {Have}/{Needed} (connected={Conn})",
-            client.SteamId, have, needed, connected);
+            client.SteamId, _rtvVoters.Count, needed, connected);
 
-        if (have < needed)
+        if (_rtvVoters.Count < needed)
         {
             return ECommandAction.Handled;
         }
 
-        _logger.LogInformation("RTV threshold reached — rotating");
-
-        var nextId = PickNextMap();
-        if (nextId is null)
-        {
-            _logger.LogWarning("RTV: no maprotation.txt entries — skipping");
-            return ECommandAction.Handled;
-        }
-
-        _shared.GetModSharp().ServerCommand($"host_workshop_map {nextId}");
-        _rtvVoters.Clear();
-        _lastNomination = null;
+        _logger.LogInformation("RTV threshold reached — forcing rotation now");
+        _nextRotationAt = DateTime.UtcNow;
         return ECommandAction.Handled;
     }
 
-    // --- !nominate <id> -----------------------------------------------------
+    // --- !nominate ----------------------------------------------------------
 
     private ECommandAction HandleNominate(IGameClient client, string arg)
     {
         if (string.IsNullOrWhiteSpace(arg) || !long.TryParse(arg, out _))
         {
             _logger.LogInformation(
-                "!nominate from {SteamId}: invalid arg {Arg!r}", client.SteamId, arg);
+                "!nominate from {SteamId}: invalid arg '{Arg}'", client.SteamId, arg);
             return ECommandAction.Handled;
         }
 
@@ -213,12 +215,123 @@ public sealed class SurfMapCommand : IModSharpModule, IClientListener
         return ECommandAction.Handled;
     }
 
-    // --- helpers ------------------------------------------------------------
+    // --- !extend ------------------------------------------------------------
+
+    private ECommandAction HandleExtend(IGameClient client)
+    {
+        if (_extendsUsed >= _maxExtends)
+        {
+            _logger.LogInformation(
+                "!extend {SteamId}: denied, max extends reached ({Used}/{Max})",
+                client.SteamId, _extendsUsed, _maxExtends);
+            return ECommandAction.Handled;
+        }
+
+        _extendVoters.Add(client.SteamId);
+
+        var connected = CountConnectedPlayers();
+        var needed    = VotesNeeded(connected);
+
+        _logger.LogInformation(
+            "!extend {SteamId}: {Have}/{Needed} (connected={Conn}, extends used={Used}/{Max})",
+            client.SteamId, _extendVoters.Count, needed, connected, _extendsUsed, _maxExtends);
+
+        if (_extendVoters.Count < needed)
+        {
+            return ECommandAction.Handled;
+        }
+
+        _nextRotationAt = _nextRotationAt.AddMinutes(_extendMinutes);
+        _extendsUsed++;
+        _extendVoters.Clear();
+        _logger.LogInformation(
+            "Extend passed — rotation pushed to {NextAt:u} ({Used}/{Max} used)",
+            _nextRotationAt, _extendsUsed, _maxExtends);
+        return ECommandAction.Handled;
+    }
+
+    // ------------------------------------------------------------------
+    // Rotation
+    // ------------------------------------------------------------------
+
+    private void ScheduleTick()
+    {
+        // Self-rescheduling 10-second tick. ModSharp's PushTimer runs the
+        // callback on the game thread, so calls into IModSharp / IClientManager
+        // from OnTick are safe.
+        _shared.GetModSharp().PushTimer(OnTick, 10.0f, GameTimerFlags.None);
+    }
+
+    private void OnTick()
+    {
+        try
+        {
+            if (DateTime.UtcNow >= _nextRotationAt)
+            {
+                DoScheduledRotation();
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "OnTick failed");
+        }
+        finally
+        {
+            ScheduleTick();
+        }
+    }
+
+    private void DoScheduledRotation()
+    {
+        var nextId = PickNextMap();
+        if (nextId is null)
+        {
+            _logger.LogWarning(
+                "Scheduled rotation: no maprotation.txt entries — retrying in {Min} min",
+                _rotationMinutes);
+            _nextRotationAt = DateTime.UtcNow.AddMinutes(_rotationMinutes);
+            return;
+        }
+
+        _logger.LogInformation("Scheduled rotation → workshop {Map}", nextId);
+        ChangeMap(nextId);
+        ResetVoteState(resetRotation: true);
+    }
+
+    private void ChangeMap(string arg)
+    {
+        var modSharp = _shared.GetModSharp();
+        if (long.TryParse(arg, out _))
+        {
+            _logger.LogInformation("host_workshop_map {WorkshopId}", arg);
+            modSharp.ServerCommand($"host_workshop_map {arg}");
+        }
+        else
+        {
+            _logger.LogInformation("changelevel {Map}", arg);
+            modSharp.ServerCommand($"changelevel {arg}");
+        }
+    }
+
+    private void ResetVoteState(bool resetRotation)
+    {
+        _rtvVoters.Clear();
+        _extendVoters.Clear();
+        _lastNomination = null;
+        _extendsUsed    = 0;
+        if (resetRotation)
+        {
+            _nextRotationAt = DateTime.UtcNow.AddMinutes(_rotationMinutes);
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Helpers
+    // ------------------------------------------------------------------
 
     private int CountConnectedPlayers()
     {
         var count = 0;
-        // Iterate client slots 0..63 (max players); fake clients excluded.
         for (var slot = 0; slot < 64; slot++)
         {
             var c = _clientManager.GetGameClient(slot);
@@ -230,20 +343,36 @@ public sealed class SurfMapCommand : IModSharpModule, IClientListener
         return count;
     }
 
+    private static int VotesNeeded(int connected)
+        => Math.Max(1, (connected / 2) + 1);
+
     private string? PickNextMap()
     {
-        // Nomination wins if set.
+        // Nomination wins regardless of rotation index.
         if (!string.IsNullOrWhiteSpace(_lastNomination))
         {
-            return _lastNomination;
+            var nom = _lastNomination;
+            _lastNomination = null;
+            return nom;
         }
 
-        // Otherwise read maprotation.txt and pick the first non-comment line.
-        // MVP: always picks the first entry. Good enough to prove the loop.
-        var path = Path.Combine(_sharpPath, "configs", "maprotation.txt");
-        if (!File.Exists(path))
+        var entries = ReadRotationList();
+        if (entries.Count == 0)
         {
             return null;
+        }
+
+        _rotationIndex = (_rotationIndex + 1) % entries.Count;
+        return entries[_rotationIndex];
+    }
+
+    private List<string> ReadRotationList()
+    {
+        var path = Path.Combine(_sharpPath, "configs", "maprotation.txt");
+        var result = new List<string>();
+        if (!File.Exists(path))
+        {
+            return result;
         }
 
         try
@@ -255,7 +384,7 @@ public sealed class SurfMapCommand : IModSharpModule, IClientListener
                 {
                     continue;
                 }
-                return line;
+                result.Add(line);
             }
         }
         catch (Exception ex)
@@ -263,6 +392,12 @@ public sealed class SurfMapCommand : IModSharpModule, IClientListener
             _logger.LogError(ex, "Failed to read maprotation.txt");
         }
 
-        return null;
+        return result;
+    }
+
+    private static int ReadIntEnv(string name, int fallback)
+    {
+        var v = Environment.GetEnvironmentVariable(name);
+        return int.TryParse(v, out var n) && n > 0 ? n : fallback;
     }
 }

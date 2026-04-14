@@ -219,35 +219,10 @@ s.close()
             log "Surf cvars forced"
         fi
 
-        # ── Map rotation loop ────────────────────────────────────────────
-        # Reads configs/maprotation.txt on the PVC every tick so the list
-        # can be edited without a rebuild. Rotates every MAP_ROTATION_MINUTES
-        # (default 30) via host_workshop_map RCON. Re-forces surf cvars
-        # ~20s after every rotation since map changes wipe them.
-        ROTATION_FILE="${CS2_DIR}/game/sharp/configs/maprotation.txt"
-        ROTATION_MIN="${MAP_ROTATION_MINUTES:-30}"
-        if [ -f "${ROTATION_FILE}" ] && [ "${ROTATION_MIN}" -gt 0 ] 2>/dev/null; then
-            log "Map rotation enabled: every ${ROTATION_MIN} min from ${ROTATION_FILE}"
-            rotation_index=0
-            while true; do
-                sleep "$((ROTATION_MIN * 60))"
-                # Read non-comment non-empty lines fresh each time
-                mapfile -t ids < <(grep -vE '^\s*(#|$)' "${ROTATION_FILE}" 2>/dev/null || true)
-                count=${#ids[@]}
-                if [ "$count" -eq 0 ]; then
-                    warn "maprotation.txt is empty, skipping rotation"
-                    continue
-                fi
-                rotation_index=$(( (rotation_index + 1) % count ))
-                next_id="${ids[$rotation_index]}"
-                log "Rotating to workshop map ${next_id} (${rotation_index}/${count})"
-                rcon_cmd "host_workshop_map ${next_id}"
-                sleep 20
-                force_surf_cvars && log "Surf cvars re-forced after rotation"
-            done
-        else
-            log "Map rotation disabled (file missing or MAP_ROTATION_MINUTES=0)"
-        fi
+        # Map rotation is now owned by the SurfMapCommand ModSharp plugin
+        # (configs/maprotation.txt + !rtv / !extend / !nominate). The only
+        # remaining entrypoint job is the post-boot cvar force above, so
+        # this subshell exits once that's done.
     ) &
 fi
 
