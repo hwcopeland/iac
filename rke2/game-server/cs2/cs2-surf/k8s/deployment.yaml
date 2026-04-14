@@ -113,6 +113,18 @@ spec:
               value: "3660894345"
             - name: SERVER_NAME
               value: "W4de Surf"
+            # SurfMapCommand admin allowlist — SteamIDs that can use !map
+            # regardless of what ModSharp's AdminManager thinks. Matches the
+            # @root and @admin entries in configs/admins.jsonc. If you add or
+            # remove an admin, update both places.
+            - name: MAP_ADMIN_STEAMIDS
+              value: "76561198808592972,76561198047424687,76561197987522730"
+            - name: MAP_ROTATION_MINUTES
+              value: "30"
+            - name: MAP_EXTEND_MINUTES
+              value: "15"
+            - name: MAP_MAX_EXTENDS
+              value: "3"
           resources:
             requests:
               cpu: 2000m
