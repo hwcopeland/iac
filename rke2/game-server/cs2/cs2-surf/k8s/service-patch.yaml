@@ -17,19 +17,18 @@ metadata:
 spec:
   selector:
     app: cs2-surf-server
+  # Game traffic is UDP only. TCP 27015 previously exposed CS2's -usercon
+  # RCON listener externally; public scanner bots were bruteforcing / reusing
+  # leaked rcon_password values and broadcasting scam links via `say`. The
+  # entrypoint's internal RCON calls connect to the pod's own IP from inside
+  # the pod and do NOT traverse the Service, so they keep working without
+  # the external TCP ports. SourceTV TCP 27020 is also dropped for the same
+  # reason — we don't use it.
   ports:
-    - name: tcp-27015
-      protocol: TCP
-      port: 27015
-      targetPort: 27015
     - name: udp-27015
       protocol: UDP
       port: 27015
       targetPort: 27015
-    - name: tcp-27020
-      protocol: TCP
-      port: 27020
-      targetPort: 27020
     - name: udp-27020
       protocol: UDP
       port: 27020
