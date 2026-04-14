@@ -60,6 +60,12 @@ public sealed class SurfMapCommand : IModSharpModule, IClientListener, IGameList
     private int _extendMinutes   = 15;
     private int _maxExtends      = 3;
 
+    // Env-configured allowlist of SteamIDs (SteamID64) that can use !map,
+    // bypassing ModSharp's AdminManager. Filled from MAP_ADMIN_STEAMIDS.
+    // Belt-and-suspenders fallback if FindAdmin / HasPermission doesn't
+    // resolve the admins.jsonc @root → "*" chain as expected.
+    private readonly HashSet<ulong> _envAdminIds = [];
+
     public SurfMapCommand(ISharedSystem sharedSystem,
                           string        dllPath,
                           string        sharpPath,
@@ -81,6 +87,17 @@ public sealed class SurfMapCommand : IModSharpModule, IClientListener, IGameList
         _extendMinutes   = ReadIntEnv("MAP_EXTEND_MINUTES",   15);
         _maxExtends      = ReadIntEnv("MAP_MAX_EXTENDS",       3);
 
+        var envAdmins = Environment.GetEnvironmentVariable("MAP_ADMIN_STEAMIDS")
+                        ?? string.Empty;
+        foreach (var part in envAdmins.Split(',', StringSplitOptions.RemoveEmptyEntries
+                                                   | StringSplitOptions.TrimEntries))
+        {
+            if (ulong.TryParse(part, out var id))
+            {
+                _envAdminIds.Add(id);
+            }
+        }
+
         _nextRotationAt = DateTime.UtcNow.AddMinutes(_rotationMinutes);
 
         _clientManager.InstallClientListener(this);
@@ -88,8 +105,8 @@ public sealed class SurfMapCommand : IModSharpModule, IClientListener, IGameList
         ScheduleTick();
 
         _logger.LogInformation(
-            "SurfMapCommand loaded — rotation={Rotation}m extend={Extend}m maxExtends={MaxExt}; next rotation at {NextAt:u}",
-            _rotationMinutes, _extendMinutes, _maxExtends, _nextRotationAt);
+            "SurfMapCommand loaded — rotation={Rotation}m extend={Extend}m maxExtends={MaxExt}; envAdmins={AdminCount}; next rotation at {NextAt:u}",
+            _rotationMinutes, _extendMinutes, _maxExtends, _envAdminIds.Count, _nextRotationAt);
     }
 
     public void Shutdown()
@@ -190,24 +207,32 @@ public sealed class SurfMapCommand : IModSharpModule, IClientListener, IGameList
 
     private ECommandAction HandleMap(IGameClient client, string arg)
     {
-        // FindAdmin via IClientManager is obsolete (migrated to AdminManager
-        // at 2.2) but still works — good enough for MVP.
+        // Three paths to grant !map access, in order:
+        //   1. The SteamID is in MAP_ADMIN_STEAMIDS (env allowlist — failsafe).
+        //   2. ModSharp's AdminManager has the user AND HasPermission succeeds
+        //      on either `admin:map` or the `*` wildcard.
+        //   3. Otherwise denied.
+        var steamId64 = (ulong) client.SteamId;
+        var envMatch  = _envAdminIds.Contains(steamId64);
+
 #pragma warning disable CS0618
         var admin = _clientManager.FindAdmin(client.SteamId);
 #pragma warning restore CS0618
-        // Accept either the explicit `admin:map` flag or the `*` wildcard
-        // (used by @root in admins.jsonc). HasPermission doesn't do wildcard
-        // resolution on its own.
-        var allowed = admin is not null
-                      && (admin.HasPermission("admin:map")
-                          || admin.HasPermission("*"));
-        if (!allowed)
+        var permMatch = admin is not null
+                        && (admin.HasPermission("admin:map")
+                            || admin.HasPermission("*"));
+
+        if (!envMatch && !permMatch)
         {
             _logger.LogInformation(
-                "!map denied for {SteamId}: no admin:map (admin is null: {Null})",
-                client.SteamId, admin is null);
+                "!map denied for {SteamId} (adminNull={Null} envAdmins={EnvCount})",
+                client.SteamId, admin is null, _envAdminIds.Count);
             return ECommandAction.Handled;
         }
+
+        _logger.LogInformation(
+            "!map allowed for {SteamId} via {Via}",
+            client.SteamId, envMatch ? "env" : "permissions");
 
         if (string.IsNullOrWhiteSpace(arg))
         {
