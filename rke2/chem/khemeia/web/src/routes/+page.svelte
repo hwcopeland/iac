@@ -64,8 +64,9 @@
       if (e.key === 'Escape') {
         commandPaletteOpen = false;
       }
-      // Tab switching: 1/2/3
-      if (!mod && !e.altKey && !e.shiftKey) {
+      // Tab switching: 1/2/3 (only when not typing in an input/textarea/select)
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (!mod && !e.altKey && !e.shiftKey && tag !== 'INPUT' && tag !== 'TEXTAREA' && tag !== 'SELECT') {
         if (e.key === '1') activeTab = 'explorer';
         else if (e.key === '2') activeTab = 'builder';
         else if (e.key === '3') activeTab = 'calculations';
