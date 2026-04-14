@@ -89,6 +89,24 @@ spec:
                 secretKeyRef:
                   name: cs2-secret
                   key: API_KEY
+            # Same mysql-secret the timer.jsonc init container uses. Exposed
+            # to the main container so entrypoint.sh can envsubst the
+            # AdminCommands.SQLStorage connection string into core.json at
+            # boot. k8s_user has ALL PRIVILEGES on the modsharp database.
+            - name: MYSQL_USER
+              valueFrom:
+                secretKeyRef:
+                  name: mysql-secret
+                  key: username
+            - name: MYSQL_PASS
+              valueFrom:
+                secretKeyRef:
+                  name: mysql-secret
+                  key: password
+            - name: MYSQL_HOST
+              value: "10.43.43.43"
+            - name: MYSQL_PORT
+              value: "3306"
             - name: STEAM_ACCOUNT
               valueFrom:
                 secretKeyRef:

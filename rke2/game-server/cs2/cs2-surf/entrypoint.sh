@@ -95,6 +95,54 @@ else
     fi
 fi
 
+# ── Step 3c: Inject MySQL connection string into core.json ─────────────────
+# Sharp.Modules.AdminCommands.SQLStorage reads its connection string from
+# core.json under ConnectionStrings.AdminCommands.SQLStorage. ModSharp
+# ships core.json with a placeholder (`User ID=your_user_name_goes_here`)
+# which makes SQLStorage fail on every boot. Replace the entire
+# AdminCommands.SQLStorage line with one built from MYSQL_USER /
+# MYSQL_PASS / MYSQL_HOST / MYSQL_PORT env vars (sourced from the
+# mysql-secret in the deployment).
+CORE_JSON="${CS2_DIR}/game/sharp/configs/core.json"
+if [ -f "${CORE_JSON}" ] && [ -n "${MYSQL_USER:-}" ] && [ -n "${MYSQL_PASS:-}" ]; then
+    CLEAN_USER=$(printf '%s' "${MYSQL_USER}" | tr -d '\r\n')
+    CLEAN_PASS=$(printf '%s' "${MYSQL_PASS}" | tr -d '\r\n')
+    CLEAN_HOST=$(printf '%s' "${MYSQL_HOST:-10.43.43.43}" | tr -d '\r\n')
+    CLEAN_PORT=$(printf '%s' "${MYSQL_PORT:-3306}" | tr -d '\r\n')
+    CONN="mysql://Server=${CLEAN_HOST};Port=${CLEAN_PORT};Database=modsharp;User ID=${CLEAN_USER};Password=${CLEAN_PASS};"
+    python3 - "${CORE_JSON}" "${CONN}" <<'PY'
+import sys, re
+path, conn = sys.argv[1], sys.argv[2]
+with open(path) as f:
+    src = f.read()
+# Replace the entire AdminCommands.SQLStorage line value, preserving
+# whatever quoting / formatting ModSharp chose.
+new = re.sub(
+    r'("AdminCommands\.SQLStorage"\s*:\s*")[^"]*(")',
+    lambda m: m.group(1) + conn + m.group(2),
+    src,
+)
+if new != src:
+    with open(path, 'w') as f:
+        f.write(new)
+    print("core.json: AdminCommands.SQLStorage rewritten")
+else:
+    print("core.json: AdminCommands.SQLStorage line not found")
+PY
+    log "Wrote MySQL connection string into core.json"
+else
+    log "Skipping core.json MySQL injection (file or env vars missing)"
+fi
+
+# ── Step 3d: Re-enable RampFix if disabled ─────────────────────────────────
+# ModSharp's RampFix module ships with a .disabled marker in some builds;
+# surf servers want it on. Remove the marker so the loader picks it up.
+RAMPFIX_DISABLED="${CS2_DIR}/game/sharp/modules/RampFix/RampFix.disabled"
+if [ -f "${RAMPFIX_DISABLED}" ]; then
+    rm -f "${RAMPFIX_DISABLED}"
+    log "Removed RampFix.disabled marker"
+fi
+
 # ── Step 4: Launch CS2 ──────────────────────────────────────────────────────
 # ── Step 3b: Ensure engine .so files are available to csgo/bin ──────────────
 # ModSharp's libserver.so in csgo/bin/ needs libv8.so from game/bin/
