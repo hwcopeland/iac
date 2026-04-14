@@ -35,7 +35,7 @@ using Sharp.Shared.Units;
 
 namespace Cs2Surf.MapCommand;
 
-public sealed class SurfMapCommand : IModSharpModule, IClientListener
+public sealed class SurfMapCommand : IModSharpModule, IClientListener, IGameListener
 {
     public string DisplayName   => "Cs2Surf.MapCommand";
     public string DisplayAuthor => "hwcopeland";
@@ -84,6 +84,7 @@ public sealed class SurfMapCommand : IModSharpModule, IClientListener
         _nextRotationAt = DateTime.UtcNow.AddMinutes(_rotationMinutes);
 
         _clientManager.InstallClientListener(this);
+        _shared.GetModSharp().InstallGameListener(this);
         ScheduleTick();
 
         _logger.LogInformation(
@@ -94,10 +95,28 @@ public sealed class SurfMapCommand : IModSharpModule, IClientListener
     public void Shutdown()
     {
         _clientManager.RemoveClientListener(this);
+        _shared.GetModSharp().RemoveGameListener(this);
     }
 
     int IClientListener.ListenerVersion  => IClientListener.ApiVersion;
     int IClientListener.ListenerPriority => 0;
+
+    int IGameListener.ListenerVersion  => IGameListener.ApiVersion;
+    int IGameListener.ListenerPriority => 0;
+
+    // Re-arm the rotation tick on every map activation. PushTimer state is
+    // cleared across map changes, so without this the timer dies after the
+    // first !map / !rtv / scheduled rotation.
+    void IGameListener.OnServerActivate()
+    {
+        _logger.LogInformation("OnServerActivate — re-arming rotation tick");
+        ScheduleTick();
+        // Reset per-map vote state so a new map starts with clean slate.
+        _rtvVoters.Clear();
+        _extendVoters.Clear();
+        _extendsUsed    = 0;
+        _lastNomination = null;
+    }
 
     // ------------------------------------------------------------------
     // Chat dispatch
@@ -176,10 +195,17 @@ public sealed class SurfMapCommand : IModSharpModule, IClientListener
 #pragma warning disable CS0618
         var admin = _clientManager.FindAdmin(client.SteamId);
 #pragma warning restore CS0618
-        if (admin is null || !admin.HasPermission("admin:map"))
+        // Accept either the explicit `admin:map` flag or the `*` wildcard
+        // (used by @root in admins.jsonc). HasPermission doesn't do wildcard
+        // resolution on its own.
+        var allowed = admin is not null
+                      && (admin.HasPermission("admin:map")
+                          || admin.HasPermission("*"));
+        if (!allowed)
         {
             _logger.LogInformation(
-                "!map denied for {SteamId}: no admin:map permission", client.SteamId);
+                "!map denied for {SteamId}: no admin:map (admin is null: {Null})",
+                client.SteamId, admin is null);
             return ECommandAction.Handled;
         }
 
@@ -221,10 +247,12 @@ public sealed class SurfMapCommand : IModSharpModule, IClientListener
 
     private ECommandAction HandleNominate(IGameClient client, string arg)
     {
-        if (string.IsNullOrWhiteSpace(arg) || !long.TryParse(arg, out _))
+        // Accept either a workshop publish file id or a map name. Name
+        // resolution happens later in ChangeMap via ListWorkshopMaps.
+        if (string.IsNullOrWhiteSpace(arg))
         {
             _logger.LogInformation(
-                "!nominate from {SteamId}: invalid arg '{Arg}'", client.SteamId, arg);
+                "!nominate from {SteamId}: no arg", client.SteamId);
             return ECommandAction.Handled;
         }
 
@@ -283,6 +311,9 @@ public sealed class SurfMapCommand : IModSharpModule, IClientListener
 
     private void OnTick()
     {
+        // Reschedule immediately so a throw in DoScheduledRotation can't kill
+        // the tick chain.
+        ScheduleTick();
         try
         {
             if (DateTime.UtcNow >= _nextRotationAt)
@@ -292,11 +323,7 @@ public sealed class SurfMapCommand : IModSharpModule, IClientListener
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "OnTick failed");
-        }
-        finally
-        {
-            ScheduleTick();
+            _logger.LogError(ex, "OnTick work failed");
         }
     }
 
@@ -338,28 +365,41 @@ public sealed class SurfMapCommand : IModSharpModule, IClientListener
         try
         {
             var workshopMaps = modSharp.ListWorkshopMaps();
-            var hit = workshopMaps.Find(i =>
-                i.Name.Equals(arg, StringComparison.OrdinalIgnoreCase));
-            if (hit != default)
+            _logger.LogInformation(
+                "ListWorkshopMaps returned {Count} entries", workshopMaps.Count);
+
+            (ulong PublishFileId, string Name)? hit = null;
+            foreach (var m in workshopMaps)
             {
-                _logger.LogInformation(
-                    "resolved {Map} → workshop {Id} via ListWorkshopMaps",
-                    hit.Name, hit.PublishFileId);
-                modSharp.ServerCommand(
-                    $"host_workshop_map {hit.PublishFileId}");
-                return;
+                if (!string.IsNullOrEmpty(m.Name)
+                    && m.Name.Equals(arg, StringComparison.OrdinalIgnoreCase))
+                {
+                    hit = m;
+                    break;
+                }
             }
 
-            // Partial-match fallback so "!map kitsune" works for surf_kitsune.
-            var partial = workshopMaps.Find(i =>
-                i.Name.Contains(arg, StringComparison.OrdinalIgnoreCase));
-            if (partial != default)
+            if (hit is null)
+            {
+                foreach (var m in workshopMaps)
+                {
+                    if (!string.IsNullOrEmpty(m.Name)
+                        && m.Name.Contains(arg, StringComparison.OrdinalIgnoreCase))
+                    {
+                        hit = m;
+                        _logger.LogInformation(
+                            "partial-matched {Arg} → {Name}", arg, m.Name);
+                        break;
+                    }
+                }
+            }
+
+            if (hit is { } h)
             {
                 _logger.LogInformation(
-                    "partial-matched {Arg} → workshop {Id} ({Name})",
-                    arg, partial.PublishFileId, partial.Name);
-                modSharp.ServerCommand(
-                    $"host_workshop_map {partial.PublishFileId}");
+                    "resolved {Map} → workshop {Id}",
+                    h.Name, h.PublishFileId);
+                modSharp.ServerCommand($"host_workshop_map {h.PublishFileId}");
                 return;
             }
         }
