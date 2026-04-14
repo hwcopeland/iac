@@ -373,7 +373,9 @@ public sealed class SurfMapCommand : IModSharpModule, IClientListener, IGameList
     {
         var modSharp = _shared.GetModSharp();
 
-        // Numeric → treat as a workshop publish file id.
+        // Numeric → workshop publish file id. host_workshop_map handles any
+        // subscribed-or-not workshop item; CS2 will download on demand if
+        // the server has Steam credentials.
         if (long.TryParse(arg, out _))
         {
             _logger.LogInformation("host_workshop_map {WorkshopId}", arg);
@@ -381,70 +383,19 @@ public sealed class SurfMapCommand : IModSharpModule, IClientListener, IGameList
             return;
         }
 
-        // Non-numeric → resolve against known workshop maps first. CS2 only
-        // accepts `changelevel <name>` for maps whose vpk is actively mounted;
-        // workshop maps need either `ds_workshop_changelevel <name>` (looks up
-        // the map by its short name in the subscribed workshop items) or
-        // `host_workshop_map <publishid>`. Try the workshop map list first so
-        // "!map surf_kitsune" works without the admin needing to know IDs.
-        try
-        {
-            var workshopMaps = modSharp.ListWorkshopMaps();
-            _logger.LogInformation(
-                "ListWorkshopMaps returned {Count} entries", workshopMaps.Count);
-
-            (ulong PublishFileId, string Name)? hit = null;
-            foreach (var m in workshopMaps)
-            {
-                if (!string.IsNullOrEmpty(m.Name)
-                    && m.Name.Equals(arg, StringComparison.OrdinalIgnoreCase))
-                {
-                    hit = m;
-                    break;
-                }
-            }
-
-            if (hit is null)
-            {
-                foreach (var m in workshopMaps)
-                {
-                    if (!string.IsNullOrEmpty(m.Name)
-                        && m.Name.Contains(arg, StringComparison.OrdinalIgnoreCase))
-                    {
-                        hit = m;
-                        _logger.LogInformation(
-                            "partial-matched {Arg} → {Name}", arg, m.Name);
-                        break;
-                    }
-                }
-            }
-
-            if (hit is { } h)
-            {
-                _logger.LogInformation(
-                    "resolved {Map} → workshop {Id}",
-                    h.Name, h.PublishFileId);
-                modSharp.ServerCommand($"host_workshop_map {h.PublishFileId}");
-                return;
-            }
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "ListWorkshopMaps lookup failed");
-        }
-
-        // Last resort — a built-in or on-disk map. Will no-op if CS2 can't
-        // find it, but we've exhausted the workshop path.
-        if (modSharp.IsMapValid(arg))
-        {
-            _logger.LogInformation("ChangeLevel {Map}", arg);
-            modSharp.ChangeLevel(arg);
-            return;
-        }
-
-        _logger.LogWarning(
-            "ChangeMap: {Arg} not a workshop map and not IsMapValid — giving up",
-            arg);
+        // Non-numeric name. Empirically ListWorkshopMaps() only returns the
+        // currently-active workshop map (1 entry), so it's useless as a
+        // name→id resolver for "change to a different map by name".
+        //
+        // ds_workshop_changelevel is the CS2-native command that takes a
+        // workshop map's *short name* and changes to it without needing to
+        // know the publish file id, as long as the map is in the subscribed
+        // set (subscribed_file_ids.txt) or already downloaded under
+        // steamapps/workshop/content/730/. Fire it unconditionally — if the
+        // map name is invalid CS2 just logs an error and stays on the
+        // current map; we lose nothing.
+        _logger.LogInformation("ds_workshop_changelevel {Map}", arg);
+        modSharp.ServerCommand($"ds_workshop_changelevel {arg}");
     }
 
     private void ResetVoteState(bool resetRotation)
