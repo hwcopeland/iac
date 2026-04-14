@@ -23,10 +23,13 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
+using System.Text;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Sharp.Shared;
 using Sharp.Shared.Enums;
+using Sharp.Shared.GameEntities;
 using Sharp.Shared.Listeners;
 using Sharp.Shared.Managers;
 using Sharp.Shared.Objects;
@@ -198,9 +201,220 @@ public sealed class SurfMapCommand : IModSharpModule, IClientListener, IGameList
             case "ext":
                 return HandleExtend(client);
 
+            case "maps":
+            case "maplist":
+                return HandleMaps(client);
+
+            case "addmap":
+                return HandleAddMap(client, arg);
+
+            case "removemap":
+            case "delmap":
+                return HandleRemoveMap(client, arg);
+
+            case "help":
+            case "commands":
+                return HandleHelp(client);
+
             default:
                 return ECommandAction.Skipped;
         }
+    }
+
+    // --- chat reply helper -------------------------------------------------
+
+    private void Reply(IGameClient client, string message)
+    {
+        try
+        {
+            client.GetPlayerController()?.GetPlayerPawn()?
+                  .Print(HudPrintChannel.Chat, message);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to print to chat");
+        }
+    }
+
+    private bool RequireAdmin(IGameClient client, string action)
+    {
+        var steamId64 = (ulong) client.SteamId;
+        if (_envAdminIds.Contains(steamId64))
+        {
+            return true;
+        }
+#pragma warning disable CS0618
+        var admin = _clientManager.FindAdmin(client.SteamId);
+#pragma warning restore CS0618
+        if (admin is not null
+            && (admin.HasPermission("admin:map") || admin.HasPermission("*")))
+        {
+            return true;
+        }
+        Reply(client, $"[surf] {action}: admin required");
+        return false;
+    }
+
+    // --- !maps -------------------------------------------------------------
+
+    private ECommandAction HandleMaps(IGameClient client)
+    {
+        var rotation = ReadRotationList();
+        var names    = ReadMapNames();
+        // Reverse name lookup for nicer display: id → first matching name.
+        var idToName = new Dictionary<ulong, string>();
+        foreach (var (n, id) in names)
+        {
+            idToName.TryAdd(id, n);
+        }
+
+        if (rotation.Count == 0)
+        {
+            Reply(client, "[surf] rotation is empty");
+            return ECommandAction.Handled;
+        }
+
+        Reply(client, $"[surf] {rotation.Count} maps in rotation:");
+        var line = new System.Text.StringBuilder();
+        var perLine = 0;
+        foreach (var entry in rotation)
+        {
+            string display = entry;
+            if (ulong.TryParse(entry, out var id) && idToName.TryGetValue(id, out var n))
+            {
+                display = n;
+            }
+            if (perLine > 0)
+            {
+                line.Append(", ");
+            }
+            line.Append(display);
+            perLine++;
+            if (perLine >= 5)
+            {
+                Reply(client, "[surf] " + line.ToString());
+                line.Clear();
+                perLine = 0;
+            }
+        }
+        if (line.Length > 0)
+        {
+            Reply(client, "[surf] " + line.ToString());
+        }
+        return ECommandAction.Handled;
+    }
+
+    // --- !addmap ----------------------------------------------------------
+
+    private ECommandAction HandleAddMap(IGameClient client, string arg)
+    {
+        if (!RequireAdmin(client, "!addmap"))
+        {
+            return ECommandAction.Handled;
+        }
+        if (string.IsNullOrWhiteSpace(arg))
+        {
+            Reply(client, "[surf] usage: !addmap <workshopid>");
+            return ECommandAction.Handled;
+        }
+        var trimmed = arg.Trim();
+        if (!ulong.TryParse(trimmed, out _))
+        {
+            Reply(client, "[surf] !addmap takes a numeric workshop id");
+            return ECommandAction.Handled;
+        }
+
+        var path = Path.Combine(_sharpPath, "configs", "maprotation.txt");
+        try
+        {
+            var lines = File.Exists(path) ? File.ReadAllLines(path).ToList() : [];
+            if (lines.Any(l => l.Trim() == trimmed))
+            {
+                Reply(client, $"[surf] {trimmed} already in rotation");
+                return ECommandAction.Handled;
+            }
+            lines.Add(trimmed);
+            File.WriteAllLines(path, lines);
+            _logger.LogInformation(
+                "!addmap {SteamId} added {Id} to rotation", client.SteamId, trimmed);
+            Reply(client, $"[surf] added {trimmed} to rotation ({lines.Count} maps)");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "!addmap write failed");
+            Reply(client, "[surf] !addmap failed (see server log)");
+        }
+        return ECommandAction.Handled;
+    }
+
+    // --- !removemap -------------------------------------------------------
+
+    private ECommandAction HandleRemoveMap(IGameClient client, string arg)
+    {
+        if (!RequireAdmin(client, "!removemap"))
+        {
+            return ECommandAction.Handled;
+        }
+        if (string.IsNullOrWhiteSpace(arg))
+        {
+            Reply(client, "[surf] usage: !removemap <workshopid_or_name>");
+            return ECommandAction.Handled;
+        }
+        var trimmed = arg.Trim();
+
+        // Resolve a name to an id via mapnames.txt so !removemap surf_kitsune works.
+        if (!ulong.TryParse(trimmed, out _))
+        {
+            var names = ReadMapNames();
+            if (names.TryGetValue(trimmed.ToLowerInvariant(), out var id))
+            {
+                trimmed = id.ToString();
+            }
+        }
+
+        var path = Path.Combine(_sharpPath, "configs", "maprotation.txt");
+        try
+        {
+            if (!File.Exists(path))
+            {
+                Reply(client, "[surf] rotation file missing");
+                return ECommandAction.Handled;
+            }
+            var lines = File.ReadAllLines(path).ToList();
+            var before = lines.Count;
+            lines.RemoveAll(l => l.Trim() == trimmed);
+            if (lines.Count == before)
+            {
+                Reply(client, $"[surf] {arg} not found in rotation");
+                return ECommandAction.Handled;
+            }
+            File.WriteAllLines(path, lines);
+            _logger.LogInformation(
+                "!removemap {SteamId} removed {Id}", client.SteamId, trimmed);
+            Reply(client, $"[surf] removed {arg} from rotation ({lines.Count} maps)");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "!removemap write failed");
+            Reply(client, "[surf] !removemap failed (see server log)");
+        }
+        return ECommandAction.Handled;
+    }
+
+    // --- !help ------------------------------------------------------------
+
+    private ECommandAction HandleHelp(IGameClient client)
+    {
+        Reply(client, "[surf] commands:");
+        Reply(client, "  !map <id|name>  — change map (admin)");
+        Reply(client, "  !rtv            — vote to rock the vote");
+        Reply(client, "  !nominate <id|name> — nominate next map");
+        Reply(client, "  !extend         — vote to extend current map");
+        Reply(client, "  !maps           — list maps in rotation");
+        Reply(client, "  !addmap <id>    — add map to rotation (admin)");
+        Reply(client, "  !removemap <id|name> — remove from rotation (admin)");
+        Reply(client, "  !help           — this menu");
+        return ECommandAction.Handled;
     }
 
     // --- !map ---------------------------------------------------------------
@@ -373,9 +587,7 @@ public sealed class SurfMapCommand : IModSharpModule, IClientListener, IGameList
     {
         var modSharp = _shared.GetModSharp();
 
-        // Numeric → workshop publish file id. host_workshop_map handles any
-        // subscribed-or-not workshop item; CS2 will download on demand if
-        // the server has Steam credentials.
+        // Numeric → workshop publish file id directly.
         if (long.TryParse(arg, out _))
         {
             _logger.LogInformation("host_workshop_map {WorkshopId}", arg);
@@ -383,19 +595,58 @@ public sealed class SurfMapCommand : IModSharpModule, IClientListener, IGameList
             return;
         }
 
-        // Non-numeric name. Empirically ListWorkshopMaps() only returns the
-        // currently-active workshop map (1 entry), so it's useless as a
-        // name→id resolver for "change to a different map by name".
-        //
-        // ds_workshop_changelevel is the CS2-native command that takes a
-        // workshop map's *short name* and changes to it without needing to
-        // know the publish file id, as long as the map is in the subscribed
-        // set (subscribed_file_ids.txt) or already downloaded under
-        // steamapps/workshop/content/730/. Fire it unconditionally — if the
-        // map name is invalid CS2 just logs an error and stays on the
-        // current map; we lose nothing.
-        _logger.LogInformation("ds_workshop_changelevel {Map}", arg);
+        // Name → look up in mapnames.txt. ListWorkshopMaps() empirically
+        // only returns the currently-active workshop map, so it's useless
+        // as a resolver for "change to a different map by name".
+        var names = ReadMapNames();
+        if (names.TryGetValue(arg.ToLowerInvariant(), out var id))
+        {
+            _logger.LogInformation(
+                "resolved {Name} → {Id} via mapnames.txt", arg, id);
+            modSharp.ServerCommand($"host_workshop_map {id}");
+            return;
+        }
+
+        // Last resort: ds_workshop_changelevel. CS2 will reject with
+        // "Map 'X' is unavailable" if the name isn't in the subscribed set,
+        // but it's the cleanest fallback for built-in maps and edge cases.
+        _logger.LogInformation(
+            "no mapnames.txt entry for {Name}, trying ds_workshop_changelevel", arg);
         modSharp.ServerCommand($"ds_workshop_changelevel {arg}");
+    }
+
+    private Dictionary<string, ulong> ReadMapNames()
+    {
+        var path = Path.Combine(_sharpPath, "configs", "mapnames.txt");
+        var result = new Dictionary<string, ulong>(StringComparer.OrdinalIgnoreCase);
+        if (!File.Exists(path))
+        {
+            return result;
+        }
+
+        try
+        {
+            foreach (var raw in File.ReadAllLines(path))
+            {
+                var line = raw.Trim();
+                if (line.Length == 0 || line.StartsWith('#'))
+                {
+                    continue;
+                }
+                var parts = line.Split([' ', '\t'], 2,
+                    StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+                if (parts.Length == 2 && ulong.TryParse(parts[1], out var id))
+                {
+                    result[parts[0]] = id;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to read mapnames.txt");
+        }
+
+        return result;
     }
 
     private void ResetVoteState(bool resetRotation)
