@@ -296,6 +296,8 @@
       <span class="count-badge" class:loading>
         {#if loading}
           ...
+        {:else if total >= 10001}
+          10,000+ compounds
         {:else}
           {total.toLocaleString()} compounds
         {/if}
@@ -330,7 +332,7 @@
     <!-- Import bar (sticky bottom) -->
     <div class="import-bar">
       <span class="import-count">
-        {total.toLocaleString()} compounds match
+        {total >= 10001 ? '10,000+' : total.toLocaleString()} compounds match
       </span>
       <input
         type="text"
