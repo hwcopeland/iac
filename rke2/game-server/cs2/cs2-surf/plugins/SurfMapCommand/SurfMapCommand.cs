@@ -324,25 +324,49 @@ public sealed class SurfMapCommand : IModSharpModule, IClientListener, IGameList
             return ECommandAction.Handled;
         }
 
+        if (!ulong.TryParse(trimmed, out var workshopId))
+        {
+            Reply(client, "[surf] !addmap takes a numeric workshop id");
+            return ECommandAction.Handled;
+        }
+
         var path = Path.Combine(_sharpPath, "configs", "maprotation.txt");
+        var added = false;
         try
         {
             var lines = File.Exists(path) ? File.ReadAllLines(path).ToList() : [];
             if (lines.Any(l => l.Trim() == trimmed))
             {
                 Reply(client, $"[surf] {trimmed} already in rotation");
-                return ECommandAction.Handled;
             }
-            lines.Add(trimmed);
-            File.WriteAllLines(path, lines);
-            _logger.LogInformation(
-                "!addmap {SteamId} added {Id} to rotation", client.SteamId, trimmed);
-            Reply(client, $"[surf] added {trimmed} to rotation ({lines.Count} maps)");
+            else
+            {
+                lines.Add(trimmed);
+                File.WriteAllLines(path, lines);
+                added = true;
+                _logger.LogInformation(
+                    "!addmap {SteamId} added {Id} to rotation", client.SteamId, trimmed);
+                Reply(client, $"[surf] added {trimmed} to rotation ({lines.Count} maps)");
+            }
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "!addmap write failed");
             Reply(client, "[surf] !addmap failed (see server log)");
+            return ECommandAction.Handled;
+        }
+
+        // Subscribe + trigger immediate download via host_workshop_map. CS2
+        // will pull the vpk from Workshop, mount it, and switch to the new
+        // map. Side effect: current map ends. The user explicitly wants
+        // !addmap to download, and the only download mechanism CS2 exposes
+        // is via map change.
+        EnsureSubscribed(workshopId);
+        if (added)
+        {
+            Reply(client, $"[surf] downloading + switching to {trimmed}…");
+            _logger.LogInformation("!addmap → host_workshop_map {Id}", workshopId);
+            _shared.GetModSharp().ServerCommand($"host_workshop_map {workshopId}");
         }
         return ECommandAction.Handled;
     }
@@ -587,11 +611,14 @@ public sealed class SurfMapCommand : IModSharpModule, IClientListener, IGameList
     {
         var modSharp = _shared.GetModSharp();
 
-        // Numeric → workshop publish file id directly.
-        if (long.TryParse(arg, out _))
+        // Numeric → workshop publish file id directly. Make sure CS2 knows
+        // about it as a subscription first so on-demand download works for
+        // IDs that weren't pre-listed in subscribed_file_ids.txt.
+        if (ulong.TryParse(arg, out var workshopId))
         {
-            _logger.LogInformation("host_workshop_map {WorkshopId}", arg);
-            modSharp.ServerCommand($"host_workshop_map {arg}");
+            EnsureSubscribed(workshopId);
+            _logger.LogInformation("host_workshop_map {WorkshopId}", workshopId);
+            modSharp.ServerCommand($"host_workshop_map {workshopId}");
             return;
         }
 
@@ -601,6 +628,7 @@ public sealed class SurfMapCommand : IModSharpModule, IClientListener, IGameList
         var names = ReadMapNames();
         if (names.TryGetValue(arg.ToLowerInvariant(), out var id))
         {
+            EnsureSubscribed(id);
             _logger.LogInformation(
                 "resolved {Name} → {Id} via mapnames.txt", arg, id);
             modSharp.ServerCommand($"host_workshop_map {id}");
@@ -608,11 +636,52 @@ public sealed class SurfMapCommand : IModSharpModule, IClientListener, IGameList
         }
 
         // Last resort: ds_workshop_changelevel. CS2 will reject with
-        // "Map 'X' is unavailable" if the name isn't in the subscribed set,
-        // but it's the cleanest fallback for built-in maps and edge cases.
+        // "Map 'X' is unavailable" if the name isn't in the subscribed set.
         _logger.LogInformation(
             "no mapnames.txt entry for {Name}, trying ds_workshop_changelevel", arg);
         modSharp.ServerCommand($"ds_workshop_changelevel {arg}");
+    }
+
+    /// <summary>
+    ///     Append a workshop publish file id to subscribed_file_ids.txt so
+    ///     CS2 will auto-download the addon on the next host_workshop_map
+    ///     call. No-op if the id is already present. CS2 reads this file
+    ///     at server start; once added the subscription persists across
+    ///     restarts.
+    /// </summary>
+    private void EnsureSubscribed(ulong workshopId)
+    {
+        var path = Path.Combine(
+            _shared.GetModSharp().GetGamePath(), "csgo", "subscribed_file_ids.txt");
+        try
+        {
+            var idStr = workshopId.ToString();
+            HashSet<string> existing = [];
+            if (File.Exists(path))
+            {
+                foreach (var line in File.ReadAllLines(path))
+                {
+                    var t = line.Trim();
+                    if (t.Length > 0)
+                    {
+                        existing.Add(t);
+                    }
+                }
+            }
+            if (existing.Contains(idStr))
+            {
+                return;
+            }
+            File.AppendAllText(path,
+                (existing.Count == 0 ? string.Empty : Environment.NewLine) + idStr + Environment.NewLine);
+            _logger.LogInformation(
+                "Added {Id} to subscribed_file_ids.txt ({Total} subscribed)",
+                idStr, existing.Count + 1);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "EnsureSubscribed({Id}) failed", workshopId);
+        }
     }
 
     private Dictionary<string, ulong> ReadMapNames()
