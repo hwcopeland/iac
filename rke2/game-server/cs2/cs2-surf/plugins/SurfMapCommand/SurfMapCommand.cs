@@ -109,8 +109,7 @@ public sealed class SurfMapCommand : IModSharpModule, IClientListener
                                              string      commandName,
                                              string      message)
     {
-        // Brute-force diagnostic so the first failed !map after a deploy is
-        // obvious in logs. Remove once chat routing is known-good.
+        // Brute-force diagnostic — remove once everything's confirmed working.
         _logger.LogInformation(
             "SAY from {SteamId} team={Team} isCmd={IsCmd} cmd={Cmd} msg={Msg}",
             client.SteamId, teamOnly, isCommand, commandName, message);
@@ -120,15 +119,31 @@ public sealed class SurfMapCommand : IModSharpModule, IClientListener
             return ECommandAction.Skipped;
         }
 
-        var cmd = (commandName ?? string.Empty).ToLowerInvariant();
-        var arg = (message    ?? string.Empty).Trim();
-
-        // Some parsers include the full "!cmd arg" in message; strip "!cmd"/".cmd".
-        if (arg.StartsWith("!" + cmd, StringComparison.OrdinalIgnoreCase)
-            || arg.StartsWith("." + cmd, StringComparison.OrdinalIgnoreCase))
+        // ModSharp passes commandName="say" and the entire chat line in
+        // message (e.g. "!map surf_kitsune"). The real command + args have
+        // to be parsed out of message, not commandName.
+        var body = (message ?? string.Empty).TrimStart();
+        if (body.Length == 0)
         {
-            arg = arg.Substring(cmd.Length + 1).Trim();
+            return ECommandAction.Skipped;
         }
+
+        // Strip the chat trigger prefix (!, ., /, backtick).
+        if ("!./`".IndexOf(body[0]) >= 0)
+        {
+            body = body.Substring(1);
+        }
+
+        if (body.Length == 0)
+        {
+            return ECommandAction.Skipped;
+        }
+
+        var spaceIdx = body.IndexOf(' ');
+        var cmd      = (spaceIdx < 0 ? body : body.Substring(0, spaceIdx))
+                       .ToLowerInvariant();
+        var arg      = (spaceIdx < 0 ? string.Empty : body.Substring(spaceIdx + 1))
+                       .Trim();
 
         switch (cmd)
         {
