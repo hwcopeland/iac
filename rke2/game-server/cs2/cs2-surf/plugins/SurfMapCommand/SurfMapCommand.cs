@@ -320,16 +320,66 @@ public sealed class SurfMapCommand : IModSharpModule, IClientListener
     private void ChangeMap(string arg)
     {
         var modSharp = _shared.GetModSharp();
+
+        // Numeric → treat as a workshop publish file id.
         if (long.TryParse(arg, out _))
         {
             _logger.LogInformation("host_workshop_map {WorkshopId}", arg);
             modSharp.ServerCommand($"host_workshop_map {arg}");
+            return;
         }
-        else
+
+        // Non-numeric → resolve against known workshop maps first. CS2 only
+        // accepts `changelevel <name>` for maps whose vpk is actively mounted;
+        // workshop maps need either `ds_workshop_changelevel <name>` (looks up
+        // the map by its short name in the subscribed workshop items) or
+        // `host_workshop_map <publishid>`. Try the workshop map list first so
+        // "!map surf_kitsune" works without the admin needing to know IDs.
+        try
         {
-            _logger.LogInformation("changelevel {Map}", arg);
-            modSharp.ServerCommand($"changelevel {arg}");
+            var workshopMaps = modSharp.ListWorkshopMaps();
+            var hit = workshopMaps.Find(i =>
+                i.Name.Equals(arg, StringComparison.OrdinalIgnoreCase));
+            if (hit != default)
+            {
+                _logger.LogInformation(
+                    "resolved {Map} → workshop {Id} via ListWorkshopMaps",
+                    hit.Name, hit.PublishFileId);
+                modSharp.ServerCommand(
+                    $"host_workshop_map {hit.PublishFileId}");
+                return;
+            }
+
+            // Partial-match fallback so "!map kitsune" works for surf_kitsune.
+            var partial = workshopMaps.Find(i =>
+                i.Name.Contains(arg, StringComparison.OrdinalIgnoreCase));
+            if (partial != default)
+            {
+                _logger.LogInformation(
+                    "partial-matched {Arg} → workshop {Id} ({Name})",
+                    arg, partial.PublishFileId, partial.Name);
+                modSharp.ServerCommand(
+                    $"host_workshop_map {partial.PublishFileId}");
+                return;
+            }
         }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "ListWorkshopMaps lookup failed");
+        }
+
+        // Last resort — a built-in or on-disk map. Will no-op if CS2 can't
+        // find it, but we've exhausted the workshop path.
+        if (modSharp.IsMapValid(arg))
+        {
+            _logger.LogInformation("ChangeLevel {Map}", arg);
+            modSharp.ChangeLevel(arg);
+            return;
+        }
+
+        _logger.LogWarning(
+            "ChangeMap: {Arg} not a workshop map and not IsMapValid — giving up",
+            arg);
     }
 
     private void ResetVoteState(bool resetRotation)
