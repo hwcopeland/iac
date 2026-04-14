@@ -156,7 +156,11 @@ public sealed class SurfMapCommand : IModSharpModule, IClientListener
 
     private ECommandAction HandleMap(IGameClient client, string arg)
     {
+        // FindAdmin via IClientManager is obsolete (migrated to AdminManager
+        // at 2.2) but still works — good enough for MVP.
+#pragma warning disable CS0618
         var admin = _clientManager.FindAdmin(client.SteamId);
+#pragma warning restore CS0618
         if (admin is null || !admin.HasPermission("admin:map"))
         {
             _logger.LogInformation(
@@ -332,9 +336,9 @@ public sealed class SurfMapCommand : IModSharpModule, IClientListener
     private int CountConnectedPlayers()
     {
         var count = 0;
-        for (var slot = 0; slot < 64; slot++)
+        for (byte slot = 0; slot < 64; slot++)
         {
-            var c = _clientManager.GetGameClient(slot);
+            var c = _clientManager.GetGameClient(new PlayerSlot(slot));
             if (c is not null && !c.IsFakeClient && c.IsAuthenticated)
             {
                 count++;
