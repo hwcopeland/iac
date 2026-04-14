@@ -127,11 +127,27 @@ if [ -f "${CONFIGS_DIR}/admins.jsonc" ]; then
 fi
 
 # maprotation.txt → sharp/configs/ (workshop ID rotation list)
-# entrypoint's rotation loop reads this every tick.
+# SurfMapCommand reads this on every rotation tick + !maps invocation.
+# !addmap / !removemap append to / delete from this same file at runtime.
 if [ -f "${CONFIGS_DIR}/maprotation.txt" ]; then
     mkdir -p "${CS2_DIR}/game/sharp/configs"
-    cp -f "${CONFIGS_DIR}/maprotation.txt" "${CS2_DIR}/game/sharp/configs/maprotation.txt"
-    log "Deployed maprotation.txt"
+    # Only deploy if the PVC copy doesn't exist — once admins start
+    # editing rotation via !addmap / !removemap we don't want the next
+    # overlay apply to clobber their changes.
+    if [ ! -f "${CS2_DIR}/game/sharp/configs/maprotation.txt" ]; then
+        cp -f "${CONFIGS_DIR}/maprotation.txt" "${CS2_DIR}/game/sharp/configs/maprotation.txt"
+        log "Deployed maprotation.txt (initial)"
+    fi
+fi
+
+# mapnames.txt → sharp/configs/ (name → workshop id resolver)
+# SurfMapCommand reads this so admins can `!map surf_kitsune` instead of
+# memorizing publish file ids. Always overwrite — this is a baked
+# reference table, not user state.
+if [ -f "${CONFIGS_DIR}/mapnames.txt" ]; then
+    mkdir -p "${CS2_DIR}/game/sharp/configs"
+    cp -f "${CONFIGS_DIR}/mapnames.txt" "${CS2_DIR}/game/sharp/configs/mapnames.txt"
+    log "Deployed mapnames.txt"
 fi
 
 # Clean up modules dropped from the image (MCS, AddonManager, the Tnms set).
