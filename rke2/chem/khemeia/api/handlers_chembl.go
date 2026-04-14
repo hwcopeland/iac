@@ -112,7 +112,7 @@ func (h *APIHandler) SearchLigands(w http.ResponseWriter, r *http.Request) {
 	// Pagination
 	limit := 50
 	if v := q.Get("limit"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 500 {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 2000 {
 			limit = n
 		}
 	}
@@ -144,9 +144,11 @@ func (h *APIHandler) SearchLigands(w http.ResponseWriter, r *http.Request) {
 		LEFT JOIN compound_properties cp ON md.molregno = cp.molregno
 		%s`, whereClause)
 
-	// Count query
+	// Capped count query — stops scanning after 10001 rows for performance.
+	// Broad filters on 2.8M compounds would otherwise take seconds to count.
+	const countCap = 10001
 	var total int
-	countSQL := "SELECT COUNT(*) " + baseQuery
+	countSQL := fmt.Sprintf("SELECT COUNT(*) FROM (SELECT 1 %s LIMIT %d) _cnt", baseQuery, countCap)
 	if err := h.chemblDB.QueryRowContext(r.Context(), countSQL, args...).Scan(&total); err != nil {
 		writeError(w, fmt.Sprintf("search count failed: %v", err), http.StatusInternalServerError)
 		return
