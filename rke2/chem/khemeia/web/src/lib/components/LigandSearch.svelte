@@ -215,17 +215,28 @@
   let chartConfig = { responsive: true, displayModeBar: false };
 
   // Import handler
+  function buildTypedParams(): Record<string, any> {
+    const p: Record<string, any> = {};
+    if (textQuery.trim()) p.q = textQuery.trim();
+    if (mwMin) p.mw_min = parseFloat(mwMin);
+    if (mwMax) p.mw_max = parseFloat(mwMax);
+    if (logpMin) p.logp_min = parseFloat(logpMin);
+    if (logpMax) p.logp_max = parseFloat(logpMax);
+    if (hbdMax) p.hbd_max = parseInt(hbdMax);
+    if (hbaMax) p.hba_max = parseInt(hbaMax);
+    if (maxPhase) p.max_phase = parseFloat(maxPhase);
+    if (ro5Only) p.ro5 = true;
+    return p;
+  }
+
   async function handleImport() {
     if (!importDbName.trim()) return;
     importing = true;
     importError = '';
     importMsg = '';
     try {
-      const params = buildParams();
+      const params = buildTypedParams();
       params.source_db = importDbName.trim();
-      // Remove limit/offset -- import all matches
-      delete params.limit;
-      delete params.offset;
       const res = await importFromFilter(params);
       importMsg = `Imported ${res.imported} compound${res.imported !== 1 ? 's' : ''} into "${res.source_db}"`;
       importDbName = '';
