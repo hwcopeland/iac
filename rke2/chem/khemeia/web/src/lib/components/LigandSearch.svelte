@@ -1,9 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import Panel from './Panel.svelte';
-  import PlotlyChart from './charts/PlotlyChart.svelte';
   import { searchLigands, importFromFilter } from '$lib/api';
-  import type { Compound } from '$lib/api';
 
   let { onImported = (_db: string) => {} }: { onImported?: (db: string) => void } = $props();
 
@@ -18,11 +16,11 @@
   let ro5Only = $state(false);
   let textQuery = $state('');
 
-  // Data state
-  let compounds = $state<Compound[]>([]);
-  let total = $state(0);
+  // Results state
+  let total = $state<number | null>(null);
   let loading = $state(false);
   let error = $state('');
+  let searched = $state(false);
 
   // Import state
   let importDbName = $state('');
@@ -30,12 +28,9 @@
   let importMsg = $state('');
   let importError = $state('');
 
-  // Debounce timer
-  let debounceTimer = $state<ReturnType<typeof setTimeout> | null>(null);
-
   function buildParams(): Record<string, string> {
     const params: Record<string, string> = {
-      limit: '1000',
+      limit: '1',
       offset: '0',
     };
     if (textQuery.trim()) params.q = textQuery.trim();
@@ -50,171 +45,21 @@
     return params;
   }
 
-  // Fire search on mount and whenever filters change.
-  // Using onchange handlers on inputs instead of $effect to avoid Svelte 5
-  // reactivity issues with $derived in effects.
-  function onFilterChange() {
-    if (debounceTimer) clearTimeout(debounceTimer);
-    debounceTimer = setTimeout(() => doSearch(), 400);
-  }
-
-  // Initial search on mount
-  onMount(() => {
-    doSearch();
-  });
-
   async function doSearch() {
     loading = true;
     error = '';
     try {
       const res = await searchLigands(buildParams());
-      compounds = res.compounds;
       total = res.total;
+      searched = true;
     } catch (e: any) {
       error = e.message || 'Search failed';
-      compounds = [];
-      total = 0;
+      total = null;
     } finally {
       loading = false;
     }
   }
 
-  // Phase color mapping
-  const phaseColors: Record<number, string> = {
-    0: '#484f58',
-    1: '#f85149',
-    2: '#e3822a',
-    3: '#d29922',
-    4: '#3fb950',
-  };
-
-  const phaseLabels: Record<number, string> = {
-    0: 'Preclinical',
-    1: 'Phase I',
-    2: 'Phase II',
-    3: 'Phase III',
-    4: 'Approved',
-  };
-
-  function truncate(s: string, max: number): string {
-    if (!s) return '';
-    return s.length > max ? s.slice(0, max) + '\u2026' : s;
-  }
-
-  // Plotly chart data - scatter plot colored by phase
-  let chartData = $derived.by(() => {
-    if (compounds.length === 0) return [];
-
-    // Group compounds by phase for separate trace per phase (enables legend)
-    const groups = new Map<number, Compound[]>();
-    for (const c of compounds) {
-      const phase = c.max_phase ?? 0;
-      if (!groups.has(phase)) groups.set(phase, []);
-      groups.get(phase)!.push(c);
-    }
-
-    const traces: any[] = [];
-    for (const [phase, comps] of [...groups.entries()].sort((a, b) => a[0] - b[0])) {
-      traces.push({
-        x: comps.map(c => c.mw),
-        y: comps.map(c => c.logp),
-        text: comps.map(c =>
-          `<b>${c.chembl_id}</b><br>` +
-          `${c.pref_name || '(unnamed)'}<br>` +
-          `MW: ${c.mw?.toFixed(1)} | LogP: ${c.logp?.toFixed(2)}<br>` +
-          `SMILES: ${truncate(c.smiles, 40)}`
-        ),
-        hoverinfo: 'text',
-        type: 'scattergl' as const,
-        mode: 'markers' as const,
-        marker: {
-          color: phaseColors[phase] ?? '#484f58',
-          size: 5,
-          opacity: 0.75,
-          line: { width: 0 },
-        },
-        name: phaseLabels[phase] ?? `Phase ${phase}`,
-      });
-    }
-
-    return traces;
-  });
-
-  // Plotly layout with Ro5 boundary box
-  let chartLayout = $derived.by(() => ({
-    height: 300,
-    xaxis: {
-      title: { text: 'Molecular Weight', font: { size: 11, color: '#8b949e' } },
-      gridcolor: 'rgba(48,54,61,0.4)',
-      zerolinecolor: 'rgba(48,54,61,0.6)',
-      color: '#8b949e',
-    },
-    yaxis: {
-      title: { text: 'LogP', font: { size: 11, color: '#8b949e' } },
-      gridcolor: 'rgba(48,54,61,0.4)',
-      zerolinecolor: 'rgba(48,54,61,0.6)',
-      color: '#8b949e',
-    },
-    paper_bgcolor: '#0d1117',
-    plot_bgcolor: 'rgba(13,17,23,0.8)',
-    font: { color: '#8b949e', family: 'SF Mono, monospace', size: 10 },
-    margin: { l: 55, r: 12, t: 10, b: 45 },
-    showlegend: true,
-    legend: {
-      orientation: 'h' as const,
-      x: 0,
-      y: 1.12,
-      font: { size: 10, color: '#8b949e' },
-      bgcolor: 'rgba(0,0,0,0)',
-    },
-    // Ro5 boundary lines: MW <= 500, LogP <= 5
-    shapes: [
-      // Vertical line at MW = 500
-      {
-        type: 'line',
-        x0: 500, x1: 500,
-        y0: 0, y1: 1,
-        yref: 'paper',
-        line: { color: 'rgba(88,166,255,0.35)', width: 1.5, dash: 'dash' },
-      },
-      // Horizontal line at LogP = 5
-      {
-        type: 'line',
-        x0: 0, x1: 1,
-        xref: 'paper',
-        y0: 5, y1: 5,
-        line: { color: 'rgba(88,166,255,0.35)', width: 1.5, dash: 'dash' },
-      },
-    ],
-    annotations: [
-      {
-        x: 500,
-        y: 1,
-        yref: 'paper',
-        text: 'MW 500',
-        showarrow: false,
-        font: { size: 9, color: 'rgba(88,166,255,0.6)', family: 'SF Mono, monospace' },
-        xanchor: 'left',
-        yanchor: 'top',
-        xshift: 3,
-      },
-      {
-        x: 1,
-        xref: 'paper',
-        y: 5,
-        text: 'LogP 5',
-        showarrow: false,
-        font: { size: 9, color: 'rgba(88,166,255,0.6)', family: 'SF Mono, monospace' },
-        xanchor: 'right',
-        yanchor: 'bottom',
-        yshift: 3,
-      },
-    ],
-  }));
-
-  let chartConfig = { responsive: true, displayModeBar: false };
-
-  // Import handler
   function buildTypedParams(): Record<string, any> {
     const p: Record<string, any> = {};
     if (textQuery.trim()) p.q = textQuery.trim();
@@ -230,7 +75,7 @@
   }
 
   async function handleImport() {
-    if (!importDbName.trim()) return;
+    if (!importDbName.trim() || !total) return;
     importing = true;
     importError = '';
     importMsg = '';
@@ -238,7 +83,7 @@
       const params = buildTypedParams();
       params.source_db = importDbName.trim();
       const res = await importFromFilter(params);
-      importMsg = `Imported ${res.imported} compound${res.imported !== 1 ? 's' : ''} into "${res.source_db}"`;
+      importMsg = `Imported ${res.imported.toLocaleString()} compounds into "${res.source_db}"`;
       importDbName = '';
       onImported(res.source_db);
     } catch (e: any) {
@@ -247,125 +92,95 @@
       importing = false;
     }
   }
+
+  // Search on mount
+  onMount(() => { doSearch(); });
 </script>
 
 <div class="ligand-search">
-  <Panel title="Chemical Space Explorer">
-    <!-- Filter bar -->
-    <div class="filter-bar">
-      <div class="filter-group">
+  <Panel title="ChEMBL Compound Filter">
+    <div class="filters">
+      <div class="filter-row">
         <label class="filter-label">MW</label>
-        <input type="number" class="filter-input" bind:value={mwMin} placeholder="min" oninput={onFilterChange} />
-        <span class="filter-sep">&ndash;</span>
-        <input type="number" class="filter-input" bind:value={mwMax} placeholder="max" oninput={onFilterChange} />
+        <input type="number" class="filter-input" bind:value={mwMin} placeholder="min" />
+        <span class="sep">&ndash;</span>
+        <input type="number" class="filter-input" bind:value={mwMax} placeholder="max" />
       </div>
-
-      <div class="filter-group">
+      <div class="filter-row">
         <label class="filter-label">LogP</label>
-        <input type="number" class="filter-input" step="0.1" bind:value={logpMin} placeholder="min" oninput={onFilterChange} />
-        <span class="filter-sep">&ndash;</span>
-        <input type="number" class="filter-input" step="0.1" bind:value={logpMax} placeholder="max" oninput={onFilterChange} />
+        <input type="number" class="filter-input" step="0.1" bind:value={logpMin} placeholder="min" />
+        <span class="sep">&ndash;</span>
+        <input type="number" class="filter-input" step="0.1" bind:value={logpMax} placeholder="max" />
       </div>
-
-      <div class="filter-group">
+      <div class="filter-row">
         <label class="filter-label">HBD</label>
-        <input type="number" class="filter-input filter-input-narrow" bind:value={hbdMax} placeholder="max" oninput={onFilterChange} />
-      </div>
-
-      <div class="filter-group">
+        <input type="number" class="filter-input small" bind:value={hbdMax} placeholder="max" />
         <label class="filter-label">HBA</label>
-        <input type="number" class="filter-input filter-input-narrow" bind:value={hbaMax} placeholder="max" oninput={onFilterChange} />
+        <input type="number" class="filter-input small" bind:value={hbaMax} placeholder="max" />
       </div>
-
-      <div class="filter-group">
+      <div class="filter-row">
         <label class="filter-label">Phase</label>
-        <select class="filter-select" bind:value={maxPhase} onchange={onFilterChange}>
+        <select class="filter-select" bind:value={maxPhase}>
           <option value="">Any</option>
           <option value="0">0</option>
           <option value="1">1</option>
           <option value="2">2</option>
           <option value="3">3</option>
-          <option value="4">4</option>
+          <option value="4">4 (Approved)</option>
         </select>
+        <label class="check-label">
+          <input type="checkbox" bind:checked={ro5Only} />
+          Ro5
+        </label>
       </div>
-
-      <label class="filter-checkbox">
-        <input type="checkbox" bind:checked={ro5Only} onchange={onFilterChange} />
-        Ro5
-      </label>
-
-      <div class="filter-group filter-group-search">
+      <div class="filter-row">
         <input
           type="text"
-          class="filter-input filter-input-search"
-          placeholder="Name or ID..."
+          class="filter-input search-input"
+          placeholder="Search name or ChEMBL ID..."
           bind:value={textQuery}
-          oninput={onFilterChange}
         />
       </div>
 
-      <span class="count-badge" class:loading>
-        {#if loading}
-          ...
-        {:else if total > 1000}
-          1,000+ compounds
-        {:else if total > 0}
-          {total.toLocaleString()} compounds
-        {:else}
-          {total.toLocaleString()} compounds
-        {/if}
-      </span>
+      <button class="search-btn" onclick={doSearch} disabled={loading}>
+        {loading ? 'Searching...' : 'Search'}
+      </button>
     </div>
 
-    <!-- Error message -->
     {#if error}
-      <p class="error-msg">{error}</p>
+      <p class="msg error">{error}</p>
     {/if}
 
-    <!-- Success message -->
-    {#if importMsg}
-      <p class="success-msg">{importMsg}</p>
-    {/if}
+    {#if searched && total !== null}
+      <div class="result-box">
+        <span class="result-count">{total.toLocaleString()}</span>
+        <span class="result-label">compounds found</span>
+      </div>
 
-    <!-- Scatter plot -->
-    <div class="chart-area">
-      {#if compounds.length > 0}
-        <PlotlyChart data={chartData} layout={chartLayout} config={chartConfig} />
-      {:else if !loading}
-        <div class="chart-empty">
-          <span>No compounds in current filter range</span>
-        </div>
-      {:else}
-        <div class="chart-empty">
-          <span>Loading...</span>
+      {#if total > 0}
+        <div class="import-section">
+          <input
+            type="text"
+            class="filter-input import-input"
+            placeholder="Name this ligand set..."
+            bind:value={importDbName}
+          />
+          <button
+            class="import-btn"
+            onclick={handleImport}
+            disabled={importing || !importDbName.trim()}
+          >
+            {importing ? 'Importing...' : `Import ${total.toLocaleString()} compounds`}
+          </button>
         </div>
       {/if}
-    </div>
+    {/if}
 
-    <!-- Import bar -->
-    <div class="import-bar">
-      <span class="import-count">
-        {total.toLocaleString()} compounds match
-      </span>
-      <div class="import-row">
-        <input
-          type="text"
-          class="filter-input import-name-input"
-          placeholder="Name this set..."
-          bind:value={importDbName}
-        />
-        <button
-          class="import-btn"
-          onclick={handleImport}
-          disabled={importing || !importDbName.trim() || total === 0}
-        >
-          {importing ? 'Importing...' : 'Import All'}
-        </button>
-      </div>
-    </div>
-
+    {#if importMsg}
+      <p class="msg success">{importMsg}</p>
+    {/if}
     {#if importError}
-      <p class="error-msg import-error">{importError}</p>
+      <p class="msg error">{importError}</p>
     {/if}
   </Panel>
 </div>
@@ -376,25 +191,16 @@
     flex-direction: column;
   }
 
-  /* ---- Filter bar ---- */
-  .filter-bar {
+  .filters {
     display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 8px 10px;
-    padding: 6px 0 10px;
+    flex-direction: column;
+    gap: 8px;
   }
 
-  .filter-group {
+  .filter-row {
     display: flex;
     align-items: center;
-    gap: 4px;
-    flex-shrink: 0;
-  }
-
-  .filter-group-search {
-    flex: 1;
-    min-width: 100px;
+    gap: 6px;
   }
 
   .filter-label {
@@ -403,7 +209,7 @@
     color: var(--text-secondary, #8b949e);
     text-transform: uppercase;
     letter-spacing: 0.3px;
-    white-space: nowrap;
+    min-width: 32px;
   }
 
   .filter-input {
@@ -411,160 +217,128 @@
     border: 1px solid rgba(48, 54, 61, 0.6);
     color: var(--text-primary, #e6edf3);
     font-family: 'SF Mono', monospace;
-    font-size: 11px;
-    padding: 4px 6px;
+    font-size: 12px;
+    padding: 5px 8px;
     border-radius: 4px;
-    width: 58px;
+    width: 70px;
     outline: none;
-    transition: border-color 0.15s;
   }
 
   .filter-input:focus {
     border-color: var(--accent, #58a6ff);
   }
 
-  .filter-input-narrow {
-    width: 42px;
+  .filter-input.small {
+    width: 50px;
   }
 
-  .filter-input-search {
+  .search-input {
     width: 100%;
+    flex: 1;
   }
 
   .filter-select {
     background: rgba(0, 0, 0, 0.3);
     border: 1px solid rgba(48, 54, 61, 0.6);
     color: var(--text-primary, #e6edf3);
-    font-family: 'SF Mono', monospace;
-    font-size: 11px;
-    padding: 4px 6px;
+    font-size: 12px;
+    padding: 5px 8px;
     border-radius: 4px;
     outline: none;
-    transition: border-color 0.15s;
-    width: auto;
   }
 
   .filter-select:focus {
     border-color: var(--accent, #58a6ff);
   }
 
-  .filter-sep {
+  .sep {
     color: var(--text-muted, #484f58);
-    font-size: 11px;
   }
 
-  .filter-checkbox {
+  .check-label {
     display: flex;
     align-items: center;
-    gap: 3px;
+    gap: 4px;
     font-size: 10px;
     font-weight: 600;
     color: var(--text-secondary, #8b949e);
     text-transform: uppercase;
-    letter-spacing: 0.3px;
-    white-space: nowrap;
     cursor: pointer;
+    margin-left: 8px;
   }
 
-  .filter-checkbox input[type="checkbox"] {
+  .check-label input {
     accent-color: var(--accent, #58a6ff);
   }
 
-  .count-badge {
-    font-size: 10px;
-    font-weight: 600;
-    color: var(--accent, #58a6ff);
-    background: rgba(88, 166, 255, 0.1);
-    padding: 3px 8px;
-    border-radius: 10px;
-    white-space: nowrap;
-    flex-shrink: 0;
-  }
-
-  .count-badge.loading {
-    opacity: 0.5;
-  }
-
-  /* ---- Chart area ---- */
-  .chart-area {
-    min-height: 300px;
-    border-radius: 4px;
-    overflow: hidden;
-  }
-
-  .chart-empty {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    height: 300px;
-    color: var(--text-muted, #484f58);
-    font-size: 12px;
-    background: rgba(0, 0, 0, 0.15);
-    border-radius: 4px;
-  }
-
-  /* ---- Import bar ---- */
-  .import-bar {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    padding: 10px 0 2px;
-    border-top: 1px solid rgba(48, 54, 61, 0.4);
-    margin-top: 8px;
-  }
-
-  .import-count {
-    font-size: 11px;
-    color: var(--text-secondary, #8b949e);
-  }
-
-  .import-row {
-    display: flex;
-    gap: 6px;
-  }
-
-  .import-name-input {
-    flex: 1;
-    min-width: 0;
-  }
-
-  .import-btn {
+  .search-btn {
     background: var(--accent, #58a6ff);
     border: none;
     color: #000;
-    font-size: 11px;
+    font-size: 13px;
     font-weight: 600;
-    padding: 5px 14px;
-    border-radius: 4px;
+    padding: 8px 12px;
+    border-radius: 6px;
     cursor: pointer;
-    white-space: nowrap;
-    flex-shrink: 0;
-    transition: opacity 0.15s;
+    width: 100%;
+    margin-top: 4px;
   }
 
-  .import-btn:hover:not(:disabled) {
-    opacity: 0.9;
+  .search-btn:hover:not(:disabled) { opacity: 0.9; }
+  .search-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  .result-box {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    padding: 12px 0;
+    border-bottom: 1px solid rgba(48, 54, 61, 0.4);
+    margin-top: 8px;
   }
 
-  .import-btn:disabled {
-    opacity: 0.4;
-    cursor: not-allowed;
+  .result-count {
+    font-family: 'SF Mono', monospace;
+    font-size: 24px;
+    font-weight: 700;
+    color: var(--accent, #58a6ff);
   }
 
-  /* ---- Messages ---- */
-  .success-msg {
-    color: #3fb950;
-    font-size: 11px;
-    margin: 4px 0;
+  .result-label {
+    font-size: 13px;
+    color: var(--text-secondary, #8b949e);
   }
 
-  .error-msg {
-    color: var(--danger, #f85149);
-    font-size: 11px;
-    margin: 4px 0;
+  .import-section {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 10px 0;
   }
 
-  .import-error {
-    margin-top: 2px;
+  .import-input {
+    width: 100%;
   }
+
+  .import-btn {
+    background: #3fb950;
+    border: none;
+    color: #000;
+    font-size: 13px;
+    font-weight: 600;
+    padding: 8px 12px;
+    border-radius: 6px;
+    cursor: pointer;
+    width: 100%;
+  }
+
+  .import-btn:hover:not(:disabled) { opacity: 0.9; }
+  .import-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  .msg {
+    font-size: 12px;
+    margin: 8px 0 0;
+  }
+
+  .msg.success { color: #3fb950; }
+  .msg.error { color: #f85149; }
 </style>
