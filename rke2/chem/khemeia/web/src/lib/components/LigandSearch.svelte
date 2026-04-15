@@ -30,7 +30,7 @@
 
   function buildParams(): Record<string, string> {
     const params: Record<string, string> = {
-      limit: '1',
+      limit: '0',
       offset: '0',
     };
     if (textQuery.trim()) params.q = textQuery.trim();
