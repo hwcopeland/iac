@@ -99,6 +99,80 @@ func buildChEMBLFilterClauses(params map[string]string) (conditions []string, ar
 	return conditions, args
 }
 
+// buildFastCountQuery builds a count query using minimal JOINs.
+// When only compound_properties filters are active, skips the expensive
+// compound_structures and molecule_dictionary JOINs entirely.
+func buildFastCountQuery(params map[string]string) (string, []interface{}) {
+	var conditions []string
+	var args []interface{}
+	needsMD := false // molecule_dictionary needed for text search or max_phase
+
+	if v := params["mw_min"]; v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			conditions = append(conditions, "cp.mw_freebase >= ?")
+			args = append(args, f)
+		}
+	}
+	if v := params["mw_max"]; v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			conditions = append(conditions, "cp.mw_freebase <= ?")
+			args = append(args, f)
+		}
+	}
+	if v := params["logp_min"]; v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			conditions = append(conditions, "cp.alogp >= ?")
+			args = append(args, f)
+		}
+	}
+	if v := params["logp_max"]; v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			conditions = append(conditions, "cp.alogp <= ?")
+			args = append(args, f)
+		}
+	}
+	if v := params["hba_max"]; v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			conditions = append(conditions, "cp.hba <= ?")
+			args = append(args, n)
+		}
+	}
+	if v := params["hbd_max"]; v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			conditions = append(conditions, "cp.hbd <= ?")
+			args = append(args, n)
+		}
+	}
+	if params["ro5"] == "true" {
+		conditions = append(conditions, "cp.num_ro5_violations = 0")
+	}
+	if v := params["max_phase"]; v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			conditions = append(conditions, "md.max_phase = ?")
+			args = append(args, f)
+			needsMD = true
+		}
+	}
+	if search := params["q"]; search != "" {
+		conditions = append(conditions, "(md.chembl_id LIKE ? OR md.pref_name LIKE ?)")
+		pattern := "%" + search + "%"
+		args = append(args, pattern, pattern)
+		needsMD = true
+	}
+
+	from := "compound_properties cp"
+	if needsMD {
+		from = "compound_properties cp JOIN molecule_dictionary md ON cp.molregno = md.molregno"
+	}
+
+	where := ""
+	if len(conditions) > 0 {
+		where = " WHERE " + strings.Join(conditions, " AND ")
+	}
+
+	return fmt.Sprintf("SELECT COUNT(*) FROM %s%s", from, where), args
+}
+
 // SearchLigands handles GET /api/v1/ligands/search.
 // Searches the ChEMBL compound library with optional filters.
 func (h *APIHandler) SearchLigands(w http.ResponseWriter, r *http.Request) {
@@ -144,12 +218,10 @@ func (h *APIHandler) SearchLigands(w http.ResponseWriter, r *http.Request) {
 		LEFT JOIN compound_properties cp ON md.molregno = cp.molregno
 		%s`, whereClause)
 
-	// Capped count — avoids scanning millions of rows on broad filters.
-	// Returns exact count up to 100K, then "100000+" for the frontend.
-	const countCap = 100001
+	// Fast count using minimal JOINs (skips compound_structures when possible).
 	var total int
-	countSQL := fmt.Sprintf("SELECT COUNT(*) FROM (SELECT 1 %s LIMIT %d) _cnt", baseQuery, countCap)
-	if err := h.chemblDB.QueryRowContext(r.Context(), countSQL, args...).Scan(&total); err != nil {
+	countSQL, countArgs := buildFastCountQuery(params)
+	if err := h.chemblDB.QueryRowContext(r.Context(), countSQL, countArgs...).Scan(&total); err != nil {
 		writeError(w, fmt.Sprintf("search count failed: %v", err), http.StatusInternalServerError)
 		return
 	}
