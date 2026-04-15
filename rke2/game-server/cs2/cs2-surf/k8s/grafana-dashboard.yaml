@@ -1,0 +1,273 @@
+---
+# Grafana dashboard ConfigMap for cs2-surf-server overview.
+#
+# Auto-imported by the kube-prometheus-stack Grafana sidecar via the
+# `grafana_dashboard: "1"` label. Dashboard shows pod health, CPU,
+# memory, network I/O, and container restarts from cadvisor metrics
+# that Prometheus already scrapes from kubelet.
+#
+# Game-level metrics (player count, current map, rotation state, chat
+# commands issued) need Loki log scraping to be turned on for the
+# game-server namespace — that's queued as a homelab TODO item in
+# docs/HOMELAB-TODO.md. When that lands this dashboard can grow
+# additional panels that query Loki via the log datasource.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cs2-surf-server-dashboard
+  namespace: monitor
+  labels:
+    grafana_dashboard: "1"
+data:
+  cs2-surf-server.json: |-
+    {
+      "annotations": {
+        "list": [
+          {
+            "builtIn": 1,
+            "datasource": { "type": "grafana", "uid": "-- Grafana --" },
+            "enable": true,
+            "hide": true,
+            "iconColor": "rgba(0, 211, 255, 1)",
+            "name": "Annotations & Alerts",
+            "type": "dashboard"
+          }
+        ]
+      },
+      "editable": true,
+      "fiscalYearStartMonth": 0,
+      "graphTooltip": 1,
+      "links": [],
+      "liveNow": false,
+      "panels": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "mappings": [
+                { "options": { "0": { "color": "red",   "text": "DOWN" } }, "type": "value" },
+                { "options": { "1": { "color": "green", "text": "UP"   } }, "type": "value" }
+              ],
+              "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "green", "value": 1 }] }
+            }
+          },
+          "gridPos": { "h": 4, "w": 4, "x": 0, "y": 0 },
+          "id": 1,
+          "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "center", "textMode": "value_and_name" },
+          "pluginVersion": "10.0.0",
+          "targets": [
+            {
+              "datasource": { "type": "prometheus", "uid": "prometheus" },
+              "expr": "kube_pod_status_ready{namespace=\"game-server\", pod=~\"cs2-surf-server.*\", condition=\"true\"}",
+              "instant": true,
+              "refId": "A"
+            }
+          ],
+          "title": "Pod Ready",
+          "type": "stat"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 1 }, { "color": "red", "value": 3 }] },
+              "unit": "short"
+            }
+          },
+          "gridPos": { "h": 4, "w": 4, "x": 4, "y": 0 },
+          "id": 2,
+          "options": { "colorMode": "value", "graphMode": "none", "justifyMode": "center", "textMode": "value_and_name" },
+          "targets": [
+            {
+              "datasource": { "type": "prometheus", "uid": "prometheus" },
+              "expr": "sum(kube_pod_container_status_restarts_total{namespace=\"game-server\", pod=~\"cs2-surf-server.*\"})",
+              "instant": true,
+              "refId": "A"
+            }
+          ],
+          "title": "Container Restarts (all-time)",
+          "type": "stat"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] },
+              "unit": "s"
+            }
+          },
+          "gridPos": { "h": 4, "w": 4, "x": 8, "y": 0 },
+          "id": 3,
+          "options": { "colorMode": "value", "graphMode": "area", "justifyMode": "center", "textMode": "value_and_name" },
+          "targets": [
+            {
+              "datasource": { "type": "prometheus", "uid": "prometheus" },
+              "expr": "time() - max(kube_pod_start_time{namespace=\"game-server\", pod=~\"cs2-surf-server.*\"})",
+              "instant": true,
+              "refId": "A"
+            }
+          ],
+          "title": "Pod Uptime",
+          "type": "stat"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "palette-classic" },
+              "custom": {
+                "axisPlacement": "auto",
+                "drawStyle": "line",
+                "fillOpacity": 10,
+                "gradientMode": "opacity",
+                "lineInterpolation": "smooth",
+                "lineWidth": 1,
+                "pointSize": 5,
+                "showPoints": "never",
+                "spanNulls": true
+              },
+              "unit": "cores"
+            }
+          },
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+          "id": 4,
+          "options": { "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom" } },
+          "targets": [
+            {
+              "datasource": { "type": "prometheus", "uid": "prometheus" },
+              "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=\"game-server\", pod=~\"cs2-surf-server.*\", container=\"cs2-surf-server\"}[5m]))",
+              "legendFormat": "cs2-surf-server",
+              "refId": "A"
+            }
+          ],
+          "title": "CPU Usage",
+          "type": "timeseries"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "palette-classic" },
+              "custom": {
+                "axisPlacement": "auto",
+                "drawStyle": "line",
+                "fillOpacity": 10,
+                "gradientMode": "opacity",
+                "lineInterpolation": "smooth",
+                "lineWidth": 1,
+                "pointSize": 5,
+                "showPoints": "never",
+                "spanNulls": true
+              },
+              "unit": "bytes"
+            }
+          },
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+          "id": 5,
+          "options": { "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom" } },
+          "targets": [
+            {
+              "datasource": { "type": "prometheus", "uid": "prometheus" },
+              "expr": "max(container_memory_working_set_bytes{namespace=\"game-server\", pod=~\"cs2-surf-server.*\", container=\"cs2-surf-server\"})",
+              "legendFormat": "working set",
+              "refId": "A"
+            },
+            {
+              "datasource": { "type": "prometheus", "uid": "prometheus" },
+              "expr": "max(container_spec_memory_limit_bytes{namespace=\"game-server\", pod=~\"cs2-surf-server.*\", container=\"cs2-surf-server\"})",
+              "legendFormat": "limit",
+              "refId": "B"
+            }
+          ],
+          "title": "Memory",
+          "type": "timeseries"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "palette-classic" },
+              "custom": {
+                "axisPlacement": "auto",
+                "drawStyle": "line",
+                "fillOpacity": 10,
+                "gradientMode": "opacity",
+                "lineInterpolation": "smooth",
+                "lineWidth": 1,
+                "pointSize": 5,
+                "showPoints": "never",
+                "spanNulls": true
+              },
+              "unit": "bps"
+            }
+          },
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+          "id": 6,
+          "options": { "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom" } },
+          "targets": [
+            {
+              "datasource": { "type": "prometheus", "uid": "prometheus" },
+              "expr": "sum(rate(container_network_receive_bytes_total{namespace=\"game-server\", pod=~\"cs2-surf-server.*\"}[1m])) * 8",
+              "legendFormat": "rx",
+              "refId": "A"
+            },
+            {
+              "datasource": { "type": "prometheus", "uid": "prometheus" },
+              "expr": "sum(rate(container_network_transmit_bytes_total{namespace=\"game-server\", pod=~\"cs2-surf-server.*\"}[1m])) * 8",
+              "legendFormat": "tx",
+              "refId": "B"
+            }
+          ],
+          "title": "Network I/O",
+          "type": "timeseries"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "palette-classic" },
+              "custom": {
+                "axisPlacement": "auto",
+                "drawStyle": "line",
+                "fillOpacity": 10,
+                "gradientMode": "opacity",
+                "lineInterpolation": "stepAfter",
+                "lineWidth": 1,
+                "pointSize": 5,
+                "showPoints": "always",
+                "spanNulls": true
+              },
+              "unit": "short"
+            }
+          },
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+          "id": 7,
+          "options": { "legend": { "calcs": ["max"], "displayMode": "table", "placement": "bottom" } },
+          "targets": [
+            {
+              "datasource": { "type": "prometheus", "uid": "prometheus" },
+              "expr": "sum(kube_pod_container_status_restarts_total{namespace=\"game-server\", pod=~\"cs2-surf-server.*\"})",
+              "legendFormat": "restarts",
+              "refId": "A"
+            }
+          ],
+          "title": "Container Restarts Over Time",
+          "type": "timeseries"
+        }
+      ],
+      "refresh": "30s",
+      "schemaVersion": 38,
+      "style": "dark",
+      "tags": ["cs2", "surf", "game-server"],
+      "templating": { "list": [] },
+      "time": { "from": "now-6h", "to": "now" },
+      "timepicker": {},
+      "timezone": "browser",
+      "title": "CS2 Surf Server Overview",
+      "uid": "cs2-surf-overview",
+      "version": 1,
+      "weekStart": ""
+    }
