@@ -144,9 +144,11 @@ func (h *APIHandler) SearchLigands(w http.ResponseWriter, r *http.Request) {
 		LEFT JOIN compound_properties cp ON md.molregno = cp.molregno
 		%s`, whereClause)
 
-	// Count matching compounds
+	// Capped count — avoids scanning millions of rows on broad filters.
+	// Returns exact count up to 100K, then "100000+" for the frontend.
+	const countCap = 100001
 	var total int
-	countSQL := "SELECT COUNT(*) " + baseQuery
+	countSQL := fmt.Sprintf("SELECT COUNT(*) FROM (SELECT 1 %s LIMIT %d) _cnt", baseQuery, countCap)
 	if err := h.chemblDB.QueryRowContext(r.Context(), countSQL, args...).Scan(&total); err != nil {
 		writeError(w, fmt.Sprintf("search count failed: %v", err), http.StatusInternalServerError)
 		return
