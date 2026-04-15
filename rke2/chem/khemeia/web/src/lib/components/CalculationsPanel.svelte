@@ -229,7 +229,7 @@
                   <p class="form-desc">{field.description}</p>
                 {/if}
 
-                {#if field.name === 'ligand_db' && ligandDBs.length > 0}
+                {#if field.name === 'ligand_db'}
                   <div class="ligand-db-row">
                     <select
                       id="{plugin.slug}-{field.name}"
@@ -238,7 +238,7 @@
                       onchange={(e) => setFieldValue(plugin.slug, field.name, (e.target as HTMLSelectElement).value)}
                       required={field.required}
                     >
-                      <option value="">Select ligand database...</option>
+                      <option value="">{ligandDBs.length ? 'Select ligand database...' : 'No databases — import from ChEMBL'}</option>
                       {#each ligandDBs as db}
                         <option value={db}>{db}</option>
                       {/each}
