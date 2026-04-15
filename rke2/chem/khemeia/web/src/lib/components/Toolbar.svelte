@@ -2,7 +2,7 @@
   import { isAuthenticated, getUser, login, logout } from '$lib/auth';
   import type { UserInfo } from '$lib/auth';
 
-  type Tab = 'explorer' | 'builder' | 'calculations';
+  type Tab = 'explorer' | 'analysis' | 'calculations';
 
   let { activeTab = $bindable('explorer'), onCommandPalette, authReady = false }: {
     activeTab: Tab;
@@ -12,7 +12,7 @@
 
   const tabs: { id: Tab; label: string }[] = [
     { id: 'explorer', label: 'Explorer' },
-    { id: 'builder', label: 'Builder' },
+    { id: 'analysis', label: 'Analysis' },
     { id: 'calculations', label: 'Calculations' },
   ];
 

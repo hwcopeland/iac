@@ -6,14 +6,14 @@
   import Toolbar from '$lib/components/Toolbar.svelte';
   import ExplorerPanel from '$lib/components/ExplorerPanel.svelte';
   import StructureBrowser from '$lib/components/StructureBrowser.svelte';
-  import BuilderPanel from '$lib/components/BuilderPanel.svelte';
+  import AnalysisPanel from '$lib/components/AnalysisPanel.svelte';
   import CalculationsPanel from '$lib/components/CalculationsPanel.svelte';
   import SelectionInfo from '$lib/components/SelectionInfo.svelte';
   import StatusBar from '$lib/components/StatusBar.svelte';
   import CommandPalette from '$lib/components/CommandPalette.svelte';
   import Toast from '$lib/components/Toast.svelte';
 
-  type Tab = 'explorer' | 'builder' | 'calculations';
+  type Tab = 'explorer' | 'analysis' | 'calculations';
 
   let activeTab = $state<Tab>('explorer');
   let viewerContainer = $state<HTMLDivElement>(undefined as unknown as HTMLDivElement);
@@ -68,7 +68,7 @@
       const tag = (e.target as HTMLElement)?.tagName;
       if (!mod && !e.altKey && !e.shiftKey && tag !== 'INPUT' && tag !== 'TEXTAREA' && tag !== 'SELECT') {
         if (e.key === '1') activeTab = 'explorer';
-        else if (e.key === '2') activeTab = 'builder';
+        else if (e.key === '2') activeTab = 'analysis';
         else if (e.key === '3') activeTab = 'calculations';
       }
       // Toggle panel: Ctrl/Cmd+B
@@ -153,8 +153,8 @@
             {#if activeTab === 'explorer'}
               <ExplorerPanel onStructureLoad={() => structureBrowser?.refresh()} />
               <StructureBrowser bind:this={structureBrowser} />
-            {:else if activeTab === 'builder'}
-              <BuilderPanel />
+            {:else if activeTab === 'analysis'}
+              <AnalysisPanel />
             {:else if activeTab === 'calculations'}
               <CalculationsPanel />
             {/if}

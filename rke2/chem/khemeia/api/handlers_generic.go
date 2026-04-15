@@ -254,7 +254,7 @@ func (h *APIHandler) PluginGet(plugin Plugin) http.HandlerFunc {
 				 FROM docking_results
 				 WHERE workflow_name = ?
 				 ORDER BY affinity_kcal_mol ASC
-				 LIMIT 200`, jobName)
+				 LIMIT 1000`, jobName)
 			if err != nil {
 				log.Printf("[docking] Warning: failed to query docking results for job %s: %v", jobName, err)
 			} else {
