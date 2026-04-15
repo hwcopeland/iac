@@ -340,24 +340,26 @@
       {/if}
     </div>
 
-    <!-- Import bar (sticky bottom) -->
+    <!-- Import bar -->
     <div class="import-bar">
       <span class="import-count">
         {total >= 10001 ? '10,000+' : total.toLocaleString()} compounds match
       </span>
-      <input
-        type="text"
-        class="filter-input import-name-input"
-        placeholder="Name this set..."
-        bind:value={importDbName}
-      />
-      <button
-        class="import-btn"
-        onclick={handleImport}
-        disabled={importing || !importDbName.trim() || total === 0}
-      >
-        {importing ? 'Importing...' : 'Import All'}
-      </button>
+      <div class="import-row">
+        <input
+          type="text"
+          class="filter-input import-name-input"
+          placeholder="Name this set..."
+          bind:value={importDbName}
+        />
+        <button
+          class="import-btn"
+          onclick={handleImport}
+          disabled={importing || !importDbName.trim() || total === 0}
+        >
+          {importing ? 'Importing...' : 'Import All'}
+        </button>
+      </div>
     </div>
 
     {#if importError}
@@ -502,27 +504,26 @@
   /* ---- Import bar ---- */
   .import-bar {
     display: flex;
-    align-items: center;
-    gap: 8px;
+    flex-direction: column;
+    gap: 6px;
     padding: 10px 0 2px;
     border-top: 1px solid rgba(48, 54, 61, 0.4);
     margin-top: 8px;
-    position: sticky;
-    bottom: 0;
-    background: var(--bg-surface, rgba(22, 27, 34, 0.95));
-    z-index: 1;
   }
 
   .import-count {
     font-size: 11px;
     color: var(--text-secondary, #8b949e);
-    white-space: nowrap;
-    flex-shrink: 0;
+  }
+
+  .import-row {
+    display: flex;
+    gap: 6px;
   }
 
   .import-name-input {
     flex: 1;
-    min-width: 120px;
+    min-width: 0;
   }
 
   .import-btn {
