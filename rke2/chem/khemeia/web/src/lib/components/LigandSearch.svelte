@@ -35,7 +35,7 @@
 
   function buildParams(): Record<string, string> {
     const params: Record<string, string> = {
-      limit: '2000',
+      limit: '1000',
       offset: '0',
     };
     if (textQuery.trim()) params.q = textQuery.trim();
@@ -307,6 +307,8 @@
       <span class="count-badge" class:loading>
         {#if loading}
           ...
+        {:else if total > 1000}
+          1,000+ compounds
         {:else if total > 0}
           {total.toLocaleString()} compounds
         {:else}

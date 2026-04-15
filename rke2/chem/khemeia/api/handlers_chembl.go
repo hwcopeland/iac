@@ -144,9 +144,11 @@ func (h *APIHandler) SearchLigands(w http.ResponseWriter, r *http.Request) {
 		LEFT JOIN compound_properties cp ON md.molregno = cp.molregno
 		%s`, whereClause)
 
-	// Count query
+	// Fast approximate count — caps at limit+1 so broad filters don't scan millions of rows.
+	// The exact count doesn't matter for the scatter plot; "2000+" is sufficient.
+	countCap := limit + 1
 	var total int
-	countSQL := "SELECT COUNT(*) " + baseQuery
+	countSQL := fmt.Sprintf("SELECT COUNT(*) FROM (SELECT 1 %s LIMIT %d) _cnt", baseQuery, countCap)
 	if err := h.chemblDB.QueryRowContext(r.Context(), countSQL, args...).Scan(&total); err != nil {
 		writeError(w, fmt.Sprintf("search count failed: %v", err), http.StatusInternalServerError)
 		return
