@@ -153,7 +153,7 @@
 
     {#if searched && total !== null}
       <div class="result-box">
-        <span class="result-count">{total.toLocaleString()}</span>
+        <span class="result-count">{total >= 100001 ? '100,000+' : total.toLocaleString()}</span>
         <span class="result-label">compounds found</span>
       </div>
 
