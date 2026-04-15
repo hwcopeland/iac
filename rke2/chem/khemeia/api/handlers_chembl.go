@@ -144,11 +144,9 @@ func (h *APIHandler) SearchLigands(w http.ResponseWriter, r *http.Request) {
 		LEFT JOIN compound_properties cp ON md.molregno = cp.molregno
 		%s`, whereClause)
 
-	// Capped count query — stops scanning after 10001 rows for performance.
-	// Broad filters on 2.8M compounds would otherwise take seconds to count.
-	const countCap = 10001
+	// Count query
 	var total int
-	countSQL := fmt.Sprintf("SELECT COUNT(*) FROM (SELECT 1 %s LIMIT %d) _cnt", baseQuery, countCap)
+	countSQL := "SELECT COUNT(*) " + baseQuery
 	if err := h.chemblDB.QueryRowContext(r.Context(), countSQL, args...).Scan(&total); err != nil {
 		writeError(w, fmt.Sprintf("search count failed: %v", err), http.StatusInternalServerError)
 		return
@@ -281,10 +279,6 @@ func (h *APIHandler) ImportFromChEMBL(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// importFilterMaxCompounds is the maximum number of compounds that can be
-// imported in a single filter-based import request.
-const importFilterMaxCompounds = 10000
-
 // ImportFromFilterRequest represents a request to import all ChEMBL compounds
 // matching a set of search filters into the docking ligands table.
 type ImportFromFilterRequest struct {
@@ -389,14 +383,6 @@ func (h *APIHandler) ImportFromFilter(w http.ResponseWriter, r *http.Request) {
 			"total_matched": 0,
 			"source_db":     req.SourceDB,
 		})
-		return
-	}
-
-	if totalMatched > importFilterMaxCompounds {
-		writeError(w, fmt.Sprintf(
-			"filter matched %d compounds (max %d) — narrow your filters",
-			totalMatched, importFilterMaxCompounds,
-		), http.StatusBadRequest)
 		return
 	}
 
