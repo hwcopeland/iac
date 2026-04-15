@@ -112,7 +112,7 @@ func (h *APIHandler) SearchLigands(w http.ResponseWriter, r *http.Request) {
 	// Pagination
 	limit := 50
 	if v := q.Get("limit"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 2000 {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 && n <= 2000 {
 			limit = n
 		}
 	}
@@ -144,44 +144,44 @@ func (h *APIHandler) SearchLigands(w http.ResponseWriter, r *http.Request) {
 		LEFT JOIN compound_properties cp ON md.molregno = cp.molregno
 		%s`, whereClause)
 
-	// Fast approximate count — caps at limit+1 so broad filters don't scan millions of rows.
-	// The exact count doesn't matter for the scatter plot; "2000+" is sufficient.
-	countCap := limit + 1
+	// Count matching compounds
 	var total int
-	countSQL := fmt.Sprintf("SELECT COUNT(*) FROM (SELECT 1 %s LIMIT %d) _cnt", baseQuery, countCap)
+	countSQL := "SELECT COUNT(*) " + baseQuery
 	if err := h.chemblDB.QueryRowContext(r.Context(), countSQL, args...).Scan(&total); err != nil {
 		writeError(w, fmt.Sprintf("search count failed: %v", err), http.StatusInternalServerError)
 		return
 	}
 
-	// Data query
-	dataSQL := fmt.Sprintf(`SELECT
-		md.chembl_id, md.pref_name, cs.canonical_smiles,
-		cp.mw_freebase, cp.alogp, cp.hba, cp.hbd, cp.psa,
-		cp.num_ro5_violations, cp.qed_weighted, md.max_phase, cp.full_molformula
-		%s
-		ORDER BY md.chembl_id
-		LIMIT ? OFFSET ?`, baseQuery)
-
-	dataArgs := append(args, limit, offset)
-	rows, err := h.chemblDB.QueryContext(r.Context(), dataSQL, dataArgs...)
-	if err != nil {
-		writeError(w, fmt.Sprintf("search query failed: %v", err), http.StatusInternalServerError)
-		return
-	}
-	defer rows.Close()
-
+	// Skip data query when limit=0 (count-only mode)
 	var compounds []CompoundResult
-	for rows.Next() {
-		var c CompoundResult
-		if err := rows.Scan(
-			&c.ChEMBLID, &c.PrefName, &c.SMILES,
-			&c.MW, &c.LogP, &c.HBA, &c.HBD, &c.PSA,
-			&c.Ro5Violations, &c.QED, &c.MaxPhase, &c.Formula,
-		); err != nil {
-			continue
+	if limit > 0 {
+		dataSQL := fmt.Sprintf(`SELECT
+			md.chembl_id, md.pref_name, cs.canonical_smiles,
+			cp.mw_freebase, cp.alogp, cp.hba, cp.hbd, cp.psa,
+			cp.num_ro5_violations, cp.qed_weighted, md.max_phase, cp.full_molformula
+			%s
+			ORDER BY md.chembl_id
+			LIMIT ? OFFSET ?`, baseQuery)
+
+		dataArgs := append(args, limit, offset)
+		rows, err := h.chemblDB.QueryContext(r.Context(), dataSQL, dataArgs...)
+		if err != nil {
+			writeError(w, fmt.Sprintf("search query failed: %v", err), http.StatusInternalServerError)
+			return
 		}
-		compounds = append(compounds, c)
+		defer rows.Close()
+
+		for rows.Next() {
+			var c CompoundResult
+			if err := rows.Scan(
+				&c.ChEMBLID, &c.PrefName, &c.SMILES,
+				&c.MW, &c.LogP, &c.HBA, &c.HBD, &c.PSA,
+				&c.Ro5Violations, &c.QED, &c.MaxPhase, &c.Formula,
+			); err != nil {
+				continue
+			}
+			compounds = append(compounds, c)
+		}
 	}
 	if compounds == nil {
 		compounds = []CompoundResult{}
