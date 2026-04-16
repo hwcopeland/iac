@@ -175,13 +175,22 @@ public sealed class SurfMapCommand : IModSharpModule, IClientListener, IGameList
                                              string      commandName,
                                              string      message)
     {
+        // Log ALL chat for Loki/Grafana chat-log panel (not just commands).
+        var rawMsg = (message ?? string.Empty).TrimStart();
+        if (rawMsg.Length > 0 && !client.IsFakeClient)
+        {
+            _logger.LogInformation(
+                "CHAT {SteamId} ({Name}): {Msg}",
+                client.SteamId, client.Name, rawMsg);
+        }
+
         // ModSharp's isCommand flag only covers commands registered with
         // CommandCenter/CommandManager. Our plugin's commands (rtv, extend,
         // nominate, maps, help, addmap, removemap) are NOT registered there
         // — they're handled purely via this OnClientSayCommand listener.
         // So we ignore isCommand entirely and parse the message body for
         // a trigger prefix (!, ., /, backtick) ourselves.
-        var body = (message ?? string.Empty).TrimStart();
+        var body = rawMsg;
         if (body.Length == 0 || "!./`".IndexOf(body[0]) < 0)
         {
             return ECommandAction.Skipped;

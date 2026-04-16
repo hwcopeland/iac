@@ -266,50 +266,43 @@ data:
         },
         {
           "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" },
-          "fieldConfig": {
-            "defaults": {
-              "color": { "mode": "fixed", "fixedColor": "text" },
-              "thresholds": { "mode": "absolute", "steps": [{"color": "green", "value": null}] },
-              "mappings": []
-            }
-          },
+          "fieldConfig": { "defaults": { "custom": { "filterable": false } } },
           "gridPos": { "h": 4, "w": 8, "x": 0, "y": 21 },
           "id": 110,
-          "options": { "colorMode": "background_solid", "graphMode": "none", "justifyMode": "center", "textMode": "value", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "/^map$/" } },
+          "options": { "showHeader": false, "cellHeight": "lg", "footer": { "show": false } },
+          "transformations": [
+            { "id": "organize", "options": { "excludeByName": { "Time": true, "id": true, "tsNs": true, "labels": true }, "renameByName": { "Line": "Map" } } }
+          ],
           "targets": [
             {
               "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" },
-              "expr": "{namespace=\"game-server\", pod=~\"cs2-surf-server.*\"} |~ \"SurfMapCommand \\\\| surf_\" | regexp \"\\\\| (?P<map>surf_\\\\w+)\\\\s*$\" | label_format map=map | line_format \"{{.map}}\"",
+              "expr": "{namespace=\"game-server\", pod=~\"cs2-surf-server.*\"} |~ \"SurfMapCommand \\\\| surf_\" | regexp \"\\\\| (?P<map>surf_\\\\w+)\" | line_format \"{{.map}}\"",
               "maxLines": 1,
-              "legendFormat": "{{map}}",
               "refId": "A"
             }
           ],
           "title": "Current Map",
-          "type": "stat"
+          "type": "table"
         },
         {
           "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" },
-          "fieldConfig": {
-            "defaults": {
-              "color": { "mode": "fixed", "fixedColor": "text" },
-              "thresholds": { "mode": "absolute", "steps": [{"color": "green", "value": null}] },
-              "mappings": []
-            }
-          },
+          "fieldConfig": { "defaults": { "custom": { "filterable": false } } },
           "gridPos": { "h": 4, "w": 8, "x": 8, "y": 21 },
           "id": 111,
-          "options": { "colorMode": "background_solid", "graphMode": "none", "justifyMode": "center", "textMode": "value", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "" } },
+          "options": { "showHeader": false, "cellHeight": "lg", "footer": { "show": false } },
+          "transformations": [
+            { "id": "organize", "options": { "excludeByName": { "Time": true, "id": true, "tsNs": true, "labels": true }, "renameByName": { "Line": "Records" } } }
+          ],
           "targets": [
             {
               "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" },
-              "expr": "{namespace=\"game-server\", pod=~\"cs2-surf-server.*\"} |~ \"Found .* main.*stage\" | line_format \"{{__line__}}\"",
+              "expr": "{namespace=\"game-server\", pod=~\"cs2-surf-server.*\"} |~ \"Found .* main.*stage\"",
               "maxLines": 1,
               "refId": "A"
             }
           ],
           "title": "Current Map Records",
-          "type": "stat"
+          "type": "table"
         },
         {
           "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" },
@@ -463,7 +456,7 @@ data:
           "targets": [
             {
               "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" },
-              "expr": "{namespace=\"game-server\", pod=~\"cs2-surf-server.*\"} |~ \"CMD from\" | regexp \"CMD from (?P<steam>\\\\d+) body=(?P<msg>.+)\" | line_format \"{{.steam}}: {{.msg}}\"",
+              "expr": "{namespace=\"game-server\", pod=~\"cs2-surf-server.*\"} |~ \"CHAT \" | regexp \"CHAT \\\\d+ \\\\((?P<name>[^)]+)\\\\): (?P<msg>.+)\" | line_format \"{{.name}}: {{.msg}}\"",
               "refId": "A"
             }
           ],
