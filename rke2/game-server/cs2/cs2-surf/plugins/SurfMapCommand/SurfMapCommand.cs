@@ -58,6 +58,16 @@ public sealed class SurfMapCommand : IModSharpModule, IClientListener, IGameList
     private DateTime _nextRotationAt;
     private int      _rotationIndex;
 
+    // --- Pending map change (countdown before switch) ---
+    // When a rotation or RTV triggers, we don't ChangeMap immediately.
+    // Instead we set a pending map + a deadline 30s out and announce to
+    // all players. OnTick checks for the deadline and fires ChangeMap
+    // only when it expires. !extend during the pending window cancels
+    // and pushes the rotation deadline.
+    private string?  _pendingMap;
+    private DateTime _pendingAt;
+    private bool     _pending10sAnnounced;
+
     // Config
     private int _rotationMinutes = 30;
     private int _extendMinutes   = 15;
@@ -131,11 +141,15 @@ public sealed class SurfMapCommand : IModSharpModule, IClientListener, IGameList
     {
         _logger.LogInformation("OnServerActivate — re-arming rotation tick");
         ScheduleTick();
-        // Reset per-map vote state so a new map starts with clean slate.
+        // Reset ALL per-map state so a new map starts with a clean slate.
         _rtvVoters.Clear();
         _extendVoters.Clear();
-        _extendsUsed    = 0;
-        _lastNomination = null;
+        _extendsUsed         = 0;
+        _lastNomination      = null;
+        _pendingMap          = null;
+        _pending10sAnnounced = false;
+        // Fresh rotation deadline from now.
+        _nextRotationAt = DateTime.UtcNow.AddMinutes(_rotationMinutes);
     }
 
     // ------------------------------------------------------------------
@@ -498,11 +512,14 @@ public sealed class SurfMapCommand : IModSharpModule, IClientListener, IGameList
 
         if (_rtvVoters.Count < needed)
         {
+            Announce($"[surf] {_rtvVoters.Count}/{needed} players want to rock the vote.");
             return ECommandAction.Handled;
         }
 
-        _logger.LogInformation("RTV threshold reached — forcing rotation now");
-        _nextRotationAt = DateTime.UtcNow;
+        _logger.LogInformation("RTV threshold reached — starting 30s countdown");
+        Announce("[surf] RTV passed!");
+        StartPendingChange(null);
+        _rtvVoters.Clear();
         return ECommandAction.Handled;
     }
 
@@ -520,6 +537,8 @@ public sealed class SurfMapCommand : IModSharpModule, IClientListener, IGameList
         }
 
         _lastNomination = arg.Trim();
+        var display = ResolveDisplayName(_lastNomination);
+        Announce($"[surf] {display} has been nominated for the next map.");
         _logger.LogInformation(
             "!nominate {SteamId} → {Map}", client.SteamId, _lastNomination);
         return ECommandAction.Handled;
@@ -548,12 +567,16 @@ public sealed class SurfMapCommand : IModSharpModule, IClientListener, IGameList
 
         if (_extendVoters.Count < needed)
         {
+            Announce($"[surf] {_extendVoters.Count}/{needed} players want to extend.");
             return ECommandAction.Handled;
         }
 
-        _nextRotationAt = _nextRotationAt.AddMinutes(_extendMinutes);
+        // Cancel any pending map change AND push the rotation deadline.
+        CancelPendingChange();
+        _nextRotationAt = DateTime.UtcNow.AddMinutes(_extendMinutes);
         _extendsUsed++;
         _extendVoters.Clear();
+        Announce($"[surf] Extend passed! Map extended by {_extendMinutes} minutes ({_extendsUsed}/{_maxExtends}).");
         _logger.LogInformation(
             "Extend passed — rotation pushed to {NextAt:u} ({Used}/{Max} used)",
             _nextRotationAt, _extendsUsed, _maxExtends);
@@ -574,14 +597,41 @@ public sealed class SurfMapCommand : IModSharpModule, IClientListener, IGameList
 
     private void OnTick()
     {
-        // Reschedule immediately so a throw in DoScheduledRotation can't kill
-        // the tick chain.
         ScheduleTick();
         try
         {
-            if (DateTime.UtcNow >= _nextRotationAt)
+            var now = DateTime.UtcNow;
+
+            // Phase 1: if a pending map change is active, manage its countdown.
+            if (_pendingMap is not null)
             {
-                DoScheduledRotation();
+                var remaining = (_pendingAt - now).TotalSeconds;
+
+                // 10-second warning
+                if (remaining <= 10 && !_pending10sAnnounced)
+                {
+                    var display = ResolveDisplayName(_pendingMap);
+                    Announce($"[surf] Map changing to {display} in 10 seconds…");
+                    _pending10sAnnounced = true;
+                }
+
+                // Deadline hit → execute the change
+                if (now >= _pendingAt)
+                {
+                    _logger.LogInformation(
+                        "Pending change executing → {Map}", _pendingMap);
+                    ChangeMap(_pendingMap);
+                    _pendingMap = null;
+                    ResetVoteState(resetRotation: true);
+                }
+
+                return; // don't start a new rotation while one is pending
+            }
+
+            // Phase 2: no pending change — check if scheduled rotation is due.
+            if (now >= _nextRotationAt)
+            {
+                StartPendingChange(null);
             }
         }
         catch (Exception ex)
@@ -590,21 +640,65 @@ public sealed class SurfMapCommand : IModSharpModule, IClientListener, IGameList
         }
     }
 
-    private void DoScheduledRotation()
+    /// <summary>
+    ///     Begin the 30-second countdown to a map change. If mapOverride is
+    ///     null, PickNextMap() chooses the target. Announces to all players
+    ///     and sets the pending state that OnTick will execute.
+    /// </summary>
+    private void StartPendingChange(string? mapOverride)
     {
-        var nextId = PickNextMap();
-        if (nextId is null)
+        var map = mapOverride ?? PickNextMap();
+        if (map is null)
         {
             _logger.LogWarning(
-                "Scheduled rotation: no maprotation.txt entries — retrying in {Min} min",
-                _rotationMinutes);
+                "No maps in rotation — retrying in {Min} min", _rotationMinutes);
             _nextRotationAt = DateTime.UtcNow.AddMinutes(_rotationMinutes);
             return;
         }
 
-        _logger.LogInformation("Scheduled rotation → workshop {Map}", nextId);
-        ChangeMap(nextId);
-        ResetVoteState(resetRotation: true);
+        _pendingMap          = map;
+        _pendingAt           = DateTime.UtcNow.AddSeconds(30);
+        _pending10sAnnounced = false;
+
+        var display = ResolveDisplayName(map);
+        Announce($"[surf] Map changing to {display} in 30 seconds! Type !extend to delay.");
+        _logger.LogInformation(
+            "Pending change started → {Map} at {At:u}", map, _pendingAt);
+    }
+
+    private void CancelPendingChange()
+    {
+        if (_pendingMap is not null)
+        {
+            _logger.LogInformation(
+                "Pending change to {Map} canceled", _pendingMap);
+            _pendingMap = null;
+        }
+    }
+
+    /// <summary>Broadcast a message to all connected players via server say.</summary>
+    private void Announce(string message)
+    {
+        _shared.GetModSharp().ServerCommand($"say {message}");
+    }
+
+    /// <summary>Resolve a map arg to a human-readable display name.</summary>
+    private string ResolveDisplayName(string arg)
+    {
+        if (!ulong.TryParse(arg, out var id))
+        {
+            return arg; // already a name
+        }
+        // Reverse lookup: id → name via mapnames.txt
+        var names = ReadMapNames();
+        foreach (var (name, mapId) in names)
+        {
+            if (mapId == id)
+            {
+                return name;
+            }
+        }
+        return arg; // return the numeric id if no name found
     }
 
     private void ChangeMap(string arg)
