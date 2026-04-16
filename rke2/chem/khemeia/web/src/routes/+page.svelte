@@ -120,16 +120,7 @@
       <h1 class="splash-title">Khemeia</h1>
       <p class="splash-subtitle">Computational Chemistry Platform</p>
 
-      <ul class="splash-features">
-        <li><span class="feature-icon">{@html '&#x2B22;'}</span> Molecular Viewer</li>
-        <li><span class="feature-icon">{@html '&#x270E;'}</span> SMILES Builder</li>
-        <li><span class="feature-icon">{@html '&#x269B;'}</span> Quantum ESPRESSO</li>
-        <li><span class="feature-icon">{@html '&#x2693;'}</span> Molecular Docking</li>
-      </ul>
-
       <button class="splash-signin" onclick={() => login()}>Sign In</button>
-
-      <p class="splash-footer">Powered by Molstar, RDKit, AutoDock Vina</p>
     </div>
   </div>
 {:else}
