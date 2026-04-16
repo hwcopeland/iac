@@ -208,10 +208,17 @@ export async function loadFile(data: string, format: string, preserveCamera = fa
   currentStructureText = data;
   currentStructureFormat = format;
   const formatMap: Record<string, string> = {
-    pdb: 'pdb', cif: 'mmcif', mmcif: 'mmcif',
+    pdb: 'pdb', pdbqt: 'pdb', cif: 'mmcif', mmcif: 'mmcif',
     mol: 'mol', mol2: 'mol2', sdf: 'sdf', xyz: 'xyz',
   };
-  const fmt = formatMap[format.toLowerCase()] || format;
+  const lowerFmt = format.toLowerCase();
+  // PDBQT needs charge/type columns stripped for Molstar
+  if (lowerFmt === 'pdbqt') {
+    data = data.split('\n').map(line =>
+      (line.startsWith('ATOM') || line.startsWith('HETATM')) ? line.substring(0, 66).padEnd(80) : line
+    ).join('\n');
+  }
+  const fmt = formatMap[lowerFmt] || format;
   // Save camera before clearing
   const cam = preserveCamera ? saveCameraSnapshot() : null;
   // Clear existing structures before loading modified data
