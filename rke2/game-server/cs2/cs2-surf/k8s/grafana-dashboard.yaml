@@ -273,7 +273,7 @@ data:
           "targets": [
             {
               "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" },
-              "expr": "sum by (cmd) (count_over_time({namespace=\"game-server\", pod=~\"cs2-surf-server.*\"} |~ \"SAY from\" | regexp \"msg=!(?P<cmd>\\\\w+)\" [$__interval]))",
+              "expr": "sum by (body) (count_over_time({namespace=\"game-server\", pod=~\"cs2-surf-server.*\"} |~ \"CMD from\" | regexp \"body=(?P<body>\\\\w+)\" [$__interval]))",
               "legendFormat": "{{cmd}}",
               "refId": "A"
             }
@@ -338,11 +338,11 @@ data:
           "targets": [
             {
               "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" },
-              "expr": "count_over_time({namespace=\"game-server\", pod=~\"cs2-surf-server.*\"} |~ \"SAY from\" [$__range])",
+              "expr": "count_over_time({namespace=\"game-server\", pod=~\"cs2-surf-server.*\"} |~ \"CMD from\" [$__range])",
               "refId": "A"
             }
           ],
-          "title": "Chat Messages (range)",
+          "title": "Chat Commands (range)",
           "type": "stat"
         },
         {
@@ -353,7 +353,7 @@ data:
           "targets": [
             {
               "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" },
-              "expr": "{namespace=\"game-server\", pod=~\"cs2-surf-server.*\"} |~ \"SAY from|host_workshop_map|Pending change|RTV|Extend|OnServerActivate|SurfMapCommand loaded\"",
+              "expr": "{namespace=\"game-server\", pod=~\"cs2-surf-server.*\"} |~ \"CMD from|CONNECT|DISCONNECT|host_workshop_map|Pending change|RTV|Extend|OnServerActivate|SurfMapCommand loaded\"",
               "refId": "A"
             }
           ],
@@ -375,7 +375,7 @@ data:
           "targets": [
             {
               "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" },
-              "expr": "count_over_time({namespace=\"game-server\", pod=~\"cs2-surf-server.*\"} |~ \"CONNECT\" |~ \"CONNECT \\\\d\" [$__interval])",
+              "expr": "count_over_time({namespace=\"game-server\", pod=~\"cs2-surf-server.*\"} |~ \"CONNECT \\\\d\" [$__interval])",
               "legendFormat": "connects",
               "refId": "A"
             },
@@ -398,11 +398,11 @@ data:
           "targets": [
             {
               "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" },
-              "expr": "count_over_time({namespace=\"game-server\", pod=~\"cs2-surf-server.*\"} |~ \"CONNECT \\\\d\" [$__range]) - count_over_time({namespace=\"game-server\", pod=~\"cs2-surf-server.*\"} |~ \"DISCONNECT\" [$__range])",
+              "expr": "count_over_time({namespace=\"game-server\", pod=~\"cs2-surf-server.*\"} |~ \"CONNECT \\\\d\" [$__range])",
               "refId": "A"
             }
           ],
-          "title": "Unique Player Sessions (range)",
+          "title": "Player Joins (range)",
           "type": "stat"
         }
       ],
