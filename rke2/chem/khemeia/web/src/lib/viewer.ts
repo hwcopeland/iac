@@ -734,20 +734,53 @@ export async function overlayStructure(data: string, format: string): Promise<vo
   }
 }
 
-/** Focus the camera on the most recently loaded structure (the ligand). */
-export function focusLastStructure(): void {
+/** Focus the camera on the most recently loaded structure (the ligand)
+ *  and switch its representation to spacefill (no bonds). */
+export async function focusLastStructure(): Promise<void> {
   if (!plugin) return;
   try {
     const structures = plugin.managers?.structure?.hierarchy?.current?.structures;
     if (!structures?.length) return;
-    // Focus on the last loaded structure (the overlaid ligand)
     const last = structures[structures.length - 1];
-    if (last?.cell?.obj?.data) {
-      const loci = getLib().structure.Structure.Loci(last.cell.obj.data);
-      plugin.managers.camera.focusLoci(loci, { durationMs: 250 });
+    if (!last?.cell?.obj?.data) return;
+
+    // Focus camera on the ligand
+    const { Structure } = getLib().structure;
+    const loci = Structure.Loci(last.cell.obj.data);
+    plugin.managers.camera.focusLoci(loci, { durationMs: 250 });
+
+    // Remove default representation and add spacefill (no bonds)
+    const { StateTransforms } = getLib().plugin;
+    const components = last.components;
+    if (components?.length) {
+      // Delete existing representations on the ligand structure
+      for (const comp of components) {
+        if (comp.representations?.length) {
+          for (const repr of comp.representations) {
+            const update = plugin.build().delete(repr.cell);
+            await update.commit();
+          }
+        }
+      }
     }
-  } catch {
-    // Fallback: just reset camera
-    plugin.managers?.camera?.reset?.();
+
+    // Add spacefill representation to the structure node
+    const structureRef = last.cell;
+    if (structureRef) {
+      const update = plugin.build()
+        .to(structureRef)
+        .apply(StateTransforms.Model.StructureCompleteComponent, { label: 'Ligand' })
+        .apply(StateTransforms.Representation.StructureRepresentation3D, {
+          type: { name: 'spacefill', params: { sizeFactor: 1 } },
+          colorTheme: { name: 'element-symbol', params: {} },
+          sizeTheme: { name: 'physical', params: {} },
+        });
+      await update.commit();
+    }
+
+    applyCanvasProps();
+  } catch (e) {
+    console.error('focusLastStructure error:', e);
+    plugin?.managers?.camera?.reset?.();
   }
 }
