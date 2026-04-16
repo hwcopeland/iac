@@ -262,27 +262,28 @@ public sealed class SurfMapCommand : IModSharpModule, IClientListener, IGameList
     private void StartVote()
     {
         _votePhase    = VotePhase.Voting;
-        _voteDeadline = DateTime.UtcNow.AddSeconds(30);
+        _voteDeadline = DateTime.UtcNow.AddSeconds(120); // 2 minute vote
         _votes.Clear();
 
-        // Build candidates: nominations first, then random from rotation.
-        var all       = ReadRotationList();
-        var names     = ReadMapNames();
+        // Build candidates: 5 random maps + any nominations on top.
+        var all        = ReadRotationList();
         var candidates = new List<string>();
 
-        foreach (var nom in _nominations.Take(2))
-        {
-            if (!candidates.Contains(nom)) candidates.Add(nom);
-        }
-        _nominations.Clear();
-
+        // Add 5 random maps from rotation.
         var rng = new Random();
         var shuffled = all.OrderBy(_ => rng.Next()).ToList();
         foreach (var entry in shuffled)
         {
             if (candidates.Count >= 5) break;
-            if (!candidates.Contains(entry)) candidates.Add(entry);
+            candidates.Add(entry);
         }
+
+        // Add nominations on top (not counted against the 5).
+        foreach (var nom in _nominations)
+        {
+            if (!candidates.Contains(nom)) candidates.Add(nom);
+        }
+        _nominations.Clear();
 
         // Add "Extend" as the last option (if extends remaining).
         if (_extendsUsed < _maxExtends)
@@ -298,7 +299,7 @@ public sealed class SurfMapCommand : IModSharpModule, IClientListener, IGameList
                 : ResolveDisplayName(candidates[i]);
             Announce($"[surf]  !{i + 1}  {label}");
         }
-        Announce("[surf] Type !1 - !{0} to vote. 30 seconds!", candidates.Count);
+        Announce($"[surf] Type !1 - !{candidates.Count} to vote. 2 minutes!");
         _logger.LogInformation("Vote started with {N} candidates", candidates.Count);
     }
 
