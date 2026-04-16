@@ -266,8 +266,59 @@ data:
         },
         {
           "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" },
+          "fieldConfig": { "defaults": {} },
+          "gridPos": { "h": 4, "w": 8, "x": 0, "y": 21 },
+          "id": 110,
+          "options": { "dedupStrategy": "none", "enableLogDetails": false, "prettifyLogMessage": false, "showCommonLabels": false, "showLabels": false, "showTime": true, "sortOrder": "Descending", "wrapLogMessage": false },
+          "targets": [
+            {
+              "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" },
+              "expr": "{namespace=\"game-server\", pod=~\"cs2-surf-server.*\"} |~ \"SurfMapCommand \\\\| surf_\" | regexp \"\\\\| (?P<map>surf_\\\\w+)\\\\s*$\" | line_format \"{{.map}}\" | decolorize",
+              "maxLines": 1,
+              "refId": "A"
+            }
+          ],
+          "title": "Current Map",
+          "type": "logs"
+        },
+        {
+          "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" },
+          "fieldConfig": { "defaults": {} },
+          "gridPos": { "h": 4, "w": 8, "x": 8, "y": 21 },
+          "id": 111,
+          "options": { "dedupStrategy": "none", "enableLogDetails": false, "prettifyLogMessage": false, "showCommonLabels": false, "showLabels": false, "showTime": true, "sortOrder": "Descending", "wrapLogMessage": false },
+          "targets": [
+            {
+              "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" },
+              "expr": "{namespace=\"game-server\", pod=~\"cs2-surf-server.*\"} |~ \"Found .* main.*stage\" | line_format \"{{__line__}}\" | decolorize",
+              "maxLines": 1,
+              "refId": "A"
+            }
+          ],
+          "title": "Current Map Records",
+          "type": "logs"
+        },
+        {
+          "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" },
+          "fieldConfig": { "defaults": {} },
+          "gridPos": { "h": 4, "w": 8, "x": 16, "y": 21 },
+          "id": 112,
+          "options": { "dedupStrategy": "none", "enableLogDetails": false, "prettifyLogMessage": false, "showCommonLabels": false, "showLabels": false, "showTime": true, "sortOrder": "Descending", "wrapLogMessage": false },
+          "targets": [
+            {
+              "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" },
+              "expr": "{namespace=\"game-server\", pod=~\"cs2-surf-server.*\"} |~ \"Pending change executing\" | line_format \"{{__line__}}\" | decolorize",
+              "maxLines": 10,
+              "refId": "A"
+            }
+          ],
+          "title": "Recent Map Changes",
+          "type": "logs"
+        },
+        {
+          "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" },
           "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" }, "unit": "short" } },
-          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 21 },
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 25 },
           "id": 101,
           "options": { "legend": { "displayMode": "table", "placement": "right" } },
           "targets": [
@@ -284,7 +335,7 @@ data:
         {
           "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" },
           "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "mode": "absolute", "steps": [{"color": "green", "value": null}] }, "unit": "short" } },
-          "gridPos": { "h": 4, "w": 6, "x": 12, "y": 21 },
+          "gridPos": { "h": 4, "w": 6, "x": 12, "y": 25 },
           "id": 102,
           "options": { "colorMode": "value", "graphMode": "area", "justifyMode": "center", "textMode": "value_and_name" },
           "targets": [
@@ -300,7 +351,7 @@ data:
         {
           "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" },
           "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "mode": "absolute", "steps": [{"color": "blue", "value": null}] }, "unit": "short" } },
-          "gridPos": { "h": 4, "w": 6, "x": 18, "y": 21 },
+          "gridPos": { "h": 4, "w": 6, "x": 18, "y": 25 },
           "id": 103,
           "options": { "colorMode": "value", "graphMode": "area", "justifyMode": "center", "textMode": "value_and_name" },
           "targets": [
@@ -316,7 +367,7 @@ data:
         {
           "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" },
           "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "mode": "absolute", "steps": [{"color": "orange", "value": null}] }, "unit": "short" } },
-          "gridPos": { "h": 4, "w": 6, "x": 12, "y": 25 },
+          "gridPos": { "h": 4, "w": 6, "x": 12, "y": 29 },
           "id": 104,
           "options": { "colorMode": "value", "graphMode": "area", "justifyMode": "center", "textMode": "value_and_name" },
           "targets": [
@@ -332,7 +383,7 @@ data:
         {
           "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" },
           "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "mode": "absolute", "steps": [{"color": "purple", "value": null}] }, "unit": "short" } },
-          "gridPos": { "h": 4, "w": 6, "x": 18, "y": 25 },
+          "gridPos": { "h": 4, "w": 6, "x": 18, "y": 29 },
           "id": 105,
           "options": { "colorMode": "value", "graphMode": "area", "justifyMode": "center", "textMode": "value_and_name" },
           "targets": [
@@ -347,7 +398,7 @@ data:
         },
         {
           "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" },
-          "gridPos": { "h": 10, "w": 24, "x": 0, "y": 29 },
+          "gridPos": { "h": 10, "w": 24, "x": 0, "y": 33 },
           "id": 106,
           "options": { "dedupStrategy": "none", "enableLogDetails": true, "prettifyLogMessage": false, "showCommonLabels": false, "showLabels": false, "showTime": true, "sortOrder": "Descending", "wrapLogMessage": true },
           "targets": [
@@ -369,7 +420,7 @@ data:
               "unit": "short"
             }
           },
-          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 39 },
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 43 },
           "id": 107,
           "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["sum"] } },
           "targets": [
@@ -392,7 +443,7 @@ data:
         {
           "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" },
           "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "mode": "absolute", "steps": [{"color": "green", "value": null}] }, "unit": "short" } },
-          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 39 },
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 43 },
           "id": 108,
           "options": { "colorMode": "value", "graphMode": "area", "justifyMode": "center", "textMode": "value_and_name" },
           "targets": [
