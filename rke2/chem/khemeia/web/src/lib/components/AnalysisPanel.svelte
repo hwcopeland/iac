@@ -58,9 +58,14 @@
     viewError = '';
     viewingCompound = result.compound_id;
     try {
+      // Load the target protein
       const pdbid = selectedJob?.input_data?.pdbid;
       if (pdbid) {
         await loadPdb(pdbid);
+      }
+      // Overlay the docked ligand pose
+      if (result.pose_pdbqt) {
+        await overlayStructure(result.pose_pdbqt, 'pdbqt');
       }
     } catch (e: any) {
       viewError = e.message || 'Failed to load structure';
