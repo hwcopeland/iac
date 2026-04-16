@@ -50,6 +50,7 @@ type PluginJobDetail struct {
 	CompletedAt    *time.Time             `json:"completed_at,omitempty"`
 	Artifacts      []ArtifactSummary      `json:"artifacts,omitempty"`
 	DockingResults []DockingResult        `json:"docking_results,omitempty"`
+	ReceptorPDBQT  *string               `json:"receptor_pdbqt,omitempty"`
 }
 
 // DockingResult represents a single docking result row from the docking_results table.
@@ -251,7 +252,7 @@ func (h *APIHandler) PluginGet(plugin Plugin) http.HandlerFunc {
 		// The workflow_name in docking_results matches the job name (set via WORKFLOW_NAME env var).
 		if plugin.Slug == "docking" {
 			dockRows, err := db.QueryContext(r.Context(),
-				`SELECT compound_id, affinity_kcal_mol, ligand_id, pose_pdbqt
+				`SELECT compound_id, affinity_kcal_mol, ligand_id, docked_pdbqt
 				 FROM docking_results
 				 WHERE workflow_name = ?
 				 ORDER BY affinity_kcal_mol ASC
@@ -269,6 +270,13 @@ func (h *APIHandler) PluginGet(plugin Plugin) http.HandlerFunc {
 					j.DockingResults = append(j.DockingResults, dr)
 				}
 			}
+
+			// Fetch the preprocessed receptor from the docking workflow.
+			var receptorPDBQT *string
+			_ = db.QueryRowContext(r.Context(),
+				`SELECT receptor_pdbqt FROM docking_workflows WHERE name = ?`, jobName,
+			).Scan(&receptorPDBQT)
+			j.ReceptorPDBQT = receptorPDBQT
 		}
 
 		w.Header().Set("Content-Type", "application/json")
