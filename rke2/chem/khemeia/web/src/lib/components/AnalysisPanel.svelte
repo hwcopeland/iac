@@ -1,7 +1,7 @@
 <script lang="ts">
   import Panel from './Panel.svelte';
   import { getJobs, getJob } from '$lib/api';
-  import { loadPdb, overlayStructure } from '$lib/viewer';
+  import { loadFile, overlayStructure } from '$lib/viewer';
   import { isAuthenticated } from '$lib/auth';
 
   let jobs = $state<any[]>([]);
@@ -58,10 +58,10 @@
     viewError = '';
     viewingCompound = result.compound_id;
     try {
-      // Load the target protein
-      const pdbid = selectedJob?.input_data?.pdbid;
-      if (pdbid) {
-        await loadPdb(pdbid);
+      // Load the preprocessed receptor (the actual protein it was docked against)
+      const receptor = selectedJob?.receptor_pdbqt;
+      if (receptor) {
+        await loadFile(receptor, 'pdbqt');
       }
       // Overlay the docked ligand pose
       if (result.pose_pdbqt) {
