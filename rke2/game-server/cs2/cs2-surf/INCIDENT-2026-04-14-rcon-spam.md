@@ -172,3 +172,27 @@ it. The affiliate / referral code embedded in the URL would let you
 file an abuse report with the gambling site against that affiliate
 account, which is the only path to actually punishing the attacker
 beyond locking them out of our server.
+
+## Update 2026-04-16 — Root cause corrected
+
+The 2026-04-14 incident was RCON-based (external TCP attack, mitigated
+by removing TCP from the Service). The 2026-04-16 recurrence was a
+**different vector entirely**: workshop map entities.
+
+surf_ace and surf_boreas have `point_servercommand` entities embedded
+in their BSP data that fire `say <clash.gg spam>` every 90 seconds
+via `logic_timer`. The referral code "BOREAS" matches the map name.
+Correlation was definitive: 100% of spam occurred exclusively during
+surf_ace (90 lines/rotation) and surf_boreas (20 lines/rotation);
+all 18 other maps had 0 spam lines.
+
+**Fix**: `sv_allow_point_servercommand never` in server.cfg. Applied
+live via RCON and committed. This cvar blocks all server console
+command execution from map entities.
+
+**Affiliate info recovered**:
+- Site: clash.gg
+- Referral URL: clash.gg/welcome/r/BOREAS
+- Referral code: BOREAS
+- Maps carrying the payload: surf_ace (workshop 3088413071),
+  surf_boreas (workshop 3133346713)
