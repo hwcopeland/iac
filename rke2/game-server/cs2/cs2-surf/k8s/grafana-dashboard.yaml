@@ -266,37 +266,50 @@ data:
         },
         {
           "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" },
-          "fieldConfig": { "defaults": {} },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "fixed", "fixedColor": "text" },
+              "thresholds": { "mode": "absolute", "steps": [{"color": "green", "value": null}] },
+              "mappings": []
+            }
+          },
           "gridPos": { "h": 4, "w": 8, "x": 0, "y": 21 },
           "id": 110,
-          "options": { "dedupStrategy": "none", "enableLogDetails": false, "prettifyLogMessage": false, "showCommonLabels": false, "showLabels": false, "showTime": true, "sortOrder": "Descending", "wrapLogMessage": false },
+          "options": { "colorMode": "background_solid", "graphMode": "none", "justifyMode": "center", "textMode": "value", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "/^map$/" } },
           "targets": [
             {
               "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" },
-              "expr": "{namespace=\"game-server\", pod=~\"cs2-surf-server.*\"} |~ \"SurfMapCommand \\\\| surf_\" | regexp \"\\\\| (?P<map>surf_\\\\w+)\\\\s*$\" | line_format \"{{.map}}\" | decolorize",
+              "expr": "{namespace=\"game-server\", pod=~\"cs2-surf-server.*\"} |~ \"SurfMapCommand \\\\| surf_\" | regexp \"\\\\| (?P<map>surf_\\\\w+)\\\\s*$\" | label_format map=map | line_format \"{{.map}}\"",
               "maxLines": 1,
+              "legendFormat": "{{map}}",
               "refId": "A"
             }
           ],
           "title": "Current Map",
-          "type": "logs"
+          "type": "stat"
         },
         {
           "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" },
-          "fieldConfig": { "defaults": {} },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "fixed", "fixedColor": "text" },
+              "thresholds": { "mode": "absolute", "steps": [{"color": "green", "value": null}] },
+              "mappings": []
+            }
+          },
           "gridPos": { "h": 4, "w": 8, "x": 8, "y": 21 },
           "id": 111,
-          "options": { "dedupStrategy": "none", "enableLogDetails": false, "prettifyLogMessage": false, "showCommonLabels": false, "showLabels": false, "showTime": true, "sortOrder": "Descending", "wrapLogMessage": false },
+          "options": { "colorMode": "background_solid", "graphMode": "none", "justifyMode": "center", "textMode": "value", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "" } },
           "targets": [
             {
               "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" },
-              "expr": "{namespace=\"game-server\", pod=~\"cs2-surf-server.*\"} |~ \"Found .* main.*stage\" | line_format \"{{__line__}}\" | decolorize",
+              "expr": "{namespace=\"game-server\", pod=~\"cs2-surf-server.*\"} |~ \"Found .* main.*stage\" | line_format \"{{__line__}}\"",
               "maxLines": 1,
               "refId": "A"
             }
           ],
           "title": "Current Map Records",
-          "type": "logs"
+          "type": "stat"
         },
         {
           "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" },
@@ -365,35 +378,21 @@ data:
           "type": "stat"
         },
         {
-          "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" },
-          "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "mode": "absolute", "steps": [{"color": "orange", "value": null}] }, "unit": "short" } },
-          "gridPos": { "h": 4, "w": 6, "x": 12, "y": 29 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 1800}, {"color": "red", "value": 3600}] }, "unit": "s" } },
+          "gridPos": { "h": 4, "w": 12, "x": 12, "y": 29 },
           "id": 104,
-          "options": { "colorMode": "value", "graphMode": "area", "justifyMode": "center", "textMode": "value_and_name" },
+          "options": { "colorMode": "value", "graphMode": "none", "justifyMode": "center", "textMode": "value_and_name" },
           "targets": [
             {
-              "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" },
-              "expr": "count_over_time({namespace=\"game-server\", pod=~\"cs2-surf-server.*\"} |~ \"host_workshop_map|Pending change executing|OnServerActivate\" [$__range])",
+              "datasource": { "type": "prometheus", "uid": "prometheus" },
+              "expr": "time() - max(kube_pod_start_time{namespace=\"game-server\", pod=~\"cs2-surf-server.*\"})",
+              "instant": true,
               "refId": "A"
             }
           ],
-          "title": "Map Changes (range)",
-          "type": "stat"
-        },
-        {
-          "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" },
-          "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "mode": "absolute", "steps": [{"color": "purple", "value": null}] }, "unit": "short" } },
-          "gridPos": { "h": 4, "w": 6, "x": 18, "y": 29 },
-          "id": 105,
-          "options": { "colorMode": "value", "graphMode": "area", "justifyMode": "center", "textMode": "value_and_name" },
-          "targets": [
-            {
-              "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" },
-              "expr": "count_over_time({namespace=\"game-server\", pod=~\"cs2-surf-server.*\"} |~ \"CMD from\" [$__range])",
-              "refId": "A"
-            }
-          ],
-          "title": "Chat Commands (range)",
+          "title": "Current Map Time (pod uptime proxy)",
+          "description": "Approximation using pod uptime. True per-map lifetime tracking needs plugin-side metrics.",
           "type": "stat"
         },
         {
@@ -455,6 +454,21 @@ data:
           ],
           "title": "Player Joins (range)",
           "type": "stat"
+        },
+        {
+          "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" },
+          "gridPos": { "h": 10, "w": 24, "x": 0, "y": 51 },
+          "id": 120,
+          "options": { "dedupStrategy": "none", "enableLogDetails": true, "prettifyLogMessage": false, "showCommonLabels": false, "showLabels": false, "showTime": true, "sortOrder": "Descending", "wrapLogMessage": true },
+          "targets": [
+            {
+              "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" },
+              "expr": "{namespace=\"game-server\", pod=~\"cs2-surf-server.*\"} |~ \"CMD from\" | regexp \"CMD from (?P<steam>\\\\d+) body=(?P<msg>.+)\" | line_format \"{{.steam}}: {{.msg}}\"",
+              "refId": "A"
+            }
+          ],
+          "title": "Player Chat Log",
+          "type": "logs"
         }
       ],
       "refresh": "30s",
