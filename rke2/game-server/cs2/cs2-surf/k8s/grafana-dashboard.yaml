@@ -276,24 +276,27 @@ data:
           "type": "table"
         },
         {
-          "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" },
-          "fieldConfig": { "defaults": { "custom": { "filterable": false } } },
-          "gridPos": { "h": 4, "w": 8, "x": 8, "y": 21 },
+          "datasource": { "type": "mysql", "uid": "cs2-surf-mysql" },
+          "fieldConfig": {
+            "defaults": { "custom": { "filterable": false, "align": "auto" } },
+            "overrides": [
+              { "matcher": { "id": "byName", "options": "time" }, "properties": [{ "id": "custom.width", "value": 100 }] },
+              { "matcher": { "id": "byName", "options": "player" }, "properties": [{ "id": "custom.width", "value": 140 }] },
+              { "matcher": { "id": "byName", "options": "achieved" }, "properties": [{ "id": "custom.width", "value": 150 }] }
+            ]
+          },
+          "gridPos": { "h": 10, "w": 16, "x": 8, "y": 21 },
           "id": 111,
-          "options": { "showHeader": false, "cellHeight": "lg", "footer": { "show": false } },
-          "transformations": [
-            { "id": "extractFields", "options": { "source": "labels", "keepTime": false } },
-            { "id": "organize", "options": { "includeByName": { "Line": true } } }
-          ],
+          "options": { "showHeader": true, "cellHeight": "sm", "footer": { "show": false }, "sortBy": [{ "displayName": "type", "desc": false }] },
           "targets": [
             {
-              "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" },
-              "expr": "{namespace=\"game-server\", pod=~\"cs2-surf-server.*\"} |~ \"Found .* main.*stage\"",
-              "maxLines": 1,
+              "datasource": { "type": "mysql", "uid": "cs2-surf-mysql" },
+              "rawSql": "SELECT CASE r.RunType WHEN 0 THEN 'Main' WHEN 1 THEN CONCAT('Stage ', r.Stage) ELSE CONCAT('Bonus ', r.Track) END AS type, CONCAT(FLOOR(r.BestTime/60), ':', LPAD(FORMAT(MOD(r.BestTime,60), 3), 6, '0')) AS time, p.Name AS player, DATE_FORMAT(r.UpdatedAt, '%Y-%m-%d %H:%i') AS achieved FROM surf_player_best_runs r JOIN surf_maps m ON m.MapId = r.MapId JOIN surf_players p ON p.SteamId = r.SteamId WHERE m.File = '$map' AND r.Style = 0 AND r.Track = 0 AND r.BestTime = (SELECT MIN(r2.BestTime) FROM surf_player_best_runs r2 WHERE r2.MapId = r.MapId AND r2.RunType = r.RunType AND r2.Stage = r.Stage AND r2.Style = r.Style AND r2.Track = r.Track) ORDER BY r.RunType, r.Stage",
+              "format": "table",
               "refId": "A"
             }
           ],
-          "title": "Current Map Records",
+          "title": "Server Records — $map",
           "type": "table"
         },
         {
@@ -460,7 +463,25 @@ data:
       "schemaVersion": 38,
       "style": "dark",
       "tags": ["cs2", "surf", "game-server"],
-      "templating": { "list": [] },
+      "templating": {
+        "list": [
+          {
+            "current": { "selected": false, "text": "surf_lt_omnific", "value": "surf_lt_omnific" },
+            "datasource": { "type": "mysql", "uid": "cs2-surf-mysql" },
+            "definition": "SELECT File FROM surf_maps ORDER BY File",
+            "hide": 0,
+            "includeAll": false,
+            "multi": false,
+            "name": "map",
+            "options": [],
+            "query": "SELECT File FROM surf_maps ORDER BY File",
+            "refresh": 1,
+            "regex": "",
+            "sort": 1,
+            "type": "query"
+          }
+        ]
+      },
       "time": { "from": "now-6h", "to": "now" },
       "timepicker": {},
       "timezone": "browser",

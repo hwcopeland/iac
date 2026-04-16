@@ -1,0 +1,28 @@
+---
+# MySQL datasource for Grafana — reads Source2Surf timer records from
+# the source2surf database on cs2-mysql. Auto-provisioned by the
+# kube-prometheus-stack Grafana sidecar via the grafana_datasource=1 label.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cs2-surf-mysql-datasource
+  namespace: monitor
+  labels:
+    grafana_datasource: "1"
+data:
+  cs2-surf-mysql.yaml: |-
+    apiVersion: 1
+    datasources:
+      - name: CS2 Surf MySQL
+        type: mysql
+        uid: cs2-surf-mysql
+        url: 10.43.43.43:3306
+        database: source2surf
+        user: k8s_user
+        secureJsonData:
+          password: "H09Xnr8neL2giu"
+        jsonData:
+          maxOpenConns: 5
+          maxIdleConns: 2
+          connMaxLifetime: 300
+        editable: false
