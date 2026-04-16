@@ -54,12 +54,28 @@
     }
   }
 
-  /** Extract only unique HETATM/ATOM lines from MODEL 1 of a Vina PDBQT.
-   *  Vina's BRANCH tree duplicates atoms — deduplicate by atom serial number. */
-  function extractBestPose(pdbqt: string): string {
+  // Element symbol from PDBQT atom name (strip numbers, take first 1-2 chars)
+  const ELEMENTS: Record<string, string> = {
+    'C': 'C', 'N': 'N', 'O': 'O', 'S': 'S', 'P': 'P', 'F': 'F',
+    'CL': 'Cl', 'BR': 'Br', 'I': 'I', 'H': 'H', 'SE': 'Se', 'SI': 'Si',
+    'SA': 'S', 'OA': 'O', 'NA': 'N', 'HD': 'H', 'HS': 'H', 'A': 'C',
+  };
+
+  function pdbqtAtomToElement(line: string): string {
+    // Vina atom type is at columns 77-78 (0-indexed)
+    const vType = line.substring(77).trim().toUpperCase();
+    if (ELEMENTS[vType]) return ELEMENTS[vType];
+    // Fallback: parse atom name from columns 12-15
+    const name = line.substring(12, 16).trim().replace(/[0-9]/g, '').toUpperCase();
+    return ELEMENTS[name] || name.substring(0, 1);
+  }
+
+  /** Convert MODEL 1 of a Vina PDBQT to XYZ format.
+   *  XYZ has no bond info — Molstar won't draw spurious bonds. */
+  function pdbqtToXyz(pdbqt: string): string {
     const lines = pdbqt.split('\n');
+    const atoms: string[] = [];
     const seen = new Set<string>();
-    const out: string[] = [];
     let inFirstModel = false;
     for (const line of lines) {
       if (line.startsWith('MODEL')) {
@@ -69,15 +85,17 @@
       }
       if (line.startsWith('ENDMDL')) break;
       if (inFirstModel && (line.startsWith('HETATM') || line.startsWith('ATOM'))) {
-        // Atom serial is columns 7-11 (0-indexed 6-10)
         const serial = line.substring(6, 11).trim();
-        if (!seen.has(serial)) {
-          seen.add(serial);
-          out.push(line);
-        }
+        if (seen.has(serial)) continue;
+        seen.add(serial);
+        const x = line.substring(30, 38).trim();
+        const y = line.substring(38, 46).trim();
+        const z = line.substring(46, 54).trim();
+        const elem = pdbqtAtomToElement(line);
+        atoms.push(`${elem}  ${x}  ${y}  ${z}`);
       }
     }
-    return out.join('\n');
+    return `${atoms.length}\nDocked pose\n${atoms.join('\n')}`;
   }
 
   async function handleView(result: any) {
@@ -89,11 +107,10 @@
       if (receptor) {
         await loadFile(receptor, 'pdbqt');
       }
-      // Overlay only the best docked pose (MODEL 1, deduplicated)
+      // Overlay the best docked pose as XYZ (no spurious bonds from distance-guessing)
       if (result.pose_pdbqt) {
-        const bestPose = extractBestPose(result.pose_pdbqt);
-        await overlayStructure(bestPose, 'pdbqt');
-        // Short delay to let Molstar finish rendering, then focus on ligand
+        const xyz = pdbqtToXyz(result.pose_pdbqt);
+        await overlayStructure(xyz, 'xyz');
         setTimeout(() => focusLastStructure(), 200);
       }
     } catch (e: any) {
