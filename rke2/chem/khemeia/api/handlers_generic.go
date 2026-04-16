@@ -57,6 +57,7 @@ type DockingResult struct {
 	CompoundID string  `json:"compound_id"`
 	Affinity   float64 `json:"affinity_kcal_mol"`
 	LigandID   int     `json:"ligand_id"`
+	PosePDBQT  *string `json:"pose_pdbqt,omitempty"`
 }
 
 // PluginSubmit returns a handler that accepts job submissions for the given plugin.
@@ -250,7 +251,7 @@ func (h *APIHandler) PluginGet(plugin Plugin) http.HandlerFunc {
 		// The workflow_name in docking_results matches the job name (set via WORKFLOW_NAME env var).
 		if plugin.Slug == "docking" {
 			dockRows, err := db.QueryContext(r.Context(),
-				`SELECT compound_id, affinity_kcal_mol, ligand_id
+				`SELECT compound_id, affinity_kcal_mol, ligand_id, pose_pdbqt
 				 FROM docking_results
 				 WHERE workflow_name = ?
 				 ORDER BY affinity_kcal_mol ASC
@@ -261,7 +262,7 @@ func (h *APIHandler) PluginGet(plugin Plugin) http.HandlerFunc {
 				defer dockRows.Close()
 				for dockRows.Next() {
 					var dr DockingResult
-					if err := dockRows.Scan(&dr.CompoundID, &dr.Affinity, &dr.LigandID); err != nil {
+					if err := dockRows.Scan(&dr.CompoundID, &dr.Affinity, &dr.LigandID, &dr.PosePDBQT); err != nil {
 						log.Printf("[docking] Warning: failed to scan docking result: %v", err)
 						continue
 					}
