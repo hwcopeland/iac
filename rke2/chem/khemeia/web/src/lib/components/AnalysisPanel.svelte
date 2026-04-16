@@ -54,21 +54,27 @@
     }
   }
 
-  /** Extract only HETATM/ATOM lines from MODEL 1 of a multi-model PDBQT */
+  /** Extract only unique HETATM/ATOM lines from MODEL 1 of a Vina PDBQT.
+   *  Vina's BRANCH tree duplicates atoms — deduplicate by atom serial number. */
   function extractBestPose(pdbqt: string): string {
     const lines = pdbqt.split('\n');
+    const seen = new Set<string>();
     const out: string[] = [];
     let inFirstModel = false;
     for (const line of lines) {
       if (line.startsWith('MODEL')) {
-        if (inFirstModel) break; // hit MODEL 2, stop
+        if (inFirstModel) break;
         inFirstModel = true;
         continue;
       }
       if (line.startsWith('ENDMDL')) break;
-      // Only keep coordinate lines
       if (inFirstModel && (line.startsWith('HETATM') || line.startsWith('ATOM'))) {
-        out.push(line);
+        // Atom serial is columns 7-11 (0-indexed 6-10)
+        const serial = line.substring(6, 11).trim();
+        if (!seen.has(serial)) {
+          seen.add(serial);
+          out.push(line);
+        }
       }
     }
     return out.join('\n');
@@ -83,12 +89,12 @@
       if (receptor) {
         await loadFile(receptor, 'pdbqt');
       }
-      // Overlay only the best docked pose (MODEL 1)
+      // Overlay only the best docked pose (MODEL 1, deduplicated)
       if (result.pose_pdbqt) {
         const bestPose = extractBestPose(result.pose_pdbqt);
         await overlayStructure(bestPose, 'pdbqt');
-        // Center camera on the ligand
-        await focusLastStructure();
+        // Short delay to let Molstar finish rendering, then focus on ligand
+        setTimeout(() => focusLastStructure(), 200);
       }
     } catch (e: any) {
       viewError = e.message || 'Failed to load structure';
