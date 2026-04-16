@@ -134,9 +134,22 @@ public sealed class SurfMapCommand : IModSharpModule, IClientListener, IGameList
     int IGameListener.ListenerVersion  => IGameListener.ApiVersion;
     int IGameListener.ListenerPriority => 0;
 
-    // Re-arm the rotation tick on every map activation. PushTimer state is
-    // cleared across map changes, so without this the timer dies after the
-    // first !map / !rtv / scheduled rotation.
+    public void OnClientPutInServer(IGameClient client)
+    {
+        if (client.IsFakeClient) return;
+        _logger.LogInformation(
+            "CONNECT {SteamId} ({Name})",
+            client.SteamId, client.Name);
+    }
+
+    public void OnClientDisconnecting(IGameClient client, NetworkDisconnectionReason reason)
+    {
+        if (client.IsFakeClient) return;
+        _logger.LogInformation(
+            "DISCONNECT {SteamId} ({Name}) reason={Reason}",
+            client.SteamId, client.Name, reason);
+    }
+
     void IGameListener.OnServerActivate()
     {
         _logger.LogInformation("OnServerActivate — re-arming rotation tick");

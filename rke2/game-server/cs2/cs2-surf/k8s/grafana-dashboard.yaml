@@ -359,6 +359,51 @@ data:
           ],
           "title": "Game Event Log",
           "type": "logs"
+        },
+        {
+          "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "palette-classic" },
+              "custom": { "axisPlacement": "auto", "drawStyle": "bars", "fillOpacity": 50, "gradientMode": "opacity", "lineWidth": 1, "pointSize": 5, "showPoints": "never", "spanNulls": true, "stacking": { "mode": "normal" } },
+              "unit": "short"
+            }
+          },
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 39 },
+          "id": 107,
+          "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["sum"] } },
+          "targets": [
+            {
+              "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" },
+              "expr": "count_over_time({namespace=\"game-server\", pod=~\"cs2-surf-server.*\"} |~ \"CONNECT\" |~ \"CONNECT \\\\d\" [$__interval])",
+              "legendFormat": "connects",
+              "refId": "A"
+            },
+            {
+              "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" },
+              "expr": "count_over_time({namespace=\"game-server\", pod=~\"cs2-surf-server.*\"} |~ \"DISCONNECT\" [$__interval])",
+              "legendFormat": "disconnects",
+              "refId": "B"
+            }
+          ],
+          "title": "Player Connects / Disconnects",
+          "type": "timeseries"
+        },
+        {
+          "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" },
+          "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "mode": "absolute", "steps": [{"color": "green", "value": null}] }, "unit": "short" } },
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 39 },
+          "id": 108,
+          "options": { "colorMode": "value", "graphMode": "area", "justifyMode": "center", "textMode": "value_and_name" },
+          "targets": [
+            {
+              "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" },
+              "expr": "count_over_time({namespace=\"game-server\", pod=~\"cs2-surf-server.*\"} |~ \"CONNECT \\\\d\" [$__range]) - count_over_time({namespace=\"game-server\", pod=~\"cs2-surf-server.*\"} |~ \"DISCONNECT\" [$__range])",
+              "refId": "A"
+            }
+          ],
+          "title": "Unique Player Sessions (range)",
+          "type": "stat"
         }
       ],
       "refresh": "30s",
