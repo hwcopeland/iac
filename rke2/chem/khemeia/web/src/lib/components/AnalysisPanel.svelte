@@ -1,7 +1,7 @@
 <script lang="ts">
   import Panel from './Panel.svelte';
   import { getJobs, getJob } from '$lib/api';
-  import { loadFile, overlayStructure } from '$lib/viewer';
+  import { loadFile, overlayStructure, focusLastStructure } from '$lib/viewer';
   import { isAuthenticated } from '$lib/auth';
 
   let jobs = $state<any[]>([]);
@@ -54,18 +54,40 @@
     }
   }
 
+  /** Extract only the first MODEL from a multi-model PDBQT (Vina outputs 9 poses) */
+  function extractBestPose(pdbqt: string): string {
+    const lines = pdbqt.split('\n');
+    const out: string[] = [];
+    let inModel = false;
+    let modelCount = 0;
+    for (const line of lines) {
+      if (line.startsWith('MODEL')) {
+        modelCount++;
+        if (modelCount > 1) break; // stop after first model
+        inModel = true;
+        continue;
+      }
+      if (line.startsWith('ENDMDL')) break;
+      if (modelCount <= 1) out.push(line);
+    }
+    return out.join('\n');
+  }
+
   async function handleView(result: any) {
     viewError = '';
     viewingCompound = result.compound_id;
     try {
-      // Load the preprocessed receptor (the actual protein it was docked against)
+      // Load the preprocessed receptor
       const receptor = selectedJob?.receptor_pdbqt;
       if (receptor) {
         await loadFile(receptor, 'pdbqt');
       }
-      // Overlay the docked ligand pose
+      // Overlay only the best docked pose (MODEL 1)
       if (result.pose_pdbqt) {
-        await overlayStructure(result.pose_pdbqt, 'pdbqt');
+        const bestPose = extractBestPose(result.pose_pdbqt);
+        await overlayStructure(bestPose, 'pdbqt');
+        // Center camera on the ligand
+        await focusLastStructure();
       }
     } catch (e: any) {
       viewError = e.message || 'Failed to load structure';
