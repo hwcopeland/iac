@@ -721,3 +721,21 @@ export async function overlayStructure(data: string, format: string): Promise<vo
     setTimeout(() => URL.revokeObjectURL(url), 5000);
   }
 }
+
+/** Focus the camera on the most recently loaded structure (the ligand). */
+export function focusLastStructure(): void {
+  if (!plugin) return;
+  try {
+    const structures = plugin.managers?.structure?.hierarchy?.current?.structures;
+    if (!structures?.length) return;
+    // Focus on the last loaded structure (the overlaid ligand)
+    const last = structures[structures.length - 1];
+    if (last?.cell?.obj?.data) {
+      const loci = getLib().structure.Structure.Loci(last.cell.obj.data);
+      plugin.managers.camera.focusLoci(loci, { durationMs: 250 });
+    }
+  } catch {
+    // Fallback: just reset camera
+    plugin.managers?.camera?.reset?.();
+  }
+}
