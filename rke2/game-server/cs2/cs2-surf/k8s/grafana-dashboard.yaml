@@ -256,6 +256,109 @@ data:
           ],
           "title": "Container Restarts Over Time",
           "type": "timeseries"
+        },
+        {
+          "collapsed": false,
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 20 },
+          "id": 100,
+          "title": "Game Activity (Loki)",
+          "type": "row"
+        },
+        {
+          "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" },
+          "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" }, "unit": "short" } },
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 21 },
+          "id": 101,
+          "options": { "legend": { "displayMode": "table", "placement": "right" } },
+          "targets": [
+            {
+              "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" },
+              "expr": "sum by (cmd) (count_over_time({namespace=\"game-server\", pod=~\"cs2-surf-server.*\"} |~ \"SAY from\" | regexp \"msg=!(?P<cmd>\\\\w+)\" [$__interval]))",
+              "legendFormat": "{{cmd}}",
+              "refId": "A"
+            }
+          ],
+          "title": "Chat Commands",
+          "type": "timeseries"
+        },
+        {
+          "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" },
+          "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "mode": "absolute", "steps": [{"color": "green", "value": null}] }, "unit": "short" } },
+          "gridPos": { "h": 4, "w": 6, "x": 12, "y": 21 },
+          "id": 102,
+          "options": { "colorMode": "value", "graphMode": "area", "justifyMode": "center", "textMode": "value_and_name" },
+          "targets": [
+            {
+              "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" },
+              "expr": "count_over_time({namespace=\"game-server\", pod=~\"cs2-surf-server.*\"} |~ \"RTV threshold|RTV passed\" [$__range])",
+              "refId": "A"
+            }
+          ],
+          "title": "RTV Votes (range)",
+          "type": "stat"
+        },
+        {
+          "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" },
+          "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "mode": "absolute", "steps": [{"color": "blue", "value": null}] }, "unit": "short" } },
+          "gridPos": { "h": 4, "w": 6, "x": 18, "y": 21 },
+          "id": 103,
+          "options": { "colorMode": "value", "graphMode": "area", "justifyMode": "center", "textMode": "value_and_name" },
+          "targets": [
+            {
+              "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" },
+              "expr": "count_over_time({namespace=\"game-server\", pod=~\"cs2-surf-server.*\"} |~ \"Extend passed\" [$__range])",
+              "refId": "A"
+            }
+          ],
+          "title": "Extends (range)",
+          "type": "stat"
+        },
+        {
+          "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" },
+          "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "mode": "absolute", "steps": [{"color": "orange", "value": null}] }, "unit": "short" } },
+          "gridPos": { "h": 4, "w": 6, "x": 12, "y": 25 },
+          "id": 104,
+          "options": { "colorMode": "value", "graphMode": "area", "justifyMode": "center", "textMode": "value_and_name" },
+          "targets": [
+            {
+              "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" },
+              "expr": "count_over_time({namespace=\"game-server\", pod=~\"cs2-surf-server.*\"} |~ \"host_workshop_map|Pending change executing|OnServerActivate\" [$__range])",
+              "refId": "A"
+            }
+          ],
+          "title": "Map Changes (range)",
+          "type": "stat"
+        },
+        {
+          "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" },
+          "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "mode": "absolute", "steps": [{"color": "purple", "value": null}] }, "unit": "short" } },
+          "gridPos": { "h": 4, "w": 6, "x": 18, "y": 25 },
+          "id": 105,
+          "options": { "colorMode": "value", "graphMode": "area", "justifyMode": "center", "textMode": "value_and_name" },
+          "targets": [
+            {
+              "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" },
+              "expr": "count_over_time({namespace=\"game-server\", pod=~\"cs2-surf-server.*\"} |~ \"SAY from\" [$__range])",
+              "refId": "A"
+            }
+          ],
+          "title": "Chat Messages (range)",
+          "type": "stat"
+        },
+        {
+          "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" },
+          "gridPos": { "h": 10, "w": 24, "x": 0, "y": 29 },
+          "id": 106,
+          "options": { "dedupStrategy": "none", "enableLogDetails": true, "prettifyLogMessage": false, "showCommonLabels": false, "showLabels": false, "showTime": true, "sortOrder": "Descending", "wrapLogMessage": true },
+          "targets": [
+            {
+              "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" },
+              "expr": "{namespace=\"game-server\", pod=~\"cs2-surf-server.*\"} |~ \"SAY from|host_workshop_map|Pending change|RTV|Extend|OnServerActivate|SurfMapCommand loaded\"",
+              "refId": "A"
+            }
+          ],
+          "title": "Game Event Log",
+          "type": "logs"
         }
       ],
       "refresh": "30s",

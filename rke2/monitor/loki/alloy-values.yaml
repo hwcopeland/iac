@@ -1,6 +1,7 @@
 alloy:
   configMap:
     content: |
+      // ─── Mikrotik syslog (unchanged) ────────────────────────────────
       loki.source.syslog "mikrotik" {
         listener {
           address = "0.0.0.0:514"
@@ -39,6 +40,41 @@ alloy:
         forward_to = [loki.write.local.receiver]
       }
 
+      // ─── Kubernetes container logs ──────────────────────────────────
+      // Discover all pods on this node and ship their container logs to
+      // Loki with namespace/pod/container/app labels. Runs as a
+      // DaemonSet so every node's /var/log/pods is covered.
+      discovery.kubernetes "pods" {
+        role = "pod"
+      }
+
+      discovery.relabel "pod_logs" {
+        targets = discovery.kubernetes.pods.targets
+
+        rule {
+          source_labels = ["__meta_kubernetes_namespace"]
+          target_label  = "namespace"
+        }
+        rule {
+          source_labels = ["__meta_kubernetes_pod_name"]
+          target_label  = "pod"
+        }
+        rule {
+          source_labels = ["__meta_kubernetes_pod_container_name"]
+          target_label  = "container"
+        }
+        rule {
+          source_labels = ["__meta_kubernetes_pod_label_app"]
+          target_label  = "app"
+        }
+      }
+
+      loki.source.kubernetes "pod_logs" {
+        targets    = discovery.relabel.pod_logs.output
+        forward_to = [loki.write.local.receiver]
+      }
+
+      // ─── Loki write endpoint ────────────────────────────────────────
       loki.write "local" {
         endpoint {
           url = "http://loki-gateway.monitor.svc.cluster.local/loki/api/v1/push"
@@ -50,9 +86,11 @@ alloy:
         mountPath: /var/lib/geoip
         readOnly: true
 
+# DaemonSet so every node's /var/log/pods is accessible for the
+# kubernetes log source. The syslog listener still runs on every node
+# but only the one with the LoadBalancer IP actually receives traffic.
 controller:
-  type: deployment
-  replicas: 1
+  type: daemonset
 
   # Define the emptyDir volume to store downloaded databases
   volumes:
