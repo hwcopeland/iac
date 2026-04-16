@@ -610,11 +610,21 @@ public sealed class SurfMapCommand : IModSharpModule, IClientListener, IGameList
         _shared.GetModSharp().PushTimer(OnTick, 10.0f, GameTimerFlags.None);
     }
 
+    private int _lastPlayerCount = -1;
+
     private void OnTick()
     {
         ScheduleTick();
         try
         {
+            // Emit player count for Loki/Grafana when it changes.
+            var players = CountConnectedPlayers();
+            if (players != _lastPlayerCount)
+            {
+                _logger.LogInformation("PLAYERS {Count}", players);
+                _lastPlayerCount = players;
+            }
+
             var now = DateTime.UtcNow;
 
             // Phase 1: if a pending map change is active, manage its countdown.
