@@ -54,21 +54,22 @@
     }
   }
 
-  /** Extract only the first MODEL from a multi-model PDBQT (Vina outputs 9 poses) */
+  /** Extract only HETATM/ATOM lines from MODEL 1 of a multi-model PDBQT */
   function extractBestPose(pdbqt: string): string {
     const lines = pdbqt.split('\n');
     const out: string[] = [];
-    let inModel = false;
-    let modelCount = 0;
+    let inFirstModel = false;
     for (const line of lines) {
       if (line.startsWith('MODEL')) {
-        modelCount++;
-        if (modelCount > 1) break; // stop after first model
-        inModel = true;
+        if (inFirstModel) break; // hit MODEL 2, stop
+        inFirstModel = true;
         continue;
       }
       if (line.startsWith('ENDMDL')) break;
-      if (modelCount <= 1) out.push(line);
+      // Only keep coordinate lines
+      if (inFirstModel && (line.startsWith('HETATM') || line.startsWith('ATOM'))) {
+        out.push(line);
+      }
     }
     return out.join('\n');
   }

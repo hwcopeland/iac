@@ -212,11 +212,18 @@ export async function loadFile(data: string, format: string, preserveCamera = fa
     mol: 'mol', mol2: 'mol2', sdf: 'sdf', xyz: 'xyz',
   };
   const lowerFmt = format.toLowerCase();
-  // PDBQT needs charge/type columns stripped for Molstar
+  // PDBQT → PDB: keep only valid PDB records, strip Vina charge/type columns
   if (lowerFmt === 'pdbqt') {
-    data = data.split('\n').map(line =>
-      (line.startsWith('ATOM') || line.startsWith('HETATM')) ? line.substring(0, 66).padEnd(80) : line
-    ).join('\n');
+    data = data.split('\n')
+      .filter(line =>
+        line.startsWith('ATOM') || line.startsWith('HETATM') ||
+        line.startsWith('TER') || line.startsWith('END') ||
+        line.startsWith('REMARK') || line.startsWith('CONECT')
+      )
+      .map(line =>
+        (line.startsWith('ATOM') || line.startsWith('HETATM')) ? line.substring(0, 66).padEnd(80) : line
+      )
+      .join('\n');
   }
   const fmt = formatMap[lowerFmt] || format;
   // Save camera before clearing
@@ -683,10 +690,15 @@ export async function loadDensityWithESP(densityCube: string, espCube: string): 
 
 // ─── Structure Overlay (Docking Poses) ───
 
-// Convert PDBQT to PDB by stripping the charge/type columns (71-79)
+// Convert PDBQT to PDB: filter to valid PDB records and strip Vina charge/type columns
 function pdbqtToPdb(pdbqt: string): string {
   return pdbqt
     .split('\n')
+    .filter(line =>
+      line.startsWith('ATOM') || line.startsWith('HETATM') ||
+      line.startsWith('TER') || line.startsWith('END') ||
+      line.startsWith('REMARK') || line.startsWith('CONECT')
+    )
     .map((line) => {
       if (line.startsWith('ATOM') || line.startsWith('HETATM')) {
         return line.substring(0, 66).padEnd(80);
