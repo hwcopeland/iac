@@ -1,24 +1,24 @@
 # Map name → workshop publish file id, one pair per line.
-# SurfMapCommand reads this on every !map / rotation tick to resolve a
-# player's `!map surf_kitsune` to `host_workshop_map 3076153623`.
-#
-# Format: <name> <publish_file_id>
-# Lines starting with # are ignored.
-#
-# Discovered names come from publish_data.txt under
-# /home/steam/cs2/game/bin/linuxsteamrt64/steamapps/workshop/content/730/<id>/.
-# Pairs below are confirmed from the live scan on 2026-04-14; remaining
-# subscribed workshop IDs (in subscribed_file_ids.txt but not yet
-# downloaded into the workshop content dir) need to be added once they
-# land — !addmap from an admin will append them automatically.
+# SurfMapCommand reads this on every !map to resolve names to IDs.
+# Full scan of steamapps/workshop/content/730/*/publish_data.txt — 2026-04-16.
 
-surf_beginner    3070321829
-surf_utopia_njv  3073875025
-surf_kitsune     3076153623
-surf_mesa_revo   3076980482
-surf_deathstar   3080544577
-surf_rookie      3082548297
-surf_ace         3088413071
-surf_benevolent  3098972556
-surf_ofsfice     3459997959
-surf_lt_omnific  3660894345
+surf_ace          3088413071
+surf_aquaflow     3255589335
+surf_astra        3165517928
+surf_beginner     3070321829
+surf_benevolent   3098972556
+surf_boreas       3133346713
+surf_cuboid       3404193171
+surf_deathstar    3080544577
+surf_kitsune      3076153623
+surf_lt_omnific   3660894345
+surf_mesa_aether  3125360522
+surf_mesa_revo    3076980482
+surf_nyx          3129698096
+surf_ofsfice      3459997959
+surf_rookie       3082548297
+surf_siren        3426610799
+surf_ski_2        3079877518
+surf_sundown_njv  3404344161
+surf_utopia_njv   3073875025
+surf_whiteout     3296258256
