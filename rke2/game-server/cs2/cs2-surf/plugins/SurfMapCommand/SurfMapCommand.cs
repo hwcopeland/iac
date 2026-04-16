@@ -175,35 +175,28 @@ public sealed class SurfMapCommand : IModSharpModule, IClientListener, IGameList
                                              string      commandName,
                                              string      message)
     {
-        // Brute-force diagnostic — remove once everything's confirmed working.
-        _logger.LogInformation(
-            "SAY from {SteamId} team={Team} isCmd={IsCmd} cmd={Cmd} msg={Msg}",
-            client.SteamId, teamOnly, isCommand, commandName, message);
-
-        if (!isCommand)
-        {
-            return ECommandAction.Skipped;
-        }
-
-        // ModSharp passes commandName="say" and the entire chat line in
-        // message (e.g. "!map surf_kitsune"). The real command + args have
-        // to be parsed out of message, not commandName.
+        // ModSharp's isCommand flag only covers commands registered with
+        // CommandCenter/CommandManager. Our plugin's commands (rtv, extend,
+        // nominate, maps, help, addmap, removemap) are NOT registered there
+        // — they're handled purely via this OnClientSayCommand listener.
+        // So we ignore isCommand entirely and parse the message body for
+        // a trigger prefix (!, ., /, backtick) ourselves.
         var body = (message ?? string.Empty).TrimStart();
+        if (body.Length == 0 || "!./`".IndexOf(body[0]) < 0)
+        {
+            return ECommandAction.Skipped;
+        }
+
+        // Strip the trigger prefix.
+        body = body.Substring(1);
         if (body.Length == 0)
         {
             return ECommandAction.Skipped;
         }
 
-        // Strip the chat trigger prefix (!, ., /, backtick).
-        if ("!./`".IndexOf(body[0]) >= 0)
-        {
-            body = body.Substring(1);
-        }
-
-        if (body.Length == 0)
-        {
-            return ECommandAction.Skipped;
-        }
+        _logger.LogInformation(
+            "CMD from {SteamId} body={Body}",
+            client.SteamId, body);
 
         var spaceIdx = body.IndexOf(' ');
         var cmd      = (spaceIdx < 0 ? body : body.Substring(0, spaceIdx))
@@ -758,8 +751,9 @@ public sealed class SurfMapCommand : IModSharpModule, IClientListener, IGameList
     /// </summary>
     private void EnsureSubscribed(ulong workshopId)
     {
+        // GetGamePath() = /home/steam/cs2/game/csgo (already includes csgo/).
         var path = Path.Combine(
-            _shared.GetModSharp().GetGamePath(), "csgo", "subscribed_file_ids.txt");
+            _shared.GetModSharp().GetGamePath(), "subscribed_file_ids.txt");
         try
         {
             var idStr = workshopId.ToString();
