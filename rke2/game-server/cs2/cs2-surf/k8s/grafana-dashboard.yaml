@@ -78,16 +78,17 @@ data:
           },
           "gridPos": { "h": 4, "w": 4, "x": 4, "y": 0 },
           "id": 2,
-          "options": { "colorMode": "value", "graphMode": "none", "justifyMode": "center", "textMode": "value_and_name" },
+          "options": { "colorMode": "value", "graphMode": "none", "justifyMode": "center", "textMode": "value" },
           "targets": [
             {
               "datasource": { "type": "prometheus", "uid": "prometheus" },
-              "expr": "sum(kube_pod_container_status_restarts_total{namespace=\"game-server\", pod=~\"cs2-surf-server.*\"})",
+              "expr": "sum(increase(kube_pod_container_status_restarts_total{namespace=\"game-server\", pod=~\"cs2-surf-server.*\"}[12h]))",
+              "legendFormat": " ",
               "instant": true,
               "refId": "A"
             }
           ],
-          "title": "Container Restarts (all-time)",
+          "title": "Restarts (12h)",
           "type": "stat"
         },
         {
@@ -101,11 +102,12 @@ data:
           },
           "gridPos": { "h": 4, "w": 4, "x": 8, "y": 0 },
           "id": 3,
-          "options": { "colorMode": "value", "graphMode": "area", "justifyMode": "center", "textMode": "value_and_name" },
+          "options": { "colorMode": "value", "graphMode": "none", "justifyMode": "center", "textMode": "value" },
           "targets": [
             {
               "datasource": { "type": "prometheus", "uid": "prometheus" },
               "expr": "time() - max(kube_pod_start_time{namespace=\"game-server\", pod=~\"cs2-surf-server.*\"})",
+              "legendFormat": " ",
               "instant": true,
               "refId": "A"
             }
@@ -225,37 +227,25 @@ data:
           "type": "timeseries"
         },
         {
-          "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "fieldConfig": {
-            "defaults": {
-              "color": { "mode": "palette-classic" },
-              "custom": {
-                "axisPlacement": "auto",
-                "drawStyle": "line",
-                "fillOpacity": 10,
-                "gradientMode": "opacity",
-                "lineInterpolation": "stepAfter",
-                "lineWidth": 1,
-                "pointSize": 5,
-                "showPoints": "always",
-                "spanNulls": true
-              },
-              "unit": "short"
-            }
-          },
-          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+          "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" },
+          "fieldConfig": { "defaults": { "custom": { "filterable": false } } },
+          "gridPos": { "h": 4, "w": 6, "x": 12, "y": 12 },
           "id": 7,
-          "options": { "legend": { "calcs": ["max"], "displayMode": "table", "placement": "bottom" } },
+          "options": { "showHeader": false, "cellHeight": "lg", "footer": { "show": false } },
+          "transformations": [
+            { "id": "extractFields", "options": { "source": "labels", "keepTime": false } },
+            { "id": "organize", "options": { "includeByName": { "Line": true } } }
+          ],
           "targets": [
             {
-              "datasource": { "type": "prometheus", "uid": "prometheus" },
-              "expr": "sum(kube_pod_container_status_restarts_total{namespace=\"game-server\", pod=~\"cs2-surf-server.*\"})",
-              "legendFormat": "restarts",
+              "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" },
+              "expr": "{namespace=\"game-server\", pod=~\"cs2-surf-server.*\"} |~ \"PLAYERS \" | regexp \"PLAYERS (?P<count>\\\\d+)\" | line_format \"{{.count}} players online\"",
+              "maxLines": 1,
               "refId": "A"
             }
           ],
-          "title": "Container Restarts Over Time",
-          "type": "timeseries"
+          "title": "Current Players",
+          "type": "table"
         },
         {
           "collapsed": false,
@@ -271,7 +261,8 @@ data:
           "id": 110,
           "options": { "showHeader": false, "cellHeight": "lg", "footer": { "show": false } },
           "transformations": [
-            { "id": "organize", "options": { "excludeByName": { "Time": true, "id": true, "tsNs": true, "labels": true }, "renameByName": { "Line": "Map" } } }
+            { "id": "extractFields", "options": { "source": "labels", "keepTime": false } },
+            { "id": "organize", "options": { "includeByName": { "Line": true } } }
           ],
           "targets": [
             {
@@ -291,7 +282,8 @@ data:
           "id": 111,
           "options": { "showHeader": false, "cellHeight": "lg", "footer": { "show": false } },
           "transformations": [
-            { "id": "organize", "options": { "excludeByName": { "Time": true, "id": true, "tsNs": true, "labels": true }, "renameByName": { "Line": "Records" } } }
+            { "id": "extractFields", "options": { "source": "labels", "keepTime": false } },
+            { "id": "organize", "options": { "includeByName": { "Line": true } } }
           ],
           "targets": [
             {
@@ -375,17 +367,17 @@ data:
           "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 1800}, {"color": "red", "value": 3600}] }, "unit": "s" } },
           "gridPos": { "h": 4, "w": 12, "x": 12, "y": 29 },
           "id": 104,
-          "options": { "colorMode": "value", "graphMode": "none", "justifyMode": "center", "textMode": "value_and_name" },
+          "options": { "colorMode": "value", "graphMode": "none", "justifyMode": "center", "textMode": "value" },
           "targets": [
             {
               "datasource": { "type": "prometheus", "uid": "prometheus" },
               "expr": "time() - max(kube_pod_start_time{namespace=\"game-server\", pod=~\"cs2-surf-server.*\"})",
+              "legendFormat": " ",
               "instant": true,
               "refId": "A"
             }
           ],
-          "title": "Current Map Time (pod uptime proxy)",
-          "description": "Approximation using pod uptime. True per-map lifetime tracking needs plugin-side metrics.",
+          "title": "Server Uptime",
           "type": "stat"
         },
         {
