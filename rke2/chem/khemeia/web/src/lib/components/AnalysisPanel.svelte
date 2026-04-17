@@ -12,6 +12,10 @@
   let jobLoading = $state(false);
   let viewingCompound = $state<string | null>(null);
   let viewError = $state('');
+  let activePose = $state(1);
+  let poseCount = $state(0);
+  let currentPosePdbqt = $state<string | null>(null);
+  let receptorLoaded = $state(false);
 
   const PLUGIN_SLUG = 'docking';
 
@@ -54,67 +58,92 @@
     }
   }
 
-  // Element symbol from PDBQT atom name (strip numbers, take first 1-2 chars)
-  const ELEMENTS: Record<string, string> = {
-    'C': 'C', 'N': 'N', 'O': 'O', 'S': 'S', 'P': 'P', 'F': 'F',
-    'CL': 'Cl', 'BR': 'Br', 'I': 'I', 'H': 'H', 'SE': 'Se', 'SI': 'Si',
-    'SA': 'S', 'OA': 'O', 'NA': 'N', 'HD': 'H', 'HS': 'H', 'A': 'C',
-  };
-
-  function pdbqtAtomToElement(line: string): string {
-    // Vina atom type is at columns 77-78 (0-indexed)
-    const vType = line.substring(77).trim().toUpperCase();
-    if (ELEMENTS[vType]) return ELEMENTS[vType];
-    // Fallback: parse atom name from columns 12-15
-    const name = line.substring(12, 16).trim().replace(/[0-9]/g, '').toUpperCase();
-    return ELEMENTS[name] || name.substring(0, 1);
-  }
-
-  /** Convert MODEL 1 of a Vina PDBQT to XYZ format.
-   *  XYZ has no bond info — Molstar won't draw spurious bonds. */
-  function pdbqtToXyz(pdbqt: string): string {
+  /** Split a multi-model PDBQT into individual models.
+   *  Returns array of PDBQT strings, one per pose. */
+  function splitModels(pdbqt: string): string[] {
+    const models: string[] = [];
     const lines = pdbqt.split('\n');
-    const atoms: string[] = [];
-    const seen = new Set<string>();
-    let inFirstModel = false;
+    let current: string[] = [];
+    let inModel = false;
     for (const line of lines) {
       if (line.startsWith('MODEL')) {
-        if (inFirstModel) break;
-        inFirstModel = true;
+        inModel = true;
+        current = [];
         continue;
       }
-      if (line.startsWith('ENDMDL')) break;
-      if (inFirstModel && (line.startsWith('HETATM') || line.startsWith('ATOM'))) {
-        const serial = line.substring(6, 11).trim();
-        if (seen.has(serial)) continue;
-        seen.add(serial);
-        const x = line.substring(30, 38).trim();
-        const y = line.substring(38, 46).trim();
-        const z = line.substring(46, 54).trim();
-        const elem = pdbqtAtomToElement(line);
-        atoms.push(`${elem}  ${x}  ${y}  ${z}`);
+      if (line.startsWith('ENDMDL')) {
+        if (current.length) models.push(current.join('\n'));
+        inModel = false;
+        continue;
+      }
+      if (inModel) {
+        // Only keep ATOM/HETATM lines (strip ROOT, BRANCH, TORSDOF, REMARK)
+        if (line.startsWith('HETATM') || line.startsWith('ATOM')) {
+          current.push(line);
+        }
       }
     }
-    return `${atoms.length}\nDocked pose\n${atoms.join('\n')}`;
+    return models;
+  }
+
+  /** Extract the REMARK VINA RESULT affinity from a model block */
+  function getPoseAffinity(pdbqt: string, modelIdx: number): string {
+    const lines = pdbqt.split('\n');
+    let modelCount = 0;
+    for (const line of lines) {
+      if (line.startsWith('MODEL')) {
+        modelCount++;
+        if (modelCount > modelIdx) break;
+      }
+      if (modelCount === modelIdx && line.startsWith('REMARK VINA RESULT')) {
+        const parts = line.substring(18).trim().split(/\s+/);
+        return parts[0] || '';
+      }
+    }
+    return '';
   }
 
   async function handleView(result: any) {
     viewError = '';
     viewingCompound = result.compound_id;
+    currentPosePdbqt = result.pose_pdbqt || null;
+    activePose = 1;
+    receptorLoaded = false;
+
+    if (!currentPosePdbqt) {
+      poseCount = 0;
+      // No pose — just load receptor
+      try {
+        const receptor = selectedJob?.receptor_pdbqt;
+        if (receptor) await loadFile(receptor, 'pdbqt');
+      } catch (e: any) { viewError = e.message; }
+      return;
+    }
+
+    const models = splitModels(currentPosePdbqt);
+    poseCount = models.length;
+    await loadPose(1);
+  }
+
+  async function loadPose(poseNum: number) {
+    if (!currentPosePdbqt) return;
+    viewError = '';
+    activePose = poseNum;
     try {
-      // Load the preprocessed receptor
+      // Load receptor (clears viewer)
       const receptor = selectedJob?.receptor_pdbqt;
       if (receptor) {
         await loadFile(receptor, 'pdbqt');
       }
-      // Overlay the best docked pose as XYZ (no spurious bonds from distance-guessing)
-      if (result.pose_pdbqt) {
-        const xyz = pdbqtToXyz(result.pose_pdbqt);
-        await overlayStructure(xyz, 'xyz');
+      // Extract the specific model and overlay
+      const models = splitModels(currentPosePdbqt);
+      if (poseNum > 0 && poseNum <= models.length) {
+        const poseData = models[poseNum - 1];
+        await overlayStructure(poseData, 'pdbqt');
         setTimeout(() => focusLastStructure(), 200);
       }
     } catch (e: any) {
-      viewError = e.message || 'Failed to load structure';
+      viewError = e.message || 'Failed to load pose';
     }
   }
 
@@ -249,6 +278,19 @@
             </tbody>
           </table>
         </div>
+        {#if viewingCompound && poseCount > 1}
+          <div class="pose-nav">
+            <span class="pose-label">Pose</span>
+            {#each Array(poseCount) as _, i}
+              <button
+                class="pose-btn"
+                class:active={activePose === i + 1}
+                onclick={() => loadPose(i + 1)}
+              >{i + 1}</button>
+            {/each}
+            <span class="pose-info">{viewingCompound}</span>
+          </div>
+        {/if}
         {#if viewError}
           <p class="error-msg">{viewError}</p>
         {/if}
@@ -294,6 +336,45 @@
     color: var(--text-secondary, #8b949e);
     font-size: 12px;
     margin-bottom: 8px;
+  }
+
+  .pose-nav {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 8px 0;
+    border-top: 1px solid rgba(48,54,61,0.4);
+    margin-top: 6px;
+  }
+
+  .pose-label {
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--text-muted, #484f58);
+    text-transform: uppercase;
+    margin-right: 4px;
+  }
+
+  .pose-btn {
+    width: 24px;
+    height: 24px;
+    font-size: 11px;
+    font-weight: 600;
+    border: 1px solid rgba(48,54,61,0.6);
+    border-radius: 4px;
+    background: none;
+    color: var(--text-secondary, #8b949e);
+    cursor: pointer;
+  }
+
+  .pose-btn:hover { border-color: var(--accent, #58a6ff); color: var(--text-primary, #e6edf3); }
+  .pose-btn.active { background: var(--accent, #58a6ff); color: #000; border-color: var(--accent, #58a6ff); }
+
+  .pose-info {
+    font-family: 'SF Mono', monospace;
+    font-size: 10px;
+    color: var(--text-muted, #484f58);
+    margin-left: auto;
   }
 
   .error-msg {
