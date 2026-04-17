@@ -2,11 +2,9 @@ apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources:
   - zot-image-pull-secret.yaml
-  - image-repository-docking-controller.yaml
   - image-repository-autodock4.yaml
   - image-repository-autodock-vina.yaml
   - image-repository-jupyter-chem.yaml
-  - image-policy-docking-controller.yaml
   - image-policy-autodock4.yaml
   - image-policy-autodock-vina.yaml
   - image-policy-jupyter-chem.yaml
