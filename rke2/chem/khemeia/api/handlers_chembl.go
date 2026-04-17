@@ -31,8 +31,9 @@ type CompoundResult struct {
 // a string-keyed parameter map.  Both SearchLigands (URL query) and ImportFromFilter
 // (JSON body) funnel through this helper so filter logic is defined once.
 func buildChEMBLFilterClauses(params map[string]string) (conditions []string, args []interface{}) {
-	// Required: must have SMILES
+	// Required: must have SMILES, and must be a single molecule (no salts/dimers/counter-ions)
 	conditions = append(conditions, "cs.canonical_smiles IS NOT NULL")
+	conditions = append(conditions, "cs.canonical_smiles NOT LIKE '%.%'")
 
 	// Text search
 	if search := params["q"]; search != "" {
