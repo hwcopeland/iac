@@ -86,16 +86,21 @@ function extractAtomInfo(reprLoci: any): AtomInfo | null {
     const e = loci.elements[0];
     const unit = e.unit;
 
-    // e.indices is an OrderedSet of unit-local indices.
-    // unit.elements[unitLocalIdx] gives the model-level element index.
-    // Location.element needs the model-level index.
+    // e.indices is a Molstar OrderedSet: either an Int32Array (SortedArray)
+    // or a float64 number (Interval encoded as two packed int32s).
+    // Extract the first unit-local index, then map through unit.elements.
     let unitLocalIdx = 0;
     const indices = e.indices;
     if (indices != null) {
-      if (indices.length > 0 && typeof indices[0] === 'number') {
-        unitLocalIdx = indices[0]; // SortedArray
-      } else if (typeof indices.min === 'number') {
-        unitLocalIdx = indices.min; // Interval
+      if (typeof indices === 'number') {
+        // Interval (IntTuple) — extract fst via the same bit trick Molstar uses
+        const buf = new Float64Array(1);
+        const view = new Int32Array(buf.buffer);
+        buf[0] = indices;
+        unitLocalIdx = view[0]; // fst = first int32
+      } else if (indices.length > 0) {
+        // SortedArray (Int32Array)
+        unitLocalIdx = indices[0];
       }
     }
 
