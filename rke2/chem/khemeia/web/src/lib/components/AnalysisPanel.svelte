@@ -1,7 +1,7 @@
 <script lang="ts">
   import Panel from './Panel.svelte';
   import { getJobs, getJob } from '$lib/api';
-  import { clearStructures, loadFile, overlayStructure, focusLastStructure } from '$lib/viewer';
+  import { loadFile, overlayStructure, focusLastStructure } from '$lib/viewer';
   import { isAuthenticated } from '$lib/auth';
 
   let jobs = $state<any[]>([]);
@@ -131,21 +131,16 @@
   }
 
   async function loadPose(poseNum: number) {
-    if (!currentPosePdbqt || loadingPose) return;
-    loadingPose = true;
+    if (!currentPosePdbqt) return;
     viewError = '';
     activePose = poseNum;
     try {
-      // Clear everything
-      await clearStructures();
-
-      // Load receptor (protein only)
+      // loadFile clears the viewer, then loads receptor
       const receptor = selectedJob?.receptor_pdbqt;
       if (receptor) {
         await loadFile(stripReceptorHetAtm(receptor), 'pdbqt');
       }
-
-      // Extract the single model and overlay as PDBQT
+      // Overlay single pose on top
       const models = splitModels(currentPosePdbqt);
       if (poseNum > 0 && poseNum <= models.length) {
         await overlayStructure(models[poseNum - 1], 'pdbqt');
@@ -153,8 +148,6 @@
       }
     } catch (e: any) {
       viewError = e.message || 'Failed to load pose';
-    } finally {
-      loadingPose = false;
     }
   }
 
