@@ -112,7 +112,11 @@ func (h *APIHandler) PluginSubmit(plugin Plugin) http.HandlerFunc {
 			"status": "Pending",
 		})
 
-		go h.controller.RunPluginJob(plugin, jobName, input)
+		if plugin.Slug == "docking" {
+			go h.controller.RunParallelDockingJob(plugin, jobName, input)
+		} else {
+			go h.controller.RunPluginJob(plugin, jobName, input)
+		}
 	}
 }
 
