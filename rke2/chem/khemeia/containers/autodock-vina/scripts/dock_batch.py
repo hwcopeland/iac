@@ -136,6 +136,8 @@ def run_vina(ligand_pdbqt_path, grid_x, grid_y, grid_z):
     out_path = os.path.join(DATA_DIR, "docked.pdbqt")
     log_path = os.path.join(DATA_DIR, "docked.log")
 
+    num_cpus = os.environ.get("NUM_CPUS", "1")
+
     cmd = [
         VINA_BIN,
         "--receptor", RECEPTOR_PATH,
@@ -146,6 +148,7 @@ def run_vina(ligand_pdbqt_path, grid_x, grid_y, grid_z):
         "--size_x", str(GRID_SIZE),
         "--size_y", str(GRID_SIZE),
         "--size_z", str(GRID_SIZE),
+        "--cpu", num_cpus,
         "--out", out_path,
         "--log", log_path,
     ]
