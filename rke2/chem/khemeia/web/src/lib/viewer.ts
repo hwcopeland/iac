@@ -85,19 +85,23 @@ function extractAtomInfo(reprLoci: any): AtomInfo | null {
 
     const e = loci.elements[0];
     const unit = e.unit;
-    // e.indices could be an OrderedSet or plain array — get first element
-    let idx = 0;
-    if (e.indices) {
-      if (typeof e.indices[0] === 'number') {
-        idx = e.indices[0];
-      } else if (e.indices.min !== undefined) {
-        idx = e.indices.min;
+
+    // e.indices is an OrderedSet of unit-local indices.
+    // unit.elements[unitLocalIdx] gives the model-level element index.
+    // Location.element needs the model-level index.
+    let unitLocalIdx = 0;
+    const indices = e.indices;
+    if (indices != null) {
+      if (indices.length > 0 && typeof indices[0] === 'number') {
+        unitLocalIdx = indices[0]; // SortedArray
+      } else if (typeof indices.min === 'number') {
+        unitLocalIdx = indices.min; // Interval
       }
     }
-    const elIdx = unit.elements[idx];
-    if (elIdx === undefined) return null;
 
-    const loc = StructureElement.Location.create(loci.structure, unit, elIdx);
+    const loc = StructureElement.Location.create(loci.structure);
+    loc.unit = unit;
+    loc.element = unit.elements[unitLocalIdx];
 
     return {
       element: String(StructureProperties.atom.type_symbol(loc)),
