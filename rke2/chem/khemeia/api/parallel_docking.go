@@ -262,7 +262,7 @@ func (c *Controller) runProteinPrepPod(plugin Plugin, leaderName, jobName string
 					Containers: []corev1.Container{{
 						Name:            "prep",
 						Image:           plugin.Image,
-						ImagePullPolicy: corev1.PullIfNotPresent,
+						ImagePullPolicy: corev1.PullAlways,
 						Command:         []string{"/bin/sh", "-c"},
 						Args:            []string{expandedCommand},
 						Env:             buildJobEnv(plugin, jobName, input),
@@ -328,7 +328,7 @@ func (c *Controller) createPrepWorker(plugin Plugin, workerName, jobName, source
 					Containers: []corev1.Container{{
 						Name:            "prep",
 						Image:           plugin.Image,
-						ImagePullPolicy: corev1.PullIfNotPresent,
+						ImagePullPolicy: corev1.PullAlways,
 						Command:         []string{"python3", "/autodock/scripts/prep_ligands.py"},
 						Env: []corev1.EnvVar{
 							{Name: "SOURCE_DB", Value: sourceDB},
@@ -390,7 +390,7 @@ func (c *Controller) createDockingWorker(plugin Plugin, workerName, jobName stri
 					Containers: []corev1.Container{{
 						Name:            "dock",
 						Image:           plugin.Image,
-						ImagePullPolicy: corev1.PullIfNotPresent,
+						ImagePullPolicy: corev1.PullAlways,
 						Command:         []string{"python3", "/autodock/scripts/dock_batch.py"},
 						Env: []corev1.EnvVar{
 							{Name: "WORKFLOW_NAME", Value: jobName},
