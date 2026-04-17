@@ -398,9 +398,11 @@ func failPluginJob(db *sql.DB, plugin Plugin, jobName, message string) {
 // buildJobEnv creates environment variables for the job container.
 // Passes through MySQL connection info and all non-text input fields as uppercase env vars.
 func buildJobEnv(plugin Plugin, jobName string, input map[string]interface{}) []corev1.EnvVar {
+	cpuStr := plugin.ExpandResource(plugin.Resources.CPU, input)
 	envs := []corev1.EnvVar{
 		{Name: "JOB_NAME", Value: jobName},
 		{Name: "WORKFLOW_NAME", Value: jobName},
+		{Name: "NUM_CPUS", Value: cpuStr},
 		{Name: "MYSQL_HOST", Value: os.Getenv("MYSQL_HOST")},
 		{Name: "MYSQL_PORT", Value: os.Getenv("MYSQL_PORT")},
 		{Name: "MYSQL_USER", Value: os.Getenv("MYSQL_USER")},
