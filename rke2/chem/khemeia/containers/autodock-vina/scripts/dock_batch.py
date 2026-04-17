@@ -112,7 +112,7 @@ def fetch_ligands(cursor, source_db, batch_limit, batch_offset):
     """Fetch a batch of ligands with pre-computed PDBQTs.
 
     Returns list of (id, compound_id, pdbqt_text).
-    Exits if no ligands are found.
+    Returns empty list if none found (graceful skip).
     """
     cursor.execute(
         "SELECT id, compound_id, pdbqt FROM ligands "
@@ -120,15 +120,16 @@ def fetch_ligands(cursor, source_db, batch_limit, batch_offset):
         "ORDER BY id LIMIT %s OFFSET %s",
         (source_db, batch_limit, batch_offset),
     )
-    rows = cursor.fetchall()
-    if not rows:
-        print(
-            f"FATAL: no ligands found for source_db='{source_db}' "
-            f"offset={batch_offset} limit={batch_limit}",
-            flush=True,
-        )
-        sys.exit(1)
-    return rows
+    return cursor.fetchall()
+
+
+def fetch_already_docked(cursor, workflow_name):
+    """Return set of compound_ids already in docking_results for this workflow."""
+    cursor.execute(
+        "SELECT compound_id FROM docking_results WHERE workflow_name = %s",
+        (workflow_name,),
+    )
+    return {row[0] for row in cursor.fetchall()}
 
 
 def run_vina(ligand_pdbqt_path, grid_x, grid_y, grid_z):
@@ -203,8 +204,28 @@ def main():
 
     # Fetch ligand batch
     ligands = fetch_ligands(cursor, cfg["source_db"], cfg["batch_limit"], cfg["batch_offset"])
+    if not ligands:
+        print("No prepped ligands found in this batch, nothing to dock", flush=True)
+        cursor.close()
+        conn.close()
+        return
+
+    # Skip already-docked compounds (resume support)
+    already_docked = fetch_already_docked(cursor, cfg["workflow_name"])
+    if already_docked:
+        before = len(ligands)
+        ligands = [(lid, cid, pdbqt) for lid, cid, pdbqt in ligands if cid not in already_docked]
+        skipped = before - len(ligands)
+        print(f"Skipping {skipped} already-docked compounds", flush=True)
+
     total = len(ligands)
-    print(f"Fetched {total} ligands (offset={cfg['batch_offset']})", flush=True)
+    if total == 0:
+        print("All ligands in this batch already docked, nothing to do", flush=True)
+        cursor.close()
+        conn.close()
+        return
+
+    print(f"Docking {total} ligands (offset={cfg['batch_offset']})", flush=True)
 
     # Process each ligand
     for i, (ligand_id, compound_id, pdbqt_text) in enumerate(ligands, start=1):

@@ -69,8 +69,8 @@ def connect_db(cfg):
 def fetch_ligands(cursor, source_db, batch_limit, batch_offset):
     """Fetch a batch of ligands that need PDBQT preparation.
 
-    Returns list of (id, compound_id, smiles).
-    Exits if no ligands are found.
+    Returns list of (id, compound_id, smiles). Returns empty list if
+    all ligands are already prepped (graceful skip).
     """
     cursor.execute(
         "SELECT id, compound_id, smiles FROM ligands "
@@ -78,15 +78,7 @@ def fetch_ligands(cursor, source_db, batch_limit, batch_offset):
         "ORDER BY id LIMIT %s OFFSET %s",
         (source_db, batch_limit, batch_offset),
     )
-    rows = cursor.fetchall()
-    if not rows:
-        print(
-            f"FATAL: no ligands found for source_db='{source_db}' "
-            f"offset={batch_offset} limit={batch_limit}",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-    return rows
+    return cursor.fetchall()
 
 
 def smiles_to_mol(smiles):
@@ -143,14 +135,15 @@ def main():
     conn = connect_db(cfg)
     cursor = conn.cursor()
 
-    # Fetch ligand batch
+    # Fetch ligand batch (only unprepped)
     ligands = fetch_ligands(cursor, cfg["source_db"], cfg["batch_limit"], cfg["batch_offset"])
     total = len(ligands)
-    print(
-        f"Fetched {total} ligands for prep (source_db='{cfg['source_db']}' "
-        f"offset={cfg['batch_offset']})",
-        flush=True,
-    )
+    if total == 0:
+        print("All ligands already prepped, nothing to do", flush=True)
+        cursor.close()
+        conn.close()
+        return
+    print(f"Prepping {total} ligands (already-prepped skipped)", flush=True)
 
     skipped = 0
 

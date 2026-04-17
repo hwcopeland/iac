@@ -59,12 +59,30 @@ func (c *Controller) RunParallelDockingJob(plugin Plugin, jobName string, input 
 	cpuStr := plugin.ExpandResource(plugin.Resources.CPU, input)
 	memStr := plugin.ExpandResource(plugin.Resources.Memory, input)
 
-	// ── Phase 1: Protein prep (single pod) ──────────────────────────
-	log.Printf("[%s] Phase 1: Protein prep", jobName)
-	leaderName := fmt.Sprintf("%s-prep", jobName)
-	if err := c.runProteinPrepPod(plugin, leaderName, jobName, input, cpuStr, memStr); err != nil {
-		failPluginJob(db, plugin, jobName, fmt.Sprintf("protein prep failed: %v", err))
-		return
+	// ── Phase 1: Protein prep (single pod) — skip if receptor already exists ──
+	var existingReceptor int
+	_ = db.QueryRow(
+		`SELECT LENGTH(receptor_pdbqt) FROM docking_workflows WHERE pdbid = ? AND receptor_pdbqt IS NOT NULL LIMIT 1`,
+		pdbid,
+	).Scan(&existingReceptor)
+
+	if existingReceptor > 0 {
+		log.Printf("[%s] Phase 1: Receptor for %s already prepped (%d bytes), skipping protein prep", jobName, pdbid, existingReceptor)
+		// Copy workflow record for this job name
+		_, _ = db.Exec(
+			`INSERT INTO docking_workflows (name, pdbid, source_db, native_ligand, chunk_size, image, receptor_pdbqt, grid_center_x, grid_center_y, grid_center_z, phase)
+			 SELECT ?, pdbid, ?, ?, ?, 'generic', receptor_pdbqt, grid_center_x, grid_center_y, grid_center_z, 'Running'
+			 FROM docking_workflows WHERE pdbid = ? AND receptor_pdbqt IS NOT NULL LIMIT 1
+			 ON DUPLICATE KEY UPDATE receptor_pdbqt=VALUES(receptor_pdbqt)`,
+			jobName, ligandDB, nativeLigand, chunkSize, pdbid,
+		)
+	} else {
+		log.Printf("[%s] Phase 1: Protein prep", jobName)
+		leaderName := fmt.Sprintf("%s-prep", jobName)
+		if err := c.runProteinPrepPod(plugin, leaderName, jobName, input, cpuStr, memStr); err != nil {
+			failPluginJob(db, plugin, jobName, fmt.Sprintf("protein prep failed: %v", err))
+			return
+		}
 	}
 
 	// ── Phase 2: Parallel ligand prep ───────────────────────────────
