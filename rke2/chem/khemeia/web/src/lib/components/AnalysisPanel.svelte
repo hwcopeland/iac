@@ -115,7 +115,7 @@
       // No pose — just load receptor
       try {
         const receptor = selectedJob?.receptor_pdbqt;
-        if (receptor) await loadFile(receptor, 'pdbqt');
+        if (receptor) await loadFile(stripReceptorHetAtm(receptor), 'pdbqt');
       } catch (e: any) { viewError = e.message; }
       return;
     }
@@ -125,15 +125,20 @@
     await loadPose(1);
   }
 
+  /** Strip HETATM from receptor — remove cofactors/ions so only the protein loads */
+  function stripReceptorHetAtm(pdbqt: string): string {
+    return pdbqt.split('\n').filter(l => !l.startsWith('HETATM')).join('\n');
+  }
+
   async function loadPose(poseNum: number) {
     if (!currentPosePdbqt) return;
     viewError = '';
     activePose = poseNum;
     try {
-      // Load receptor (clears viewer)
+      // Load receptor without cofactors/ions (clears viewer)
       const receptor = selectedJob?.receptor_pdbqt;
       if (receptor) {
-        await loadFile(receptor, 'pdbqt');
+        await loadFile(stripReceptorHetAtm(receptor), 'pdbqt');
       }
       // Extract the specific model and overlay
       const models = splitModels(currentPosePdbqt);
@@ -545,8 +550,9 @@
   }
 
   .col-action {
-    width: 52px;
+    width: 60px;
     text-align: center;
+    white-space: nowrap;
   }
 
   .view-btn {
