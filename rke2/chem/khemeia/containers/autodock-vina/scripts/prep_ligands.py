@@ -119,7 +119,10 @@ def mol_to_pdbqt(mol, tmpdir):
 
     cmd = ["prepare_ligand4", "-l", pdb_path, "-o", pdbqt_path]
     try:
-        subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60)
+    except subprocess.TimeoutExpired:
+        print(f"WARNING: prepare_ligand4 timed out (60s)", flush=True)
+        return None
     except subprocess.CalledProcessError as exc:
         print(
             f"WARNING: prepare_ligand4 failed: {exc.stderr.decode(errors='replace')}",
