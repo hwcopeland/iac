@@ -149,7 +149,7 @@ def main():
     print(
         f"Fetched {total} ligands for prep (source_db='{cfg['source_db']}' "
         f"offset={cfg['batch_offset']})",
-        file=sys.stderr,
+        flush=True,
     )
 
     skipped = 0
@@ -161,7 +161,7 @@ def main():
             if mol is None:
                 print(
                     f"Skipped {i}/{total}: {compound_id} (invalid SMILES or embedding failed)",
-                    file=sys.stderr,
+                    flush=True,
                 )
                 skipped += 1
                 continue
@@ -171,7 +171,7 @@ def main():
             if pdbqt_text is None:
                 print(
                     f"Skipped {i}/{total}: {compound_id} (prepare_ligand4 failed)",
-                    file=sys.stderr,
+                    flush=True,
                 )
                 skipped += 1
                 continue
@@ -188,13 +188,13 @@ def main():
         )
         conn.commit()
 
-        print(f"Prepared {i}/{total}: {compound_id}", file=sys.stderr)
+        print(f"Prepared {i}/{total}: {compound_id}", flush=True)
 
     cursor.close()
     conn.close()
     print(
         f"Batch complete: {total} ligands, {total - skipped} prepared, {skipped} skipped",
-        file=sys.stderr,
+        flush=True,
     )
 
 
