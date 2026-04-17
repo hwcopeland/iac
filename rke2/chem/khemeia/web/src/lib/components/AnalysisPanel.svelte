@@ -1,7 +1,7 @@
 <script lang="ts">
   import Panel from './Panel.svelte';
   import { getJobs, getJob } from '$lib/api';
-  import { loadFile, overlayStructure, focusLastStructure } from '$lib/viewer';
+  import { clearStructures, loadFile, overlayStructure, focusLastStructure } from '$lib/viewer';
   import { isAuthenticated } from '$lib/auth';
 
   let jobs = $state<any[]>([]);
@@ -15,7 +15,7 @@
   let activePose = $state(1);
   let poseCount = $state(0);
   let currentPosePdbqt = $state<string | null>(null);
-  let receptorLoaded = $state(false);
+  let loadingPose = $state(false);
 
   const PLUGIN_SLUG = 'docking';
 
@@ -131,24 +131,58 @@
   }
 
   async function loadPose(poseNum: number) {
-    if (!currentPosePdbqt) return;
+    if (!currentPosePdbqt || loadingPose) return;
+    loadingPose = true;
     viewError = '';
     activePose = poseNum;
     try {
-      // Load receptor without cofactors/ions (clears viewer)
+      // Clear everything
+      await clearStructures();
+
+      // Load receptor (protein only)
       const receptor = selectedJob?.receptor_pdbqt;
       if (receptor) {
         await loadFile(stripReceptorHetAtm(receptor), 'pdbqt');
       }
-      // Extract the specific model and overlay
+
+      // Extract ONLY the requested model's atoms
       const models = splitModels(currentPosePdbqt);
       if (poseNum > 0 && poseNum <= models.length) {
-        const poseData = models[poseNum - 1];
-        await overlayStructure(poseData, 'pdbqt');
-        setTimeout(() => focusLastStructure(), 200);
+        const singlePose = models[poseNum - 1];
+        // Convert to SDF with 0 bonds to prevent Molstar bond inference
+        const atoms = singlePose.split('\n').filter((l: string) => l.startsWith('HETATM') || l.startsWith('ATOM'));
+        const sdfLines: string[] = [];
+        sdfLines.push('Docked Pose');  // molecule name
+        sdfLines.push('  Khemeia         3D');  // program/timestamp
+        sdfLines.push('');  // comment
+        // counts line: aaabbblllfffcccsssxxxrrrpppiiimmmvvvvvv
+        const nAtoms = atoms.length;
+        sdfLines.push(`${nAtoms.toString().padStart(3)}  0  0  0  0  0  0  0  0999 V2000`);
+        // atom block
+        for (const line of atoms) {
+          const x = parseFloat(line.substring(30, 38));
+          const y = parseFloat(line.substring(38, 46));
+          const z = parseFloat(line.substring(46, 54));
+          // Get element from atom name (col 12-16) or Vina type (col 77+)
+          let elem = line.substring(77).trim();
+          const elemMap: Record<string, string> = {'A':'C','OA':'O','NA':'N','SA':'S','HD':'H','HS':'H'};
+          elem = elemMap[elem] || elem.substring(0, elem.length > 2 ? 2 : elem.length) || 'C';
+          if (elem.length === 2) elem = elem[0].toUpperCase() + elem[1].toLowerCase();
+          else elem = elem.toUpperCase();
+          sdfLines.push(`${x.toFixed(4).padStart(10)}${y.toFixed(4).padStart(10)}${z.toFixed(4).padStart(10)} ${elem.padEnd(3)} 0  0  0  0  0  0  0  0  0  0  0  0`);
+        }
+        // bond block: 0 bonds
+        sdfLines.push('M  END');
+        sdfLines.push('$$$$');
+        const sdf = sdfLines.join('\n');
+        console.log(`[pose] model ${poseNum}: ${nAtoms} atoms as SDF`);
+        await overlayStructure(sdf, 'sdf');
+        setTimeout(() => focusLastStructure(), 300);
       }
     } catch (e: any) {
       viewError = e.message || 'Failed to load pose';
+    } finally {
+      loadingPose = false;
     }
   }
 
