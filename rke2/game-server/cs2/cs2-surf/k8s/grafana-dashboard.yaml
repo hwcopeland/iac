@@ -68,6 +68,29 @@ data:
           "type": "stat"
         },
         {
+          "datasource": { "type": "mysql", "uid": "cs2-surf-mysql" },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] },
+              "unit": "short"
+            }
+          },
+          "gridPos": { "h": 4, "w": 4, "x": 12, "y": 0 },
+          "id": 130,
+          "options": { "colorMode": "value", "graphMode": "none", "justifyMode": "center", "textMode": "value" },
+          "targets": [
+            {
+              "datasource": { "type": "mysql", "uid": "cs2-surf-mysql" },
+              "rawSql": "SELECT COUNT(*) AS total FROM surf_players",
+              "format": "table",
+              "refId": "A"
+            }
+          ],
+          "title": "Unique Players (all time)",
+          "type": "stat"
+        },
+        {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
           "fieldConfig": {
             "defaults": {
