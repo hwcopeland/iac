@@ -734,53 +734,19 @@ export async function overlayStructure(data: string, format: string): Promise<vo
   }
 }
 
-/** Focus the camera on the most recently loaded structure (the ligand)
- *  and switch its representation to spacefill (no bonds). */
-export async function focusLastStructure(): Promise<void> {
+/** Focus the camera on the most recently loaded structure (the ligand). */
+export function focusLastStructure(): void {
   if (!plugin) return;
   try {
     const structures = plugin.managers?.structure?.hierarchy?.current?.structures;
     if (!structures?.length) return;
     const last = structures[structures.length - 1];
-    if (!last?.cell?.obj?.data) return;
-
-    // Focus camera on the ligand
-    const { Structure } = getLib().structure;
-    const loci = Structure.Loci(last.cell.obj.data);
-    plugin.managers.camera.focusLoci(loci, { durationMs: 250 });
-
-    // Remove default representation and add spacefill (no bonds)
-    const { StateTransforms } = getLib().plugin;
-    const components = last.components;
-    if (components?.length) {
-      // Delete existing representations on the ligand structure
-      for (const comp of components) {
-        if (comp.representations?.length) {
-          for (const repr of comp.representations) {
-            const update = plugin.build().delete(repr.cell);
-            await update.commit();
-          }
-        }
-      }
+    if (last?.cell?.obj?.data) {
+      const { Structure } = getLib().structure;
+      const loci = Structure.Loci(last.cell.obj.data);
+      plugin.managers.camera.focusLoci(loci, { durationMs: 250 });
     }
-
-    // Add spacefill representation to the structure node
-    const structureRef = last.cell;
-    if (structureRef) {
-      const update = plugin.build()
-        .to(structureRef)
-        .apply(StateTransforms.Model.StructureCompleteComponent, { label: 'Ligand' })
-        .apply(StateTransforms.Representation.StructureRepresentation3D, {
-          type: { name: 'spacefill', params: { sizeFactor: 1 } },
-          colorTheme: { name: 'element-symbol', params: {} },
-          sizeTheme: { name: 'physical', params: {} },
-        });
-      await update.commit();
-    }
-
-    applyCanvasProps();
-  } catch (e) {
-    console.error('focusLastStructure error:', e);
+  } catch {
     plugin?.managers?.camera?.reset?.();
   }
 }
