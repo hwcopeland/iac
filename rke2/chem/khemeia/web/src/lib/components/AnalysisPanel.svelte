@@ -12,10 +12,6 @@
   let jobLoading = $state(false);
   let viewingCompound = $state<string | null>(null);
   let viewError = $state('');
-  let activePose = $state(1);
-  let poseCount = $state(0);
-  let currentPosePdbqt = $state<string | null>(null);
-  let loadingPose = $state(false);
 
   const PLUGIN_SLUG = 'docking';
 
@@ -58,96 +54,50 @@
     }
   }
 
-  /** Split a multi-model PDBQT into individual models.
-   *  Returns array of PDBQT strings, one per pose. */
-  function splitModels(pdbqt: string): string[] {
-    const models: string[] = [];
+  /** Extract only unique HETATM/ATOM lines from MODEL 1 of a Vina PDBQT.
+   *  Vina's BRANCH tree duplicates atoms — deduplicate by atom serial number. */
+  function extractBestPose(pdbqt: string): string {
     const lines = pdbqt.split('\n');
-    let current: string[] = [];
-    let inModel = false;
+    const seen = new Set<string>();
+    const out: string[] = [];
+    let inFirstModel = false;
     for (const line of lines) {
       if (line.startsWith('MODEL')) {
-        inModel = true;
-        current = [];
+        if (inFirstModel) break;
+        inFirstModel = true;
         continue;
       }
-      if (line.startsWith('ENDMDL')) {
-        if (current.length) models.push(current.join('\n'));
-        inModel = false;
-        continue;
-      }
-      if (inModel) {
-        // Only keep ATOM/HETATM lines (strip ROOT, BRANCH, TORSDOF, REMARK)
-        if (line.startsWith('HETATM') || line.startsWith('ATOM')) {
-          current.push(line);
+      if (line.startsWith('ENDMDL')) break;
+      if (inFirstModel && (line.startsWith('HETATM') || line.startsWith('ATOM'))) {
+        // Atom serial is columns 7-11 (0-indexed 6-10)
+        const serial = line.substring(6, 11).trim();
+        if (!seen.has(serial)) {
+          seen.add(serial);
+          out.push(line);
         }
       }
     }
-    return models;
-  }
-
-  /** Extract the REMARK VINA RESULT affinity from a model block */
-  function getPoseAffinity(pdbqt: string, modelIdx: number): string {
-    const lines = pdbqt.split('\n');
-    let modelCount = 0;
-    for (const line of lines) {
-      if (line.startsWith('MODEL')) {
-        modelCount++;
-        if (modelCount > modelIdx) break;
-      }
-      if (modelCount === modelIdx && line.startsWith('REMARK VINA RESULT')) {
-        const parts = line.substring(18).trim().split(/\s+/);
-        return parts[0] || '';
-      }
-    }
-    return '';
+    return out.join('\n');
   }
 
   async function handleView(result: any) {
     viewError = '';
     viewingCompound = result.compound_id;
-    currentPosePdbqt = result.pose_pdbqt || null;
-    activePose = 1;
-    receptorLoaded = false;
-
-    if (!currentPosePdbqt) {
-      poseCount = 0;
-      // No pose — just load receptor
-      try {
-        const receptor = selectedJob?.receptor_pdbqt;
-        if (receptor) await loadFile(stripReceptorHetAtm(receptor), 'pdbqt');
-      } catch (e: any) { viewError = e.message; }
-      return;
-    }
-
-    const models = splitModels(currentPosePdbqt);
-    poseCount = models.length;
-    await loadPose(1);
-  }
-
-  /** Strip HETATM from receptor — remove cofactors/ions so only the protein loads */
-  function stripReceptorHetAtm(pdbqt: string): string {
-    return pdbqt.split('\n').filter(l => !l.startsWith('HETATM')).join('\n');
-  }
-
-  async function loadPose(poseNum: number) {
-    if (!currentPosePdbqt) return;
-    viewError = '';
-    activePose = poseNum;
     try {
-      // loadFile clears the viewer, then loads receptor
+      // Load the preprocessed receptor
       const receptor = selectedJob?.receptor_pdbqt;
       if (receptor) {
-        await loadFile(stripReceptorHetAtm(receptor), 'pdbqt');
+        await loadFile(receptor, 'pdbqt');
       }
-      // Overlay single pose on top
-      const models = splitModels(currentPosePdbqt);
-      if (poseNum > 0 && poseNum <= models.length) {
-        await overlayStructure(models[poseNum - 1], 'pdbqt');
-        setTimeout(() => focusLastStructure(), 300);
+      // Overlay only the best docked pose (MODEL 1, deduplicated)
+      if (result.pose_pdbqt) {
+        const bestPose = extractBestPose(result.pose_pdbqt);
+        await overlayStructure(bestPose, 'pdbqt');
+        // Short delay to let Molstar finish rendering, then focus on ligand
+        setTimeout(() => focusLastStructure(), 200);
       }
     } catch (e: any) {
-      viewError = e.message || 'Failed to load pose';
+      viewError = e.message || 'Failed to load structure';
     }
   }
 
@@ -282,19 +232,6 @@
             </tbody>
           </table>
         </div>
-        {#if viewingCompound && poseCount > 1}
-          <div class="pose-nav">
-            <span class="pose-label">Pose</span>
-            {#each Array(poseCount) as _, i}
-              <button
-                class="pose-btn"
-                class:active={activePose === i + 1}
-                onclick={() => loadPose(i + 1)}
-              >{i + 1}</button>
-            {/each}
-            <span class="pose-info">{viewingCompound}</span>
-          </div>
-        {/if}
         {#if viewError}
           <p class="error-msg">{viewError}</p>
         {/if}
@@ -340,45 +277,6 @@
     color: var(--text-secondary, #8b949e);
     font-size: 12px;
     margin-bottom: 8px;
-  }
-
-  .pose-nav {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    padding: 8px 0;
-    border-top: 1px solid rgba(48,54,61,0.4);
-    margin-top: 6px;
-  }
-
-  .pose-label {
-    font-size: 10px;
-    font-weight: 600;
-    color: var(--text-muted, #484f58);
-    text-transform: uppercase;
-    margin-right: 4px;
-  }
-
-  .pose-btn {
-    width: 24px;
-    height: 24px;
-    font-size: 11px;
-    font-weight: 600;
-    border: 1px solid rgba(48,54,61,0.6);
-    border-radius: 4px;
-    background: none;
-    color: var(--text-secondary, #8b949e);
-    cursor: pointer;
-  }
-
-  .pose-btn:hover { border-color: var(--accent, #58a6ff); color: var(--text-primary, #e6edf3); }
-  .pose-btn.active { background: var(--accent, #58a6ff); color: #000; border-color: var(--accent, #58a6ff); }
-
-  .pose-info {
-    font-family: 'SF Mono', monospace;
-    font-size: 10px;
-    color: var(--text-muted, #484f58);
-    margin-left: auto;
   }
 
   .error-msg {
@@ -549,9 +447,8 @@
   }
 
   .col-action {
-    width: 60px;
+    width: 52px;
     text-align: center;
-    white-space: nowrap;
   }
 
   .view-btn {
