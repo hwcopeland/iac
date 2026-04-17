@@ -45,7 +45,7 @@ def require_env(name):
     """Return the value of a required environment variable, or exit."""
     value = os.environ.get(name)
     if not value:
-        print(f"FATAL: required environment variable {name} is not set", file=sys.stderr)
+        print(f"FATAL: required environment variable {name} is not set", flush=True)
         sys.exit(1)
     return value
 
@@ -78,7 +78,7 @@ def connect_db(cfg):
             database=cfg["mysql_database"],
         )
     except mysql.connector.Error as exc:
-        print(f"FATAL: MySQL connection failed: {exc}", file=sys.stderr)
+        print(f"FATAL: MySQL connection failed: {exc}", flush=True)
         sys.exit(1)
 
 
@@ -97,13 +97,13 @@ def fetch_receptor(cursor, workflow_name):
     if row is None:
         print(
             f"FATAL: no receptor data for workflow '{workflow_name}' in docking_workflows",
-            file=sys.stderr,
+            flush=True,
         )
         sys.exit(1)
 
     receptor_pdbqt, gx, gy, gz = row
     if receptor_pdbqt is None:
-        print("FATAL: receptor_pdbqt is NULL in docking_workflows", file=sys.stderr)
+        print("FATAL: receptor_pdbqt is NULL in docking_workflows", flush=True)
         sys.exit(1)
     return receptor_pdbqt, float(gx), float(gy), float(gz)
 
@@ -125,7 +125,7 @@ def fetch_ligands(cursor, source_db, batch_limit, batch_offset):
         print(
             f"FATAL: no ligands found for source_db='{source_db}' "
             f"offset={batch_offset} limit={batch_limit}",
-            file=sys.stderr,
+            flush=True,
         )
         sys.exit(1)
     return rows
@@ -158,7 +158,7 @@ def run_vina(ligand_pdbqt_path, grid_x, grid_y, grid_z):
     except subprocess.CalledProcessError as exc:
         print(
             f"WARNING: Vina failed for {ligand_pdbqt_path}: {exc.stderr.decode(errors='replace')}",
-            file=sys.stderr,
+            flush=True,
         )
         return None, None
 
@@ -175,7 +175,7 @@ def parse_vina_log(log_path):
                 if m:
                     return float(m.group(1))
     except (OSError, ValueError) as exc:
-        print(f"WARNING: could not parse {log_path}: {exc}", file=sys.stderr)
+        print(f"WARNING: could not parse {log_path}: {exc}", flush=True)
     return None
 
 
@@ -198,13 +198,13 @@ def main():
     print(
         f"Receptor loaded for workflow '{cfg['workflow_name']}': "
         f"grid_center=({grid_x}, {grid_y}, {grid_z})",
-        file=sys.stderr,
+        flush=True,
     )
 
     # Fetch ligand batch
     ligands = fetch_ligands(cursor, cfg["source_db"], cfg["batch_limit"], cfg["batch_offset"])
     total = len(ligands)
-    print(f"Fetched {total} ligands (offset={cfg['batch_offset']})", file=sys.stderr)
+    print(f"Fetched {total} ligands (offset={cfg['batch_offset']})", flush=True)
 
     # Process each ligand
     for i, (ligand_id, compound_id, pdbqt_text) in enumerate(ligands, start=1):
@@ -222,7 +222,7 @@ def main():
             if affinity is None:
                 print(
                     f"Skipped ligand {i}/{total}: {compound_id} (Vina failure or unparseable log)",
-                    file=sys.stderr,
+                    flush=True,
                 )
                 continue
 
@@ -252,7 +252,7 @@ def main():
 
             print(
                 f"Processed ligand {i}/{total}: {compound_id} affinity={affinity}",
-                file=sys.stderr,
+                flush=True,
             )
 
         finally:
@@ -262,7 +262,7 @@ def main():
 
     cursor.close()
     conn.close()
-    print(f"Batch complete: {total} ligands processed", file=sys.stderr)
+    print(f"Batch complete: {total} ligands processed", flush=True)
 
 
 if __name__ == "__main__":
