@@ -92,9 +92,14 @@ def smiles_to_mol(smiles):
     # Try default embedding first
     result = AllChem.EmbedMolecule(mol, randomSeed=42)
     if result == -1:
-        # Fallback to ETKDGv3 for difficult molecules
+        # Fallback: relax chirality enforcement during embedding.
+        # Stereo centers stay assigned on the atoms — RDKit just can't always
+        # satisfy bridged ring chirality during distance geometry. MMFF
+        # optimization + Vina's conformer search handle it from here.
         params = AllChem.ETKDGv3()
         params.randomSeed = 42
+        params.useRandomCoords = True
+        params.enforceChirality = False
         result = AllChem.EmbedMolecule(mol, params)
         if result == -1:
             return None
