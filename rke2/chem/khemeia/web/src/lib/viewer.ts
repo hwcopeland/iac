@@ -734,6 +734,299 @@ export async function overlayStructure(data: string, format: string): Promise<vo
   }
 }
 
+// ─── Viewer API Extensions ───
+
+/**
+ * Focus camera on a specific residue by chain ID and residue number.
+ * Uses auth_asym_id (chain) and auth_seq_id (residue) to locate atoms,
+ * then builds a loci and focuses the camera on it.
+ */
+export function focusResidue(chainId: string, resId: number): void {
+  if (!plugin) return;
+  try {
+    const structures = plugin.managers?.structure?.hierarchy?.current?.structures;
+    if (!structures?.length) return;
+
+    const structData = structures[0]?.cell?.obj?.data;
+    if (!structData) return;
+
+    const { StructureElement, StructureProperties, Structure } = getLib().structure;
+
+    // Collect element indices matching the target residue
+    const lociElements: any[] = [];
+    for (const unit of structData.units) {
+      const indices: number[] = [];
+      for (let i = 0, len = unit.elements.length; i < len; i++) {
+        const elIdx = unit.elements[i];
+        const loc = StructureElement.Location.create(structData, unit, elIdx);
+        const c = StructureProperties.chain.auth_asym_id(loc);
+        const r = StructureProperties.residue.auth_seq_id(loc);
+        if (c === chainId && r === resId) {
+          indices.push(i);
+        }
+      }
+      if (indices.length > 0) {
+        lociElements.push({ unit, indices: (StructureElement as any).Loci?.createOrderedSet
+          ? (StructureElement as any).Loci.createOrderedSet(indices)
+          : indices });
+      }
+    }
+
+    if (lociElements.length === 0) return;
+
+    const loci = StructureElement.Loci(structData, lociElements);
+    plugin.managers.camera.focusLoci(loci, { durationMs: 250 });
+  } catch {
+    // Residue focus failed — likely API mismatch
+  }
+}
+
+/**
+ * Change the representation of the current structure.
+ * Removes all existing representations and applies the specified type.
+ */
+export async function setRepresentation(type: string): Promise<void> {
+  if (!plugin) return;
+  try {
+    const structures = plugin.managers?.structure?.hierarchy?.current?.structures;
+    if (!structures?.length) return;
+
+    const structRef = structures[0];
+    const { StateTransforms } = getLib().plugin;
+
+    // Remove existing representations
+    const components = structRef.components ?? [];
+    for (const comp of components) {
+      const representations = comp.representations ?? [];
+      for (const repr of representations) {
+        if (repr.cell?.transform?.ref) {
+          const builder = plugin.build();
+          builder.delete(repr.cell.transform.ref);
+          await builder.commit();
+        }
+      }
+    }
+
+    // Also remove top-level representations if any
+    const topReprs = structRef.representations ?? [];
+    for (const repr of topReprs) {
+      if (repr.cell?.transform?.ref) {
+        const builder = plugin.build();
+        builder.delete(repr.cell.transform.ref);
+        await builder.commit();
+      }
+    }
+
+    // Add the new representation
+    const structureRef = structRef.cell?.transform?.ref;
+    if (!structureRef) return;
+
+    const builder = plugin.build();
+    builder.to(structureRef).apply(StateTransforms.Representation.StructureRepresentation3D, {
+      type: { name: type, params: {} },
+      colorTheme: { name: 'element-symbol', params: {} },
+      sizeTheme: { name: 'physical', params: {} },
+    });
+    await builder.commit();
+  } catch {
+    // Representation change failed — likely unsupported type or API mismatch
+  }
+}
+
+/**
+ * Change the color theme of the current representation(s).
+ * Updates all existing structure representations to use the specified theme.
+ */
+export async function setColorTheme(theme: string): Promise<void> {
+  if (!plugin) return;
+  try {
+    const structures = plugin.managers?.structure?.hierarchy?.current?.structures;
+    if (!structures?.length) return;
+
+    const { StateTransforms } = getLib().plugin;
+    const structRef = structures[0];
+
+    // Collect all representation refs from components and top-level
+    const reprRefs: any[] = [];
+    for (const comp of structRef.components ?? []) {
+      for (const repr of comp.representations ?? []) {
+        if (repr.cell?.transform?.ref) reprRefs.push(repr.cell.transform.ref);
+      }
+    }
+    for (const repr of structRef.representations ?? []) {
+      if (repr.cell?.transform?.ref) reprRefs.push(repr.cell.transform.ref);
+    }
+
+    // Update each representation's color theme
+    for (const ref of reprRefs) {
+      const builder = plugin.build();
+      const cell = plugin.state.data.cells.get(ref);
+      if (!cell?.params?.values) continue;
+
+      builder.to(ref).update(StateTransforms.Representation.StructureRepresentation3D, (old: any) => ({
+        ...old,
+        colorTheme: { name: theme, params: {} },
+      }));
+      await builder.commit();
+    }
+  } catch {
+    // Color theme change failed — likely unsupported theme or API mismatch
+  }
+}
+
+/**
+ * Add a molecular surface representation overlaid on the current structure.
+ * Does not remove existing representations — the surface is added on top.
+ */
+export async function showSurface(colorTheme: string = 'partial-charge'): Promise<void> {
+  if (!plugin) return;
+  try {
+    const structures = plugin.managers?.structure?.hierarchy?.current?.structures;
+    if (!structures?.length) return;
+
+    const { StateTransforms } = getLib().plugin;
+    const structureRef = structures[0]?.cell?.transform?.ref;
+    if (!structureRef) return;
+
+    const builder = plugin.build();
+    builder.to(structureRef).apply(StateTransforms.Representation.StructureRepresentation3D, {
+      type: { name: 'molecular-surface', params: { alpha: 0.7 } },
+      colorTheme: { name: colorTheme, params: {} },
+      sizeTheme: { name: 'physical', params: {} },
+    });
+    await builder.commit();
+  } catch {
+    // Surface addition failed — likely API mismatch
+  }
+}
+
+/**
+ * Remove any molecular-surface representations from the current structure.
+ */
+export async function hideSurface(): Promise<void> {
+  if (!plugin) return;
+  try {
+    const structures = plugin.managers?.structure?.hierarchy?.current?.structures;
+    if (!structures?.length) return;
+
+    const structRef = structures[0];
+
+    // Search through all components and top-level representations
+    const allReprs = [
+      ...(structRef.components ?? []).flatMap((c: any) => c.representations ?? []),
+      ...(structRef.representations ?? []),
+    ];
+
+    for (const repr of allReprs) {
+      const cell = repr.cell;
+      if (!cell?.params?.values) continue;
+      const typeName = cell.params.values?.type?.name;
+      if (typeName === 'molecular-surface') {
+        if (cell.transform?.ref) {
+          const builder = plugin.build();
+          builder.delete(cell.transform.ref);
+          await builder.commit();
+        }
+      }
+    }
+  } catch {
+    // Surface removal failed — likely API mismatch
+  }
+}
+
+/**
+ * Highlight a residue visually without moving the camera.
+ * Uses Molstar's interactivity manager for selection highlight.
+ */
+export function highlightResidue(chainId: string, resId: number): void {
+  if (!plugin) return;
+  try {
+    const structures = plugin.managers?.structure?.hierarchy?.current?.structures;
+    if (!structures?.length) return;
+
+    const structData = structures[0]?.cell?.obj?.data;
+    if (!structData) return;
+
+    const { StructureElement, StructureProperties } = getLib().structure;
+
+    // Build a loci for the target residue (same approach as focusResidue)
+    const lociElements: any[] = [];
+    for (const unit of structData.units) {
+      const indices: number[] = [];
+      for (let i = 0, len = unit.elements.length; i < len; i++) {
+        const elIdx = unit.elements[i];
+        const loc = StructureElement.Location.create(structData, unit, elIdx);
+        const c = StructureProperties.chain.auth_asym_id(loc);
+        const r = StructureProperties.residue.auth_seq_id(loc);
+        if (c === chainId && r === resId) {
+          indices.push(i);
+        }
+      }
+      if (indices.length > 0) {
+        lociElements.push({ unit, indices });
+      }
+    }
+
+    if (lociElements.length === 0) return;
+
+    const loci = StructureElement.Loci(structData, lociElements);
+
+    // Clear existing selection and mark the residue
+    plugin.managers.interactivity.lociSelects.deselectAll();
+    plugin.managers.interactivity.lociSelects.select({ loci });
+  } catch {
+    // Residue highlight failed — likely API mismatch
+  }
+}
+
+/**
+ * Extract the amino acid sequence from the current structure.
+ * Returns an array of chains, each containing an array of residues with id and 3-letter name.
+ */
+export function getSequence(): { chainId: string; residues: { resId: number; resName: string }[] }[] {
+  if (!plugin) return [];
+  try {
+    const structures = plugin.managers?.structure?.hierarchy?.current?.structures;
+    if (!structures?.length) return [];
+
+    const structData = structures[0]?.cell?.obj?.data;
+    if (!structData) return [];
+
+    const { StructureElement, StructureProperties } = getLib().structure;
+
+    // Collect residues per chain, deduplicating by (chainId, resId)
+    const chainMap = new Map<string, Map<number, string>>();
+
+    for (const unit of structData.units) {
+      for (let i = 0, len = unit.elements.length; i < len; i++) {
+        const elIdx = unit.elements[i];
+        const loc = StructureElement.Location.create(structData, unit, elIdx);
+        const cId = StructureProperties.chain.auth_asym_id(loc);
+        const rId = StructureProperties.residue.auth_seq_id(loc);
+        const rName = StructureProperties.residue.label_comp_id(loc);
+
+        if (!chainMap.has(cId)) {
+          chainMap.set(cId, new Map());
+        }
+        chainMap.get(cId)!.set(rId, rName);
+      }
+    }
+
+    // Convert to sorted output
+    const result: { chainId: string; residues: { resId: number; resName: string }[] }[] = [];
+    for (const [chainId, residueMap] of [...chainMap.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
+      const residues = [...residueMap.entries()]
+        .sort((a, b) => a[0] - b[0])
+        .map(([rId, rName]) => ({ resId: rId, resName: rName }));
+      result.push({ chainId, residues });
+    }
+
+    return result;
+  } catch {
+    return [];
+  }
+}
+
 /** Focus the camera on the most recently loaded structure (the ligand). */
 export function focusLastStructure(): void {
   if (!plugin) return;
