@@ -145,38 +145,10 @@
         await loadFile(stripReceptorHetAtm(receptor), 'pdbqt');
       }
 
-      // Extract ONLY the requested model's atoms
+      // Extract the single model and overlay as PDBQT
       const models = splitModels(currentPosePdbqt);
       if (poseNum > 0 && poseNum <= models.length) {
-        const singlePose = models[poseNum - 1];
-        // Convert to SDF with 0 bonds to prevent Molstar bond inference
-        const atoms = singlePose.split('\n').filter((l: string) => l.startsWith('HETATM') || l.startsWith('ATOM'));
-        const sdfLines: string[] = [];
-        sdfLines.push('Docked Pose');  // molecule name
-        sdfLines.push('  Khemeia         3D');  // program/timestamp
-        sdfLines.push('');  // comment
-        // counts line: aaabbblllfffcccsssxxxrrrpppiiimmmvvvvvv
-        const nAtoms = atoms.length;
-        sdfLines.push(`${nAtoms.toString().padStart(3)}  0  0  0  0  0  0  0  0999 V2000`);
-        // atom block
-        for (const line of atoms) {
-          const x = parseFloat(line.substring(30, 38));
-          const y = parseFloat(line.substring(38, 46));
-          const z = parseFloat(line.substring(46, 54));
-          // Get element from atom name (col 12-16) or Vina type (col 77+)
-          let elem = line.substring(77).trim();
-          const elemMap: Record<string, string> = {'A':'C','OA':'O','NA':'N','SA':'S','HD':'H','HS':'H'};
-          elem = elemMap[elem] || elem.substring(0, elem.length > 2 ? 2 : elem.length) || 'C';
-          if (elem.length === 2) elem = elem[0].toUpperCase() + elem[1].toLowerCase();
-          else elem = elem.toUpperCase();
-          sdfLines.push(`${x.toFixed(4).padStart(10)}${y.toFixed(4).padStart(10)}${z.toFixed(4).padStart(10)} ${elem.padEnd(3)} 0  0  0  0  0  0  0  0  0  0  0  0`);
-        }
-        // bond block: 0 bonds
-        sdfLines.push('M  END');
-        sdfLines.push('$$$$');
-        const sdf = sdfLines.join('\n');
-        console.log(`[pose] model ${poseNum}: ${nAtoms} atoms as SDF`);
-        await overlayStructure(sdf, 'sdf');
+        await overlayStructure(models[poseNum - 1], 'pdbqt');
         setTimeout(() => focusLastStructure(), 300);
       }
     } catch (e: any) {
