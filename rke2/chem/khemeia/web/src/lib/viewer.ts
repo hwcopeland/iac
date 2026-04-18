@@ -1054,7 +1054,7 @@ export function focusLastStructure(): void {
   }
 }
 
-// ─── Interaction Lines ───
+// ─── Interaction Lines (2D Canvas Overlay) ───
 
 export type InteractionLine = {
   type: string;
@@ -1063,61 +1063,106 @@ export type InteractionLine = {
 };
 
 const IX_LINE_COLORS: Record<string, string> = {
-  hbond: '0000FF',
-  hydrophobic: '888888',
-  ionic: 'FF8800',
-  dipole: 'BB33BB',
-  contact: '333333',
+  hbond: '#58a6ff',
+  hydrophobic: '#8b949e',
+  ionic: '#d29922',
+  dipole: '#bb33bb',
+  contact: '#484f58',
 };
 
-/**
- * Draw interaction lines as a PDB overlay with CONECT records.
- * Each line = 2 HETATM atoms + 1 CONECT. Rendered as 'line' representation.
- */
-export async function drawInteractionLines(lines: InteractionLine[], activeTypes?: Set<string>): Promise<void> {
-  if (!viewerInstance || !lines.length) return;
+let _interactionLines: InteractionLine[] = [];
+let _activeLineTypes: Set<string> = new Set();
+let _lineCanvas: HTMLCanvasElement | null = null;
+let _lineAnimFrame: number | null = null;
 
-  // Remove previous interaction lines
-  await removeInteractionLines();
+/** Start drawing interaction lines as a 2D overlay on the viewer canvas. */
+export function drawInteractionLines(lines: InteractionLine[], activeTypes?: Set<string>): void {
+  _interactionLines = lines;
+  _activeLineTypes = activeTypes ?? new Set(Object.keys(IX_LINE_COLORS));
 
-  const filtered = activeTypes
-    ? lines.filter(l => activeTypes.has(l.type))
-    : lines;
-
-  if (!filtered.length) return;
-
-  // Build PDB with pairs of atoms + CONECT
-  const pdbLines: string[] = [];
-  let serial = 1;
-  for (const line of filtered) {
-    const s1 = serial;
-    const s2 = serial + 1;
-    // HETATM records for the two endpoints
-    pdbLines.push(
-      `HETATM${s1.toString().padStart(5)}  X   IXL X   1    ${line.rec_x.toFixed(3).padStart(8)}${line.rec_y.toFixed(3).padStart(8)}${line.rec_z.toFixed(3).padStart(8)}  1.00  0.00           X`
-    );
-    pdbLines.push(
-      `HETATM${s2.toString().padStart(5)}  X   IXL X   1    ${line.lig_x.toFixed(3).padStart(8)}${line.lig_y.toFixed(3).padStart(8)}${line.lig_z.toFixed(3).padStart(8)}  1.00  0.00           X`
-    );
-    pdbLines.push(`CONECT${s1.toString().padStart(5)}${s2.toString().padStart(5)}`);
-    serial += 2;
+  if (!_lineCanvas && plugin?.canvas3d) {
+    // Create overlay canvas
+    const container = plugin.canvas3d.webgl.gl.canvas as HTMLCanvasElement;
+    const parent = container.parentElement;
+    if (parent) {
+      _lineCanvas = document.createElement('canvas');
+      _lineCanvas.style.cssText = 'position:absolute;inset:0;pointer-events:none;z-index:10';
+      parent.style.position = 'relative';
+      parent.appendChild(_lineCanvas);
+    }
   }
-  pdbLines.push('END');
 
-  const pdb = pdbLines.join('\n');
-  const blob = new Blob([pdb], { type: 'text/plain' });
-  const url = URL.createObjectURL(blob);
-  try {
-    await viewerInstance.loadStructureFromUrl(url, 'pdb', false);
-    applyCanvasProps();
-  } finally {
-    setTimeout(() => URL.revokeObjectURL(url), 5000);
+  // Start render loop
+  if (!_lineAnimFrame) {
+    renderInteractionLines();
   }
 }
 
-/** Remove interaction line overlays (structures with IXL residue). */
-export async function removeInteractionLines(): Promise<void> {
-  // For now this is a no-op — lines get cleared on next loadFile call
-  // which happens every time View is clicked. Future: track and remove
-  // the specific state tree node.
+/** Stop and remove interaction line overlay. */
+export function removeInteractionLines(): void {
+  _interactionLines = [];
+  if (_lineAnimFrame) {
+    cancelAnimationFrame(_lineAnimFrame);
+    _lineAnimFrame = null;
+  }
+  if (_lineCanvas) {
+    const ctx = _lineCanvas.getContext('2d');
+    if (ctx) ctx.clearRect(0, 0, _lineCanvas.width, _lineCanvas.height);
+  }
+}
+
+function renderInteractionLines(): void {
+  if (!plugin?.canvas3d || !_lineCanvas || !_interactionLines.length) {
+    _lineAnimFrame = null;
+    return;
+  }
+
+  const canvas3d = plugin.canvas3d;
+  const cam = canvas3d.camera;
+  const w = canvas3d.webgl.gl.drawingBufferWidth;
+  const h = canvas3d.webgl.gl.drawingBufferHeight;
+
+  _lineCanvas.width = w;
+  _lineCanvas.height = h;
+
+  const ctx = _lineCanvas.getContext('2d');
+  if (!ctx) { _lineAnimFrame = null; return; }
+  ctx.clearRect(0, 0, w, h);
+
+  // Get view-projection matrix
+  const vp = cam.viewProjection;
+
+  function project(x: number, y: number, z: number): [number, number, number] | null {
+    // Multiply by view-projection matrix (column-major)
+    const cx = vp[0]*x + vp[4]*y + vp[8]*z + vp[12];
+    const cy = vp[1]*x + vp[5]*y + vp[9]*z + vp[13];
+    const cz = vp[2]*x + vp[6]*y + vp[10]*z + vp[14];
+    const cw = vp[3]*x + vp[7]*y + vp[11]*z + vp[15];
+    if (cw <= 0) return null; // behind camera
+    const ndcX = cx / cw;
+    const ndcY = cy / cw;
+    return [(ndcX * 0.5 + 0.5) * w, (1 - (ndcY * 0.5 + 0.5)) * h, cz / cw];
+  }
+
+  for (const line of _interactionLines) {
+    if (!_activeLineTypes.has(line.type)) continue;
+
+    const p1 = project(line.rec_x, line.rec_y, line.rec_z);
+    const p2 = project(line.lig_x, line.lig_y, line.lig_z);
+    if (!p1 || !p2) continue;
+
+    ctx.strokeStyle = IX_LINE_COLORS[line.type] || '#ffffff';
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([4, 4]);
+    ctx.globalAlpha = 0.7;
+    ctx.beginPath();
+    ctx.moveTo(p1[0], p1[1]);
+    ctx.lineTo(p2[0], p2[1]);
+    ctx.stroke();
+  }
+
+  ctx.setLineDash([]);
+  ctx.globalAlpha = 1;
+
+  _lineAnimFrame = requestAnimationFrame(renderInteractionLines);
 }
