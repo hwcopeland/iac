@@ -149,3 +149,27 @@ export async function importFromFilter(params: Record<string, any>): Promise<Imp
     body: JSON.stringify(params),
   });
 }
+
+// --- Pocket Analysis ---
+
+export interface PocketResidue {
+  chain_id: string;
+  res_id: number;
+  res_name: string;
+  min_distance: number;
+  interactions: string[];
+  contact_atoms: number;
+}
+
+export interface PocketAnalysis {
+  compound_id: string;
+  cutoff_angstrom: number;
+  pocket_residues: PocketResidue[];
+  total_contacts: number;
+  ligand_atoms: number;
+}
+
+export async function getPocketAnalysis(jobName: string, compoundId: string, cutoff?: number): Promise<PocketAnalysis> {
+  const params = cutoff ? `?cutoff=${cutoff}` : '';
+  return api<PocketAnalysis>(`/api/v1/docking/pocket/${jobName}/${encodeURIComponent(compoundId)}${params}`);
+}
