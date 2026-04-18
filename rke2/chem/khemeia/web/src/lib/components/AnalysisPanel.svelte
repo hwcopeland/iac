@@ -2,7 +2,8 @@
   import Panel from './Panel.svelte';
   import { getJobs, getJob, getPocketAnalysis } from '$lib/api';
   import type { PocketResidue, PocketAnalysis } from '$lib/api';
-  import { loadFile, overlayStructure, focusLastStructure, focusResidue, highlightResidue } from '$lib/viewer';
+  import { loadFile, overlayStructure, focusLastStructure, focusResidue, highlightResidue, drawInteractionLines } from '$lib/viewer';
+  import type { InteractionLine } from '$lib/viewer';
   import { isAuthenticated } from '$lib/auth';
 
   let jobs = $state<any[]>([]);
@@ -118,6 +119,9 @@
     pocket = null;
     try {
       pocket = await getPocketAnalysis(selectedJob.name, compoundId, pocketCutoff);
+      if (pocket?.interaction_lines?.length) {
+        drawInteractionLines(pocket.interaction_lines, activeInteractions);
+      }
     } catch (e: any) {
       pocketError = e.message || 'Pocket analysis failed';
     } finally {
@@ -141,8 +145,29 @@
     hbond: { bg: 'rgba(88,166,255,0.15)', text: '#58a6ff', label: 'H-bond' },
     hydrophobic: { bg: 'rgba(139,148,158,0.15)', text: '#8b949e', label: 'Hydro' },
     ionic: { bg: 'rgba(210,153,34,0.15)', text: '#d29922', label: 'Ionic' },
+    dipole: { bg: 'rgba(187,51,187,0.15)', text: '#bb33bb', label: 'Dipole' },
     contact: { bg: 'rgba(48,54,61,0.3)', text: '#484f58', label: 'Contact' },
   };
+
+  // Interaction type toggles — which types to show in the table
+  let activeInteractions = $state<Set<string>>(new Set(['hbond', 'hydrophobic', 'ionic', 'dipole', 'contact']));
+
+  function toggleInteraction(type: string) {
+    const next = new Set(activeInteractions);
+    if (next.has(type)) next.delete(type);
+    else next.add(type);
+    activeInteractions = next;
+    // Redraw lines with updated filter
+    if (pocket?.interaction_lines?.length) {
+      drawInteractionLines(pocket.interaction_lines, activeInteractions);
+    }
+  }
+
+  let filteredResidues = $derived(
+    pocket?.pocket_residues.filter(r =>
+      r.interactions.some(ix => activeInteractions.has(ix))
+    ) ?? []
+  );
 
   function statusClass(status: string): string {
     const s = status?.toLowerCase();
@@ -301,24 +326,24 @@
           {:else if pocketError}
             <p class="error-msg">{pocketError}</p>
           {:else if pocket}
-            <div class="pocket-summary">
-              {#each Object.entries(
-                pocket.pocket_residues.reduce((acc, r) => {
-                  for (const ix of r.interactions) {
-                    acc[ix] = (acc[ix] || 0) + 1;
-                  }
-                  return acc;
-                }, {} as Record<string, number>)
-              ) as [type, count]}
-                {@const style = interactionColors[type] || interactionColors.contact}
-                <span class="ix-badge" style="background:{style.bg};color:{style.text}">
-                  {count} {style.label}
-                </span>
+            <div class="pocket-toggles">
+              {#each Object.entries(interactionColors) as [type, style]}
+                {@const count = pocket.pocket_residues.filter(r => r.interactions.includes(type)).length}
+                {#if count > 0}
+                  <button
+                    class="ix-toggle"
+                    class:active={activeInteractions.has(type)}
+                    style="background:{activeInteractions.has(type) ? style.bg : 'transparent'};color:{style.text};border-color:{style.text}"
+                    onclick={() => toggleInteraction(type)}
+                  >
+                    {count} {style.label}
+                  </button>
+                {/if}
               {/each}
-              <span class="pocket-count">{pocket.pocket_residues.length} residues</span>
+              <span class="pocket-count">{filteredResidues.length} residues</span>
             </div>
 
-            {#if pocket.pocket_residues.length > 0}
+            {#if filteredResidues.length > 0}
               <div class="pocket-table-wrap">
                 <table class="pocket-table">
                   <thead>
@@ -331,7 +356,7 @@
                     </tr>
                   </thead>
                   <tbody>
-                    {#each pocket.pocket_residues as res}
+                    {#each filteredResidues as res}
                       <tr
                         class="pocket-row"
                         onclick={() => handleResidueClick(res)}
@@ -637,7 +662,7 @@
     min-width: 35px;
   }
 
-  .pocket-summary {
+  .pocket-toggles {
     display: flex;
     flex-wrap: wrap;
     gap: 4px;
@@ -651,11 +676,23 @@
     margin-left: auto;
   }
 
-  .ix-badge {
+  .ix-toggle {
     font-size: 10px;
     font-weight: 600;
     padding: 2px 7px;
     border-radius: 8px;
+    border: 1px solid;
+    cursor: pointer;
+    opacity: 0.5;
+    transition: opacity 0.15s;
+  }
+
+  .ix-toggle.active {
+    opacity: 1;
+  }
+
+  .ix-toggle:hover {
+    opacity: 0.8;
   }
 
   .pocket-table-wrap {

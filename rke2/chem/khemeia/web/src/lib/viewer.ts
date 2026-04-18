@@ -1053,3 +1053,71 @@ export function focusLastStructure(): void {
     plugin.managers?.camera?.reset?.();
   }
 }
+
+// ─── Interaction Lines ───
+
+export type InteractionLine = {
+  type: string;
+  rec_x: number; rec_y: number; rec_z: number;
+  lig_x: number; lig_y: number; lig_z: number;
+};
+
+const IX_LINE_COLORS: Record<string, string> = {
+  hbond: '0000FF',
+  hydrophobic: '888888',
+  ionic: 'FF8800',
+  dipole: 'BB33BB',
+  contact: '333333',
+};
+
+/**
+ * Draw interaction lines as a PDB overlay with CONECT records.
+ * Each line = 2 HETATM atoms + 1 CONECT. Rendered as 'line' representation.
+ */
+export async function drawInteractionLines(lines: InteractionLine[], activeTypes?: Set<string>): Promise<void> {
+  if (!viewerInstance || !lines.length) return;
+
+  // Remove previous interaction lines
+  await removeInteractionLines();
+
+  const filtered = activeTypes
+    ? lines.filter(l => activeTypes.has(l.type))
+    : lines;
+
+  if (!filtered.length) return;
+
+  // Build PDB with pairs of atoms + CONECT
+  const pdbLines: string[] = [];
+  let serial = 1;
+  for (const line of filtered) {
+    const s1 = serial;
+    const s2 = serial + 1;
+    // HETATM records for the two endpoints
+    pdbLines.push(
+      `HETATM${s1.toString().padStart(5)}  X   IXL X   1    ${line.rec_x.toFixed(3).padStart(8)}${line.rec_y.toFixed(3).padStart(8)}${line.rec_z.toFixed(3).padStart(8)}  1.00  0.00           X`
+    );
+    pdbLines.push(
+      `HETATM${s2.toString().padStart(5)}  X   IXL X   1    ${line.lig_x.toFixed(3).padStart(8)}${line.lig_y.toFixed(3).padStart(8)}${line.lig_z.toFixed(3).padStart(8)}  1.00  0.00           X`
+    );
+    pdbLines.push(`CONECT${s1.toString().padStart(5)}${s2.toString().padStart(5)}`);
+    serial += 2;
+  }
+  pdbLines.push('END');
+
+  const pdb = pdbLines.join('\n');
+  const blob = new Blob([pdb], { type: 'text/plain' });
+  const url = URL.createObjectURL(blob);
+  try {
+    await viewerInstance.loadStructureFromUrl(url, 'pdb', false);
+    applyCanvasProps();
+  } finally {
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+  }
+}
+
+/** Remove interaction line overlays (structures with IXL residue). */
+export async function removeInteractionLines(): Promise<void> {
+  // For now this is a no-op — lines get cleared on next loadFile call
+  // which happens every time View is clicked. Future: track and remove
+  // the specific state tree node.
+}
