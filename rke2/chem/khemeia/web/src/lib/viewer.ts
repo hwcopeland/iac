@@ -86,27 +86,34 @@ function extractAtomInfo(reprLoci: any): AtomInfo | null {
     const e = loci.elements[0];
     const unit = e.unit;
 
-    // e.indices is a Molstar OrderedSet: either an Int32Array (SortedArray)
-    // or a float64 number (Interval encoded as two packed int32s).
-    // Extract the first unit-local index, then map through unit.elements.
-    let unitLocalIdx = 0;
-    const indices = e.indices;
-    if (indices != null) {
-      if (typeof indices === 'number') {
-        // Interval (IntTuple) — extract fst via the same bit trick Molstar uses
-        const buf = new Float64Array(1);
-        const view = new Int32Array(buf.buffer);
-        buf[0] = indices;
-        unitLocalIdx = view[0]; // fst = first int32
-      } else if (indices.length > 0) {
-        // SortedArray (Int32Array)
-        unitLocalIdx = indices[0];
-      }
-    }
-
+    // Use Molstar's own Location helper — safest way to extract atom info
     const loc = StructureElement.Location.create(loci.structure);
     loc.unit = unit;
-    loc.element = unit.elements[unitLocalIdx];
+    // Set element to the first atom in this unit as a safe default
+    loc.element = unit.elements[0];
+
+    // Try to get the specific clicked atom from the OrderedSet indices
+    try {
+      const indices = e.indices;
+      if (indices != null) {
+        let unitLocalIdx = 0;
+        if (typeof indices === 'number') {
+          // Interval (IntTuple packed as float64)
+          const buf = new Float64Array(1);
+          const view = new Int32Array(buf.buffer);
+          buf[0] = indices;
+          unitLocalIdx = view[0];
+        } else if (ArrayBuffer.isView(indices) && indices.length > 0) {
+          // Int32Array (SortedArray)
+          unitLocalIdx = (indices as Int32Array)[0];
+        }
+        if (unitLocalIdx >= 0 && unitLocalIdx < unit.elements.length) {
+          loc.element = unit.elements[unitLocalIdx];
+        }
+      }
+    } catch {
+      // Fall through with default element
+    }
 
     return {
       element: String(StructureProperties.atom.type_symbol(loc)),
