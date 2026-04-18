@@ -123,11 +123,10 @@ def fetch_ligands(cursor, source_db, batch_limit, batch_offset):
     return cursor.fetchall()
 
 
-def fetch_already_docked(cursor, workflow_name):
-    """Return set of compound_ids already in docking_results for this workflow."""
+def fetch_already_docked(cursor):
+    """Return set of compound_ids already in docking_results (any workflow)."""
     cursor.execute(
-        "SELECT compound_id FROM docking_results WHERE workflow_name = %s",
-        (workflow_name,),
+        "SELECT DISTINCT compound_id FROM docking_results",
     )
     return {row[0] for row in cursor.fetchall()}
 
@@ -216,7 +215,7 @@ def main():
         return
 
     # Skip already-docked compounds (resume support)
-    already_docked = fetch_already_docked(cursor, cfg["workflow_name"])
+    already_docked = fetch_already_docked(cursor)
     if already_docked:
         before = len(ligands)
         ligands = [(lid, cid, pdbqt) for lid, cid, pdbqt in ligands if cid not in already_docked]
