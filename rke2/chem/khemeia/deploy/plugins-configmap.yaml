@@ -340,7 +340,7 @@ data:
     resources:
       cpu: "1"
       memory: "2048Mi"
-      timeout: 1h
+      timeout: 168h
     command: |
       cd /autodock &&
       export SOURCE_DB="{{ .ligand_db }}" &&
