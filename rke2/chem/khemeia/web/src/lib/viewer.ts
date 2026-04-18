@@ -139,23 +139,24 @@ function setupInteractions(): void {
   // Use behaviors.interaction instead of canvas3d.interaction
   // canvas3d.interaction is the raw source; behaviors.interaction is the proxied version
   // that Molstar's own code uses
+  const safeExtract = (event: any): AtomInfo | null => {
+    try { return extractAtomInfo(event?.current); } catch { return null; }
+  };
+
   const bi = plugin.behaviors?.interaction;
   if (bi) {
     bi.hover.subscribe((event: any) => {
-      if (hoverCallback) {
-        hoverCallback(extractAtomInfo(event.current));
-      }
+      if (hoverCallback) hoverCallback(safeExtract(event));
     });
     bi.click.subscribe((event: any) => {
-      if (clickCallback) clickCallback(extractAtomInfo(event.current));
+      if (clickCallback) clickCallback(safeExtract(event));
     });
-  } else {
-    // Fallback to canvas3d.interaction (raw source)
+  } else if (plugin.canvas3d?.interaction) {
     plugin.canvas3d.interaction.hover.subscribe((event: any) => {
-      if (hoverCallback) hoverCallback(extractAtomInfo(event.current));
+      if (hoverCallback) hoverCallback(safeExtract(event));
     });
     plugin.canvas3d.interaction.click.subscribe((event: any) => {
-      if (clickCallback) clickCallback(extractAtomInfo(event.current));
+      if (clickCallback) clickCallback(safeExtract(event));
     });
   }
 
