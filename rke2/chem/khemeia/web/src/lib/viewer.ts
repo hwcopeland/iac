@@ -48,18 +48,18 @@ export async function init(container: HTMLDivElement): Promise<void> {
     layoutShowRemoteState: false,
     layoutShowSequence: true,
     layoutShowLog: false,
-    layoutShowLeftPanel: true,
+    layoutShowLeftPanel: false,
     collapseLeftPanel: true,
-    collapseRightPanel: false,
+    collapseRightPanel: true,
     viewportShowControls: true,
-    viewportShowExpand: true,
+    viewportShowExpand: false,
     viewportShowSettings: true,
     viewportShowSelectionMode: true,
     viewportShowAnimation: false,
     viewportShowTrajectoryControls: false,
     viewportShowReset: true,
-    viewportShowScreenshotControls: true,
-    viewportShowToggleFullscreen: true,
+    viewportShowScreenshotControls: false,
+    viewportShowToggleFullscreen: false,
   });
 
   viewerInstance = instance;
@@ -1086,23 +1086,7 @@ let _lineAnimFrame: number | null = null;
 export function drawInteractionLines(lines: InteractionLine[], activeTypes?: Set<string>): void {
   _interactionLines = lines;
   _activeLineTypes = activeTypes ?? new Set(Object.keys(IX_LINE_COLORS));
-
-  if (!_lineCanvas && plugin?.canvas3d) {
-    // Create overlay canvas
-    const container = plugin.canvas3d.webgl.gl.canvas as HTMLCanvasElement;
-    const parent = container.parentElement;
-    if (parent) {
-      _lineCanvas = document.createElement('canvas');
-      _lineCanvas.style.cssText = 'position:absolute;inset:0;pointer-events:none;z-index:10';
-      parent.style.position = 'relative';
-      parent.appendChild(_lineCanvas);
-    }
-  }
-
-  // Start render loop
-  if (!_lineAnimFrame) {
-    renderInteractionLines();
-  }
+  // Disabled — the rAF loop causes lag. Will use Molstar's native measurement tools instead.
 }
 
 /** Stop and remove interaction line overlay. */
