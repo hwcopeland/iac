@@ -1103,14 +1103,16 @@ export function drawInteractionLines(lines: InteractionLine[], activeTypes?: Set
     }
   }
 
-  // Subscribe to camera changes (not rAF — only redraws when view changes)
+  // Render once, then on camera changes with throttle
   if (!_cameraSubscription && plugin.canvas3d.didDraw) {
+    let throttled = false;
     _cameraSubscription = plugin.canvas3d.didDraw.subscribe(() => {
-      if (_interactionLines.length > 0) renderInteractionLines();
+      if (throttled || !_interactionLines.length) return;
+      throttled = true;
+      setTimeout(() => { renderInteractionLines(); throttled = false; }, 100);
     });
   }
 
-  // Initial render
   renderInteractionLines();
 }
 
