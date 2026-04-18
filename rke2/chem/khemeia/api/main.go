@@ -475,6 +475,11 @@ func (c *Controller) startAPIServer() error {
 	// GET /api/v1/docking/pocket/{jobName}/{compoundId}?cutoff=5.0
 	mux.HandleFunc("/api/v1/docking/pocket/", wrap(handler.PocketAnalysis))
 
+	// Docking set analysis — aggregate statistics across top-scoring compounds.
+	// GET /api/v1/docking/analysis/receptor-contacts/{jobName}?top=50
+	// GET /api/v1/docking/analysis/fingerprints/{jobName}?top=100
+	mux.HandleFunc("/api/v1/docking/analysis/", wrap(handler.AnalysisDispatch))
+
 	// Pseudopotential management — uses the QE plugin's database.
 	mux.HandleFunc("/api/v1/qe/pseudopotentials", wrap(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
