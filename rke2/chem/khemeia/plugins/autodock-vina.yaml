@@ -39,7 +39,7 @@ artifacts:
     description: "Docked ligand poses in PDBQT format"
 
 resources:
-  cpu: "2"
+  cpu: "1"
   memory: "2048Mi"
   timeout: 168h
 
