@@ -137,7 +137,12 @@ def run_vina(ligand_pdbqt_path, grid_x, grid_y, grid_z):
     out_path = os.path.join(DATA_DIR, "docked.pdbqt")
     log_path = os.path.join(DATA_DIR, "docked.log")
 
-    num_cpus = os.environ.get("NUM_CPUS", "1")
+    # NUM_CPUS may be a k8s millicore string like "1500m" — convert to integer
+    raw_cpus = os.environ.get("NUM_CPUS", "1")
+    if raw_cpus.endswith("m"):
+        num_cpus = str(max(1, int(raw_cpus[:-1]) // 1000))
+    else:
+        num_cpus = str(max(1, int(float(raw_cpus))))
 
     cmd = [
         VINA_BIN,
