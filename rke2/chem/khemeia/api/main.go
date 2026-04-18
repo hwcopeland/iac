@@ -470,6 +470,11 @@ func (c *Controller) startAPIServer() error {
 		}
 	}))
 
+	// Binding pocket analysis — parses receptor and docked ligand PDBQTs to
+	// identify contact residues and classify interactions.
+	// GET /api/v1/docking/pocket/{jobName}/{compoundId}?cutoff=5.0
+	mux.HandleFunc("/api/v1/docking/pocket/", wrap(handler.PocketAnalysis))
+
 	// Pseudopotential management — uses the QE plugin's database.
 	mux.HandleFunc("/api/v1/qe/pseudopotentials", wrap(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
