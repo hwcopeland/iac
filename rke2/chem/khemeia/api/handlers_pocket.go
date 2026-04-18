@@ -36,6 +36,23 @@ type residueKey struct {
 
 // --- Pocket analysis response types ---
 
+// InteractionLine represents a dotted line between two atoms for visualization.
+type InteractionLine struct {
+	Type    string    `json:"type"`
+	RecX    float64   `json:"rec_x"`
+	RecY    float64   `json:"rec_y"`
+	RecZ    float64   `json:"rec_z"`
+	LigX    float64   `json:"lig_x"`
+	LigY    float64   `json:"lig_y"`
+	LigZ    float64   `json:"lig_z"`
+	Distance float64  `json:"distance"`
+	RecAtom  string   `json:"rec_atom"`
+	LigAtom  string   `json:"lig_atom"`
+	ResName  string   `json:"res_name"`
+	ResID    int      `json:"res_id"`
+	ChainID  string   `json:"chain_id"`
+}
+
 // PocketResidue describes a single receptor residue in contact with the ligand.
 type PocketResidue struct {
 	ChainID      string   `json:"chain_id"`
@@ -48,11 +65,12 @@ type PocketResidue struct {
 
 // PocketAnalysisResponse is the JSON envelope returned by the pocket endpoint.
 type PocketAnalysisResponse struct {
-	CompoundID     string          `json:"compound_id"`
-	CutoffAngstrom float64         `json:"cutoff_angstrom"`
-	PocketResidues []PocketResidue `json:"pocket_residues"`
-	TotalContacts  int             `json:"total_contacts"`
-	LigandAtoms    int             `json:"ligand_atoms"`
+	CompoundID     string            `json:"compound_id"`
+	CutoffAngstrom float64           `json:"cutoff_angstrom"`
+	PocketResidues []PocketResidue   `json:"pocket_residues"`
+	InteractionLines []InteractionLine `json:"interaction_lines"`
+	TotalContacts  int               `json:"total_contacts"`
+	LigandAtoms    int               `json:"ligand_atoms"`
 }
 
 // --- PDBQT parsing ---
@@ -285,24 +303,31 @@ type residueInteractions struct {
 	HasHBond     bool
 	HasHydro     bool
 	HasIonic     bool
+	HasDipole    bool
+}
+
+// isPolarElement returns true for atoms that participate in dipole interactions.
+func isPolarElement(e string) bool {
+	return e == "N" || e == "O" || e == "S" || e == "F"
 }
 
 // classifyPocket performs the full pocket analysis: for each receptor atom,
 // finds the nearest ligand atom, accumulates per-residue statistics, and
 // classifies interactions.
-func classifyPocket(receptorAtoms, ligandAtoms []pdbqtAtom, cutoff float64) []PocketResidue {
+func classifyPocket(receptorAtoms, ligandAtoms []pdbqtAtom, cutoff float64) ([]PocketResidue, []InteractionLine) {
 	if len(receptorAtoms) == 0 || len(ligandAtoms) == 0 {
-		return []PocketResidue{}
+		return []PocketResidue{}, nil
 	}
 
 	// Precompute ligand coordinates for cache locality.
 	type ligCoord struct {
 		x, y, z float64
-		element  string
+		element string
+		name    string
 	}
 	ligCoords := make([]ligCoord, len(ligandAtoms))
 	for i, la := range ligandAtoms {
-		ligCoords[i] = ligCoord{x: la.X, y: la.Y, z: la.Z, element: la.Element}
+		ligCoords[i] = ligCoord{x: la.X, y: la.Y, z: la.Z, element: la.Element, name: la.Name}
 	}
 
 	cutoffSq := cutoff * cutoff
@@ -312,11 +337,13 @@ func classifyPocket(receptorAtoms, ligandAtoms []pdbqtAtom, cutoff float64) []Po
 	hydroCutoffSq := hydroCutoff * hydroCutoff
 	ionicCutoff := 4.0
 	ionicCutoffSq := ionicCutoff * ionicCutoff
+	dipoleCutoff := 4.5
+	dipoleCutoffSq := dipoleCutoff * dipoleCutoff
 
 	residueMap := make(map[residueKey]*residueInteractions)
+	var interactionLines []InteractionLine
 
 	for _, ra := range receptorAtoms {
-		// Find the minimum distance from this receptor atom to any ligand atom.
 		minDistSq := math.MaxFloat64
 		var nearestLig ligCoord
 		for _, lc := range ligCoords {
@@ -347,27 +374,45 @@ func classifyPocket(receptorAtoms, ligandAtoms []pdbqtAtom, cutoff float64) []Po
 		}
 		ri.ContactAtoms++
 
-		// Classify interactions based on the nearest ligand atom to this
-		// receptor atom. We check all specific interaction types for each
-		// receptor-ligand atom pair within their respective cutoffs.
+		// Helper to add an interaction line
+		addLine := func(iType string) {
+			interactionLines = append(interactionLines, InteractionLine{
+				Type: iType, Distance: math.Round(d*100) / 100,
+				RecX: ra.X, RecY: ra.Y, RecZ: ra.Z,
+				LigX: nearestLig.x, LigY: nearestLig.y, LigZ: nearestLig.z,
+				RecAtom: ra.Name, LigAtom: nearestLig.name,
+				ResName: ra.ResName, ResID: ra.ResID, ChainID: ra.ChainID,
+			})
+		}
 
-		// H-bond: receptor N/O within 3.5A of ligand N/O.
+		// H-bond: receptor N/O within 3.5A of ligand N/O
 		if minDistSq <= hbondCutoffSq && isHBondElement(ra.Element) && isHBondElement(nearestLig.element) {
 			ri.HasHBond = true
+			addLine("hbond")
 		}
 
-		// Hydrophobic: receptor C within 4.0A of ligand C.
+		// Hydrophobic: receptor C within 4.0A of ligand C
 		if minDistSq <= hydroCutoffSq && isCarbonElement(ra.Element) && isCarbonElement(nearestLig.element) {
 			ri.HasHydro = true
+			addLine("hydrophobic")
 		}
 
-		// Ionic: charged residue within 4.0A of ligand N/O.
+		// Ionic: charged residue within 4.0A of ligand N/O
 		if minDistSq <= ionicCutoffSq && chargedResidues[ra.ResName] && isHBondElement(nearestLig.element) {
 			ri.HasIonic = true
+			addLine("ionic")
+		}
+
+		// Dipole: polar receptor atom within 4.5A of polar ligand atom
+		// (not already classified as H-bond or ionic)
+		if minDistSq <= dipoleCutoffSq && isPolarElement(ra.Element) && isPolarElement(nearestLig.element) &&
+			!ri.HasHBond && !chargedResidues[ra.ResName] {
+			ri.HasDipole = true
+			addLine("dipole")
 		}
 	}
 
-	// Build the result slice, sorted by min distance (lowest first).
+	// Build the result slice, sorted by min distance.
 	results := make([]PocketResidue, 0, len(residueMap))
 	for key, ri := range residueMap {
 		var interactions []string
@@ -380,13 +425,16 @@ func classifyPocket(receptorAtoms, ligandAtoms []pdbqtAtom, cutoff float64) []Po
 		if ri.HasIonic {
 			interactions = append(interactions, "ionic")
 		}
+		if ri.HasDipole {
+			interactions = append(interactions, "dipole")
+		}
 		interactions = append(interactions, "contact")
 
 		results = append(results, PocketResidue{
 			ChainID:      key.ChainID,
 			ResID:        key.ResID,
 			ResName:      key.ResName,
-			MinDistance:   math.Round(ri.MinDist*100) / 100, // 2 decimal places
+			MinDistance:   math.Round(ri.MinDist*100) / 100,
 			Interactions: interactions,
 			ContactAtoms: ri.ContactAtoms,
 		})
@@ -394,7 +442,10 @@ func classifyPocket(receptorAtoms, ligandAtoms []pdbqtAtom, cutoff float64) []Po
 
 	// Sort by min distance ascending for a consistent, useful ordering.
 	sortPocketResidues(results)
-	return results
+	if interactionLines == nil {
+		interactionLines = []InteractionLine{}
+	}
+	return results, interactionLines
 }
 
 // sortPocketResidues sorts residues by MinDistance ascending using insertion
@@ -495,7 +546,7 @@ func (h *APIHandler) PocketAnalysis(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Classify pocket.
-	pocketResidues := classifyPocket(receptorAtoms, ligandAtoms, cutoff)
+	pocketResidues, interactionLines := classifyPocket(receptorAtoms, ligandAtoms, cutoff)
 
 	// Sum total contact atoms across all residues.
 	totalContacts := 0
@@ -504,11 +555,12 @@ func (h *APIHandler) PocketAnalysis(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := PocketAnalysisResponse{
-		CompoundID:     compoundID,
-		CutoffAngstrom: cutoff,
-		PocketResidues: pocketResidues,
-		TotalContacts:  totalContacts,
-		LigandAtoms:    len(ligandAtoms),
+		CompoundID:       compoundID,
+		CutoffAngstrom:   cutoff,
+		PocketResidues:   pocketResidues,
+		InteractionLines: interactionLines,
+		TotalContacts:    totalContacts,
+		LigandAtoms:      len(ligandAtoms),
 	}
 
 	w.Header().Set("Content-Type", "application/json")
