@@ -1,7 +1,8 @@
 <script lang="ts">
   import Panel from './Panel.svelte';
-  import { getJobs, getJob } from '$lib/api';
-  import { loadFile, overlayStructure, focusLastStructure } from '$lib/viewer';
+  import { getJobs, getJob, getPocketAnalysis } from '$lib/api';
+  import type { PocketResidue, PocketAnalysis } from '$lib/api';
+  import { loadFile, overlayStructure, focusLastStructure, focusResidue, highlightResidue } from '$lib/viewer';
   import { isAuthenticated } from '$lib/auth';
 
   let jobs = $state<any[]>([]);
@@ -12,6 +13,13 @@
   let jobLoading = $state(false);
   let viewingCompound = $state<string | null>(null);
   let viewError = $state('');
+
+  // Pocket analysis state
+  let pocket = $state<PocketAnalysis | null>(null);
+  let pocketLoading = $state(false);
+  let pocketError = $state('');
+  let pocketCutoff = $state(5.0);
+  let pocketOpen = $state(true);
 
   const PLUGIN_SLUG = 'docking';
 
@@ -96,10 +104,45 @@
         // Short delay to let Molstar finish rendering, then focus on ligand
         setTimeout(() => focusLastStructure(), 200);
       }
+      // Fetch pocket analysis
+      fetchPocket(result.compound_id);
     } catch (e: any) {
       viewError = e.message || 'Failed to load structure';
     }
   }
+
+  async function fetchPocket(compoundId: string) {
+    if (!selectedJob?.name) return;
+    pocketLoading = true;
+    pocketError = '';
+    pocket = null;
+    try {
+      pocket = await getPocketAnalysis(selectedJob.name, compoundId, pocketCutoff);
+    } catch (e: any) {
+      pocketError = e.message || 'Pocket analysis failed';
+    } finally {
+      pocketLoading = false;
+    }
+  }
+
+  function handleCutoffChange() {
+    if (viewingCompound) fetchPocket(viewingCompound);
+  }
+
+  function handleResidueClick(res: PocketResidue) {
+    focusResidue(res.chain_id, res.res_id);
+  }
+
+  function handleResidueHover(res: PocketResidue) {
+    highlightResidue(res.chain_id, res.res_id);
+  }
+
+  const interactionColors: Record<string, { bg: string; text: string; label: string }> = {
+    hbond: { bg: 'rgba(88,166,255,0.15)', text: '#58a6ff', label: 'H-bond' },
+    hydrophobic: { bg: 'rgba(139,148,158,0.15)', text: '#8b949e', label: 'Hydro' },
+    ionic: { bg: 'rgba(210,153,34,0.15)', text: '#d29922', label: 'Ionic' },
+    contact: { bg: 'rgba(48,54,61,0.3)', text: '#484f58', label: 'Contact' },
+  };
 
   function statusClass(status: string): string {
     const s = status?.toLowerCase();
@@ -236,6 +279,88 @@
           <p class="error-msg">{viewError}</p>
         {/if}
       </Panel>
+
+      {#if viewingCompound}
+        <Panel title="Binding Pocket">
+          <div class="pocket-header">
+            <label class="cutoff-label">
+              Cutoff
+              <input
+                type="range"
+                min="3" max="8" step="0.5"
+                bind:value={pocketCutoff}
+                onchange={handleCutoffChange}
+                class="cutoff-slider"
+              />
+              <span class="cutoff-val">{pocketCutoff.toFixed(1)}A</span>
+            </label>
+          </div>
+
+          {#if pocketLoading}
+            <p class="loading">Analyzing pocket...</p>
+          {:else if pocketError}
+            <p class="error-msg">{pocketError}</p>
+          {:else if pocket}
+            <div class="pocket-summary">
+              {#each Object.entries(
+                pocket.pocket_residues.reduce((acc, r) => {
+                  for (const ix of r.interactions) {
+                    acc[ix] = (acc[ix] || 0) + 1;
+                  }
+                  return acc;
+                }, {} as Record<string, number>)
+              ) as [type, count]}
+                {@const style = interactionColors[type] || interactionColors.contact}
+                <span class="ix-badge" style="background:{style.bg};color:{style.text}">
+                  {count} {style.label}
+                </span>
+              {/each}
+              <span class="pocket-count">{pocket.pocket_residues.length} residues</span>
+            </div>
+
+            {#if pocket.pocket_residues.length > 0}
+              <div class="pocket-table-wrap">
+                <table class="pocket-table">
+                  <thead>
+                    <tr>
+                      <th>Chain</th>
+                      <th>Res</th>
+                      <th>Name</th>
+                      <th>Dist (A)</th>
+                      <th>Interactions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {#each pocket.pocket_residues as res}
+                      <tr
+                        class="pocket-row"
+                        onclick={() => handleResidueClick(res)}
+                        onmouseenter={() => handleResidueHover(res)}
+                      >
+                        <td>{res.chain_id}</td>
+                        <td class="mono">{res.res_id}</td>
+                        <td class="mono">{res.res_name}</td>
+                        <td class="mono">{res.min_distance.toFixed(1)}</td>
+                        <td class="ix-cell">
+                          {#each res.interactions as ix}
+                            {@const style = interactionColors[ix] || interactionColors.contact}
+                            <span class="ix-pill" style="background:{style.bg};color:{style.text}">
+                              {style.label}
+                            </span>
+                          {/each}
+                        </td>
+                      </tr>
+                    {/each}
+                  </tbody>
+                </table>
+              </div>
+            {:else}
+              <p class="empty">No residues within {pocketCutoff.toFixed(1)}A</p>
+            {/if}
+          {/if}
+        </Panel>
+      {/if}
+
     {:else if selectedJob.status?.toLowerCase() === 'completed'}
       <Panel title="Results">
         <p class="empty">No docking results available.</p>
@@ -480,5 +605,111 @@
   .view-btn.active {
     background: rgba(88,166,255,0.2);
     border-color: var(--accent, #58a6ff);
+  }
+
+  /* ---- Pocket Analysis ---- */
+  .pocket-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+  }
+
+  .cutoff-label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--text-secondary, #8b949e);
+    text-transform: uppercase;
+  }
+
+  .cutoff-slider {
+    width: 100px;
+    accent-color: var(--accent, #58a6ff);
+  }
+
+  .cutoff-val {
+    font-family: 'SF Mono', monospace;
+    font-size: 11px;
+    color: var(--text-primary, #e6edf3);
+    min-width: 35px;
+  }
+
+  .pocket-summary {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-bottom: 8px;
+    align-items: center;
+  }
+
+  .pocket-count {
+    font-size: 10px;
+    color: var(--text-muted, #484f58);
+    margin-left: auto;
+  }
+
+  .ix-badge {
+    font-size: 10px;
+    font-weight: 600;
+    padding: 2px 7px;
+    border-radius: 8px;
+  }
+
+  .pocket-table-wrap {
+    border: 1px solid rgba(48,54,61,0.4);
+    border-radius: 6px;
+    overflow: hidden;
+    max-height: 300px;
+    overflow-y: auto;
+  }
+
+  .pocket-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 10px;
+  }
+
+  .pocket-table th {
+    text-align: left;
+    font-size: 9px;
+    font-weight: 600;
+    color: var(--text-muted, #484f58);
+    text-transform: uppercase;
+    padding: 3px 6px;
+    border-bottom: 1px solid rgba(48,54,61,0.6);
+    position: sticky;
+    top: 0;
+    background: rgba(13,17,23,0.95);
+  }
+
+  .pocket-table td {
+    padding: 3px 6px;
+    color: var(--text-primary, #e6edf3);
+    border-bottom: 1px solid rgba(48,54,61,0.2);
+  }
+
+  .pocket-row {
+    cursor: pointer;
+  }
+
+  .pocket-row:hover td {
+    background: rgba(88,166,255,0.05);
+  }
+
+  .ix-cell {
+    display: flex;
+    gap: 3px;
+    flex-wrap: wrap;
+  }
+
+  .ix-pill {
+    font-size: 9px;
+    font-weight: 600;
+    padding: 1px 5px;
+    border-radius: 6px;
+    white-space: nowrap;
   }
 </style>
