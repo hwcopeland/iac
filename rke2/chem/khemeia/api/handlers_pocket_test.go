@@ -144,7 +144,7 @@ func TestClassifyPocket(t *testing.T) {
 	receptorAtoms := parseAllAtoms(sampleReceptorPDBQT)
 	ligandAtoms := parseModel1Atoms(sampleDockedPDBQT)
 
-	results := classifyPocket(receptorAtoms, ligandAtoms, 5.0)
+	results, _ := classifyPocket(receptorAtoms, ligandAtoms, 5.0)
 
 	// ASP 107 should be in the pocket (ligand atoms are at ~10.x coords).
 	foundASP := false
@@ -203,7 +203,7 @@ func TestClassifyPocketHBond(t *testing.T) {
 		X: 3.0, Y: 0, Z: 0, Element: "O",
 	}}
 
-	results := classifyPocket(receptor, ligand, 5.0)
+	results, _ := classifyPocket(receptor, ligand, 5.0)
 	if len(results) != 1 {
 		t.Fatalf("got %d residues, want 1", len(results))
 	}
@@ -230,7 +230,7 @@ func TestClassifyPocketHydrophobic(t *testing.T) {
 		X: 3.5, Y: 0, Z: 0, Element: "C",
 	}}
 
-	results := classifyPocket(receptor, ligand, 5.0)
+	results, _ := classifyPocket(receptor, ligand, 5.0)
 	if len(results) != 1 {
 		t.Fatalf("got %d residues, want 1", len(results))
 	}
@@ -247,7 +247,7 @@ func TestClassifyPocketHydrophobic(t *testing.T) {
 }
 
 func TestClassifyPocketEmpty(t *testing.T) {
-	results := classifyPocket(nil, nil, 5.0)
+	results, _ := classifyPocket(nil, nil, 5.0)
 	if len(results) != 0 {
 		t.Errorf("expected empty results for nil atoms, got %d", len(results))
 	}
@@ -328,7 +328,7 @@ func TestLEU110InPocket(t *testing.T) {
 	ligandAtoms := parseModel1Atoms(sampleDockedPDBQT)
 
 	// With 5A cutoff, LEU should not appear.
-	results5 := classifyPocket(receptorAtoms, ligandAtoms, 5.0)
+	results5, _ := classifyPocket(receptorAtoms, ligandAtoms, 5.0)
 	for _, pr := range results5 {
 		if pr.ResName == "LEU" && pr.ResID == 110 {
 			t.Error("LEU 110 should not be in pocket at 5.0A cutoff")
@@ -337,7 +337,7 @@ func TestLEU110InPocket(t *testing.T) {
 
 	// LEU 110 at (20,20,20) vs ligand at (11.2,10,10) = dist ~13.4A.
 	// With a 20A cutoff, LEU should appear.
-	results20 := classifyPocket(receptorAtoms, ligandAtoms, 20.0)
+	results20, _ := classifyPocket(receptorAtoms, ligandAtoms, 20.0)
 	foundLEU := false
 	for _, pr := range results20 {
 		if pr.ResName == "LEU" && pr.ResID == 110 {
