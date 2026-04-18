@@ -173,3 +173,44 @@ export async function getPocketAnalysis(jobName: string, compoundId: string, cut
   const params = cutoff ? `?cutoff=${cutoff}` : '';
   return api<PocketAnalysis>(`/api/v1/docking/pocket/${jobName}/${encodeURIComponent(compoundId)}${params}`);
 }
+
+// --- Docking Analysis ---
+
+export interface ResidueContact {
+  chain_id: string;
+  res_id: number;
+  res_name: string;
+  contact_frequency: number;
+  avg_distance: number;
+  interaction_counts: Record<string, number>;
+  compounds_contacting: number;
+}
+
+export interface ReceptorContactsResponse {
+  job_name: string;
+  top_n: number;
+  residue_contacts: ResidueContact[];
+  total_compounds_analyzed: number;
+}
+
+export interface FingerprintCompound {
+  compound_id: string;
+  smiles: string;
+  affinity: number;
+}
+
+export interface FingerprintsResponse {
+  job_name: string;
+  compounds: FingerprintCompound[];
+  total: number;
+}
+
+export async function getReceptorContacts(jobName: string, top?: number): Promise<ReceptorContactsResponse> {
+  const params = top ? `?top=${top}` : '';
+  return api<ReceptorContactsResponse>(`/api/v1/docking/analysis/receptor-contacts/${jobName}${params}`);
+}
+
+export async function getFingerprints(jobName: string, top?: number): Promise<FingerprintsResponse> {
+  const params = top ? `?top=${top}` : '';
+  return api<FingerprintsResponse>(`/api/v1/docking/analysis/fingerprints/${jobName}${params}`);
+}

@@ -1,7 +1,7 @@
 <script lang="ts">
   import Panel from './Panel.svelte';
-  import { getJobs, getJob, getPocketAnalysis } from '$lib/api';
-  import type { PocketResidue, PocketAnalysis } from '$lib/api';
+  import { getJobs, getJob, getPocketAnalysis, getReceptorContacts, getFingerprints } from '$lib/api';
+  import type { PocketResidue, PocketAnalysis, ResidueContact, ReceptorContactsResponse, FingerprintCompound } from '$lib/api';
   import { loadFile, overlayStructure, focusLastStructure, focusResidue, highlightResidue, drawInteractionLines } from '$lib/viewer';
   import type { InteractionLine } from '$lib/viewer';
   import { isAuthenticated } from '$lib/auth';
@@ -21,6 +21,17 @@
   let pocketError = $state('');
   let pocketCutoff = $state(5.0);
   let pocketOpen = $state(true);
+
+  // Receptor contacts state
+  let receptorContacts = $state<ReceptorContactsResponse | null>(null);
+  let rcLoading = $state(false);
+  let rcError = $state('');
+
+  // Fingerprints state
+  let fpCompounds = $state<FingerprintCompound[]>([]);
+  let fpLoading = $state(false);
+  let fpError = $state('');
+  let fpTotal = $state(0);
 
   const PLUGIN_SLUG = 'docking';
 
@@ -139,6 +150,34 @@
 
   function handleResidueHover(res: PocketResidue) {
     highlightResidue(res.chain_id, res.res_id);
+  }
+
+  async function fetchReceptorContacts() {
+    if (!selectedJob?.name) return;
+    rcLoading = true;
+    rcError = '';
+    try {
+      receptorContacts = await getReceptorContacts(selectedJob.name, 50);
+    } catch (e: any) {
+      rcError = e.message || 'Failed to load receptor contacts';
+    } finally {
+      rcLoading = false;
+    }
+  }
+
+  async function fetchFingerprints() {
+    if (!selectedJob?.name) return;
+    fpLoading = true;
+    fpError = '';
+    try {
+      const res = await getFingerprints(selectedJob.name, 100);
+      fpCompounds = res.compounds || [];
+      fpTotal = res.total || 0;
+    } catch (e: any) {
+      fpError = e.message || 'Failed to load fingerprints';
+    } finally {
+      fpLoading = false;
+    }
   }
 
   const interactionColors: Record<string, { bg: string; text: string; label: string }> = {
@@ -385,6 +424,92 @@
           {/if}
         </Panel>
       {/if}
+
+      <!-- Receptor Interaction Map (job-level, not per-compound) -->
+      <Panel title="Receptor Interaction Map">
+        {#if !receptorContacts && !rcLoading}
+          <button class="analyze-btn" onclick={fetchReceptorContacts} disabled={rcLoading}>
+            Analyze Top 50 Binders
+          </button>
+        {/if}
+        {#if rcLoading}
+          <p class="loading">Analyzing receptor contacts...</p>
+        {:else if rcError}
+          <p class="error-msg">{rcError}</p>
+        {:else if receptorContacts}
+          <p class="rc-summary">{receptorContacts.residue_contacts.length} residues contacted by {receptorContacts.total_compounds_analyzed} compounds</p>
+          <div class="pocket-table-wrap">
+            <table class="pocket-table">
+              <thead>
+                <tr>
+                  <th>Res</th>
+                  <th>Name</th>
+                  <th>Freq</th>
+                  <th>Avg Dist</th>
+                  <th>H-bond</th>
+                  <th>Hydro</th>
+                  <th>Ionic</th>
+                </tr>
+              </thead>
+              <tbody>
+                {#each receptorContacts.residue_contacts.slice(0, 30) as rc}
+                  <tr class="pocket-row" onclick={() => focusResidue(rc.chain_id, rc.res_id)}>
+                    <td class="mono">{rc.chain_id}{rc.res_id}</td>
+                    <td class="mono">{rc.res_name}</td>
+                    <td>
+                      <div class="freq-bar-wrap">
+                        <div class="freq-bar" style="width:{rc.contact_frequency * 100}%"></div>
+                        <span class="freq-label">{(rc.contact_frequency * 100).toFixed(0)}%</span>
+                      </div>
+                    </td>
+                    <td class="mono">{rc.avg_distance.toFixed(1)}</td>
+                    <td class="mono">{rc.interaction_counts?.hbond || 0}</td>
+                    <td class="mono">{rc.interaction_counts?.hydrophobic || 0}</td>
+                    <td class="mono">{rc.interaction_counts?.ionic || 0}</td>
+                  </tr>
+                {/each}
+              </tbody>
+            </table>
+          </div>
+        {/if}
+      </Panel>
+
+      <!-- Compound Fingerprints -->
+      <Panel title="Top Compounds">
+        {#if !fpCompounds.length && !fpLoading}
+          <button class="analyze-btn" onclick={fetchFingerprints} disabled={fpLoading}>
+            Load Top 100
+          </button>
+        {/if}
+        {#if fpLoading}
+          <p class="loading">Loading compounds...</p>
+        {:else if fpError}
+          <p class="error-msg">{fpError}</p>
+        {:else if fpCompounds.length > 0}
+          <div class="pocket-table-wrap">
+            <table class="pocket-table">
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th>Compound</th>
+                  <th>Affinity</th>
+                  <th>SMILES</th>
+                </tr>
+              </thead>
+              <tbody>
+                {#each fpCompounds as comp, i}
+                  <tr>
+                    <td>{i + 1}</td>
+                    <td class="mono">{comp.compound_id}</td>
+                    <td class="mono">{comp.affinity.toFixed(1)}</td>
+                    <td class="smiles-cell" title={comp.smiles}>{comp.smiles.length > 30 ? comp.smiles.slice(0, 30) + '...' : comp.smiles}</td>
+                  </tr>
+                {/each}
+              </tbody>
+            </table>
+          </div>
+        {/if}
+      </Panel>
 
     {:else if selectedJob.status?.toLowerCase() === 'completed'}
       <Panel title="Results">
@@ -748,5 +873,58 @@
     padding: 1px 5px;
     border-radius: 6px;
     white-space: nowrap;
+  }
+
+  /* ---- Analysis Panels ---- */
+  .analyze-btn {
+    background: var(--accent, #58a6ff);
+    border: none;
+    color: #000;
+    font-size: 12px;
+    font-weight: 600;
+    padding: 6px 12px;
+    border-radius: 6px;
+    cursor: pointer;
+    width: 100%;
+  }
+
+  .analyze-btn:hover:not(:disabled) { opacity: 0.9; }
+  .analyze-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  .rc-summary {
+    font-size: 11px;
+    color: var(--text-secondary, #8b949e);
+    margin-bottom: 6px;
+  }
+
+  .freq-bar-wrap {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    min-width: 80px;
+  }
+
+  .freq-bar {
+    height: 8px;
+    background: linear-gradient(90deg, #3fb950, #58a6ff);
+    border-radius: 4px;
+    min-width: 2px;
+  }
+
+  .freq-label {
+    font-size: 9px;
+    color: var(--text-muted, #484f58);
+    white-space: nowrap;
+  }
+
+  .smiles-cell {
+    font-family: 'SF Mono', monospace;
+    font-size: 9px;
+    color: var(--text-muted, #484f58);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 150px;
+    cursor: help;
   }
 </style>
