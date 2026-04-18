@@ -6,7 +6,6 @@
   import Toolbar from '$lib/components/Toolbar.svelte';
   import ExplorerPanel from '$lib/components/ExplorerPanel.svelte';
   import StructureBrowser from '$lib/components/StructureBrowser.svelte';
-  import StructureControls from '$lib/components/StructureControls.svelte';
   import AnalysisPanel from '$lib/components/AnalysisPanel.svelte';
   import CalculationsPanel from '$lib/components/CalculationsPanel.svelte';
   import SelectionInfo from '$lib/components/SelectionInfo.svelte';
@@ -23,7 +22,6 @@
   let commandPaletteOpen = $state(false);
   let panelVisible = $state(true);
   let structureBrowser = $state<StructureBrowser>(undefined as unknown as StructureBrowser);
-  let structureControls = $state<StructureControls>(undefined as unknown as StructureControls);
   let authReady = $state(false);
   let viewerInitialized = false;
 
@@ -144,9 +142,8 @@
         <aside class="side-panel">
           <div class="side-panel-scroll">
             {#if activeTab === 'explorer'}
-              <ExplorerPanel onStructureLoad={() => { structureBrowser?.refresh(); structureControls?.refreshChains(); }} />
+              <ExplorerPanel onStructureLoad={() => structureBrowser?.refresh()} />
               <StructureBrowser bind:this={structureBrowser} />
-              <StructureControls bind:this={structureControls} />
             {:else if activeTab === 'analysis'}
               <AnalysisPanel />
             {:else if activeTab === 'calculations'}

@@ -44,22 +44,22 @@ function applyCanvasProps(): void {
 export async function init(container: HTMLDivElement): Promise<void> {
   const instance = await molstar.Viewer.create(container, {
     layoutIsExpanded: false,
-    layoutShowControls: false,
+    layoutShowControls: true,
     layoutShowRemoteState: false,
-    layoutShowSequence: false,
+    layoutShowSequence: true,
     layoutShowLog: false,
-    layoutShowLeftPanel: false,
+    layoutShowLeftPanel: true,
     collapseLeftPanel: true,
-    collapseRightPanel: true,
-    viewportShowControls: false,
-    viewportShowExpand: false,
-    viewportShowSettings: false,
-    viewportShowSelectionMode: false,
+    collapseRightPanel: false,
+    viewportShowControls: true,
+    viewportShowExpand: true,
+    viewportShowSettings: true,
+    viewportShowSelectionMode: true,
     viewportShowAnimation: false,
     viewportShowTrajectoryControls: false,
-    viewportShowReset: false,
-    viewportShowScreenshotControls: false,
-    viewportShowToggleFullscreen: false,
+    viewportShowReset: true,
+    viewportShowScreenshotControls: true,
+    viewportShowToggleFullscreen: true,
   });
 
   viewerInstance = instance;
