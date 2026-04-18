@@ -1082,19 +1082,44 @@ let _activeLineTypes: Set<string> = new Set();
 let _lineCanvas: HTMLCanvasElement | null = null;
 let _lineAnimFrame: number | null = null;
 
-/** Start drawing interaction lines as a 2D overlay on the viewer canvas. */
+let _cameraSubscription: any = null;
+
+/** Draw interaction lines as a 2D overlay. Redraws on camera changes only. */
 export function drawInteractionLines(lines: InteractionLine[], activeTypes?: Set<string>): void {
   _interactionLines = lines;
   _activeLineTypes = activeTypes ?? new Set(Object.keys(IX_LINE_COLORS));
-  // Disabled — the rAF loop causes lag. Will use Molstar's native measurement tools instead.
+
+  if (!plugin?.canvas3d) return;
+
+  // Create overlay canvas if needed
+  if (!_lineCanvas) {
+    const glCanvas = plugin.canvas3d.webgl.gl.canvas as HTMLCanvasElement;
+    const parent = glCanvas.parentElement;
+    if (parent) {
+      _lineCanvas = document.createElement('canvas');
+      _lineCanvas.style.cssText = 'position:absolute;inset:0;pointer-events:none;z-index:10';
+      parent.style.position = 'relative';
+      parent.appendChild(_lineCanvas);
+    }
+  }
+
+  // Subscribe to camera changes (not rAF — only redraws when view changes)
+  if (!_cameraSubscription && plugin.canvas3d.didDraw) {
+    _cameraSubscription = plugin.canvas3d.didDraw.subscribe(() => {
+      if (_interactionLines.length > 0) renderInteractionLines();
+    });
+  }
+
+  // Initial render
+  renderInteractionLines();
 }
 
 /** Stop and remove interaction line overlay. */
 export function removeInteractionLines(): void {
   _interactionLines = [];
-  if (_lineAnimFrame) {
-    cancelAnimationFrame(_lineAnimFrame);
-    _lineAnimFrame = null;
+  if (_cameraSubscription) {
+    _cameraSubscription.unsubscribe();
+    _cameraSubscription = null;
   }
   if (_lineCanvas) {
     const ctx = _lineCanvas.getContext('2d');
@@ -1155,5 +1180,5 @@ function renderInteractionLines(): void {
   ctx.setLineDash([]);
   ctx.globalAlpha = 1;
 
-  _lineAnimFrame = requestAnimationFrame(renderInteractionLines);
+  // No rAF loop — redrawn by camera didDraw subscription
 }
