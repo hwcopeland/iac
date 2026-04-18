@@ -373,6 +373,7 @@
     width: 100%;
     border-collapse: collapse;
     font-size: 11px;
+    table-layout: fixed;
   }
 
   .results-table thead {
@@ -436,6 +437,12 @@
     text-align: center;
   }
 
+  .col-compound {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
   .col-affinity {
     text-align: right;
     width: 110px;
@@ -447,8 +454,10 @@
   }
 
   .col-action {
-    width: 52px;
-    text-align: center;
+    width: 60px;
+    text-align: right;
+    padding-right: 4px;
+    white-space: nowrap;
   }
 
   .view-btn {
