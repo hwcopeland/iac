@@ -13,10 +13,11 @@
       onResidueClick?: (r: PocketResidue) => void;
     } = $props();
 
-  let prolifSvg = $state('');
+  let prolifHtml = $state('');
   let fallbackSvg = $state('');
   let loading = $state(true);
   let useProLIF = $state(false);
+  let iframeRef = $state<HTMLIFrameElement>(undefined as unknown as HTMLIFrameElement);
 
   const IX_COLORS: Record<string, string> = {
     hbond: '#58a6ff',
@@ -46,8 +47,8 @@
     if (jobName && compoundId) {
       try {
         const res = await getInteractionMap(jobName, compoundId);
-        if (res?.svg) {
-          prolifSvg = res.svg;
+        if (res?.html) {
+          prolifHtml = res.html;
           useProLIF = true;
           loading = false;
           return;
@@ -93,10 +94,14 @@
 <div class="interaction-network">
   {#if loading}
     <div class="net-loading">Loading interaction map...</div>
-  {:else if useProLIF && prolifSvg}
-    <div class="prolif-svg-wrap">
-      {@html prolifSvg}
-    </div>
+  {:else if useProLIF && prolifHtml}
+    <iframe
+      bind:this={iframeRef}
+      srcdoc={prolifHtml}
+      class="prolif-iframe"
+      sandbox="allow-scripts"
+      title="ProLIF Interaction Network"
+    ></iframe>
   {:else}
     <svg viewBox="0 0 500 350" class="net-svg">
       <rect width="500" height="350" fill="#0d1117" rx="8" />
@@ -174,15 +179,11 @@
     font-size: 12px;
   }
 
-  .prolif-svg-wrap {
+  .prolif-iframe {
     width: 100%;
-    padding: 8px;
-  }
-
-  .prolif-svg-wrap :global(svg) {
-    width: 100%;
-    height: auto;
-    display: block;
+    height: 400px;
+    border: none;
+    background: #0d1117;
   }
 
   .net-svg {
