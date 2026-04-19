@@ -43,6 +43,7 @@
   let pocketOpen = $state(true);
   let showSurfaceMesh = $state(false);
   let surfaceType = $state('charge');
+  let surfaceAlpha = $state(0.8);
 
   // Receptor contacts state
   let receptorContacts = $state<ReceptorContactsResponse | null>(null);
@@ -420,15 +421,15 @@
             <p class="section-label">Surface</p>
             <div class="surface-btns">
               <button class="surface-btn" class:active={showSurfaceMesh && surfaceType === 'charge'}
-                onclick={() => { surfaceType = 'charge'; showSurfaceMesh = true; togglePocketSurface(true, 'residue-charge'); onSurfaceChange('residue-charge'); }}>
+                onclick={() => { surfaceType = 'charge'; showSurfaceMesh = true; togglePocketSurface(true, 'residue-charge', surfaceAlpha); onSurfaceChange('residue-charge'); }}>
                 Charge
               </button>
               <button class="surface-btn" class:active={showSurfaceMesh && surfaceType === 'hydro'}
-                onclick={() => { surfaceType = 'hydro'; showSurfaceMesh = true; togglePocketSurface(true, 'hydrophobicity'); onSurfaceChange('hydrophobicity'); }}>
+                onclick={() => { surfaceType = 'hydro'; showSurfaceMesh = true; togglePocketSurface(true, 'hydrophobicity', surfaceAlpha); onSurfaceChange('hydrophobicity'); }}>
                 Hydrophobic
               </button>
               <button class="surface-btn" class:active={showSurfaceMesh && surfaceType === 'element'}
-                onclick={() => { surfaceType = 'element'; showSurfaceMesh = true; togglePocketSurface(true, 'element-symbol'); onSurfaceChange('element-symbol'); }}>
+                onclick={() => { surfaceType = 'element'; showSurfaceMesh = true; togglePocketSurface(true, 'element-symbol', surfaceAlpha); onSurfaceChange('element-symbol'); }}>
                 Element
               </button>
               <button class="surface-btn" class:active={!showSurfaceMesh}
@@ -445,6 +446,13 @@
               Cutoff
               <input type="range" min="3" max="8" step="0.5" bind:value={pocketCutoff} onchange={handleCutoffChange} class="cutoff-slider" />
               <span class="cutoff-val">{pocketCutoff.toFixed(1)}A</span>
+            </label>
+            <label class="cutoff-label">
+              Surface Opacity
+              <input type="range" min="0.1" max="1" step="0.1" bind:value={surfaceAlpha}
+                onchange={() => { if (showSurfaceMesh) togglePocketSurface(true, surfaceType === 'charge' ? 'residue-charge' : surfaceType === 'hydro' ? 'hydrophobicity' : 'element-symbol', surfaceAlpha); }}
+                class="cutoff-slider" />
+              <span class="cutoff-val">{Math.round(surfaceAlpha * 100)}%</span>
             </label>
           </details>
         {/if}
