@@ -1120,10 +1120,10 @@ export async function showPocketView(residues: { chain_id: string; res_id: numbe
 
     const builder = plugin.build();
 
-    // Protein as faded cartoon (30% opacity)
+    // Protein as faded cartoon (30% opacity, neutral grey)
     builder.to(ref).apply(StateTransforms.Representation.StructureRepresentation3D, {
-      type: { name: 'cartoon', params: { sizeFactor: 0.2, alpha: 0.3 } },
-      colorTheme: { name: 'chain-id', params: {} },
+      type: { name: 'cartoon', params: { sizeFactor: 0.2, alpha: 0.15 } },
+      colorTheme: { name: 'uniform', params: { value: 0x484f58 } },
       sizeTheme: { name: 'uniform', params: { value: 0.2 } },
     });
 
