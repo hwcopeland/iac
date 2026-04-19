@@ -1,5 +1,5 @@
-rdkit-pypi>=2024.3.5
-prolif>=2.0.3
-flask>=3.1,<4
-gunicorn>=23,<24
-matplotlib>=3.9,<4
+rdkit-pypi
+prolif
+flask
+gunicorn
+matplotlib
