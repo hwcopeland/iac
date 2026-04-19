@@ -131,18 +131,46 @@ function extractAtomInfo(reprLoci: any): AtomInfo | null {
 }
 
 function setupInteractions(): void {
-  if (!plugin?.canvas3d?.interaction) {
-    // No canvas3d interaction available
-    return;
+  if (!plugin?.canvas3d) return;
+
+  // Use Molstar's own StructureElement.Stats to safely extract atom info
+  // instead of manually decoding OrderedSets
+  const safeExtract = (reprLoci: any): AtomInfo | null => {
+    try {
+      const loci = reprLoci?.loci ?? reprLoci;
+      if (!loci || loci.kind !== 'element-loci' || !loci.elements?.length) return null;
+
+      const { StructureElement, StructureProperties } = getLib().structure;
+
+      // Use Stats.ofLoci which handles all OrderedSet types internally
+      const stats = StructureElement.Stats.ofLoci(loci);
+      const loc = stats.firstElementLoc;
+      if (!loc?.unit) return null;
+
+      return {
+        element: String(StructureProperties.atom.type_symbol(loc)),
+        atomName: StructureProperties.atom.label_atom_id(loc),
+        residueName: StructureProperties.residue.label_comp_id(loc),
+        residueId: StructureProperties.residue.auth_seq_id(loc),
+        chainId: StructureProperties.chain.auth_asym_id(loc),
+        x: StructureProperties.atom.x(loc),
+        y: StructureProperties.atom.y(loc),
+        z: StructureProperties.atom.z(loc),
+      };
+    } catch {
+      return null;
+    }
+  };
+
+  const bi = plugin.behaviors?.interaction;
+  if (bi) {
+    bi.hover.subscribe((event: any) => {
+      if (hoverCallback) hoverCallback(safeExtract(event?.current));
+    });
+    bi.click.subscribe((event: any) => {
+      if (clickCallback) clickCallback(safeExtract(event?.current));
+    });
   }
-
-  // Use behaviors.interaction instead of canvas3d.interaction
-  // canvas3d.interaction is the raw source; behaviors.interaction is the proxied version
-  // that Molstar's own code uses
-  // Molstar's native controls handle hover/click labels.
-  // Our custom extractAtomInfo can't reliably decode Molstar's internal
-  // OrderedSet types, causing crashes. Disabled in favor of native tooltips.
-
 }
 
 export function onHover(cb: InteractionCallback): void {
