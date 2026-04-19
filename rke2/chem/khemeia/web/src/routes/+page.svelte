@@ -10,7 +10,7 @@
   import InteractionNetwork from '$lib/components/InteractionNetwork.svelte';
   import CalculationsPanel from '$lib/components/CalculationsPanel.svelte';
   import SelectionInfo from '$lib/components/SelectionInfo.svelte';
-  import { focusResidue } from '$lib/viewer';
+  import { focusResidue, setRepresentation } from '$lib/viewer';
   import StatusBar from '$lib/components/StatusBar.svelte';
   import CommandPalette from '$lib/components/CommandPalette.svelte';
   import Toast from '$lib/components/Toast.svelte';
@@ -166,6 +166,17 @@
     <div class="main">
       <div class="viewer-area">
         <div class="viewer-container" bind:this={viewerContainer}></div>
+
+        <div class="repr-dropdown">
+          <select class="repr-select" onchange={(e) => setRepresentation((e.target as HTMLSelectElement).value)}>
+            <option value="cartoon">Ribbon</option>
+            <option value="ball-and-stick">Ball & Stick</option>
+            <option value="spacefill">Spacefill</option>
+            <option value="backbone">Backbone</option>
+            <option value="line">Line</option>
+            <option value="molecular-surface">Surface</option>
+          </select>
+        </div>
 
         {#if selectionInfo}
           <div class="selection-overlay">
@@ -350,6 +361,29 @@
   .viewer-container :global(.msp-plugin) {
     width: 100% !important;
     height: 100% !important;
+  }
+
+  .repr-dropdown {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    z-index: 50;
+  }
+
+  .repr-select {
+    background: rgba(13,17,23,0.8);
+    border: 1px solid rgba(48,54,61,0.6);
+    color: var(--text-primary, #e6edf3);
+    font-size: 11px;
+    padding: 4px 8px;
+    border-radius: 4px;
+    outline: none;
+    cursor: pointer;
+    backdrop-filter: blur(8px);
+  }
+
+  .repr-select:hover {
+    border-color: var(--accent, #58a6ff);
   }
 
   .selection-overlay {

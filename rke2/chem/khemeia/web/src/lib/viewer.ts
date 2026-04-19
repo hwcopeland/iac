@@ -1151,7 +1151,7 @@ let _pocketSurfaceRef: string | null = null;
 
 let _surfaceRefs: string[] = [];
 
-export async function togglePocketSurface(show: boolean, colorTheme: string = 'residue-charge'): Promise<void> {
+export async function togglePocketSurface(show: boolean, colorTheme: string = 'residue-charge', alpha: number = 0.8): Promise<void> {
   if (!plugin) return;
   try {
     // Remove tracked surface refs
@@ -1176,7 +1176,7 @@ export async function togglePocketSurface(show: boolean, colorTheme: string = 'r
     // Add gaussian surface at 80% transparency (alpha 0.2)
     const update = plugin.build();
     const node = update.to(ref).apply(StateTransforms.Representation.StructureRepresentation3D, {
-      type: { name: 'gaussian-surface', params: { smoothness: 1.5, alpha: 0.2 } },
+      type: { name: 'gaussian-surface', params: { smoothness: 1.5, alpha } },
       colorTheme: { name: colorTheme, params: {} },
       sizeTheme: { name: 'physical', params: {} },
     });
