@@ -281,12 +281,23 @@ func (h *APIHandler) PluginGet(plugin Plugin) http.HandlerFunc {
 			j.OutputData["page"] = page
 			j.OutputData["per_page"] = perPage
 
-			dockRows, err := db.QueryContext(r.Context(),
-				`SELECT compound_id, affinity_kcal_mol, ligand_id, docked_pdbqt
-				 FROM docking_results
-				 WHERE workflow_name = ?
-				 ORDER BY affinity_kcal_mol ASC
-				 LIMIT ? OFFSET ?`, jobName, perPage, offset)
+			// If a specific compound is requested, fetch just that one.
+			compoundFilter := r.URL.Query().Get("compound")
+			var dockRows *sql.Rows
+			if compoundFilter != "" {
+				dockRows, err = db.QueryContext(r.Context(),
+					`SELECT compound_id, affinity_kcal_mol, ligand_id, docked_pdbqt
+					 FROM docking_results
+					 WHERE workflow_name = ? AND compound_id = ?
+					 LIMIT 1`, jobName, compoundFilter)
+			} else {
+				dockRows, err = db.QueryContext(r.Context(),
+					`SELECT compound_id, affinity_kcal_mol, ligand_id, docked_pdbqt
+					 FROM docking_results
+					 WHERE workflow_name = ?
+					 ORDER BY affinity_kcal_mol ASC
+					 LIMIT ? OFFSET ?`, jobName, perPage, offset)
+			}
 			if err != nil {
 				log.Printf("[docking] Warning: failed to query docking results for job %s: %v", jobName, err)
 			} else {

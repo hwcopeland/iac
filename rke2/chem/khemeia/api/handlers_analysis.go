@@ -4,6 +4,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -50,9 +51,28 @@ type ReceptorContactsResponse struct {
 
 // CompoundEntry holds compound-level data returned by the fingerprints endpoint.
 type CompoundEntry struct {
-	CompoundID string  `json:"compound_id"`
-	Smiles     string  `json:"smiles"`
-	Affinity   float64 `json:"affinity"`
+	CompoundID    string   `json:"compound_id"`
+	Smiles        string   `json:"smiles"`
+	Affinity      float64  `json:"affinity"`
+	MW            *float64 `json:"mw"`
+	LogP          *float64 `json:"logp"`
+	HBA           *int     `json:"hba"`
+	HBD           *int     `json:"hbd"`
+	PSA           *float64 `json:"psa"`
+	RO5Violations *int     `json:"ro5_violations"`
+	QED           *float64 `json:"qed"`
+	ADMET         ADMETFlags `json:"admet"`
+}
+
+// ADMETFlags holds preliminary ADMET/drug-likeness predictions computed from
+// molecular properties.
+type ADMETFlags struct {
+	Lipinski     bool `json:"lipinski"`      // Lipinski Rule of 5 (MW<500, LogP<5, HBA<10, HBD<5)
+	Veber        bool `json:"veber"`         // Veber (PSA<=140, rotatable bonds not checked)
+	LeadLike     bool `json:"lead_like"`     // Lead-like (MW 200-350, LogP -1 to 3.5, HBA<=7, HBD<=3)
+	GoodQED      bool `json:"good_qed"`      // QED >= 0.5
+	P450Risk     bool `json:"p450_risk"`     // High LogP (>3) suggests CYP metabolism liability
+	HighPSA      bool `json:"high_psa"`      // PSA>140 — poor oral absorption
 }
 
 // FingerprintsResponse is the JSON envelope for the fingerprints endpoint.
@@ -115,10 +135,10 @@ func (h *APIHandler) AnalysisDispatch(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// receptorContacts implements GET /api/v1/docking/analysis/receptor-contacts/{jobName}?top=50.
+// receptorContacts implements GET /api/v1/docking/analysis/receptor-contacts/{jobName}?top=100.
 // It aggregates pocket residue contacts across the top N docked compounds for a workflow.
 func (h *APIHandler) receptorContacts(w http.ResponseWriter, r *http.Request, jobName string) {
-	topN := 50
+	topN := 100
 	if v := r.URL.Query().Get("top"); v != "" {
 		if parsed, err := strconv.Atoi(v); err == nil && parsed > 0 && parsed <= 500 {
 			topN = parsed
@@ -283,8 +303,7 @@ func (h *APIHandler) receptorContacts(w http.ResponseWriter, r *http.Request, jo
 }
 
 // fingerprints implements GET /api/v1/docking/analysis/fingerprints/{jobName}?top=100.
-// Returns SMILES + affinity data for the top N compounds so the frontend can compute
-// fingerprints via RDKit WASM.
+// Returns SMILES + affinity + molecular properties + ADMET flags for the top N compounds.
 func (h *APIHandler) fingerprints(w http.ResponseWriter, r *http.Request, jobName string) {
 	topN := 100
 	if v := r.URL.Query().Get("top"); v != "" {
@@ -329,16 +348,23 @@ func (h *APIHandler) fingerprints(w http.ResponseWriter, r *http.Request, jobNam
 	defer rows.Close()
 
 	compounds := make([]CompoundEntry, 0)
+	compoundIDs := make([]string, 0)
 	for rows.Next() {
 		var c CompoundEntry
 		if err := rows.Scan(&c.CompoundID, &c.Smiles, &c.Affinity); err != nil {
 			continue
 		}
 		compounds = append(compounds, c)
+		compoundIDs = append(compoundIDs, c.CompoundID)
 	}
 	if err := rows.Err(); err != nil {
 		writeError(w, fmt.Sprintf("error reading compounds: %v", err), http.StatusInternalServerError)
 		return
+	}
+
+	// Enrich with molecular properties from ChEMBL if available.
+	if h.chemblDB != nil && len(compoundIDs) > 0 {
+		h.enrichWithChEMBLProperties(r.Context(), compounds, compoundIDs)
 	}
 
 	resp := FingerprintsResponse{
@@ -349,4 +375,113 @@ func (h *APIHandler) fingerprints(w http.ResponseWriter, r *http.Request, jobNam
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
+}
+
+// enrichWithChEMBLProperties fetches molecular properties from ChEMBL and
+// computes ADMET flags for each compound.
+func (h *APIHandler) enrichWithChEMBLProperties(
+	ctx context.Context,
+	compounds []CompoundEntry,
+	compoundIDs []string,
+) {
+	if len(compoundIDs) == 0 {
+		return
+	}
+
+	// Build IN clause with placeholders.
+	placeholders := make([]string, len(compoundIDs))
+	args := make([]interface{}, len(compoundIDs))
+	for i, id := range compoundIDs {
+		placeholders[i] = "?"
+		args[i] = id
+	}
+
+	query := fmt.Sprintf(`
+		SELECT md.chembl_id, cp.mw_freebase, cp.alogp, cp.hba, cp.hbd,
+		       cp.psa, cp.num_ro5_violations, cp.qed_weighted
+		FROM molecule_dictionary md
+		JOIN compound_properties cp ON md.molregno = cp.molregno
+		WHERE md.chembl_id IN (%s)`,
+		strings.Join(placeholders, ","),
+	)
+
+	rows, err := h.chemblDB.QueryContext(ctx, query, args...)
+	if err != nil {
+		return // silently degrade — properties are optional enrichment
+	}
+	defer rows.Close()
+
+	// Build a lookup map.
+	type props struct {
+		MW            *float64
+		LogP          *float64
+		HBA           *int
+		HBD           *int
+		PSA           *float64
+		RO5Violations *int
+		QED           *float64
+	}
+	propMap := make(map[string]props)
+
+	for rows.Next() {
+		var chemblID string
+		var p props
+		if err := rows.Scan(&chemblID, &p.MW, &p.LogP, &p.HBA, &p.HBD,
+			&p.PSA, &p.RO5Violations, &p.QED); err != nil {
+			continue
+		}
+		propMap[chemblID] = p
+	}
+
+	// Merge properties and compute ADMET flags.
+	for i := range compounds {
+		p, ok := propMap[compounds[i].CompoundID]
+		if !ok {
+			continue
+		}
+		compounds[i].MW = p.MW
+		compounds[i].LogP = p.LogP
+		compounds[i].HBA = p.HBA
+		compounds[i].HBD = p.HBD
+		compounds[i].PSA = p.PSA
+		compounds[i].RO5Violations = p.RO5Violations
+		compounds[i].QED = p.QED
+		compounds[i].ADMET = computeADMET(p.MW, p.LogP, p.HBA, p.HBD, p.PSA, p.QED)
+	}
+}
+
+// computeADMET derives preliminary ADMET/drug-likeness flags from molecular
+// properties.
+func computeADMET(mw, logp *float64, hba, hbd *int, psa, qed *float64) ADMETFlags {
+	flags := ADMETFlags{}
+
+	// Lipinski Rule of 5: MW<500, LogP<5, HBA<10, HBD<5
+	if mw != nil && logp != nil && hba != nil && hbd != nil {
+		flags.Lipinski = *mw < 500 && *logp < 5 && *hba < 10 && *hbd < 5
+	}
+
+	// Veber: PSA <= 140 (rotatable bonds not available here)
+	if psa != nil {
+		flags.Veber = *psa <= 140
+		flags.HighPSA = *psa > 140
+	}
+
+	// Lead-like: MW 200-350, LogP -1 to 3.5, HBA<=7, HBD<=3
+	if mw != nil && logp != nil && hba != nil && hbd != nil {
+		flags.LeadLike = *mw >= 200 && *mw <= 350 &&
+			*logp >= -1 && *logp <= 3.5 &&
+			*hba <= 7 && *hbd <= 3
+	}
+
+	// QED quality
+	if qed != nil {
+		flags.GoodQED = *qed >= 0.5
+	}
+
+	// P450 risk: high lipophilicity tends toward CYP metabolism
+	if logp != nil {
+		flags.P450Risk = *logp > 3.0
+	}
+
+	return flags
 }

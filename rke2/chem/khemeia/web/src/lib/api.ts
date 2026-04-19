@@ -197,10 +197,27 @@ export interface ReceptorContactsResponse {
   total_compounds_analyzed: number;
 }
 
+export interface ADMETFlags {
+  lipinski: boolean;
+  veber: boolean;
+  lead_like: boolean;
+  good_qed: boolean;
+  p450_risk: boolean;
+  high_psa: boolean;
+}
+
 export interface FingerprintCompound {
   compound_id: string;
   smiles: string;
   affinity: number;
+  mw?: number;
+  logp?: number;
+  hba?: number;
+  hbd?: number;
+  psa?: number;
+  ro5_violations?: number;
+  qed?: number;
+  admet?: ADMETFlags;
 }
 
 export interface FingerprintsResponse {
@@ -229,4 +246,9 @@ export async function getReceptorContacts(jobName: string, top?: number): Promis
 export async function getFingerprints(jobName: string, top?: number): Promise<FingerprintsResponse> {
   const params = top ? `?top=${top}` : '';
   return api<FingerprintsResponse>(`/api/v1/docking/analysis/fingerprints/${jobName}${params}`);
+}
+
+export async function getDockingResult(jobName: string, compoundId: string): Promise<any> {
+  const res = await api<any>(`/api/v1/docking/jobs/${jobName}?compound=${encodeURIComponent(compoundId)}`);
+  return res?.docking_results?.[0] ?? null;
 }

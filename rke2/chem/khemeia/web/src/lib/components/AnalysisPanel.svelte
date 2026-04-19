@@ -1,9 +1,9 @@
 <script lang="ts">
   import Panel from './Panel.svelte';
   import InteractionNetwork from './InteractionNetwork.svelte';
-  import { getJobs, getJob, getPocketAnalysis, getReceptorContacts, getFingerprints, getLigandSmiles } from '$lib/api';
+  import { getJobs, getJob, getPocketAnalysis, getReceptorContacts, getFingerprints, getLigandSmiles, getDockingResult } from '$lib/api';
   import type { PocketResidue, PocketAnalysis, ResidueContact, ReceptorContactsResponse, FingerprintCompound } from '$lib/api';
-  import { loadFile, overlayStructure, focusLastStructure, focusResidue, highlightResidue, drawInteractionLines, showPocketView, togglePocketSurface } from '$lib/viewer';
+  import { loadFile, overlayStructure, focusLastStructure, focusResidue, highlightResidue, drawInteractionLines, showPocketView, togglePocketSurface, clearPocketView } from '$lib/viewer';
   import type { InteractionLine } from '$lib/viewer';
   import { isAuthenticated } from '$lib/auth';
 
@@ -55,6 +55,9 @@
   let fpLoading = $state(false);
   let fpError = $state('');
   let fpTotal = $state(0);
+
+  // Top-N selector for analysis
+  let analysisTopN = $state(100);
 
   const PLUGIN_SLUG = 'docking';
 
@@ -187,7 +190,7 @@
     rcLoading = true;
     rcError = '';
     try {
-      receptorContacts = await getReceptorContacts(selectedJob.name, 50);
+      receptorContacts = await getReceptorContacts(selectedJob.name, analysisTopN);
     } catch (e: any) {
       rcError = e.message || 'Failed to load receptor contacts';
     } finally {
@@ -200,13 +203,60 @@
     fpLoading = true;
     fpError = '';
     try {
-      const res = await getFingerprints(selectedJob.name, 100);
+      const res = await getFingerprints(selectedJob.name, analysisTopN);
       fpCompounds = res.compounds || [];
       fpTotal = res.total || 0;
     } catch (e: any) {
       fpError = e.message || 'Failed to load fingerprints';
     } finally {
       fpLoading = false;
+    }
+  }
+
+  function exportCSV() {
+    if (!fpCompounds.length) return;
+    const header = 'Rank,CompoundID,SMILES,Affinity,MW,LogP,HBA,HBD,PSA,QED,Lipinski,Veber,LeadLike,P450Risk,HighPSA';
+    const rows = fpCompounds.map((c, i) => {
+      const a = c.admet;
+      return [
+        i + 1,
+        c.compound_id,
+        `"${(c.smiles || '').replace(/"/g, '""')}"`,
+        c.affinity?.toFixed(2) ?? '',
+        c.mw?.toFixed(1) ?? '',
+        c.logp?.toFixed(2) ?? '',
+        c.hba ?? '',
+        c.hbd ?? '',
+        c.psa?.toFixed(1) ?? '',
+        c.qed?.toFixed(3) ?? '',
+        a?.lipinski ? 'PASS' : 'FAIL',
+        a?.veber ? 'PASS' : 'FAIL',
+        a?.lead_like ? 'YES' : 'NO',
+        a?.p450_risk ? 'YES' : 'NO',
+        a?.high_psa ? 'YES' : 'NO',
+      ].join(',');
+    });
+    const csv = [header, ...rows].join('\n');
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${selectedJob?.name ?? 'compounds'}-top-${fpCompounds.length}.csv`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+  }
+
+  async function viewCompoundFromTable(compoundId: string) {
+    if (!selectedJob?.name) return;
+    try {
+      const result = await getDockingResult(selectedJob.name, compoundId);
+      if (result) {
+        handleView(result);
+      } else {
+        viewError = `No docking result found for ${compoundId}`;
+      }
+    } catch (e: any) {
+      viewError = e.message || 'Failed to fetch compound';
     }
   }
 
@@ -307,7 +357,7 @@
       {#if viewingCompound}
         <!-- Back button + stats when viewing a compound -->
         <div class="viewing-header">
-          <button class="back-btn" onclick={() => { viewingCompound = null; pocket = null; showSurfaceMesh = false; showNetwork = false; }}>
+          <button class="back-btn" onclick={() => { viewingCompound = null; pocket = null; showSurfaceMesh = false; showNetwork = false; clearPocketView(); onSurfaceChange(null); }}>
             Back to Results
           </button>
           {#each results.filter((r) => r.compound_id === viewingCompound).slice(0, 1) as viewedResult}
@@ -334,11 +384,13 @@
                 <tr class:top-hit={i < 3} class:alt={i % 2 === 1}>
                   <td class="col-rank">{(currentPage-1)*perPage + i + 1}</td>
                   <td class="col-compound mono">{result.compound_id}</td>
-                  <td class="col-affinity mono">{result.affinity_kcal_mol.toFixed(2)}</td>
+                  <td class="col-affinity mono">{(result.affinity_kcal_mol ?? 0).toFixed(2)}</td>
                   <td class="col-action">
                     <button class="view-btn" onclick={() => handleView(result)}>View</button>
                   </td>
                 </tr>
+              {:else}
+                <tr><td colspan="4" class="empty-row">No docking results for this job.</td></tr>
               {/each}
             </tbody>
           </table>
@@ -414,6 +466,8 @@
                 </tbody>
               </table>
             </div>
+          {:else}
+            <p class="empty">No residues within {pocketCutoff.toFixed(1)} Å cutoff.</p>
           {/if}
 
           <!-- Surface options -->
@@ -463,43 +517,118 @@
     {#if results.length > 0 && !viewingCompound}
       <Panel title="Receptor Contacts">
         {#if !receptorContacts && !rcLoading}
-          <button class="analyze-btn" onclick={fetchReceptorContacts}>Analyze Top 50</button>
+          <div class="topn-row">
+            <select class="topn-select" bind:value={analysisTopN}>
+              <option value={50}>Top 50</option>
+              <option value={100}>Top 100</option>
+              <option value={200}>Top 200</option>
+              <option value={500}>Top 500</option>
+            </select>
+            <button class="analyze-btn" onclick={fetchReceptorContacts}>Analyze</button>
+          </div>
         {/if}
         {#if rcLoading}
           <p class="loading">Analyzing...</p>
         {:else if receptorContacts}
-          <div class="pocket-table-wrap">
+          {#if receptorContacts.residue_contacts.length > 0}
+            <p class="rc-summary">Top {receptorContacts.top_n} compounds, {receptorContacts.total_compounds_analyzed} analyzed</p>
+            <div class="pocket-table-wrap">
+              <table class="pocket-table">
+                <thead><tr><th>Res</th><th>Freq</th><th>Dist</th></tr></thead>
+                <tbody>
+                  {#each receptorContacts.residue_contacts.slice(0, 20) as rc}
+                    <tr class="pocket-row" onclick={() => focusResidue(rc.chain_id, rc.res_id)}>
+                      <td class="mono">{rc.res_name}{rc.res_id}.{rc.chain_id}</td>
+                      <td><div class="freq-bar-wrap"><div class="freq-bar" style="width:{rc.contact_frequency*100}%"></div><span class="freq-label">{(rc.contact_frequency*100).toFixed(0)}%</span></div></td>
+                      <td class="mono">{rc.avg_distance.toFixed(1)}</td>
+                    </tr>
+                  {/each}
+                </tbody>
+              </table>
+            </div>
+          {:else}
+            <p class="empty">No receptor contacts found.</p>
+          {/if}
+        {:else if rcError}
+          <p class="error-msg">{rcError}</p>
+        {/if}
+      </Panel>
+
+      <Panel title="Top Compounds">
+        {#if !fpCompounds.length && !fpLoading && !fpError}
+          <button class="analyze-btn" onclick={fetchFingerprints}>Load Top {analysisTopN} + ADMET</button>
+        {/if}
+        {#if fpLoading}
+          <p class="loading">Loading compounds &amp; ADMET...</p>
+        {:else if fpError}
+          <p class="error-msg">{fpError}</p>
+        {/if}
+        {#if fpCompounds.length > 0}
+          <p class="rc-summary">{fpTotal} compounds — showing top {Math.min(fpCompounds.length, 50)}</p>
+          <div class="pocket-table-wrap" style="max-height:400px">
             <table class="pocket-table">
-              <thead><tr><th>Res</th><th>Freq</th><th>Dist</th></tr></thead>
+              <thead><tr><th>#</th><th>ID</th><th>Aff.</th><th>MW</th><th>LogP</th><th>QED</th><th>ADMET</th></tr></thead>
               <tbody>
-                {#each receptorContacts.residue_contacts.slice(0, 20) as rc}
-                  <tr class="pocket-row" onclick={() => focusResidue(rc.chain_id, rc.res_id)}>
-                    <td class="mono">{rc.res_name}{rc.res_id}.{rc.chain_id}</td>
-                    <td><div class="freq-bar-wrap"><div class="freq-bar" style="width:{rc.contact_frequency*100}%"></div><span class="freq-label">{(rc.contact_frequency*100).toFixed(0)}%</span></div></td>
-                    <td class="mono">{rc.avg_distance.toFixed(1)}</td>
+                {#each fpCompounds.slice(0, 50) as comp, i}
+                  <tr class="pocket-row" onclick={() => viewCompoundFromTable(comp.compound_id)}>
+                    <td>{i+1}</td>
+                    <td class="mono">{comp.compound_id}</td>
+                    <td class="mono">{(comp.affinity ?? 0).toFixed(1)}</td>
+                    <td class="mono">{comp.mw?.toFixed(0) ?? '—'}</td>
+                    <td class="mono">{comp.logp?.toFixed(1) ?? '—'}</td>
+                    <td class="mono">{comp.qed?.toFixed(2) ?? '—'}</td>
+                    <td class="admet-cell">
+                      {#if comp.admet}
+                        {#if comp.admet.lipinski}<span class="admet-pill pass">Lip</span>{:else}<span class="admet-pill fail">Lip</span>{/if}
+                        {#if comp.admet.veber}<span class="admet-pill pass">Veb</span>{:else}<span class="admet-pill fail">Veb</span>{/if}
+                        {#if comp.admet.lead_like}<span class="admet-pill pass">Lead</span>{/if}
+                        {#if comp.admet.p450_risk}<span class="admet-pill warn">CYP</span>{/if}
+                        {#if comp.admet.high_psa}<span class="admet-pill fail">PSA</span>{/if}
+                      {/if}
+                    </td>
                   </tr>
                 {/each}
               </tbody>
             </table>
           </div>
-        {/if}
-      </Panel>
 
-      <Panel title="Top Compounds">
-        {#if !fpCompounds.length && !fpLoading}
-          <button class="analyze-btn" onclick={fetchFingerprints}>Load Top 100</button>
-        {/if}
-        {#if fpCompounds.length > 0}
-          <div class="pocket-table-wrap">
-            <table class="pocket-table">
-              <thead><tr><th>#</th><th>ID</th><th>Aff.</th></tr></thead>
-              <tbody>
-                {#each fpCompounds.slice(0, 20) as comp, i}
-                  <tr><td>{i+1}</td><td class="mono">{comp.compound_id}</td><td class="mono">{comp.affinity.toFixed(1)}</td></tr>
-                {/each}
-              </tbody>
-            </table>
-          </div>
+          <!-- ADMET Summary -->
+          {@const admetCompounds = fpCompounds.filter(c => c.admet)}
+          {#if admetCompounds.length === 0}
+            <p class="empty">ADMET properties unavailable (compounds not in ChEMBL).</p>
+          {:else}
+            <div class="admet-summary">
+              <p class="section-label">ADMET Summary (Top {admetCompounds.length})</p>
+              <div class="admet-stats">
+                <div class="admet-stat">
+                  <span class="admet-stat-val">{admetCompounds.filter(c => c.admet?.lipinski).length}</span>
+                  <span class="admet-stat-lbl">Lipinski Pass</span>
+                </div>
+                <div class="admet-stat">
+                  <span class="admet-stat-val">{admetCompounds.filter(c => c.admet?.veber).length}</span>
+                  <span class="admet-stat-lbl">Veber Pass</span>
+                </div>
+                <div class="admet-stat">
+                  <span class="admet-stat-val">{admetCompounds.filter(c => c.admet?.lead_like).length}</span>
+                  <span class="admet-stat-lbl">Lead-Like</span>
+                </div>
+                <div class="admet-stat">
+                  <span class="admet-stat-val">{admetCompounds.filter(c => c.admet?.good_qed).length}</span>
+                  <span class="admet-stat-lbl">Good QED</span>
+                </div>
+                <div class="admet-stat warn">
+                  <span class="admet-stat-val">{admetCompounds.filter(c => c.admet?.p450_risk).length}</span>
+                  <span class="admet-stat-lbl">CYP Risk</span>
+                </div>
+                <div class="admet-stat warn">
+                  <span class="admet-stat-val">{admetCompounds.filter(c => c.admet?.high_psa).length}</span>
+                  <span class="admet-stat-lbl">High PSA</span>
+                </div>
+              </div>
+            </div>
+          {/if}
+
+          <button class="export-btn" onclick={exportCSV}>Export CSV</button>
         {/if}
       </Panel>
     {/if}
@@ -1088,5 +1217,120 @@
     white-space: nowrap;
     max-width: 150px;
     cursor: help;
+  }
+
+  .topn-row {
+    display: flex;
+    gap: 6px;
+    align-items: stretch;
+  }
+
+  .topn-select {
+    background: rgba(0,0,0,0.3);
+    border: 1px solid rgba(48,54,61,0.6);
+    color: var(--text-primary, #e6edf3);
+    font-size: 11px;
+    padding: 4px 6px;
+    border-radius: 6px;
+    outline: none;
+  }
+
+  .topn-row .analyze-btn {
+    flex: 1;
+  }
+
+  .export-btn {
+    width: 100%;
+    margin-top: 6px;
+    background: none;
+    border: 1px solid rgba(48,54,61,0.6);
+    color: var(--text-secondary, #8b949e);
+    font-size: 10px;
+    font-weight: 600;
+    padding: 4px 10px;
+    border-radius: 4px;
+    cursor: pointer;
+  }
+
+  .export-btn:hover {
+    color: var(--text-primary, #e6edf3);
+    border-color: var(--accent, #58a6ff);
+  }
+
+  .empty-row {
+    text-align: center;
+    color: var(--text-muted, #484f58);
+    font-size: 12px;
+    padding: 16px 8px !important;
+  }
+
+  /* ---- ADMET pills & summary ---- */
+  .admet-cell {
+    display: flex;
+    gap: 2px;
+    flex-wrap: wrap;
+  }
+
+  .admet-pill {
+    font-size: 8px;
+    font-weight: 700;
+    padding: 1px 4px;
+    border-radius: 4px;
+    white-space: nowrap;
+    line-height: 1.3;
+  }
+
+  .admet-pill.pass {
+    background: rgba(63,185,80,0.15);
+    color: #3fb950;
+  }
+
+  .admet-pill.fail {
+    background: rgba(248,81,73,0.1);
+    color: #f85149;
+  }
+
+  .admet-pill.warn {
+    background: rgba(210,153,34,0.15);
+    color: #d29922;
+  }
+
+  .admet-summary {
+    border-top: 1px solid rgba(48,54,61,0.3);
+    padding-top: 6px;
+    margin-top: 6px;
+  }
+
+  .admet-stats {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 4px;
+  }
+
+  .admet-stat {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 4px;
+    background: rgba(63,185,80,0.06);
+    border-radius: 4px;
+  }
+
+  .admet-stat.warn {
+    background: rgba(210,153,34,0.06);
+  }
+
+  .admet-stat-val {
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--text-primary, #e6edf3);
+    font-family: 'SF Mono', monospace;
+  }
+
+  .admet-stat-lbl {
+    font-size: 9px;
+    color: var(--text-muted, #484f58);
+    text-transform: uppercase;
+    letter-spacing: 0.2px;
   }
 </style>
