@@ -3,7 +3,7 @@
   import InteractionNetwork from './InteractionNetwork.svelte';
   import { getJobs, getJob, getPocketAnalysis, getReceptorContacts, getFingerprints, getLigandSmiles } from '$lib/api';
   import type { PocketResidue, PocketAnalysis, ResidueContact, ReceptorContactsResponse, FingerprintCompound } from '$lib/api';
-  import { loadFile, overlayStructure, focusLastStructure, focusResidue, highlightResidue, drawInteractionLines } from '$lib/viewer';
+  import { loadFile, overlayStructure, focusLastStructure, focusResidue, highlightResidue, drawInteractionLines, showPocketView } from '$lib/viewer';
   import type { InteractionLine } from '$lib/viewer';
   import { isAuthenticated } from '$lib/auth';
 
@@ -151,6 +151,10 @@
       pocket = await getPocketAnalysis(selectedJob.name, compoundId, pocketCutoff);
       if (pocket?.interaction_lines?.length) {
         drawInteractionLines(pocket.interaction_lines, activeInteractions);
+      }
+      // Show pocket view — protein as thin cartoon, interacting residues as sticks
+      if (pocket?.pocket_residues?.length) {
+        showPocketView(pocket.pocket_residues.map(r => ({ chain_id: r.chain_id, res_id: r.res_id })));
       }
     } catch (e: any) {
       pocketError = e.message || 'Pocket analysis failed';
