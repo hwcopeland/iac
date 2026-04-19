@@ -1121,49 +1121,44 @@ export async function showPocketView(residues: { chain_id: string; res_id: numbe
  */
 let _pocketSurfaceRef: string | null = null;
 
+let _surfaceRefs: string[] = [];
+
 export async function togglePocketSurface(show: boolean, colorTheme: string = 'residue-charge'): Promise<void> {
   if (!plugin) return;
   try {
-    // Always remove existing surface first by clearing and rebuilding
-    // This is brute force but reliable
-    const structures = plugin.managers?.structure?.hierarchy?.current?.structures;
-    if (!structures?.length) return;
-
-    const { StateTransforms } = getLib().plugin;
-
-    // Find and remove any surface representations from ALL structures
-    for (const structRef of structures) {
-      const allReprs = [
-        ...(structRef.components ?? []).flatMap((c: any) => c.representations ?? []),
-        ...(structRef.representations ?? []),
-      ];
-      for (const repr of allReprs) {
-        try {
-          // Check multiple paths for the type name
-          let typeName = '';
-          try { typeName = repr.cell?.obj?.type?.name ?? ''; } catch {}
-          if (!typeName) try { typeName = repr.cell?.params?.values?.type?.name ?? ''; } catch {}
-          if (!typeName) try { typeName = repr.cell?.transform?.params?.type?.name ?? ''; } catch {}
-
-          if (typeName.includes('surface') || typeName.includes('gaussian')) {
-            await plugin.build().delete(repr.cell.transform.ref).commit();
-          }
-        } catch {}
-      }
+    // Remove tracked surface refs
+    for (const ref of _surfaceRefs) {
+      try {
+        const cell = plugin.state.data.cells.get(ref);
+        if (cell) await plugin.build().delete(ref).commit();
+      } catch {}
     }
+    _surfaceRefs = [];
 
     if (!show) return;
 
-    // Add to the first structure (protein)
+    const structures = plugin.managers?.structure?.hierarchy?.current?.structures;
+    if (!structures?.length) return;
+    const { StateTransforms } = getLib().plugin;
+
     const structRef = structures[0];
     const ref = structRef.cell?.transform?.ref;
     if (!ref) return;
 
-    await plugin.build().to(ref).apply(StateTransforms.Representation.StructureRepresentation3D, {
-      type: { name: 'gaussian-surface', params: { smoothness: 1.5 } },
+    // Add gaussian surface at 80% transparency (alpha 0.2)
+    const update = plugin.build();
+    const node = update.to(ref).apply(StateTransforms.Representation.StructureRepresentation3D, {
+      type: { name: 'gaussian-surface', params: { smoothness: 1.5, alpha: 0.2 } },
       colorTheme: { name: colorTheme, params: {} },
       sizeTheme: { name: 'physical', params: {} },
-    }).commit();
+    });
+    await update.commit();
+
+    // Track the ref for removal
+    try {
+      const newRef = node.ref;
+      if (newRef) _surfaceRefs.push(newRef);
+    } catch {}
 
     applyCanvasProps();
   } catch (e) {

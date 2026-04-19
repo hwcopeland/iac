@@ -30,6 +30,35 @@
   let networkJobName = $state('');
   let networkCompoundId = $state('');
   let showNetwork = $state(false);
+  let surfaceLegend = $state<string | null>(null);
+
+  const SURFACE_LEGENDS: Record<string, { label: string; items: { color: string; text: string }[] }> = {
+    'residue-charge': {
+      label: 'Charge',
+      items: [
+        { color: '#f85149', text: 'Negative (ASP, GLU)' },
+        { color: '#e6edf3', text: 'Neutral' },
+        { color: '#58a6ff', text: 'Positive (LYS, ARG, HIS)' },
+      ]
+    },
+    'hydrophobicity': {
+      label: 'Hydrophobicity',
+      items: [
+        { color: '#58a6ff', text: 'Hydrophilic' },
+        { color: '#e6edf3', text: 'Neutral' },
+        { color: '#d29922', text: 'Hydrophobic' },
+      ]
+    },
+    'element-symbol': {
+      label: 'Element',
+      items: [
+        { color: '#909090', text: 'Carbon' },
+        { color: '#3050F8', text: 'Nitrogen' },
+        { color: '#FF0D0D', text: 'Oxygen' },
+        { color: '#FFFF30', text: 'Sulfur' },
+      ]
+    },
+  };
   let viewerInitialized = false;
 
   onMount(() => {
@@ -144,6 +173,19 @@
           </div>
         {/if}
 
+        {#if surfaceLegend && SURFACE_LEGENDS[surfaceLegend]}
+          {@const legend = SURFACE_LEGENDS[surfaceLegend]}
+          <div class="surface-legend">
+            <span class="legend-title">{legend.label}</span>
+            {#each legend.items as item}
+              <div class="legend-item">
+                <span class="legend-swatch" style="background:{item.color}"></span>
+                <span class="legend-text">{item.text}</span>
+              </div>
+            {/each}
+          </div>
+        {/if}
+
         {#if showNetwork && networkSmiles && networkResidues.length > 0}
           <div class="network-overlay">
             <InteractionNetwork
@@ -164,7 +206,10 @@
               <ExplorerPanel onStructureLoad={() => structureBrowser?.refresh()} />
               <StructureBrowser bind:this={structureBrowser} />
             {:else if activeTab === 'analysis'}
-              <AnalysisPanel onNetworkToggle={(show, smiles, residues, jn, cid) => { showNetwork = show; networkSmiles = smiles; networkResidues = residues; networkJobName = jn; networkCompoundId = cid; }} />
+              <AnalysisPanel
+                onNetworkToggle={(show, smiles, residues, jn, cid) => { showNetwork = show; networkSmiles = smiles; networkResidues = residues; networkJobName = jn; networkCompoundId = cid; }}
+                onSurfaceChange={(theme) => { surfaceLegend = theme; }}
+              />
             {:else if activeTab === 'calculations'}
               <CalculationsPanel />
             {/if}
@@ -312,6 +357,46 @@
     bottom: 12px;
     left: 12px;
     z-index: 50;
+  }
+
+  .surface-legend {
+    position: absolute;
+    bottom: 12px;
+    left: 12px;
+    z-index: 50;
+    background: rgba(13,17,23,0.85);
+    border: 1px solid rgba(48,54,61,0.6);
+    border-radius: 6px;
+    padding: 6px 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+  }
+
+  .legend-title {
+    font-size: 9px;
+    font-weight: 600;
+    color: var(--text-muted, #484f58);
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+  }
+
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .legend-swatch {
+    width: 12px;
+    height: 8px;
+    border-radius: 2px;
+    flex-shrink: 0;
+  }
+
+  .legend-text {
+    font-size: 10px;
+    color: var(--text-secondary, #8b949e);
   }
 
   .network-overlay {
