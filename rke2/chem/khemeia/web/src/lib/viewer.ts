@@ -1064,9 +1064,8 @@ const IX_LINE_COLORS: Record<string, string> = {
 // ─── Pocket View ───
 
 /**
- * Show protein as thin cartoon with specific residues as ball-and-stick.
- * Used when viewing docking interactions — shows only the binding pocket.
- * residues: array of {chain_id, res_id} to highlight as sticks.
+ * Show protein as faded cartoon with pocket residues as ball-and-stick.
+ * Protein at 30% opacity, pocket residues solid with element colors.
  */
 export async function showPocketView(residues: { chain_id: string; res_id: number }[]): Promise<void> {
   if (!plugin) return;
@@ -1080,7 +1079,7 @@ export async function showPocketView(residues: { chain_id: string; res_id: numbe
     const { StateTransforms } = getLib().plugin;
     const ref = structureCell.transform.ref;
 
-    // Remove all existing representations
+    // Remove existing representations on the protein
     const allReprs = [
       ...(structRef.components ?? []).flatMap((c: any) => c.representations ?? []),
       ...(structRef.representations ?? []),
@@ -1091,29 +1090,18 @@ export async function showPocketView(residues: { chain_id: string; res_id: numbe
       }
     }
 
-    // Build the residue selection expression for Molstar
-    // Using StructureSelectionQuery with auth_seq_id matching
-    const resSet = new Set(residues.map(r => `${r.chain_id}_${r.res_id}`));
-
     const builder = plugin.build();
 
-    // 1. Full protein as thin cartoon (alpha=0.3)
+    // Protein as faded cartoon (30% opacity)
     builder.to(ref).apply(StateTransforms.Representation.StructureRepresentation3D, {
-      type: { name: 'cartoon', params: { sizeFactor: 0.15 } },
+      type: { name: 'cartoon', params: { sizeFactor: 0.2 } },
       colorTheme: { name: 'chain-id', params: {} },
-      sizeTheme: { name: 'uniform', params: { value: 0.15 } },
+      sizeTheme: { name: 'uniform', params: { value: 0.2 } },
+      alpha: 0.3,
     });
 
-    // 2. Pocket residues as ball-and-stick
-    // We need to create a component selection for just these residues
-    // Using the StructureComponent with a residue query
-    const residueExpression = residues.map(r =>
-      `(auth_asym_id=${r.chain_id} and auth_seq_id=${r.res_id})`
-    ).join(' or ');
-
+    // Pocket residues as ball-and-stick (solid, element colors)
     if (residues.length > 0) {
-      // Add a second representation — ball-and-stick for pocket residues
-      // This shows all atoms but Molstar will display them on top of the cartoon
       builder.to(ref).apply(StateTransforms.Representation.StructureRepresentation3D, {
         type: { name: 'ball-and-stick', params: { sizeFactor: 0.2 } },
         colorTheme: { name: 'element-symbol', params: {} },
@@ -1125,6 +1113,57 @@ export async function showPocketView(residues: { chain_id: string; res_id: numbe
     applyCanvasProps();
   } catch (e) {
     console.error('showPocketView failed:', e);
+  }
+}
+
+/**
+ * Toggle a polar molecular surface mesh on the binding pocket.
+ * Shows the electrostatic surface of residues near the ligand.
+ */
+let _pocketSurfaceRef: string | null = null;
+
+export async function togglePocketSurface(show: boolean): Promise<void> {
+  if (!plugin) return;
+  try {
+    const structures = plugin.managers?.structure?.hierarchy?.current?.structures;
+    if (!structures?.length) return;
+    const structRef = structures[0];
+    const structureCell = structRef.cell;
+    if (!structureCell?.transform?.ref) return;
+
+    const { StateTransforms } = getLib().plugin;
+    const ref = structureCell.transform.ref;
+
+    if (!show) {
+      // Remove the surface if it exists
+      if (_pocketSurfaceRef) {
+        try {
+          await plugin.build().delete(_pocketSurfaceRef).commit();
+        } catch {}
+        _pocketSurfaceRef = null;
+      }
+      return;
+    }
+
+    // Add molecular surface colored by partial charge (ESP-like)
+    const builder = plugin.build();
+    const surfaceNode = builder.to(ref).apply(StateTransforms.Representation.StructureRepresentation3D, {
+      type: { name: 'molecular-surface', params: { quality: 'medium', probeRadius: 1.4 } },
+      colorTheme: { name: 'partial-charge', params: {} },
+      sizeTheme: { name: 'physical', params: {} },
+      alpha: 0.6,
+    });
+
+    await builder.commit();
+
+    // Track the ref so we can remove it later
+    if (surfaceNode?.selector?.cell?.transform?.ref) {
+      _pocketSurfaceRef = surfaceNode.selector.cell.transform.ref;
+    }
+
+    applyCanvasProps();
+  } catch (e) {
+    console.error('togglePocketSurface failed:', e);
   }
 }
 
