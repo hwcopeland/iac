@@ -6,6 +6,7 @@ resources:
   - api-deployment.yaml
   - web-deployment.yaml
   - result-writer.yaml
+  - prolif-runner.yaml
   - mysql.yaml
   - mysql-secret.yaml
   - httproute.yaml

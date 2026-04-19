@@ -1,0 +1,66 @@
+# Deployment for the ProLIF interaction fingerprint sidecar
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prolif-runner
+  namespace: chem
+  labels:
+    app: prolif-runner
+spec:
+  replicas: 1
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app: prolif-runner
+  template:
+    metadata:
+      labels:
+        app: prolif-runner
+    spec:
+      imagePullSecrets:
+        - name: zot-pull-secret
+      containers:
+        - name: prolif-runner
+          image: zot.hwcopeland.net/chem/prolif-runner:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8000
+              name: http
+              protocol: TCP
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 5
+---
+# Service for the ProLIF interaction fingerprint sidecar
+apiVersion: v1
+kind: Service
+metadata:
+  name: prolif-runner
+  namespace: chem
+  labels:
+    app: prolif-runner
+spec:
+  type: ClusterIP
+  ports:
+    - port: 80
+      targetPort: 8000
+      protocol: TCP
+      name: http
+  selector:
+    app: prolif-runner
