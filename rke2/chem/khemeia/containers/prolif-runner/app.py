@@ -257,15 +257,51 @@ def _generate_network_html(
         html = buf.getvalue()
 
         if dark_theme:
-            # Inject dark background CSS into the HTML
-            dark_css = (
-                "<style>"
-                "body { background-color: #0d1117 !important; }"
-                ".vis-network { background-color: #0d1117 !important; }"
-                "canvas { background-color: #0d1117 !important; }"
-                "</style>"
-            )
-            html = html.replace("</head>", dark_css + "</head>", 1)
+            # Inject dark theme CSS + residue click handler
+            dark_inject = """
+<style>
+  body { background-color: #0d1117 !important; margin: 0; }
+  .vis-network { background-color: #0d1117 !important; }
+  canvas { background-color: #0d1117 !important; }
+  /* Fix atom visibility: white heteroatom spheres → transparent,
+     black carbons/bonds → light grey */
+</style>
+<script>
+  // Post residue clicks to parent window for 3D viewer integration
+  document.addEventListener('DOMContentLoaded', function() {
+    setTimeout(function() {
+      if (typeof network !== 'undefined') {
+        network.on('click', function(params) {
+          if (params.nodes.length > 0) {
+            var nodeId = params.nodes[0];
+            var node = network.body.data.nodes.get(nodeId);
+            if (node && node.title) {
+              window.parent.postMessage({
+                type: 'prolif-residue-click',
+                residue: node.title || node.label || nodeId
+              }, '*');
+            }
+          }
+        });
+      }
+    }, 1000);
+  });
+</script>
+"""
+            html = html.replace("</head>", dark_inject + "</head>", 1)
+
+            # Fix SVG colors for dark theme:
+            # White atom fills → dark bg so they're visible
+            # Black strokes/fills → light grey
+            html = html.replace('fill="white"', 'fill="#0d1117"')
+            html = html.replace("fill='white'", "fill='#0d1117'")
+            html = html.replace('fill="#FFFFFF"', 'fill="#0d1117"')
+            html = html.replace('fill="black"', 'fill="#c9d1d9"')
+            html = html.replace("fill='black'", "fill='#c9d1d9'")
+            html = html.replace('fill="#000000"', 'fill="#c9d1d9"')
+            html = html.replace('stroke="black"', 'stroke="#c9d1d9"')
+            html = html.replace("stroke='black'", "stroke='#c9d1d9'")
+            html = html.replace('stroke="#000000"', 'stroke="#c9d1d9"')
 
         return html
     except Exception as exc:

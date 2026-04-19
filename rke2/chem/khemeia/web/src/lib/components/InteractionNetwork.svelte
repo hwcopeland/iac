@@ -43,6 +43,21 @@
   }
 
   onMount(async () => {
+    // Listen for residue clicks from the ProLIF iframe
+    const handleMessage = (event: MessageEvent) => {
+      if (event.data?.type === 'prolif-residue-click' && event.data.residue) {
+        // Parse residue like "ASP107.A" → chain A, res 107
+        const match = event.data.residue.match(/([A-Z]+)(\d+)\.?([A-Z])?/);
+        if (match && onResidueClick) {
+          const resName = match[1];
+          const resId = parseInt(match[2]);
+          const chainId = match[3] || 'A';
+          onResidueClick({ chain_id: chainId, res_id: resId, res_name: resName } as any);
+        }
+      }
+    };
+    window.addEventListener('message', handleMessage);
+
     // Try ProLIF first
     if (jobName && compoundId) {
       try {
@@ -99,7 +114,7 @@
       bind:this={iframeRef}
       srcdoc={prolifHtml}
       class="prolif-iframe"
-      sandbox="allow-scripts"
+      sandbox="allow-scripts allow-same-origin"
       title="ProLIF Interaction Network"
     ></iframe>
   {:else}
