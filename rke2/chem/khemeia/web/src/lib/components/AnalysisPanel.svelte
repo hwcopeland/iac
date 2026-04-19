@@ -16,7 +16,16 @@
   let viewingCompound = $state<string | null>(null);
   let viewError = $state('');
 
+  let { onNetworkToggle = (_show: boolean, _smiles: string, _residues: any[]) => {} }:
+    { onNetworkToggle?: (show: boolean, smiles: string, residues: any[]) => void } = $props();
+
   let viewedSmiles = $state('');
+  let showNetwork = $state(false);
+
+  function toggleNetwork() {
+    showNetwork = !showNetwork;
+    onNetworkToggle(showNetwork, viewedSmiles, pocket?.pocket_residues ?? []);
+  }
   let currentPage = $state(1);
   let perPage = $state(50);
   let totalResults = $state(0);
@@ -367,12 +376,10 @@
       </Panel>
 
       {#if viewingCompound}
-        {#if pocket && viewedSmiles && pocket.pocket_residues.length > 0}
-          <InteractionNetwork
-            smiles={viewedSmiles}
-            residues={pocket.pocket_residues}
-            onResidueClick={(r) => focusResidue(r.chain_id, r.res_id)}
-          />
+        {#if pocket && pocket.pocket_residues.length > 0}
+          <button class="net-toggle" onclick={toggleNetwork}>
+            {showNetwork ? 'Hide' : 'Show'} Interaction Map
+          </button>
         {/if}
 
         <Panel title="Binding Pocket">
@@ -904,6 +911,21 @@
     border-radius: 6px;
     white-space: nowrap;
   }
+
+  .net-toggle {
+    width: 100%;
+    background: rgba(88,166,255,0.08);
+    border: 1px solid rgba(88,166,255,0.2);
+    color: var(--accent, #58a6ff);
+    font-size: 11px;
+    font-weight: 600;
+    padding: 5px 10px;
+    border-radius: 4px;
+    cursor: pointer;
+    margin-bottom: 4px;
+  }
+
+  .net-toggle:hover { background: rgba(88,166,255,0.15); }
 
   /* ---- Pagination ---- */
   .pagination {
