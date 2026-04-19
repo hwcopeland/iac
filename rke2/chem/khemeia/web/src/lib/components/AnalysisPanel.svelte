@@ -16,8 +16,12 @@
   let viewingCompound = $state<string | null>(null);
   let viewError = $state('');
 
-  let { onNetworkToggle = (_show: boolean, _smiles: string, _residues: any[], _jobName: string, _compoundId: string) => {} }:
-    { onNetworkToggle?: (show: boolean, smiles: string, residues: any[], jobName: string, compoundId: string) => void } = $props();
+  let { onNetworkToggle = (_show: boolean, _smiles: string, _residues: any[], _jobName: string, _compoundId: string) => {},
+        onSurfaceChange = (_theme: string | null) => {} }:
+    {
+      onNetworkToggle?: (show: boolean, smiles: string, residues: any[], jobName: string, compoundId: string) => void;
+      onSurfaceChange?: (theme: string | null) => void;
+    } = $props();
 
   let viewedSmiles = $state('');
   let showNetwork = $state(false);
@@ -416,19 +420,19 @@
             <p class="section-label">Surface</p>
             <div class="surface-btns">
               <button class="surface-btn" class:active={showSurfaceMesh && surfaceType === 'charge'}
-                onclick={() => { surfaceType = 'charge'; showSurfaceMesh = true; togglePocketSurface(true, 'residue-charge'); }}>
+                onclick={() => { surfaceType = 'charge'; showSurfaceMesh = true; togglePocketSurface(true, 'residue-charge'); onSurfaceChange('residue-charge'); }}>
                 Charge
               </button>
               <button class="surface-btn" class:active={showSurfaceMesh && surfaceType === 'hydro'}
-                onclick={() => { surfaceType = 'hydro'; showSurfaceMesh = true; togglePocketSurface(true, 'hydrophobicity'); }}>
+                onclick={() => { surfaceType = 'hydro'; showSurfaceMesh = true; togglePocketSurface(true, 'hydrophobicity'); onSurfaceChange('hydrophobicity'); }}>
                 Hydrophobic
               </button>
               <button class="surface-btn" class:active={showSurfaceMesh && surfaceType === 'element'}
-                onclick={() => { surfaceType = 'element'; showSurfaceMesh = true; togglePocketSurface(true, 'element-symbol'); }}>
+                onclick={() => { surfaceType = 'element'; showSurfaceMesh = true; togglePocketSurface(true, 'element-symbol'); onSurfaceChange('element-symbol'); }}>
                 Element
               </button>
               <button class="surface-btn" class:active={!showSurfaceMesh}
-                onclick={() => { showSurfaceMesh = false; togglePocketSurface(false); }}>
+                onclick={() => { showSurfaceMesh = false; togglePocketSurface(false); onSurfaceChange(null); }}>
                 Off
               </button>
             </div>
