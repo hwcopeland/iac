@@ -236,53 +236,106 @@ def _generate_network_svg(
     compound_id: str,
     dark_theme: bool,
 ) -> str:
-    """Render the ligand interaction network diagram as SVG."""
+    """Render the ligand interaction diagram as SVG using matplotlib."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
+    import numpy as np
 
-    try:
-        net = plf.LigNetwork.from_fingerprint(fp)
-        fig, ax = plt.subplots(figsize=(10, 8))
-        net.plot(ax=ax)
-        ax.set_title(f"Interaction Map: {compound_id}", fontsize=14)
-        plt.tight_layout()
-
-        buf = io.BytesIO()
-        fig.savefig(buf, format="svg", bbox_inches="tight")
-        plt.close(fig)
-        svg = buf.getvalue().decode("utf-8")
-    except Exception:  # noqa: BLE001
-        # Fallback: generate a minimal SVG with interaction summary
-        app.logger.warning(
-            "LigNetwork plot failed for %s, using text fallback", compound_id,
-        )
-        svg = _fallback_svg(fp, compound_id)
-
-    if dark_theme:
-        svg = _apply_dark_theme(svg)
-
-    return svg
-
-
-def _fallback_svg(fp: plf.Fingerprint, compound_id: str) -> str:
-    """Produce a minimal text-based SVG when the network plot is unavailable."""
     interactions = _extract_interactions(fp)
-    lines = [f"Interaction Map: {compound_id}", ""]
-    for ix in interactions:
-        lines.append(f"  {ix['residue']}  --  {ix['type']}")
     if not interactions:
-        lines.append("  No interactions detected.")
+        return _empty_svg(compound_id, dark_theme)
 
-    text_block = "\n".join(
-        f'<text x="20" y="{40 + i * 22}" font-family="monospace" '
-        f'font-size="14" fill="black">{line}</text>'
-        for i, line in enumerate(lines)
-    )
-    height = 40 + len(lines) * 22 + 20
+    # Group by residue
+    residue_interactions: dict[str, list[str]] = {}
+    for ix in interactions:
+        res = ix["residue"]
+        if res not in residue_interactions:
+            residue_interactions[res] = []
+        residue_interactions[res].append(ix["type"])
+
+    residues = list(residue_interactions.keys())
+    n = len(residues)
+
+    # Color palette
+    colors = {
+        "HBDonor": "#58a6ff", "HBAcceptor": "#58a6ff",
+        "Hydrophobic": "#8b949e", "VdWContact": "#555555",
+        "VanDerWaals": "#555555",
+        "Ionic": "#d29922", "Anionic": "#d29922", "Cationic": "#d29922",
+        "PiStacking": "#bb33bb", "PiCation": "#bb33bb",
+        "EdgeToFace": "#bb33bb", "FaceToFace": "#bb33bb",
+    }
+
+    bg = DARK_BG if dark_theme else "white"
+    text_color = DARK_TEXT if dark_theme else "black"
+
+    fig, ax = plt.subplots(figsize=(8, 8), facecolor=bg)
+    ax.set_facecolor(bg)
+    ax.set_xlim(-2, 2)
+    ax.set_ylim(-2, 2)
+    ax.set_aspect("equal")
+    ax.axis("off")
+
+    # Ligand in center
+    ax.text(0, 0, compound_id, ha="center", va="center",
+            fontsize=11, fontweight="bold", color="#58a6ff",
+            bbox=dict(boxstyle="round,pad=0.4", facecolor=bg,
+                      edgecolor="#58a6ff", linewidth=1.5))
+
+    # Residues in circle
+    for i, res in enumerate(residues):
+        angle = 2 * np.pi * i / max(n, 1) - np.pi / 2
+        x = 1.5 * np.cos(angle)
+        y = 1.5 * np.sin(angle)
+
+        ix_types = residue_interactions[res]
+        primary = ix_types[0]
+        color = colors.get(primary, "#555555")
+
+        # Dashed line from center to residue
+        ax.plot([0, x], [0, y], color=color, linewidth=1.5,
+                linestyle="--", alpha=0.6, zorder=1)
+
+        # Residue circle + label
+        circle = plt.Circle((x, y), 0.22, facecolor=bg,
+                             edgecolor=color, linewidth=2, zorder=2)
+        ax.add_patch(circle)
+        ax.text(x, y + 0.04, res, ha="center", va="center",
+                fontsize=7, color=text_color, fontweight="bold", zorder=3)
+
+    # Legend
+    seen = set()
+    legend_y = 1.8
+    for ix in interactions:
+        t = ix["type"]
+        if t in seen:
+            continue
+        seen.add(t)
+        c = colors.get(t, "#555")
+        ax.plot([- 1.9, -1.7], [legend_y, legend_y], color=c,
+                linewidth=2, linestyle="--")
+        ax.text(-1.65, legend_y, t, fontsize=8, color=c, va="center")
+        legend_y -= 0.15
+
+    ax.set_title(f"Interaction Map: {compound_id}", fontsize=12,
+                 color=text_color, pad=10)
+
+    buf = io.BytesIO()
+    fig.savefig(buf, format="svg", bbox_inches="tight",
+                facecolor=bg, edgecolor="none")
+    plt.close(fig)
+    return buf.getvalue().decode("utf-8")
+
+
+def _empty_svg(compound_id: str, dark_theme: bool) -> str:
+    bg = DARK_BG if dark_theme else "white"
+    text = DARK_TEXT if dark_theme else "black"
     return (
-        f'<svg xmlns="http://www.w3.org/2000/svg" width="600" height="{height}">'
-        f"{text_block}</svg>"
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="400" height="100"'
+        f' style="background-color:{bg}">'
+        f'<text x="200" y="50" text-anchor="middle" fill="{text}" '
+        f'font-size="14">No interactions detected for {compound_id}</text></svg>'
     )
 
 
