@@ -28,7 +28,7 @@
       selectedJob?.name ?? '', viewingCompound ?? '');
   }
   let currentPage = $state(1);
-  let perPage = $state(50);
+  let perPage = $state(10);
   let totalResults = $state(0);
 
   // Pocket analysis state
@@ -38,6 +38,7 @@
   let pocketCutoff = $state(5.0);
   let pocketOpen = $state(true);
   let showSurfaceMesh = $state(false);
+  let surfaceType = $state('charge');
 
   // Receptor contacts state
   let receptorContacts = $state<ReceptorContactsResponse | null>(null);
@@ -272,302 +273,224 @@
 </script>
 
 <div class="analysis-panels">
-  <Panel title="Docking Jobs">
-    {#if jobsLoading}
-      <p class="loading">Loading jobs...</p>
-    {:else if jobsError}
-      <div class="error-box">
-        <p class="error-title">Failed to load jobs</p>
-        <p class="error-detail">{jobsError}</p>
-        <button class="retry-btn" onclick={loadJobsList}>Retry</button>
-      </div>
-    {:else if jobs.length === 0}
-      <p class="empty">No docking jobs found.</p>
-    {:else}
-      <select
-        class="job-select"
-        value={selectedJobName}
-        onchange={(e) => selectJob((e.target as HTMLSelectElement).value)}
-      >
+  <!-- Phase 1: Job selection (hidden once a job is selected) -->
+  {#if !selectedJob}
+    <Panel title="Jobs">
+      {#if jobsLoading}
+        <p class="loading">Loading jobs...</p>
+      {:else if jobsError}
+        <div class="error-box">
+          <p class="error-title">Failed to load jobs</p>
+          <button class="retry-btn" onclick={loadJobsList}>Retry</button>
+        </div>
+      {:else if jobs.length === 0}
+        <p class="empty">No docking jobs found.</p>
+      {:else}
         {#each jobs as job}
-          <option value={job.name}>
-            {job.name} [{job.status}]
-          </option>
+          <button class="job-row" onclick={() => selectJob(job.name)}>
+            <span class="job-row-name">{job.name.replace('docking-', '')}</span>
+            <span class="status-badge {statusClass(job.status)}">{job.status}</span>
+          </button>
         {/each}
-      </select>
-    {/if}
-  </Panel>
+      {/if}
+    </Panel>
+  {/if}
 
   {#if selectedJob && !jobLoading}
-    <Panel title="Stats">
-      <div class="stats-bar">
-        <div class="stat">
-          <span class="stat-label">Results</span>
-          <span class="stat-value">{totalResults}</span>
+    <!-- Phase 2: Results (collapsible, collapses when viewing a compound) -->
+    <Panel title={viewingCompound ? `Ligand: ${viewingCompound}` : `Results (${totalResults})`}>
+      {#if viewingCompound}
+        <!-- Back button + stats when viewing a compound -->
+        <div class="viewing-header">
+          <button class="back-btn" onclick={() => { viewingCompound = null; pocket = null; showSurfaceMesh = false; showNetwork = false; }}>
+            Back to Results
+          </button>
+          {@const viewedResult = results.find((r: any) => r.compound_id === viewingCompound)}
+          {#if viewedResult}
+            <span class="viewing-affinity mono">{viewedResult.affinity_kcal_mol.toFixed(2)} kcal/mol</span>
+          {/if}
         </div>
-        {#if bestAffinity !== null}
-          <div class="stat">
-            <span class="stat-label">Best</span>
-            <span class="stat-value mono">{bestAffinity.toFixed(2)}</span>
-          </div>
+        {#if viewError}
+          <p class="error-msg">{viewError}</p>
         {/if}
-        {#if meanAffinity !== null}
-          <div class="stat">
-            <span class="stat-label">Mean</span>
-            <span class="stat-value mono">{meanAffinity.toFixed(2)}</span>
-          </div>
-        {/if}
-        <div class="stat">
-          <span class="stat-label">Status</span>
-          <span class="status-badge {statusClass(selectedJob.status)}">{selectedJob.status}</span>
-        </div>
-        {#if elapsed}
-          <div class="stat">
-            <span class="stat-label">Elapsed</span>
-            <span class="stat-value mono">{elapsed}</span>
-          </div>
-        {/if}
-      </div>
-    </Panel>
-
-    {#if results.length > 0}
-      <Panel title="Results">
+      {:else}
+        <!-- Results table -->
         <div class="results-table-wrap">
           <table class="results-table">
             <thead>
               <tr>
                 <th class="col-rank">#</th>
                 <th class="col-compound">Compound</th>
-                <th class="col-affinity">Affinity (kcal/mol)</th>
+                <th class="col-affinity">Affinity</th>
                 <th class="col-action"></th>
               </tr>
             </thead>
             <tbody>
               {#each results as result, i}
                 <tr class:top-hit={i < 3} class:alt={i % 2 === 1}>
-                  <td class="col-rank">{i + 1}</td>
+                  <td class="col-rank">{(currentPage-1)*perPage + i + 1}</td>
                   <td class="col-compound mono">{result.compound_id}</td>
                   <td class="col-affinity mono">{result.affinity_kcal_mol.toFixed(2)}</td>
                   <td class="col-action">
-                    <button
-                      class="view-btn"
-                      class:active={viewingCompound === result.compound_id}
-                      onclick={() => handleView(result)}
-                    >
-                      {viewingCompound === result.compound_id ? 'Viewing' : 'View'}
-                    </button>
+                    <button class="view-btn" onclick={() => handleView(result)}>View</button>
                   </td>
                 </tr>
               {/each}
             </tbody>
           </table>
         </div>
-        {#if viewError}
-          <p class="error-msg">{viewError}</p>
-        {/if}
-
-        <!-- Pagination -->
         {#if totalResults > perPage}
           <div class="pagination">
             <button class="page-btn" onclick={() => selectJob(selectedJobName!, currentPage - 1)} disabled={currentPage <= 1}>Prev</button>
-            <select class="page-size-select" value={perPage} onchange={(e) => { perPage = parseInt((e.target as HTMLSelectElement).value); selectJob(selectedJobName!, 1); }}>
-              <option value="25">25</option>
-              <option value="50">50</option>
-              <option value="100">100</option>
-            </select>
             <span class="page-info">{(currentPage-1)*perPage+1}-{Math.min(currentPage*perPage, totalResults)} of {totalResults}</span>
             <button class="page-btn" onclick={() => selectJob(selectedJobName!, currentPage + 1)} disabled={currentPage * perPage >= totalResults}>Next</button>
           </div>
         {/if}
-      </Panel>
+      {/if}
+    </Panel>
 
-      {#if viewingCompound}
-        {#if pocket && pocket.pocket_residues.length > 0}
-          <button class="net-toggle" onclick={toggleNetwork}>
-            {showNetwork ? 'Hide' : 'Show'} Interaction Map
-          </button>
-        {/if}
-
-        <Panel title="Binding Pocket">
-          <div class="pocket-header">
-            <label class="cutoff-label">
-              Cutoff
-              <input
-                type="range"
-                min="3" max="8" step="0.5"
-                bind:value={pocketCutoff}
-                onchange={handleCutoffChange}
-                class="cutoff-slider"
-              />
-              <span class="cutoff-val">{pocketCutoff.toFixed(1)}A</span>
-            </label>
-            <button
-              class="surface-toggle"
-              class:active={showSurfaceMesh}
-              onclick={() => { showSurfaceMesh = !showSurfaceMesh; togglePocketSurface(showSurfaceMesh); }}
-            >
-              {showSurfaceMesh ? 'Hide' : 'Show'} Surface
-            </button>
-          </div>
-
-          {#if pocketLoading}
-            <p class="loading">Analyzing pocket...</p>
-          {:else if pocketError}
-            <p class="error-msg">{pocketError}</p>
-          {:else if pocket}
-            <div class="pocket-toggles">
-              {#each Object.entries(interactionColors) as [type, style]}
-                {@const count = pocket.pocket_residues.filter(r => r.interactions.includes(type)).length}
-                {#if count > 0}
-                  <button
-                    class="ix-toggle"
-                    class:active={activeInteractions.has(type)}
-                    style="background:{activeInteractions.has(type) ? style.bg : 'transparent'};color:{style.text};border-color:{style.text}"
-                    onclick={() => toggleInteraction(type)}
-                  >
-                    {count} {style.label}
-                  </button>
-                {/if}
-              {/each}
-              <span class="pocket-count">{filteredResidues.length} residues</span>
-            </div>
-
-            {#if filteredResidues.length > 0}
-              <div class="pocket-table-wrap">
-                <table class="pocket-table">
-                  <thead>
-                    <tr>
-                      <th>Chain</th>
-                      <th>Res</th>
-                      <th>Name</th>
-                      <th>Dist (A)</th>
-                      <th>Interactions</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {#each filteredResidues as res}
-                      <tr
-                        class="pocket-row"
-                        onclick={() => handleResidueClick(res)}
-                        onmouseenter={() => handleResidueHover(res)}
-                      >
-                        <td>{res.chain_id}</td>
-                        <td class="mono">{res.res_id}</td>
-                        <td class="mono">{res.res_name}</td>
-                        <td class="mono">{res.min_distance.toFixed(1)}</td>
-                        <td class="ix-cell">
-                          {#each res.interactions as ix}
-                            {@const style = interactionColors[ix] || interactionColors.contact}
-                            <span class="ix-pill" style="background:{style.bg};color:{style.text}">
-                              {style.label}
-                            </span>
-                          {/each}
-                        </td>
-                      </tr>
-                    {/each}
-                  </tbody>
-                </table>
-              </div>
-            {:else}
-              <p class="empty">No residues within {pocketCutoff.toFixed(1)}A</p>
-            {/if}
-          {/if}
-        </Panel>
+    <!-- Phase 3: Compound analysis (only when viewing) -->
+    {#if viewingCompound}
+      <!-- ProLIF interaction map toggle -->
+      {#if pocket && pocket.pocket_residues.length > 0}
+        <button class="net-toggle" onclick={toggleNetwork}>
+          {showNetwork ? 'Hide' : 'Show'} Interaction Map
+        </button>
       {/if}
 
-      <!-- Receptor Interaction Map (job-level, not per-compound) -->
-      <Panel title="Receptor Interaction Map">
-        {#if !receptorContacts && !rcLoading}
-          <button class="analyze-btn" onclick={fetchReceptorContacts} disabled={rcLoading}>
-            Analyze Top 50 Binders
-          </button>
-        {/if}
-        {#if rcLoading}
-          <p class="loading">Analyzing receptor contacts...</p>
-        {:else if rcError}
-          <p class="error-msg">{rcError}</p>
-        {:else if receptorContacts}
-          <p class="rc-summary">{receptorContacts.residue_contacts.length} residues contacted by {receptorContacts.total_compounds_analyzed} compounds</p>
-          <div class="pocket-table-wrap">
-            <table class="pocket-table">
-              <thead>
-                <tr>
-                  <th>Res</th>
-                  <th>Name</th>
-                  <th>Freq</th>
-                  <th>Avg Dist</th>
-                  <th>H-bond</th>
-                  <th>Hydro</th>
-                  <th>Ionic</th>
-                </tr>
-              </thead>
-              <tbody>
-                {#each receptorContacts.residue_contacts.slice(0, 30) as rc}
-                  <tr class="pocket-row" onclick={() => focusResidue(rc.chain_id, rc.res_id)}>
-                    <td class="mono">{rc.chain_id}{rc.res_id}</td>
-                    <td class="mono">{rc.res_name}</td>
-                    <td>
-                      <div class="freq-bar-wrap">
-                        <div class="freq-bar" style="width:{rc.contact_frequency * 100}%"></div>
-                        <span class="freq-label">{(rc.contact_frequency * 100).toFixed(0)}%</span>
-                      </div>
-                    </td>
-                    <td class="mono">{rc.avg_distance.toFixed(1)}</td>
-                    <td class="mono">{rc.interaction_counts?.hbond || 0}</td>
-                    <td class="mono">{rc.interaction_counts?.hydrophobic || 0}</td>
-                    <td class="mono">{rc.interaction_counts?.ionic || 0}</td>
-                  </tr>
-                {/each}
-              </tbody>
-            </table>
+      <!-- Binding Pocket -->
+      <Panel title="Binding Pocket">
+        {#if pocketLoading}
+          <p class="loading">Analyzing pocket...</p>
+        {:else if pocketError}
+          <p class="error-msg">{pocketError}</p>
+        {:else if pocket}
+          <!-- Interaction type toggles -->
+          <div class="pocket-toggles">
+            {#each Object.entries(interactionColors) as [type, style]}
+              {@const count = pocket.pocket_residues.filter(r => r.interactions.includes(type)).length}
+              {#if count > 0}
+                <button
+                  class="ix-toggle"
+                  class:active={activeInteractions.has(type)}
+                  style="background:{activeInteractions.has(type) ? style.bg : 'transparent'};color:{style.text};border-color:{style.text}"
+                  onclick={() => toggleInteraction(type)}
+                >
+                  {count} {style.label}
+                </button>
+              {/if}
+            {/each}
+            <span class="pocket-count">{filteredResidues.length} res</span>
           </div>
-        {/if}
-      </Panel>
 
-      <!-- Compound Fingerprints -->
-      <Panel title="Top Compounds">
-        {#if !fpCompounds.length && !fpLoading}
-          <button class="analyze-btn" onclick={fetchFingerprints} disabled={fpLoading}>
-            Load Top 100
-          </button>
-        {/if}
-        {#if fpLoading}
-          <p class="loading">Loading compounds...</p>
-        {:else if fpError}
-          <p class="error-msg">{fpError}</p>
-        {:else if fpCompounds.length > 0}
-          <div class="pocket-table-wrap">
-            <table class="pocket-table">
-              <thead>
-                <tr>
-                  <th>#</th>
-                  <th>Compound</th>
-                  <th>Affinity</th>
-                  <th>SMILES</th>
-                </tr>
-              </thead>
-              <tbody>
-                {#each fpCompounds as comp, i}
+          <!-- Residue table -->
+          {#if filteredResidues.length > 0}
+            <div class="pocket-table-wrap">
+              <table class="pocket-table">
+                <thead>
                   <tr>
-                    <td>{i + 1}</td>
-                    <td class="mono">{comp.compound_id}</td>
-                    <td class="mono">{comp.affinity.toFixed(1)}</td>
-                    <td class="smiles-cell" title={comp.smiles}>{comp.smiles.length > 30 ? comp.smiles.slice(0, 30) + '...' : comp.smiles}</td>
+                    <th>Res</th>
+                    <th>Dist</th>
+                    <th>Type</th>
                   </tr>
-                {/each}
-              </tbody>
-            </table>
-          </div>
-        {/if}
-      </Panel>
+                </thead>
+                <tbody>
+                  {#each filteredResidues as res}
+                    <tr class="pocket-row" onclick={() => handleResidueClick(res)} onmouseenter={() => handleResidueHover(res)}>
+                      <td class="mono">{res.res_name}{res.res_id}.{res.chain_id}</td>
+                      <td class="mono">{res.min_distance.toFixed(1)}</td>
+                      <td class="ix-cell">
+                        {#each res.interactions.filter(ix => ix !== 'contact') as ix}
+                          {@const style = interactionColors[ix] || interactionColors.contact}
+                          <span class="ix-pill" style="background:{style.bg};color:{style.text}">{style.label}</span>
+                        {/each}
+                      </td>
+                    </tr>
+                  {/each}
+                </tbody>
+              </table>
+            </div>
+          {/if}
 
-    {:else if selectedJob.status?.toLowerCase() === 'completed'}
-      <Panel title="Results">
-        <p class="empty">No docking results available.</p>
+          <!-- Surface options -->
+          <div class="surface-section">
+            <p class="section-label">Surface</p>
+            <div class="surface-btns">
+              <button class="surface-btn" class:active={showSurfaceMesh && surfaceType === 'charge'}
+                onclick={() => { surfaceType = 'charge'; showSurfaceMesh = true; togglePocketSurface(true, 'partial-charge'); }}>
+                Electrostatic
+              </button>
+              <button class="surface-btn" class:active={showSurfaceMesh && surfaceType === 'hydro'}
+                onclick={() => { surfaceType = 'hydro'; showSurfaceMesh = true; togglePocketSurface(true, 'hydrophobicity'); }}>
+                Hydrophobic
+              </button>
+              <button class="surface-btn" class:active={!showSurfaceMesh}
+                onclick={() => { showSurfaceMesh = false; togglePocketSurface(false); }}>
+                Off
+              </button>
+            </div>
+          </div>
+
+          <!-- Advanced section (collapsed) -->
+          <details class="adv-section">
+            <summary class="adv-summary">Advanced</summary>
+            <label class="cutoff-label">
+              Cutoff
+              <input type="range" min="3" max="8" step="0.5" bind:value={pocketCutoff} onchange={handleCutoffChange} class="cutoff-slider" />
+              <span class="cutoff-val">{pocketCutoff.toFixed(1)}A</span>
+            </label>
+          </details>
+        {/if}
       </Panel>
     {/if}
+
+    <!-- Job-level analysis (always visible when job selected) -->
+    {#if results.length > 0 && !viewingCompound}
+      <Panel title="Receptor Contacts">
+        {#if !receptorContacts && !rcLoading}
+          <button class="analyze-btn" onclick={fetchReceptorContacts}>Analyze Top 50</button>
+        {/if}
+        {#if rcLoading}
+          <p class="loading">Analyzing...</p>
+        {:else if receptorContacts}
+          <div class="pocket-table-wrap">
+            <table class="pocket-table">
+              <thead><tr><th>Res</th><th>Freq</th><th>Dist</th></tr></thead>
+              <tbody>
+                {#each receptorContacts.residue_contacts.slice(0, 20) as rc}
+                  <tr class="pocket-row" onclick={() => focusResidue(rc.chain_id, rc.res_id)}>
+                    <td class="mono">{rc.res_name}{rc.res_id}.{rc.chain_id}</td>
+                    <td><div class="freq-bar-wrap"><div class="freq-bar" style="width:{rc.contact_frequency*100}%"></div><span class="freq-label">{(rc.contact_frequency*100).toFixed(0)}%</span></div></td>
+                    <td class="mono">{rc.avg_distance.toFixed(1)}</td>
+                  </tr>
+                {/each}
+              </tbody>
+            </table>
+          </div>
+        {/if}
+      </Panel>
+
+      <Panel title="Top Compounds">
+        {#if !fpCompounds.length && !fpLoading}
+          <button class="analyze-btn" onclick={fetchFingerprints}>Load Top 100</button>
+        {/if}
+        {#if fpCompounds.length > 0}
+          <div class="pocket-table-wrap">
+            <table class="pocket-table">
+              <thead><tr><th>#</th><th>ID</th><th>Aff.</th></tr></thead>
+              <tbody>
+                {#each fpCompounds.slice(0, 20) as comp, i}
+                  <tr><td>{i+1}</td><td class="mono">{comp.compound_id}</td><td class="mono">{comp.affinity.toFixed(1)}</td></tr>
+                {/each}
+              </tbody>
+            </table>
+          </div>
+        {/if}
+      </Panel>
+    {/if}
+
   {:else if jobLoading}
-    <Panel title="Stats">
+    <Panel title="Loading">
       <p class="loading">Loading job details...</p>
     </Panel>
   {/if}
@@ -924,6 +847,110 @@
     border-radius: 6px;
     white-space: nowrap;
   }
+
+  .job-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    width: 100%;
+    padding: 6px 8px;
+    background: rgba(0,0,0,0.15);
+    border: 1px solid transparent;
+    border-radius: 4px;
+    cursor: pointer;
+    text-align: left;
+    margin-bottom: 2px;
+    transition: all 0.15s;
+  }
+
+  .job-row:hover { background: rgba(255,255,255,0.05); border-color: rgba(48,54,61,0.6); }
+
+  .job-row-name {
+    font-family: 'SF Mono', monospace;
+    font-size: 11px;
+    color: var(--text-primary, #e6edf3);
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .viewing-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+
+  .back-btn {
+    background: none;
+    border: 1px solid rgba(48,54,61,0.6);
+    color: var(--text-secondary, #8b949e);
+    font-size: 10px;
+    padding: 3px 8px;
+    border-radius: 4px;
+    cursor: pointer;
+  }
+
+  .back-btn:hover { color: var(--text-primary, #e6edf3); }
+
+  .viewing-affinity {
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--accent, #58a6ff);
+  }
+
+  .section-label {
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--text-muted, #484f58);
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    margin: 8px 0 4px;
+  }
+
+  .surface-section {
+    border-top: 1px solid rgba(48,54,61,0.3);
+    padding-top: 6px;
+    margin-top: 6px;
+  }
+
+  .surface-btns {
+    display: flex;
+    gap: 4px;
+  }
+
+  .surface-btn {
+    font-size: 10px;
+    font-weight: 600;
+    padding: 3px 8px;
+    border-radius: 4px;
+    border: 1px solid rgba(48,54,61,0.6);
+    background: none;
+    color: var(--text-secondary, #8b949e);
+    cursor: pointer;
+  }
+
+  .surface-btn.active {
+    background: rgba(63,185,80,0.15);
+    border-color: #3fb950;
+    color: #3fb950;
+  }
+
+  .surface-btn:hover { opacity: 0.8; }
+
+  .adv-section {
+    border-top: 1px solid rgba(48,54,61,0.2);
+    margin-top: 8px;
+    padding-top: 4px;
+  }
+
+  .adv-summary {
+    font-size: 10px;
+    color: var(--text-muted, #484f58);
+    cursor: pointer;
+    padding: 2px 0;
+  }
+
+  .adv-summary:hover { color: var(--text-secondary, #8b949e); }
 
   .surface-toggle {
     font-size: 10px;

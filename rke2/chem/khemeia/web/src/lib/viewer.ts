@@ -1122,7 +1122,7 @@ export async function showPocketView(residues: { chain_id: string; res_id: numbe
  */
 let _pocketSurfaceRef: string | null = null;
 
-export async function togglePocketSurface(show: boolean): Promise<void> {
+export async function togglePocketSurface(show: boolean, colorTheme: string = 'partial-charge'): Promise<void> {
   if (!plugin) return;
   try {
     const structures = plugin.managers?.structure?.hierarchy?.current?.structures;
@@ -1149,7 +1149,7 @@ export async function togglePocketSurface(show: boolean): Promise<void> {
     const builder = plugin.build();
     const surfaceNode = builder.to(ref).apply(StateTransforms.Representation.StructureRepresentation3D, {
       type: { name: 'molecular-surface', params: { quality: 'medium', probeRadius: 1.4 } },
-      colorTheme: { name: 'partial-charge', params: {} },
+      colorTheme: { name: colorTheme, params: {} },
       sizeTheme: { name: 'physical', params: {} },
       alpha: 0.6,
     });
