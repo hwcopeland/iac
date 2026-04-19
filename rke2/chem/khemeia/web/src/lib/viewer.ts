@@ -1121,45 +1121,50 @@ export async function showPocketView(residues: { chain_id: string; res_id: numbe
  */
 let _pocketSurfaceRef: string | null = null;
 
-export async function togglePocketSurface(show: boolean, colorTheme: string = 'partial-charge'): Promise<void> {
+export async function togglePocketSurface(show: boolean, colorTheme: string = 'residue-charge'): Promise<void> {
   if (!plugin) return;
   try {
+    // Always remove existing surface first by clearing and rebuilding
+    // This is brute force but reliable
     const structures = plugin.managers?.structure?.hierarchy?.current?.structures;
     if (!structures?.length) return;
-    const structRef = structures[0];
-    const structureCell = structRef.cell;
-    if (!structureCell?.transform?.ref) return;
 
     const { StateTransforms } = getLib().plugin;
-    const ref = structureCell.transform.ref;
 
-    // Remove existing surface representations
-    const allReprs = [
-      ...(structRef.components ?? []).flatMap((c: any) => c.representations ?? []),
-      ...(structRef.representations ?? []),
-    ];
-    for (const repr of allReprs) {
-      try {
-        const typeName = repr.cell?.params?.values?.type?.name;
-        if (typeName === 'molecular-surface' || typeName === 'gaussian-surface') {
-          if (repr.cell?.transform?.ref) {
+    // Find and remove any surface representations from ALL structures
+    for (const structRef of structures) {
+      const allReprs = [
+        ...(structRef.components ?? []).flatMap((c: any) => c.representations ?? []),
+        ...(structRef.representations ?? []),
+      ];
+      for (const repr of allReprs) {
+        try {
+          // Check multiple paths for the type name
+          let typeName = '';
+          try { typeName = repr.cell?.obj?.type?.name ?? ''; } catch {}
+          if (!typeName) try { typeName = repr.cell?.params?.values?.type?.name ?? ''; } catch {}
+          if (!typeName) try { typeName = repr.cell?.transform?.params?.type?.name ?? ''; } catch {}
+
+          if (typeName.includes('surface') || typeName.includes('gaussian')) {
             await plugin.build().delete(repr.cell.transform.ref).commit();
           }
-        }
-      } catch {}
+        } catch {}
+      }
     }
 
     if (!show) return;
 
-    // Add surface
-    const builder = plugin.build();
-    builder.to(ref).apply(StateTransforms.Representation.StructureRepresentation3D, {
-      type: { name: 'gaussian-surface', params: { smoothness: 1.5, radiusOffset: 0 } },
+    // Add to the first structure (protein)
+    const structRef = structures[0];
+    const ref = structRef.cell?.transform?.ref;
+    if (!ref) return;
+
+    await plugin.build().to(ref).apply(StateTransforms.Representation.StructureRepresentation3D, {
+      type: { name: 'gaussian-surface', params: { smoothness: 1.5 } },
       colorTheme: { name: colorTheme, params: {} },
       sizeTheme: { name: 'physical', params: {} },
-    });
+    }).commit();
 
-    await builder.commit();
     applyCanvasProps();
   } catch (e) {
     console.error('togglePocketSurface failed:', e);
