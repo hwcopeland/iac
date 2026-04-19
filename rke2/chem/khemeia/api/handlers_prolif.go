@@ -21,7 +21,7 @@ var prolifServiceURL = getProlifURL()
 func getProlifURL() string {
 	url := os.Getenv("PROLIF_SERVICE_URL")
 	if url == "" {
-		return "http://prolif-runner.chem.svc.cluster.local:8000"
+		return "http://prolif-runner.chem.svc.cluster.local"
 	}
 	return url
 }
@@ -69,11 +69,11 @@ func (h *APIHandler) InteractionMapHandler(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	// Fetch docked ligand PDBQT
+	// Fetch docked ligand PDBQT (search across all workflows for this compound)
 	var ligandPDBQT []byte
 	err = db.QueryRowContext(r.Context(),
-		`SELECT docked_pdbqt FROM docking_results WHERE workflow_name = ? AND compound_id = ?`,
-		jobName, compoundID,
+		`SELECT docked_pdbqt FROM docking_results WHERE compound_id = ? AND docked_pdbqt IS NOT NULL LIMIT 1`,
+		compoundID,
 	).Scan(&ligandPDBQT)
 	if err != nil {
 		writeError(w, "docked pose not found", http.StatusNotFound)
