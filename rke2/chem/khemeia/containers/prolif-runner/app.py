@@ -257,34 +257,44 @@ def _generate_network_html(
         html = buf.getvalue()
 
         if dark_theme:
-            # Inject dark theme CSS + residue click handler
+            # Inject dark theme CSS + residue click handler + zoom fix
             dark_inject = """
 <style>
   body { background-color: #0d1117 !important; margin: 0; }
   .vis-network { background-color: #0d1117 !important; }
   canvas { background-color: #0d1117 !important; }
-  /* Fix atom visibility: white heteroatom spheres → transparent,
-     black carbons/bonds → light grey */
 </style>
 <script>
-  // Post residue clicks to parent window for 3D viewer integration
   document.addEventListener('DOMContentLoaded', function() {
     setTimeout(function() {
       if (typeof network !== 'undefined') {
+        // Reduce zoom speed significantly
+        network.setOptions({
+          interaction: {
+            zoomSpeed: 0.15,
+            zoomView: true
+          }
+        });
+
+        // Click residue → post to parent for 3D viewer focus
         network.on('click', function(params) {
           if (params.nodes.length > 0) {
             var nodeId = params.nodes[0];
             var node = network.body.data.nodes.get(nodeId);
-            if (node && node.title) {
-              window.parent.postMessage({
-                type: 'prolif-residue-click',
-                residue: node.title || node.label || nodeId
-              }, '*');
+            if (node) {
+              var label = node.label || node.title || String(nodeId);
+              // Only post for protein residue nodes (have format like ASP107.A)
+              if (label.match(/[A-Z]{3}\\d+/)) {
+                window.parent.postMessage({
+                  type: 'prolif-residue-click',
+                  residue: label
+                }, '*');
+              }
             }
           }
         });
       }
-    }, 1000);
+    }, 1500);
   });
 </script>
 """
