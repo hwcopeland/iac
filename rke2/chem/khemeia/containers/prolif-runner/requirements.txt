@@ -4,3 +4,4 @@ prolif
 flask
 gunicorn
 matplotlib
+ipython
