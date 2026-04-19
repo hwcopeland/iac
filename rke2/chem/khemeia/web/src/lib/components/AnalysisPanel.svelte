@@ -305,10 +305,9 @@
           <button class="back-btn" onclick={() => { viewingCompound = null; pocket = null; showSurfaceMesh = false; showNetwork = false; }}>
             Back to Results
           </button>
-          {@const viewedResult = results.find((r: any) => r.compound_id === viewingCompound)}
-          {#if viewedResult}
+          {#each results.filter((r) => r.compound_id === viewingCompound).slice(0, 1) as viewedResult}
             <span class="viewing-affinity mono">{viewedResult.affinity_kcal_mol.toFixed(2)} kcal/mol</span>
-          {/if}
+          {/each}
         </div>
         {#if viewError}
           <p class="error-msg">{viewError}</p>
