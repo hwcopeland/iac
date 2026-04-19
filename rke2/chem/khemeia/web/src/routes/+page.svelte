@@ -10,7 +10,7 @@
   import InteractionNetwork from '$lib/components/InteractionNetwork.svelte';
   import CalculationsPanel from '$lib/components/CalculationsPanel.svelte';
   import SelectionInfo from '$lib/components/SelectionInfo.svelte';
-  import { focusResidue, setRepresentation } from '$lib/viewer';
+  import { focusResidue, setRepresentation, onRepresentationChange } from '$lib/viewer';
   import StatusBar from '$lib/components/StatusBar.svelte';
   import CommandPalette from '$lib/components/CommandPalette.svelte';
   import Toast from '$lib/components/Toast.svelte';
@@ -31,13 +31,14 @@
   let networkCompoundId = $state('');
   let showNetwork = $state(false);
   let surfaceLegend = $state<string | null>(null);
+  let currentRepr = $state('cartoon');
 
   const SURFACE_LEGENDS: Record<string, { label: string; items: { color: string; text: string }[] }> = {
     'residue-charge': {
       label: 'Charge',
       items: [
         { color: '#f85149', text: 'Negative (ASP, GLU)' },
-        { color: '#e6edf3', text: 'Neutral' },
+        { color: '#3b434d', text: 'Neutral' },
         { color: '#58a6ff', text: 'Positive (LYS, ARG, HIS)' },
       ]
     },
@@ -52,7 +53,7 @@
     'element-symbol': {
       label: 'Element',
       items: [
-        { color: '#909090', text: 'Carbon' },
+        { color: '#606870', text: 'Carbon' },
         { color: '#3050F8', text: 'Nitrogen' },
         { color: '#FF0D0D', text: 'Oxygen' },
         { color: '#FFFF30', text: 'Sulfur' },
@@ -85,6 +86,7 @@
       await init(viewerContainer);
       onHover((info) => { hoverInfo = info; });
       onClick((info) => { selectionInfo = info; });
+      onRepresentationChange((repr) => { currentRepr = repr; });
     } catch (e) {
       console.error('Failed to initialize Mol* viewer:', e);
     }
@@ -168,7 +170,7 @@
         <div class="viewer-container" bind:this={viewerContainer}></div>
 
         <div class="repr-dropdown">
-          <select class="repr-select" onchange={(e) => setRepresentation((e.target as HTMLSelectElement).value)}>
+          <select class="repr-select" value={currentRepr} onchange={(e) => setRepresentation((e.target as HTMLSelectElement).value)}>
             <option value="cartoon">Ribbon</option>
             <option value="ball-and-stick">Ball & Stick</option>
             <option value="spacefill">Spacefill</option>

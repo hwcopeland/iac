@@ -17,6 +17,7 @@
   let fallbackSvg = $state('');
   let loading = $state(true);
   let useProLIF = $state(false);
+  let prolifUnavailable = $state(false);
   let iframeRef = $state<HTMLIFrameElement>(undefined as unknown as HTMLIFrameElement);
 
   const IX_COLORS: Record<string, string> = {
@@ -69,7 +70,7 @@
           return;
         }
       } catch {
-        // ProLIF not available, fall back
+        prolifUnavailable = true;
       }
     }
 
@@ -118,6 +119,9 @@
       title="ProLIF Interaction Network"
     ></iframe>
   {:else}
+    {#if prolifUnavailable}
+      <div class="prolif-notice">Detailed interaction map unavailable. Showing simplified view.</div>
+    {/if}
     <svg viewBox="0 0 500 350" class="net-svg">
       <rect width="500" height="350" fill="#0d1117" rx="8" />
 
@@ -183,6 +187,14 @@
     background: #0d1117;
     overflow: hidden;
     box-shadow: 0 4px 24px rgba(0,0,0,0.5);
+  }
+
+  .prolif-notice {
+    font-size: 10px;
+    color: var(--text-muted, #484f58);
+    text-align: center;
+    padding: 4px 8px;
+    border-bottom: 1px solid rgba(48,54,61,0.4);
   }
 
   .net-loading {

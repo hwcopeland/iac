@@ -809,55 +809,76 @@ export function focusResidue(chainId: string, resId: number): void {
   }
 }
 
+// Track current representation type so the UI dropdown can stay in sync.
+let _currentRepresentation: string = 'cartoon';
+let _reprChangeListeners: ((repr: string) => void)[] = [];
+
+export function getCurrentRepresentation(): string { return _currentRepresentation; }
+export function onRepresentationChange(cb: (repr: string) => void): void { _reprChangeListeners.push(cb); }
+
 /**
  * Change the representation of the current structure.
- * Removes all existing representations and applies the specified type.
+ * Removes ALL existing representations from ALL structures, then adds the new one.
  */
 export async function setRepresentation(type: string): Promise<void> {
   if (!plugin) return;
   try {
-    const structures = plugin.managers?.structure?.hierarchy?.current?.structures;
-    if (!structures?.length) return;
-
-    const structRef = structures[0];
     const { StateTransforms } = getLib().plugin;
 
-    // Remove existing representations
-    const components = structRef.components ?? [];
-    for (const comp of components) {
-      const representations = comp.representations ?? [];
-      for (const repr of representations) {
-        if (repr.cell?.transform?.ref) {
-          const builder = plugin.build();
-          builder.delete(repr.cell.transform.ref);
-          await builder.commit();
+    // Clear any tracked pocket view and surface refs first
+    await clearPocketView();
+    for (const ref of _surfaceRefs) {
+      try {
+        const cell = plugin.state.data.cells.get(ref);
+        if (cell) await plugin.build().delete(ref).commit();
+      } catch {}
+    }
+    _surfaceRefs = [];
+
+    // Collect all representation refs across all structures
+    const refsToDelete: string[] = [];
+    const structures = plugin.managers?.structure?.hierarchy?.current?.structures ?? [];
+    for (const structRef of structures) {
+      for (const comp of (structRef.components ?? [])) {
+        for (const repr of (comp.representations ?? [])) {
+          if (repr.cell?.transform?.ref) refsToDelete.push(repr.cell.transform.ref);
         }
       }
-    }
-
-    // Also remove top-level representations if any
-    const topReprs = structRef.representations ?? [];
-    for (const repr of topReprs) {
-      if (repr.cell?.transform?.ref) {
-        const builder = plugin.build();
-        builder.delete(repr.cell.transform.ref);
-        await builder.commit();
+      for (const repr of (structRef.representations ?? [])) {
+        if (repr.cell?.transform?.ref) refsToDelete.push(repr.cell.transform.ref);
       }
     }
 
-    // Add the new representation
-    const structureRef = structRef.cell?.transform?.ref;
-    if (!structureRef) return;
+    // Delete all in one batch
+    if (refsToDelete.length > 0) {
+      const delBuilder = plugin.build();
+      for (const ref of refsToDelete) {
+        try { delBuilder.delete(ref); } catch {}
+      }
+      await delBuilder.commit();
+    }
 
-    const builder = plugin.build();
-    builder.to(structureRef).apply(StateTransforms.Representation.StructureRepresentation3D, {
-      type: { name: type, params: {} },
-      colorTheme: { name: 'element-symbol', params: {} },
-      sizeTheme: { name: 'physical', params: {} },
-    });
-    await builder.commit();
-  } catch {
-    // Representation change failed — likely unsupported type or API mismatch
+    // Re-read structures after deletion (hierarchy changed)
+    const updatedStructures = plugin.managers?.structure?.hierarchy?.current?.structures ?? [];
+    if (!updatedStructures.length) return;
+
+    // Add new representation to each structure
+    const addBuilder = plugin.build();
+    for (const structRef of updatedStructures) {
+      const ref = structRef.cell?.transform?.ref;
+      if (!ref) continue;
+      addBuilder.to(ref).apply(StateTransforms.Representation.StructureRepresentation3D, {
+        type: { name: type, params: {} },
+        colorTheme: { name: 'element-symbol', params: {} },
+        sizeTheme: { name: 'physical', params: {} },
+      });
+    }
+    await addBuilder.commit();
+    applyCanvasProps();
+    _currentRepresentation = type;
+    for (const cb of _reprChangeListeners) cb(type);
+  } catch (e) {
+    console.error('setRepresentation failed:', e);
   }
 }
 
@@ -1089,11 +1110,152 @@ const IX_LINE_COLORS: Record<string, string> = {
   contact: '#484f58',
 };
 
+// ─── Custom Dark-Theme Color Themes for Surfaces ───
+
+let _darkChargeThemeRegistered = false;
+let _darkElementThemeRegistered = false;
+
+// Residue charge classification for dark-theme surface coloring.
+const POSITIVE_RESIDUES = new Set(['LYS', 'ARG', 'HIS']);
+const NEGATIVE_RESIDUES = new Set(['ASP', 'GLU']);
+
+/** Register a dark-theme-friendly residue charge color theme.
+ *  Neutral = dark grey (not white) so it doesn't pop on #0d1117 background. */
+function ensureDarkChargeTheme() {
+  if (_darkChargeThemeRegistered || !plugin) return;
+  const themeRegistry = plugin.representation.structure.themes.colorThemeRegistry;
+  const { StructureProperties } = getLib().structure;
+
+  const provider = {
+    name: 'dark-residue-charge',
+    label: 'Charge (Dark)',
+    category: 'Misc',
+    factory: (_ctx: any, props: any) => {
+      const colorFn = (location: any) => {
+        try {
+          const resName = StructureProperties.residue.label_comp_id(location);
+          if (POSITIVE_RESIDUES.has(resName)) return 0x58a6ff; // blue
+          if (NEGATIVE_RESIDUES.has(resName)) return 0xf85149; // red
+          return 0x3b434d; // dark grey neutral
+        } catch {
+          return 0x3b434d;
+        }
+      };
+      return {
+        factory: provider.factory,
+        granularity: 'group' as const,
+        color: colorFn,
+        props,
+        description: 'Residue charge (dark theme)',
+      };
+    },
+    getParams: () => ({}),
+    defaultValues: {},
+    isApplicable: () => true,
+  };
+
+  themeRegistry.add(provider);
+  _darkChargeThemeRegistered = true;
+}
+
+// CPK element colors for dark-theme surface — C=grey not green/orange.
+const ELEMENT_COLORS: Record<string, number> = {
+  C: 0x606870,   // neutral grey (not green/orange)
+  N: 0x3050F8,   // blue
+  O: 0xFF0D0D,   // red
+  S: 0xFFFF30,   // yellow
+  P: 0xFF8000,   // orange
+  H: 0x8b949e,   // light grey
+  FE: 0xE06633,  // iron
+  ZN: 0x7D80B0,  // zinc
+  CA: 0x3DFF00,  // calcium
+  MG: 0x8AFF00,  // magnesium
+};
+const DEFAULT_ELEMENT_COLOR = 0x8b949e;
+
+/** Register a dark-theme-friendly element symbol color theme.
+ *  Carbon = neutral grey, avoids the chain-id green/orange bleed. */
+function ensureDarkElementTheme() {
+  if (_darkElementThemeRegistered || !plugin) return;
+  const themeRegistry = plugin.representation.structure.themes.colorThemeRegistry;
+  const { StructureProperties } = getLib().structure;
+
+  const provider = {
+    name: 'dark-element-symbol',
+    label: 'Element (Dark)',
+    category: 'Misc',
+    factory: (_ctx: any, props: any) => {
+      const colorFn = (location: any) => {
+        try {
+          const el = String(StructureProperties.atom.type_symbol(location)).toUpperCase();
+          return ELEMENT_COLORS[el] ?? DEFAULT_ELEMENT_COLOR;
+        } catch {
+          return DEFAULT_ELEMENT_COLOR;
+        }
+      };
+      return {
+        factory: provider.factory,
+        granularity: 'group' as const,
+        color: colorFn,
+        props,
+        description: 'Element symbol (dark theme)',
+      };
+    },
+    getParams: () => ({}),
+    defaultValues: {},
+    isApplicable: () => true,
+  };
+
+  themeRegistry.add(provider);
+  _darkElementThemeRegistered = true;
+}
+
 // ─── Pocket View ───
+
+// Track pocket-view representation refs so we can reliably clean them up
+// when switching representations or navigating away.
+let _pocketViewRefs: string[] = [];
+
+/** Remove all pocket-view representations (cartoon + ball-and-stick). */
+export async function clearPocketView(): Promise<void> {
+  if (!plugin) return;
+  for (const ref of _pocketViewRefs) {
+    try {
+      const cell = plugin.state.data.cells.get(ref);
+      if (cell) await plugin.build().delete(ref).commit();
+    } catch {}
+  }
+  _pocketViewRefs = [];
+}
+
+/**
+ * Filter PDB text to only lines matching specific residues.
+ * Matches ATOM/HETATM lines by chain ID (column 22) and residue sequence number (columns 23-26).
+ */
+function filterPdbToResidues(pdbText: string, residues: { chain_id: string; res_id: number }[]): string {
+  const resSet = new Set(residues.map(r => `${r.chain_id}:${r.res_id}`));
+  const lines = pdbText.split('\n');
+  const out: string[] = [];
+  for (const line of lines) {
+    if (line.startsWith('ATOM') || line.startsWith('HETATM')) {
+      // PDB fixed-width: chain at col 21 (0-indexed), resSeq at cols 22-25
+      const chain = line[21]?.trim() || 'A';
+      const resSeq = parseInt(line.substring(22, 26).trim(), 10);
+      if (resSet.has(`${chain}:${resSeq}`)) {
+        out.push(line);
+      }
+    } else if (line.startsWith('TER') || line.startsWith('END')) {
+      out.push(line);
+    }
+  }
+  if (!out.some(l => l.startsWith('END'))) out.push('END');
+  return out.join('\n');
+}
 
 /**
  * Show protein as faded cartoon with pocket residues as ball-and-stick.
- * Protein at 30% opacity, pocket residues solid with element colors.
+ * Protein at 15% opacity. Pocket residues loaded as a separate overlay
+ * so ball-and-stick only applies to the binding pocket, not the whole protein.
  */
 export async function showPocketView(residues: { chain_id: string; res_id: number }[]): Promise<void> {
   if (!plugin) return;
@@ -1107,6 +1269,9 @@ export async function showPocketView(residues: { chain_id: string; res_id: numbe
     const { StateTransforms } = getLib().plugin;
     const ref = structureCell.transform.ref;
 
+    // Clear any previous pocket view refs first
+    await clearPocketView();
+
     // Remove existing representations on the protein
     const allReprs = [
       ...(structRef.components ?? []).flatMap((c: any) => c.representations ?? []),
@@ -1118,25 +1283,73 @@ export async function showPocketView(residues: { chain_id: string; res_id: numbe
       }
     }
 
-    const builder = plugin.build();
-
-    // Protein as faded cartoon (30% opacity, neutral grey)
-    builder.to(ref).apply(StateTransforms.Representation.StructureRepresentation3D, {
+    // Protein as faded cartoon (15% opacity, neutral grey)
+    const cartoonBuilder = plugin.build();
+    const cartoonNode = cartoonBuilder.to(ref).apply(StateTransforms.Representation.StructureRepresentation3D, {
       type: { name: 'cartoon', params: { sizeFactor: 0.2, alpha: 0.15 } },
       colorTheme: { name: 'uniform', params: { value: 0x484f58 } },
       sizeTheme: { name: 'uniform', params: { value: 0.2 } },
     });
+    await cartoonBuilder.commit();
+    try { if (cartoonNode.ref) _pocketViewRefs.push(cartoonNode.ref); } catch {}
 
-    // Pocket residues as ball-and-stick (solid, element colors)
-    if (residues.length > 0) {
-      builder.to(ref).apply(StateTransforms.Representation.StructureRepresentation3D, {
-        type: { name: 'ball-and-stick', params: { sizeFactor: 0.2 } },
-        colorTheme: { name: 'element-symbol', params: {} },
-        sizeTheme: { name: 'physical', params: {} },
-      });
+    // Pocket residues as separate overlay with ball-and-stick
+    if (residues.length > 0 && currentStructureText) {
+      ensureDarkElementTheme();
+
+      // Filter the receptor PDB to only pocket residue atoms
+      let pdbText = currentStructureText;
+      // If the stored text is PDBQT, convert first
+      if (currentStructureFormat === 'pdbqt') {
+        pdbText = pdbText.split('\n')
+          .filter(line => line.startsWith('ATOM') || line.startsWith('TER') || line.startsWith('END'))
+          .map(line => line.startsWith('ATOM') ? line.substring(0, 66).padEnd(80) : line)
+          .join('\n');
+      }
+      const pocketPdb = filterPdbToResidues(pdbText, residues);
+
+      if (pocketPdb.split('\n').some(l => l.startsWith('ATOM') || l.startsWith('HETATM'))) {
+        // Load filtered pocket atoms as a separate overlay structure
+        const blob = new Blob([pocketPdb], { type: 'text/plain' });
+        const url = URL.createObjectURL(blob);
+        try {
+          await viewerInstance.loadStructureFromUrl(url, 'pdb', false);
+        } finally {
+          setTimeout(() => URL.revokeObjectURL(url), 5000);
+        }
+
+        // The pocket overlay is the last structure loaded — apply ball-and-stick to it
+        const updatedStructures = plugin.managers?.structure?.hierarchy?.current?.structures ?? [];
+        const pocketStruct = updatedStructures[updatedStructures.length - 1];
+        if (pocketStruct?.cell?.transform?.ref) {
+          const pocketRef = pocketStruct.cell.transform.ref;
+
+          // Remove default representation that Molstar auto-adds
+          const autoReprs = [
+            ...(pocketStruct.components ?? []).flatMap((c: any) => c.representations ?? []),
+            ...(pocketStruct.representations ?? []),
+          ];
+          for (const repr of autoReprs) {
+            if (repr.cell?.transform?.ref) {
+              await plugin.build().delete(repr.cell.transform.ref).commit();
+            }
+          }
+
+          // Add ball-and-stick with dark element colors
+          const bsBuilder = plugin.build();
+          const bsNode = bsBuilder.to(pocketRef).apply(StateTransforms.Representation.StructureRepresentation3D, {
+            type: { name: 'ball-and-stick', params: { sizeFactor: 0.15 } },
+            colorTheme: { name: 'dark-element-symbol', params: {} },
+            sizeTheme: { name: 'physical', params: {} },
+          });
+          await bsBuilder.commit();
+          // Track both the structure and its representation for cleanup
+          try { if (bsNode.ref) _pocketViewRefs.push(bsNode.ref); } catch {}
+          _pocketViewRefs.push(pocketRef);
+        }
+      }
     }
 
-    await builder.commit();
     applyCanvasProps();
   } catch (e) {
     console.error('showPocketView failed:', e);
@@ -1150,6 +1363,13 @@ export async function showPocketView(residues: { chain_id: string; res_id: numbe
 let _pocketSurfaceRef: string | null = null;
 
 let _surfaceRefs: string[] = [];
+
+// Map user-facing theme names to our dark-theme custom themes.
+const DARK_THEME_MAP: Record<string, string> = {
+  'residue-charge': 'dark-residue-charge',
+  'element-symbol': 'dark-element-symbol',
+  'hydrophobicity': 'hydrophobicity', // Molstar's built-in is fine for dark bg
+};
 
 export async function togglePocketSurface(show: boolean, colorTheme: string = 'residue-charge', alpha: number = 0.8): Promise<void> {
   if (!plugin) return;
@@ -1165,6 +1385,10 @@ export async function togglePocketSurface(show: boolean, colorTheme: string = 'r
 
     if (!show) return;
 
+    // Ensure custom dark themes are registered
+    ensureDarkChargeTheme();
+    ensureDarkElementTheme();
+
     const structures = plugin.managers?.structure?.hierarchy?.current?.structures;
     if (!structures?.length) return;
     const { StateTransforms } = getLib().plugin;
@@ -1173,11 +1397,13 @@ export async function togglePocketSurface(show: boolean, colorTheme: string = 'r
     const ref = structRef.cell?.transform?.ref;
     if (!ref) return;
 
-    // Add gaussian surface at 80% transparency (alpha 0.2)
+    // Use dark-theme-friendly color theme
+    const resolvedTheme = DARK_THEME_MAP[colorTheme] ?? colorTheme;
+
     const update = plugin.build();
     const node = update.to(ref).apply(StateTransforms.Representation.StructureRepresentation3D, {
       type: { name: 'gaussian-surface', params: { smoothness: 1.5, alpha } },
-      colorTheme: { name: colorTheme, params: {} },
+      colorTheme: { name: resolvedTheme, params: {} },
       sizeTheme: { name: 'physical', params: {} },
     });
     await update.commit();
