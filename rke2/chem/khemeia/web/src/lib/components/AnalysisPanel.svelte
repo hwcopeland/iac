@@ -17,6 +17,9 @@
   let viewError = $state('');
 
   let viewedSmiles = $state('');
+  let currentPage = $state(1);
+  let perPage = $state(50);
+  let totalResults = $state(0);
 
   // Pocket analysis state
   let pocket = $state<PocketAnalysis | null>(null);
@@ -63,13 +66,15 @@
     }
   }
 
-  async function selectJob(name: string) {
+  async function selectJob(name: string, page = 1) {
     selectedJobName = name;
     jobLoading = true;
     viewingCompound = null;
     viewError = '';
+    currentPage = page;
     try {
-      selectedJob = await getJob(PLUGIN_SLUG, name);
+      selectedJob = await getJob(PLUGIN_SLUG, name, page, perPage);
+      totalResults = selectedJob?.output_data?.total_results ?? selectedJob?.docking_results?.length ?? 0;
     } catch (e: any) {
       selectedJob = null;
     } finally {
@@ -228,7 +233,6 @@
 
   // Stats computations
   let results = $derived(selectedJob?.docking_results ?? []);
-  let totalResults = $derived(results.length);
   let bestAffinity = $derived(
     results.length > 0 ? results[0].affinity_kcal_mol : null
   );
@@ -345,6 +349,20 @@
         </div>
         {#if viewError}
           <p class="error-msg">{viewError}</p>
+        {/if}
+
+        <!-- Pagination -->
+        {#if totalResults > perPage}
+          <div class="pagination">
+            <button class="page-btn" onclick={() => selectJob(selectedJobName!, currentPage - 1)} disabled={currentPage <= 1}>Prev</button>
+            <select class="page-size-select" value={perPage} onchange={(e) => { perPage = parseInt((e.target as HTMLSelectElement).value); selectJob(selectedJobName!, 1); }}>
+              <option value="25">25</option>
+              <option value="50">50</option>
+              <option value="100">100</option>
+            </select>
+            <span class="page-info">{(currentPage-1)*perPage+1}-{Math.min(currentPage*perPage, totalResults)} of {totalResults}</span>
+            <button class="page-btn" onclick={() => selectJob(selectedJobName!, currentPage + 1)} disabled={currentPage * perPage >= totalResults}>Next</button>
+          </div>
         {/if}
       </Panel>
 
@@ -885,6 +903,42 @@
     padding: 1px 5px;
     border-radius: 6px;
     white-space: nowrap;
+  }
+
+  /* ---- Pagination ---- */
+  .pagination {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 8px 0 2px;
+  }
+
+  .page-btn {
+    background: none;
+    border: 1px solid rgba(48,54,61,0.6);
+    color: var(--text-secondary, #8b949e);
+    font-size: 11px;
+    padding: 3px 10px;
+    border-radius: 4px;
+    cursor: pointer;
+  }
+
+  .page-btn:hover:not(:disabled) { color: var(--text-primary, #e6edf3); border-color: var(--accent, #58a6ff); }
+  .page-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+
+  .page-info {
+    font-size: 11px;
+    color: var(--text-secondary, #8b949e);
+  }
+
+  .page-size-select {
+    background: rgba(0,0,0,0.3);
+    border: 1px solid rgba(48,54,61,0.6);
+    color: var(--text-primary, #e6edf3);
+    font-size: 11px;
+    padding: 2px 4px;
+    border-radius: 4px;
   }
 
   /* ---- Analysis Panels ---- */

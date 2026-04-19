@@ -66,8 +66,12 @@ export async function getJobs(slug: string): Promise<any> {
   return api(`/api/v1/${slug}/jobs`);
 }
 
-export async function getJob(slug: string, jobName: string): Promise<any> {
-  return api(`/api/v1/${slug}/jobs/${jobName}`);
+export async function getJob(slug: string, jobName: string, page?: number, perPage?: number): Promise<any> {
+  const params = new URLSearchParams();
+  if (page) params.set('page', String(page));
+  if (perPage) params.set('per_page', String(perPage));
+  const qs = params.toString();
+  return api(`/api/v1/${slug}/jobs/${jobName}${qs ? '?' + qs : ''}`);
 }
 
 export async function getLigandDatabases(): Promise<{ databases: { name: string; count: number }[] }> {
