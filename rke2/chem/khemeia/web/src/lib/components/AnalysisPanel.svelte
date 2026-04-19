@@ -1,6 +1,7 @@
 <script lang="ts">
   import Panel from './Panel.svelte';
-  import { getJobs, getJob, getPocketAnalysis, getReceptorContacts, getFingerprints } from '$lib/api';
+  import InteractionNetwork from './InteractionNetwork.svelte';
+  import { getJobs, getJob, getPocketAnalysis, getReceptorContacts, getFingerprints, getLigandSmiles } from '$lib/api';
   import type { PocketResidue, PocketAnalysis, ResidueContact, ReceptorContactsResponse, FingerprintCompound } from '$lib/api';
   import { loadFile, overlayStructure, focusLastStructure, focusResidue, highlightResidue, drawInteractionLines } from '$lib/viewer';
   import type { InteractionLine } from '$lib/viewer';
@@ -14,6 +15,8 @@
   let jobLoading = $state(false);
   let viewingCompound = $state<string | null>(null);
   let viewError = $state('');
+
+  let viewedSmiles = $state('');
 
   // Pocket analysis state
   let pocket = $state<PocketAnalysis | null>(null);
@@ -116,8 +119,9 @@
         // Short delay to let Molstar finish rendering, then focus on ligand
         setTimeout(() => focusLastStructure(), 200);
       }
-      // Fetch pocket analysis
+      // Fetch pocket analysis + SMILES for interaction network
       fetchPocket(result.compound_id);
+      getLigandSmiles(result.compound_id).then(s => { if (s) viewedSmiles = s; });
     } catch (e: any) {
       viewError = e.message || 'Failed to load structure';
     }
@@ -345,6 +349,14 @@
       </Panel>
 
       {#if viewingCompound}
+        {#if pocket && viewedSmiles && pocket.pocket_residues.length > 0}
+          <InteractionNetwork
+            smiles={viewedSmiles}
+            residues={pocket.pocket_residues}
+            onResidueClick={(r) => focusResidue(r.chain_id, r.res_id)}
+          />
+        {/if}
+
         <Panel title="Binding Pocket">
           <div class="pocket-header">
             <label class="cutoff-label">
