@@ -205,6 +205,14 @@ export interface FingerprintsResponse {
   total: number;
 }
 
+export async function getLigandSmiles(compoundId: string): Promise<string | null> {
+  try {
+    const res = await searchLigands({ q: compoundId, limit: '1' });
+    const match = res.compounds?.find((c: any) => c.chembl_id === compoundId);
+    return match?.smiles ?? null;
+  } catch { return null; }
+}
+
 export async function getReceptorContacts(jobName: string, top?: number): Promise<ReceptorContactsResponse> {
   const params = top ? `?top=${top}` : '';
   return api<ReceptorContactsResponse>(`/api/v1/docking/analysis/receptor-contacts/${jobName}${params}`);
