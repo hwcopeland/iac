@@ -16,15 +16,16 @@
   let viewingCompound = $state<string | null>(null);
   let viewError = $state('');
 
-  let { onNetworkToggle = (_show: boolean, _smiles: string, _residues: any[]) => {} }:
-    { onNetworkToggle?: (show: boolean, smiles: string, residues: any[]) => void } = $props();
+  let { onNetworkToggle = (_show: boolean, _smiles: string, _residues: any[], _jobName: string, _compoundId: string) => {} }:
+    { onNetworkToggle?: (show: boolean, smiles: string, residues: any[], jobName: string, compoundId: string) => void } = $props();
 
   let viewedSmiles = $state('');
   let showNetwork = $state(false);
 
   function toggleNetwork() {
     showNetwork = !showNetwork;
-    onNetworkToggle(showNetwork, viewedSmiles, pocket?.pocket_residues ?? []);
+    onNetworkToggle(showNetwork, viewedSmiles, pocket?.pocket_residues ?? [],
+      selectedJob?.name ?? '', viewingCompound ?? '');
   }
   let currentPage = $state(1);
   let perPage = $state(50);

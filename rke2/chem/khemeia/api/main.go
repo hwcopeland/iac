@@ -480,6 +480,9 @@ func (c *Controller) startAPIServer() error {
 	// GET /api/v1/docking/analysis/fingerprints/{jobName}?top=100
 	mux.HandleFunc("/api/v1/docking/analysis/", wrap(handler.AnalysisDispatch))
 
+	// ProLIF interaction map — proxies to the ProLIF sidecar service.
+	mux.HandleFunc("/api/v1/docking/interaction-map/", wrap(handler.InteractionMapHandler))
+
 	// Pseudopotential management — uses the QE plugin's database.
 	mux.HandleFunc("/api/v1/qe/pseudopotentials", wrap(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {

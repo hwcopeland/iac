@@ -27,6 +27,8 @@
   let authReady = $state(false);
   let networkSmiles = $state('');
   let networkResidues = $state<any[]>([]);
+  let networkJobName = $state('');
+  let networkCompoundId = $state('');
   let showNetwork = $state(false);
   let viewerInitialized = false;
 
@@ -147,6 +149,8 @@
             <InteractionNetwork
               smiles={networkSmiles}
               residues={networkResidues}
+              jobName={networkJobName}
+              compoundId={networkCompoundId}
               onResidueClick={(r) => focusResidue(r.chain_id, r.res_id)}
             />
           </div>
@@ -160,7 +164,7 @@
               <ExplorerPanel onStructureLoad={() => structureBrowser?.refresh()} />
               <StructureBrowser bind:this={structureBrowser} />
             {:else if activeTab === 'analysis'}
-              <AnalysisPanel onNetworkToggle={(show, smiles, residues) => { showNetwork = show; networkSmiles = smiles; networkResidues = residues; }} />
+              <AnalysisPanel onNetworkToggle={(show, smiles, residues, jn, cid) => { showNetwork = show; networkSmiles = smiles; networkResidues = residues; networkJobName = jn; networkCompoundId = cid; }} />
             {:else if activeTab === 'calculations'}
               <CalculationsPanel />
             {/if}
