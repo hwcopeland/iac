@@ -290,18 +290,22 @@ def _generate_network_html(
 """
             html = html.replace("</head>", dark_inject + "</head>", 1)
 
-            # Fix SVG colors for dark theme:
-            # White atom fills → dark bg so they're visible
-            # Black strokes/fills → light grey
+            # Fix all colors for dark theme — SVG attributes AND JSON strings
+            # White fills → dark bg
             html = html.replace('fill="white"', 'fill="#0d1117"')
             html = html.replace("fill='white'", "fill='#0d1117'")
             html = html.replace('fill="#FFFFFF"', 'fill="#0d1117"')
+            # Black → light grey (SVG attributes)
             html = html.replace('fill="black"', 'fill="#c9d1d9"')
-            html = html.replace("fill='black'", "fill='#c9d1d9'")
-            html = html.replace('fill="#000000"', 'fill="#c9d1d9"')
             html = html.replace('stroke="black"', 'stroke="#c9d1d9"')
-            html = html.replace("stroke='black'", "stroke='#c9d1d9'")
-            html = html.replace('stroke="#000000"', 'stroke="#c9d1d9"')
+            # Black → light grey (JSON strings in vis-network config)
+            html = html.replace('"color": "black"', '"color": "#c9d1d9"')
+            html = html.replace('"fontcolor": "black"', '"fontcolor": "#c9d1d9"')
+            html = html.replace('"color": "#000000"', '"color": "#c9d1d9"')
+            html = html.replace('"color":"black"', '"color":"#c9d1d9"')
+            # White → dark bg (JSON strings)
+            html = html.replace('"color": "white"', '"color": "#0d1117"')
+            html = html.replace('"color":"white"', '"color":"#0d1117"')
 
         return html
     except Exception as exc:
