@@ -294,7 +294,13 @@ def _generate_network_html(
           }
         });
       }
-    }, 1500);
+    }, 3000);
+    // Also try immediately in case it's already loaded
+    try {
+      if (typeof network !== 'undefined') {
+        network.setOptions({ interaction: { zoomSpeed: 0.15, zoomView: true } });
+      }
+    } catch(e) {}
   });
 </script>
 """

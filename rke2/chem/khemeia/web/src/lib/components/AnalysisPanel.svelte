@@ -3,7 +3,7 @@
   import InteractionNetwork from './InteractionNetwork.svelte';
   import { getJobs, getJob, getPocketAnalysis, getReceptorContacts, getFingerprints, getLigandSmiles } from '$lib/api';
   import type { PocketResidue, PocketAnalysis, ResidueContact, ReceptorContactsResponse, FingerprintCompound } from '$lib/api';
-  import { loadFile, overlayStructure, focusLastStructure, focusResidue, highlightResidue, drawInteractionLines, showPocketView } from '$lib/viewer';
+  import { loadFile, overlayStructure, focusLastStructure, focusResidue, highlightResidue, drawInteractionLines, showPocketView, togglePocketSurface } from '$lib/viewer';
   import type { InteractionLine } from '$lib/viewer';
   import { isAuthenticated } from '$lib/auth';
 
@@ -37,6 +37,7 @@
   let pocketError = $state('');
   let pocketCutoff = $state(5.0);
   let pocketOpen = $state(true);
+  let showSurfaceMesh = $state(false);
 
   // Receptor contacts state
   let receptorContacts = $state<ReceptorContactsResponse | null>(null);
@@ -400,6 +401,13 @@
               />
               <span class="cutoff-val">{pocketCutoff.toFixed(1)}A</span>
             </label>
+            <button
+              class="surface-toggle"
+              class:active={showSurfaceMesh}
+              onclick={() => { showSurfaceMesh = !showSurfaceMesh; togglePocketSurface(showSurfaceMesh); }}
+            >
+              {showSurfaceMesh ? 'Hide' : 'Show'} Surface
+            </button>
           </div>
 
           {#if pocketLoading}
@@ -916,6 +924,25 @@
     border-radius: 6px;
     white-space: nowrap;
   }
+
+  .surface-toggle {
+    font-size: 10px;
+    font-weight: 600;
+    padding: 3px 8px;
+    border-radius: 4px;
+    border: 1px solid rgba(63,185,80,0.3);
+    background: none;
+    color: #3fb950;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+
+  .surface-toggle.active {
+    background: rgba(63,185,80,0.15);
+    border-color: #3fb950;
+  }
+
+  .surface-toggle:hover { opacity: 0.8; }
 
   .net-toggle {
     width: 100%;
