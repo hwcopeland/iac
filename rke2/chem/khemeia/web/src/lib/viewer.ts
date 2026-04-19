@@ -1094,10 +1094,9 @@ export async function showPocketView(residues: { chain_id: string; res_id: numbe
 
     // Protein as faded cartoon (30% opacity)
     builder.to(ref).apply(StateTransforms.Representation.StructureRepresentation3D, {
-      type: { name: 'cartoon', params: { sizeFactor: 0.2 } },
+      type: { name: 'cartoon', params: { sizeFactor: 0.2, alpha: 0.3 } },
       colorTheme: { name: 'chain-id', params: {} },
       sizeTheme: { name: 'uniform', params: { value: 0.2 } },
-      alpha: 0.3,
     });
 
     // Pocket residues as ball-and-stick (solid, element colors)
@@ -1134,33 +1133,33 @@ export async function togglePocketSurface(show: boolean, colorTheme: string = 'p
     const { StateTransforms } = getLib().plugin;
     const ref = structureCell.transform.ref;
 
-    if (!show) {
-      // Remove the surface if it exists
-      if (_pocketSurfaceRef) {
-        try {
-          await plugin.build().delete(_pocketSurfaceRef).commit();
-        } catch {}
-        _pocketSurfaceRef = null;
-      }
-      return;
+    // Remove existing surface representations
+    const allReprs = [
+      ...(structRef.components ?? []).flatMap((c: any) => c.representations ?? []),
+      ...(structRef.representations ?? []),
+    ];
+    for (const repr of allReprs) {
+      try {
+        const typeName = repr.cell?.params?.values?.type?.name;
+        if (typeName === 'molecular-surface' || typeName === 'gaussian-surface') {
+          if (repr.cell?.transform?.ref) {
+            await plugin.build().delete(repr.cell.transform.ref).commit();
+          }
+        }
+      } catch {}
     }
 
-    // Add molecular surface colored by partial charge (ESP-like)
+    if (!show) return;
+
+    // Add surface
     const builder = plugin.build();
-    const surfaceNode = builder.to(ref).apply(StateTransforms.Representation.StructureRepresentation3D, {
-      type: { name: 'molecular-surface', params: { quality: 'medium', probeRadius: 1.4 } },
+    builder.to(ref).apply(StateTransforms.Representation.StructureRepresentation3D, {
+      type: { name: 'gaussian-surface', params: { smoothness: 1.5, radiusOffset: 0 } },
       colorTheme: { name: colorTheme, params: {} },
       sizeTheme: { name: 'physical', params: {} },
-      alpha: 0.6,
     });
 
     await builder.commit();
-
-    // Track the ref so we can remove it later
-    if (surfaceNode?.selector?.cell?.transform?.ref) {
-      _pocketSurfaceRef = surfaceNode.selector.cell.transform.ref;
-    }
-
     applyCanvasProps();
   } catch (e) {
     console.error('togglePocketSurface failed:', e);
