@@ -188,11 +188,12 @@ def _compute_interactions(
         # Extract interaction data
         interaction_list = _extract_interactions(fp)
 
-        # Generate network plot as SVG
-        svg = _generate_network_svg(fp, compound_id, dark_theme)
+        # Generate network plot as HTML (proper ProLIF ligand network)
+        html = _generate_network_html(fp, lig_mol, compound_id, dark_theme)
 
         return jsonify({
-            "svg": svg,
+            "html": html,
+            "svg": "",  # deprecated, use html
             "interactions": interaction_list,
             "compound_id": compound_id,
         })
@@ -231,112 +232,47 @@ def _extract_interactions(fp: plf.Fingerprint) -> list[dict]:
     return interactions
 
 
-def _generate_network_svg(
+def _generate_network_html(
     fp: plf.Fingerprint,
+    ligand_mol,
     compound_id: str,
     dark_theme: bool,
 ) -> str:
-    """Render the ligand interaction diagram as SVG using matplotlib."""
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-    import numpy as np
+    """Render the ProLIF ligand interaction network as HTML.
 
-    interactions = _extract_interactions(fp)
-    if not interactions:
-        return _empty_svg(compound_id, dark_theme)
+    Uses fp.plot_lignetwork which generates the proper 2D ligand structure
+    with atom-level interaction lines to protein residues.
+    """
+    try:
+        net = fp.plot_lignetwork(
+            ligand_mol,
+            kind="frame",
+            frame=0,
+            display_all=False,
+            use_coordinates=True,
+        )
 
-    # Group by residue
-    residue_interactions: dict[str, list[str]] = {}
-    for ix in interactions:
-        res = ix["residue"]
-        if res not in residue_interactions:
-            residue_interactions[res] = []
-        residue_interactions[res].append(ix["type"])
+        buf = io.StringIO()
+        net.save(buf)
+        html = buf.getvalue()
 
-    residues = list(residue_interactions.keys())
-    n = len(residues)
+        if dark_theme:
+            # Inject dark background CSS into the HTML
+            dark_css = (
+                "<style>"
+                "body { background-color: #0d1117 !important; }"
+                ".vis-network { background-color: #0d1117 !important; }"
+                "canvas { background-color: #0d1117 !important; }"
+                "</style>"
+            )
+            html = html.replace("</head>", dark_css + "</head>", 1)
 
-    # Color palette
-    colors = {
-        "HBDonor": "#58a6ff", "HBAcceptor": "#58a6ff",
-        "Hydrophobic": "#8b949e", "VdWContact": "#555555",
-        "VanDerWaals": "#555555",
-        "Ionic": "#d29922", "Anionic": "#d29922", "Cationic": "#d29922",
-        "PiStacking": "#bb33bb", "PiCation": "#bb33bb",
-        "EdgeToFace": "#bb33bb", "FaceToFace": "#bb33bb",
-    }
-
-    bg = DARK_BG if dark_theme else "white"
-    text_color = DARK_TEXT if dark_theme else "black"
-
-    fig, ax = plt.subplots(figsize=(8, 8), facecolor=bg)
-    ax.set_facecolor(bg)
-    ax.set_xlim(-2, 2)
-    ax.set_ylim(-2, 2)
-    ax.set_aspect("equal")
-    ax.axis("off")
-
-    # Ligand in center
-    ax.text(0, 0, compound_id, ha="center", va="center",
-            fontsize=11, fontweight="bold", color="#58a6ff",
-            bbox=dict(boxstyle="round,pad=0.4", facecolor=bg,
-                      edgecolor="#58a6ff", linewidth=1.5))
-
-    # Residues in circle
-    for i, res in enumerate(residues):
-        angle = 2 * np.pi * i / max(n, 1) - np.pi / 2
-        x = 1.5 * np.cos(angle)
-        y = 1.5 * np.sin(angle)
-
-        ix_types = residue_interactions[res]
-        primary = ix_types[0]
-        color = colors.get(primary, "#555555")
-
-        # Dashed line from center to residue
-        ax.plot([0, x], [0, y], color=color, linewidth=1.5,
-                linestyle="--", alpha=0.6, zorder=1)
-
-        # Residue circle + label
-        circle = plt.Circle((x, y), 0.22, facecolor=bg,
-                             edgecolor=color, linewidth=2, zorder=2)
-        ax.add_patch(circle)
-        ax.text(x, y + 0.04, res, ha="center", va="center",
-                fontsize=7, color=text_color, fontweight="bold", zorder=3)
-
-    # Legend
-    seen = set()
-    legend_y = 1.8
-    for ix in interactions:
-        t = ix["type"]
-        if t in seen:
-            continue
-        seen.add(t)
-        c = colors.get(t, "#555")
-        ax.plot([- 1.9, -1.7], [legend_y, legend_y], color=c,
-                linewidth=2, linestyle="--")
-        ax.text(-1.65, legend_y, t, fontsize=8, color=c, va="center")
-        legend_y -= 0.15
-
-    ax.set_title(f"Interaction Map: {compound_id}", fontsize=12,
-                 color=text_color, pad=10)
-
-    buf = io.BytesIO()
-    fig.savefig(buf, format="svg", bbox_inches="tight",
-                facecolor=bg, edgecolor="none")
-    plt.close(fig)
-    return buf.getvalue().decode("utf-8")
-
-
-def _empty_svg(compound_id: str, dark_theme: bool) -> str:
-    bg = DARK_BG if dark_theme else "white"
-    text = DARK_TEXT if dark_theme else "black"
-    return (
-        f'<svg xmlns="http://www.w3.org/2000/svg" width="400" height="100"'
-        f' style="background-color:{bg}">'
-        f'<text x="200" y="50" text-anchor="middle" fill="{text}" '
-        f'font-size="14">No interactions detected for {compound_id}</text></svg>'
-    )
+        return html
+    except Exception as exc:
+        app.logger.warning(
+            "plot_lignetwork failed for %s: %s", compound_id, exc,
+        )
+        return ""
 
 
 # ---------------------------------------------------------------------------
