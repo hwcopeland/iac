@@ -217,6 +217,10 @@ export async function getLigandSmiles(compoundId: string): Promise<string | null
   } catch { return null; }
 }
 
+export async function getInteractionMap(jobName: string, compoundId: string): Promise<{ svg: string; interactions: any[] }> {
+  return api(`/api/v1/docking/interaction-map/${jobName}/${encodeURIComponent(compoundId)}`);
+}
+
 export async function getReceptorContacts(jobName: string, top?: number): Promise<ReceptorContactsResponse> {
   const params = top ? `?top=${top}` : '';
   return api<ReceptorContactsResponse>(`/api/v1/docking/analysis/receptor-contacts/${jobName}${params}`);

@@ -1,13 +1,22 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { getInteractionMap } from '$lib/api';
   import { getSVG } from '$lib/rdkit';
   import type { PocketResidue } from '$lib/api';
 
-  let { smiles, residues, onResidueClick }:
-    { smiles: string; residues: PocketResidue[]; onResidueClick?: (r: PocketResidue) => void } = $props();
+  let { smiles, residues, jobName, compoundId, onResidueClick }:
+    {
+      smiles: string;
+      residues: PocketResidue[];
+      jobName?: string;
+      compoundId?: string;
+      onResidueClick?: (r: PocketResidue) => void;
+    } = $props();
 
-  let ligandSvg = $state('');
+  let prolifSvg = $state('');
+  let fallbackSvg = $state('');
   let loading = $state(true);
+  let useProLIF = $state(false);
 
   const IX_COLORS: Record<string, string> = {
     hbond: '#58a6ff',
@@ -33,11 +42,26 @@
   }
 
   onMount(async () => {
+    // Try ProLIF first
+    if (jobName && compoundId) {
+      try {
+        const res = await getInteractionMap(jobName, compoundId);
+        if (res?.svg) {
+          prolifSvg = res.svg;
+          useProLIF = true;
+          loading = false;
+          return;
+        }
+      } catch {
+        // ProLIF not available, fall back
+      }
+    }
+
+    // Fallback: RDKit WASM ligand SVG + custom diagram
     if (smiles) {
       const svg = await getSVG(smiles, 250, 200);
       if (svg) {
-        // Strip white background from RDKit SVG
-        ligandSvg = svg
+        fallbackSvg = svg
           .replace(/fill:\s*#FFFFFF/gi, 'fill:transparent')
           .replace(/fill="#FFFFFF"/gi, 'fill="transparent"')
           .replace(/fill="white"/gi, 'fill="transparent"')
@@ -68,13 +92,15 @@
 
 <div class="interaction-network">
   {#if loading}
-    <div class="net-loading">Loading...</div>
+    <div class="net-loading">Loading interaction map...</div>
+  {:else if useProLIF && prolifSvg}
+    <div class="prolif-svg-wrap">
+      {@html prolifSvg}
+    </div>
   {:else}
     <svg viewBox="0 0 500 350" class="net-svg">
-      <!-- Background -->
       <rect width="500" height="350" fill="#0d1117" rx="8" />
 
-      <!-- Interaction lines -->
       {#each residuePositions as rp}
         <line
           x1={CX} y1={CY} x2={rp.x} y2={rp.y}
@@ -85,18 +111,16 @@
         />
       {/each}
 
-      <!-- Ligand 2D depiction -->
       <foreignObject x={CX - 125} y={CY - 100} width="250" height="200">
         <div class="ligand-svg-wrap">
-          {#if ligandSvg}
-            {@html ligandSvg}
+          {#if fallbackSvg}
+            {@html fallbackSvg}
           {:else}
             <div class="ligand-placeholder">Ligand</div>
           {/if}
         </div>
       </foreignObject>
 
-      <!-- Residue nodes -->
       {#each residuePositions as rp}
         <g
           class="res-node"
@@ -118,7 +142,6 @@
         </g>
       {/each}
 
-      <!-- Legend -->
       {#each Object.entries(IX_COLORS).filter(([k]) => residuePositions.some(r => r.ix === k)) as [type, color], i}
         <g transform="translate(10,{14 + i * 16})">
           <line x1="0" y1="0" x2="16" y2="0" stroke={color} stroke-width="2.5" stroke-dasharray="4 3" />
@@ -145,6 +168,17 @@
     height: 150px;
     color: var(--text-muted, #484f58);
     font-size: 12px;
+  }
+
+  .prolif-svg-wrap {
+    width: 100%;
+    padding: 8px;
+  }
+
+  .prolif-svg-wrap :global(svg) {
+    width: 100%;
+    height: auto;
+    display: block;
   }
 
   .net-svg {
