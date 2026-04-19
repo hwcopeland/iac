@@ -101,9 +101,13 @@
     <svg viewBox="0 0 500 350" class="net-svg">
       <rect width="500" height="350" fill="#0d1117" rx="8" />
 
-      {#each residuePositions as rp}
+      {#each residuePositions as rp, i}
+        {@const spread = 40}
+        {@const angle = (i / Math.max(residuePositions.length, 1)) * 2 * Math.PI}
+        {@const lx = CX + spread * Math.cos(angle)}
+        {@const ly = CY + spread * Math.sin(angle)}
         <line
-          x1={CX} y1={CY} x2={rp.x} y2={rp.y}
+          x1={lx} y1={ly} x2={rp.x} y2={rp.y}
           stroke={rp.color}
           stroke-width="2"
           stroke-dasharray="6 4"
