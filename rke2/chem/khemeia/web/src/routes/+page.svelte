@@ -7,8 +7,10 @@
   import ExplorerPanel from '$lib/components/ExplorerPanel.svelte';
   import StructureBrowser from '$lib/components/StructureBrowser.svelte';
   import AnalysisPanel from '$lib/components/AnalysisPanel.svelte';
+  import InteractionNetwork from '$lib/components/InteractionNetwork.svelte';
   import CalculationsPanel from '$lib/components/CalculationsPanel.svelte';
   import SelectionInfo from '$lib/components/SelectionInfo.svelte';
+  import { focusResidue } from '$lib/viewer';
   import StatusBar from '$lib/components/StatusBar.svelte';
   import CommandPalette from '$lib/components/CommandPalette.svelte';
   import Toast from '$lib/components/Toast.svelte';
@@ -23,6 +25,9 @@
   let panelVisible = $state(true);
   let structureBrowser = $state<StructureBrowser>(undefined as unknown as StructureBrowser);
   let authReady = $state(false);
+  let networkSmiles = $state('');
+  let networkResidues = $state<any[]>([]);
+  let showNetwork = $state(false);
   let viewerInitialized = false;
 
   onMount(() => {
@@ -136,6 +141,16 @@
             <SelectionInfo info={selectionInfo} />
           </div>
         {/if}
+
+        {#if showNetwork && networkSmiles && networkResidues.length > 0}
+          <div class="network-overlay">
+            <InteractionNetwork
+              smiles={networkSmiles}
+              residues={networkResidues}
+              onResidueClick={(r) => focusResidue(r.chain_id, r.res_id)}
+            />
+          </div>
+        {/if}
       </div>
 
       {#if panelVisible}
@@ -145,7 +160,7 @@
               <ExplorerPanel onStructureLoad={() => structureBrowser?.refresh()} />
               <StructureBrowser bind:this={structureBrowser} />
             {:else if activeTab === 'analysis'}
-              <AnalysisPanel />
+              <AnalysisPanel onNetworkToggle={(show, smiles, residues) => { showNetwork = show; networkSmiles = smiles; networkResidues = residues; }} />
             {:else if activeTab === 'calculations'}
               <CalculationsPanel />
             {/if}
@@ -293,6 +308,15 @@
     bottom: 12px;
     left: 12px;
     z-index: 50;
+  }
+
+  .network-overlay {
+    position: absolute;
+    top: 12px;
+    left: 12px;
+    z-index: 50;
+    width: 420px;
+    max-width: 50%;
   }
 
   .side-panel {
