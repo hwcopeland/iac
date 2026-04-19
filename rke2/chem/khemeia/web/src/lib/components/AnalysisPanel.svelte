@@ -416,12 +416,16 @@
             <p class="section-label">Surface</p>
             <div class="surface-btns">
               <button class="surface-btn" class:active={showSurfaceMesh && surfaceType === 'charge'}
-                onclick={() => { surfaceType = 'charge'; showSurfaceMesh = true; togglePocketSurface(true, 'partial-charge'); }}>
-                Electrostatic
+                onclick={() => { surfaceType = 'charge'; showSurfaceMesh = true; togglePocketSurface(true, 'residue-charge'); }}>
+                Charge
               </button>
               <button class="surface-btn" class:active={showSurfaceMesh && surfaceType === 'hydro'}
                 onclick={() => { surfaceType = 'hydro'; showSurfaceMesh = true; togglePocketSurface(true, 'hydrophobicity'); }}>
                 Hydrophobic
+              </button>
+              <button class="surface-btn" class:active={showSurfaceMesh && surfaceType === 'element'}
+                onclick={() => { surfaceType = 'element'; showSurfaceMesh = true; togglePocketSurface(true, 'element-symbol'); }}>
+                Element
               </button>
               <button class="surface-btn" class:active={!showSurfaceMesh}
                 onclick={() => { showSurfaceMesh = false; togglePocketSurface(false); }}>
