@@ -127,17 +127,14 @@ if [ -f "${CONFIGS_DIR}/admins.jsonc" ]; then
 fi
 
 # maprotation.txt → sharp/configs/ (workshop ID rotation list)
-# SurfMapCommand reads this on every rotation tick + !maps invocation.
-# !addmap / !removemap append to / delete from this same file at runtime.
+# Always overwrite from the image — git is the source of truth for the
+# full rotation list. Admin !addmap / !removemap edits on the PVC are
+# transient (they persist until the next deploy, which is fine for
+# testing maps before committing them to git).
 if [ -f "${CONFIGS_DIR}/maprotation.txt" ]; then
     mkdir -p "${CS2_DIR}/game/sharp/configs"
-    # Only deploy if the PVC copy doesn't exist — once admins start
-    # editing rotation via !addmap / !removemap we don't want the next
-    # overlay apply to clobber their changes.
-    if [ ! -f "${CS2_DIR}/game/sharp/configs/maprotation.txt" ]; then
-        cp -f "${CONFIGS_DIR}/maprotation.txt" "${CS2_DIR}/game/sharp/configs/maprotation.txt"
-        log "Deployed maprotation.txt (initial)"
-    fi
+    cp -f "${CONFIGS_DIR}/maprotation.txt" "${CS2_DIR}/game/sharp/configs/maprotation.txt"
+    log "Deployed maprotation.txt"
 fi
 
 # mapnames.txt → sharp/configs/ (name → workshop id resolver)
