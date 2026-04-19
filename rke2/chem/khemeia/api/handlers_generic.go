@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -252,15 +253,40 @@ func (h *APIHandler) PluginGet(plugin Plugin) http.HandlerFunc {
 			}
 		}
 
-		// For docking jobs, fetch ranked results from the docking_results table.
-		// The workflow_name in docking_results matches the job name (set via WORKFLOW_NAME env var).
+		// For docking jobs, fetch ranked results with pagination.
 		if plugin.Slug == "docking" {
+			perPage := 50
+			page := 1
+			if v := r.URL.Query().Get("per_page"); v != "" {
+				if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 100 {
+					perPage = n
+				}
+			}
+			if v := r.URL.Query().Get("page"); v != "" {
+				if n, err := strconv.Atoi(v); err == nil && n > 0 {
+					page = n
+				}
+			}
+			offset := (page - 1) * perPage
+
+			// Total count for pagination
+			var totalResults int
+			_ = db.QueryRowContext(r.Context(),
+				`SELECT COUNT(*) FROM docking_results WHERE workflow_name = ?`, jobName,
+			).Scan(&totalResults)
+			if j.OutputData == nil {
+				j.OutputData = make(map[string]interface{})
+			}
+			j.OutputData["total_results"] = totalResults
+			j.OutputData["page"] = page
+			j.OutputData["per_page"] = perPage
+
 			dockRows, err := db.QueryContext(r.Context(),
 				`SELECT compound_id, affinity_kcal_mol, ligand_id, docked_pdbqt
 				 FROM docking_results
 				 WHERE workflow_name = ?
 				 ORDER BY affinity_kcal_mol ASC
-				 LIMIT 1000`, jobName)
+				 LIMIT ? OFFSET ?`, jobName, perPage, offset)
 			if err != nil {
 				log.Printf("[docking] Warning: failed to query docking results for job %s: %v", jobName, err)
 			} else {
