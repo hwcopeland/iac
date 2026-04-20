@@ -17,6 +17,7 @@
     <PackageReference Include="ModSharp.Sharp.Shared"
                       Version="2.1.117"
                       ExcludeAssets="runtime" />
+    <PackageReference Include="MySqlConnector" Version="2.4.0" />
   </ItemGroup>
 
 </Project>
