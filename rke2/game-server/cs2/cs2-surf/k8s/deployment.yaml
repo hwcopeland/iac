@@ -128,7 +128,7 @@ spec:
             - name: MAP
               value: "de_dust2"
             - name: STARTUP_MAP
-              value: "3660894345"
+              value: "3076153623"
             - name: SERVER_NAME
               value: "W4de Surf"
             # SurfMapCommand admin allowlist — SteamIDs that can use !map
