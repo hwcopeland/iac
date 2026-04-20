@@ -196,7 +196,7 @@ public sealed class SurfMapCommand : IModSharpModule, IClientListener, IGameList
             case "maps": case "maplist":         return HandleMaps(client);
             case "addmap":                       return HandleAddMap(client, arg);
             case "removemap": case "delmap":     return HandleRemoveMap(client, arg);
-            case "help": case "commands":        return HandleHelp(client);
+            case "help": case "commands": case "h": return HandleHelp(client);
             default:                             return ECommandAction.Skipped;
         }
     }
@@ -291,15 +291,16 @@ public sealed class SurfMapCommand : IModSharpModule, IClientListener, IGameList
 
         _voteCandidates = candidates;
 
-        Announce("[surf] ── VOTE: Next Map ──");
+        Announce("[surf] ========= VOTE: Next Map =========");
         for (int i = 0; i < candidates.Count; i++)
         {
             var label = candidates[i] == "extend"
                 ? $"Extend (+{_extendMinutes}m)"
                 : ResolveDisplayName(candidates[i]);
-            Announce($"[surf]  !{i + 1}  {label}");
+            Announce($"[surf]  !{i + 1}  >>  {label}");
         }
         Announce($"[surf] Type !1 - !{candidates.Count} to vote. 2 minutes!");
+        Announce("[surf] ====================================");
         _logger.LogInformation("Vote started with {N} candidates", candidates.Count);
     }
 
@@ -488,15 +489,17 @@ public sealed class SurfMapCommand : IModSharpModule, IClientListener, IGameList
 
     private ECommandAction HandleHelp(IGameClient client)
     {
-        Reply(client, "[surf] Commands:");
-        Reply(client, "  !map <id|name>  — change map (admin)");
-        Reply(client, "  !rtv            — rock the vote");
-        Reply(client, "  !nominate <name> — nominate for next vote");
-        Reply(client, "  !extend         — vote extend during a vote");
-        Reply(client, "  !1..!5          — vote during map vote");
-        Reply(client, "  !maps           �� list rotation");
-        Reply(client, "  !addmap <id>    — add to rotation (admin)");
-        Reply(client, "  !removemap <id|name> — remove (admin)");
+        Reply(client, "\x04\x01 \x04======= W4de Surf Commands =======");
+        Reply(client, " \x09!map \x01<id|name> \x08- change map (admin)");
+        Reply(client, " \x09!rtv \x08- rock the vote");
+        Reply(client, " \x09!nominate \x01<name> \x08- nominate for next vote");
+        Reply(client, " \x09!extend \x08- vote extend during a vote");
+        Reply(client, " \x09!1..!5 \x08- vote during map vote");
+        Reply(client, " \x09!maps \x08- list rotation");
+        Reply(client, " \x09!addmap \x01<id> \x08- add to rotation (admin)");
+        Reply(client, " \x09!removemap \x01<id|name> \x08- remove (admin)");
+        Reply(client, " \x09!h \x08- this menu");
+        Reply(client, "\x04\x01 \x04============================");
         return ECommandAction.Handled;
     }
 
