@@ -35,11 +35,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends git && rm -rf /
 WORKDIR /build
 
 # --- Source2Surf/Timer (hwcopeland fork with surf patches) ---
-# Fork carries: bhop enabled in start zone (upstream hard-disables it),
-# prejump velocity limiter removed entirely, WR → SR rename in user-facing
-# strings, graceful nav-patch failure.
-# Clone full history (not --depth 1) so we can checkout a specific SHA
-# for cache busting. --branch works for branches/tags but not SHAs.
+# TIMER_COMMIT is bumped whenever the fork is updated to bust Docker's
+# layer cache (git clone is cached by instruction text, not remote state).
+ARG TIMER_COMMIT="a295320"
 RUN git clone --branch "${SOURCE2SURF_TIMER_REF}" \
         https://github.com/hwcopeland/Timer.git /build/timer
 WORKDIR /build/timer
