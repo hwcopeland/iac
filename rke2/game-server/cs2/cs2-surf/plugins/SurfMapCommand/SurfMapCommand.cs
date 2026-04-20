@@ -29,6 +29,7 @@ using System.Linq;
 using System.Text;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
+using MySqlConnector;
 using Sharp.Shared;
 using Sharp.Shared.Enums;
 using Sharp.Shared.GameEntities;
@@ -81,6 +82,44 @@ public sealed class SurfMapCommand : IModSharpModule, IClientListener, IGameList
     // Env-configured admin allowlist.
     private readonly HashSet<ulong> _envAdminIds = [];
 
+    // MySQL connection string for rank/leaderboard queries.
+    private string _mysqlConnStr = "";
+
+    // ─── Rank definitions (color code, name, min points) ───────────────
+    private static readonly (string Color, string Name, int MinPoints)[] Ranks =
+    [
+        ("\x08", "Unranked",      0),
+        ("\x07", "First Blood",   150),
+        ("\x06", "Impressive",    750),
+        ("\x02", "Rampage",       1_500),
+        ("\x07", "Savage",        2_500),
+        ("\x09", "Unstoppable",   4_000),
+        ("\x02", "Monster",       6_000),
+        ("\x04", "Relentless",    9_000),
+        ("\x0E", "Wicked",        13_000),
+        ("\x0F", "Ludicrous",     18_000),
+        ("\x07", "Dominating",    25_000),
+        ("\x02", "Menace",        33_000),
+        ("\x0B", "Demon",         42_000),
+        ("\x09", "Legendary",     55_000),
+        ("\x04", "Apex",          70_000),
+        ("\x0E", "Combowhore",    88_000),
+        ("\x0D", "Transcendent",  110_000),
+        ("\x0B", "Immortal",      135_000),
+        ("\x02", "Holy Shit",     165_000),
+        ("\x07", "Godlike",       200_000),
+    ];
+
+    private static (string Color, string Name) GetRank(int points)
+    {
+        for (int i = Ranks.Length - 1; i >= 0; i--)
+        {
+            if (points >= Ranks[i].MinPoints)
+                return (Ranks[i].Color, Ranks[i].Name);
+        }
+        return (Ranks[0].Color, Ranks[0].Name);
+    }
+
     public SurfMapCommand(ISharedSystem sharedSystem,
                           string        dllPath,
                           string        sharpPath,
@@ -107,6 +146,20 @@ public sealed class SurfMapCommand : IModSharpModule, IClientListener, IGameList
                                                    | StringSplitOptions.TrimEntries))
         {
             if (ulong.TryParse(part, out var id)) _envAdminIds.Add(id);
+        }
+
+        var dbHost = Environment.GetEnvironmentVariable("MYSQL_HOST") ?? "";
+        var dbPort = Environment.GetEnvironmentVariable("MYSQL_PORT") ?? "3306";
+        var dbUser = Environment.GetEnvironmentVariable("MYSQL_USER") ?? "";
+        var dbPass = Environment.GetEnvironmentVariable("MYSQL_PASS") ?? "";
+        if (!string.IsNullOrEmpty(dbHost) && !string.IsNullOrEmpty(dbUser))
+        {
+            _mysqlConnStr = $"Server={dbHost};Port={dbPort};Database=source2surf;User ID={dbUser};Password={dbPass};";
+            _logger.LogInformation("MySQL configured for rank queries");
+        }
+        else
+        {
+            _logger.LogWarning("MYSQL_HOST/MYSQL_USER not set — !rank and !lb will not work");
         }
 
         _nextRotationAt = DateTime.UtcNow.AddMinutes(_rotationMinutes);
@@ -197,6 +250,8 @@ public sealed class SurfMapCommand : IModSharpModule, IClientListener, IGameList
             case "addmap":                       return HandleAddMap(client, arg);
             case "removemap": case "delmap":     return HandleRemoveMap(client, arg);
             case "help": case "commands": case "h": return HandleHelp(client);
+            case "rank":                         return HandleRank(client);
+            case "lb": case "leaderboard": case "top": return HandleLeaderboard(client);
             default:                             return ECommandAction.Skipped;
         }
     }
@@ -499,7 +554,121 @@ public sealed class SurfMapCommand : IModSharpModule, IClientListener, IGameList
         Reply(client, " \x09!addmap \x01<id> \x08- add to rotation (admin)");
         Reply(client, " \x09!removemap \x01<id|name> \x08- remove (admin)");
         Reply(client, " \x09!h \x08- this menu");
+        Reply(client, " \x09!rank \x08- show your rank");
+        Reply(client, " \x09!lb \x08- leaderboard");
         Reply(client, "\x04\x01 \x04============================");
+        return ECommandAction.Handled;
+    }
+
+    // ─── Ranks ─────────────────────────────────────────────────────────
+
+    private ECommandAction HandleRank(IGameClient client)
+    {
+        if (string.IsNullOrEmpty(_mysqlConnStr))
+        {
+            Reply(client, "\x07[surf] Ranks not available (DB not configured)");
+            return ECommandAction.Handled;
+        }
+
+        try
+        {
+            var steamId = (ulong)client.SteamId;
+            using var conn = new MySqlConnection(_mysqlConnStr);
+            conn.Open();
+
+            // Get player points + position
+            using var cmd = new MySqlCommand(
+                @"SELECT p.Name, p.Points,
+                  (SELECT COUNT(*) + 1 FROM surf_players p2 WHERE p2.Points > p.Points) AS position,
+                  (SELECT COUNT(*) FROM surf_players WHERE Points > 0) AS total
+                  FROM surf_players p WHERE p.SteamId = @sid",
+                conn);
+            cmd.Parameters.AddWithValue("@sid", (long)steamId);
+
+            using var reader = cmd.ExecuteReader();
+            if (reader.Read())
+            {
+                var name   = reader.GetString("Name");
+                var points = reader.GetInt32("Points");
+                var pos    = reader.GetInt64("position");
+                var total  = reader.GetInt64("total");
+                var (color, rankName) = GetRank(points);
+
+                Reply(client, $"\x04======= Your Rank =======");
+                Reply(client, $" \x01{name}");
+                Reply(client, $" Rank: {color}{rankName}");
+                Reply(client, $" \x09{points:N0} \x01points \x08(#{pos} of {total})");
+
+                // Next rank
+                for (int i = 0; i < Ranks.Length - 1; i++)
+                {
+                    if (points < Ranks[i + 1].MinPoints)
+                    {
+                        var needed = Ranks[i + 1].MinPoints - points;
+                        Reply(client, $" \x08Next: {Ranks[i + 1].Color}{Ranks[i + 1].Name} \x08({needed:N0} pts)");
+                        break;
+                    }
+                }
+                Reply(client, $"\x04=========================");
+            }
+            else
+            {
+                Reply(client, "\x08[surf] No rank data yet - complete a map!");
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "HandleRank failed");
+            Reply(client, "\x07[surf] Error loading rank");
+        }
+
+        return ECommandAction.Handled;
+    }
+
+    private ECommandAction HandleLeaderboard(IGameClient client)
+    {
+        if (string.IsNullOrEmpty(_mysqlConnStr))
+        {
+            Reply(client, "\x07[surf] Leaderboard not available (DB not configured)");
+            return ECommandAction.Handled;
+        }
+
+        try
+        {
+            using var conn = new MySqlConnection(_mysqlConnStr);
+            conn.Open();
+
+            using var cmd = new MySqlCommand(
+                "SELECT Name, Points FROM surf_players WHERE Points > 0 ORDER BY Points DESC LIMIT 10",
+                conn);
+            using var reader = cmd.ExecuteReader();
+
+            Reply(client, "\x04======= Leaderboard =======");
+            int pos = 1;
+            while (reader.Read())
+            {
+                var name   = reader.GetString("Name");
+                var points = reader.GetInt32("Points");
+                var (color, rankName) = GetRank(points);
+
+                var medal = pos switch
+                {
+                    1 => "\x09#1",
+                    2 => "\x08#2",
+                    3 => "\x02#3",
+                    _ => $"\x01#{pos}",
+                };
+                Reply(client, $" {medal} \x01{name} \x08- {color}[{rankName}] \x09{points:N0}");
+                pos++;
+            }
+            Reply(client, "\x04===========================");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "HandleLeaderboard failed");
+            Reply(client, "\x07[surf] Error loading leaderboard");
+        }
+
         return ECommandAction.Handled;
     }
 
