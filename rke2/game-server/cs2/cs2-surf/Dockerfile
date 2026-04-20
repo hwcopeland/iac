@@ -38,7 +38,7 @@ WORKDIR /build
 # TIMER_COMMIT is bumped whenever the fork is updated to bust Docker's
 # layer cache (git clone is cached by instruction text, not remote state).
 ARG TIMER_COMMIT="a295320"
-RUN git clone --branch "${SOURCE2SURF_TIMER_REF}" \
+RUN echo "timer:${TIMER_COMMIT}" && git clone --branch "${SOURCE2SURF_TIMER_REF}" \
         https://github.com/hwcopeland/Timer.git /build/timer
 WORKDIR /build/timer
 RUN sed -i '/<Target Name="PostBuild"/,/<\/Target>/d' Timer/Timer.csproj && \
