@@ -346,16 +346,42 @@ public sealed class SurfMapCommand : IModSharpModule, IClientListener, IGameList
 
         _voteCandidates = candidates;
 
-        Announce("[surf] ========= VOTE: Next Map =========");
+        // Query DB for record info on each candidate.
+        var mapRecords = new Dictionary<string, bool>(); // name → has SR
+        if (!string.IsNullOrEmpty(_mysqlConnStr))
+        {
+            try
+            {
+                using var conn = new MySqlConnection(_mysqlConnStr);
+                conn.Open();
+                foreach (var c in candidates.Where(c => c != "extend"))
+                {
+                    var name = ResolveDisplayName(c);
+                    using var cmd = new MySqlCommand(
+                        "SELECT COUNT(*) FROM surf_player_best_runs r JOIN surf_maps m ON m.MapId = r.MapId WHERE m.File = @f AND r.RunType = 0 AND r.Style = 0 AND r.Track = 0",
+                        conn);
+                    cmd.Parameters.AddWithValue("@f", name);
+                    mapRecords[name] = Convert.ToInt32(cmd.ExecuteScalar()) > 0;
+                }
+            }
+            catch { }
+        }
+
+        Announce("\x04========= \x09VOTE: Next Map \x04=========");
         for (int i = 0; i < candidates.Count; i++)
         {
-            var label = candidates[i] == "extend"
-                ? $"Extend (+{_extendMinutes}m)"
-                : ResolveDisplayName(candidates[i]);
-            Announce($"[surf]  !{i + 1}  >>  {label}");
+            if (candidates[i] == "extend")
+            {
+                Announce($" \x09!{i + 1} \x01>> \x04Extend \x08(+{_extendMinutes}m)");
+                continue;
+            }
+            var name = ResolveDisplayName(candidates[i]);
+            var hasSR = mapRecords.GetValueOrDefault(name, false);
+            var recordTag = hasSR ? "" : " \x07*";
+            Announce($" \x09!{i + 1} \x01>> \x04{name}{recordTag}");
         }
-        Announce($"[surf] Type !1 - !{candidates.Count} to vote. 2 minutes!");
-        Announce("[surf] ====================================");
+        Announce($"\x01Type \x09!1 \x01- \x09!{candidates.Count} \x01to vote. \x092 minutes!");
+        Announce("\x04======================================");
         _logger.LogInformation("Vote started with {N} candidates", candidates.Count);
     }
 
@@ -734,7 +760,7 @@ public sealed class SurfMapCommand : IModSharpModule, IClientListener, IGameList
     }
 
     private void Announce(string msg)
-        => _shared.GetModSharp().ServerCommand($"say {msg}");
+        => _shared.GetModSharp().PrintToChatAll(msg);
 
     private bool RequireAdmin(IGameClient client, string action)
     {
