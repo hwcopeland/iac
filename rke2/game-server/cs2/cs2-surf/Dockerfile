@@ -37,7 +37,7 @@ WORKDIR /build
 # --- Source2Surf/Timer (hwcopeland fork with surf patches) ---
 # TIMER_COMMIT is bumped whenever the fork is updated to bust Docker's
 # layer cache (git clone is cached by instruction text, not remote state).
-ARG TIMER_COMMIT="a295320"
+ARG TIMER_COMMIT="5fee677"
 RUN echo "timer:${TIMER_COMMIT}" && git clone --branch "${SOURCE2SURF_TIMER_REF}" \
         https://github.com/hwcopeland/Timer.git /build/timer
 WORKDIR /build/timer
@@ -118,6 +118,11 @@ RUN curl -fsSL "https://github.com/darkerz7/MS-NoBlock/releases/download/${MSNOB
 COPY --from=plugin-builder /build/out/timer/ /staging/sharp/modules/Timer/
 COPY --from=plugin-builder /build/out/timer-rm/ /staging/sharp/modules/Timer.RequestManager/
 COPY --from=plugin-builder /build/out/timer-shared/ /staging/sharp/shared/Timer.Shared/
+
+# --- SR announcer sounds (UT announcer MP3s for record celebrations) ---
+# CS2's `play` command resolves from csgo/sound/, so these go into the
+# overlay's sound/ dir which maps to game/sound/ after overlay apply.
+COPY sounds/ /staging/sound/surf/
 
 # --- SurfMapCommand (in-repo native !map plugin) ---
 COPY --from=plugin-builder /build/out/surf-map-command/ /staging/sharp/modules/SurfMapCommand/
