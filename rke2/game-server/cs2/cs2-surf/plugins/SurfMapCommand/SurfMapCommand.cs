@@ -426,6 +426,8 @@ public sealed class SurfMapCommand : IModSharpModule, IClientListener, IGameList
             catch { }
         }
 
+        var tiers = ReadMapTiers();
+
         Announce("========= VOTE: Next Map =========");
         for (int i = 0; i < candidates.Count; i++)
         {
@@ -436,9 +438,11 @@ public sealed class SurfMapCommand : IModSharpModule, IClientListener, IGameList
             }
             var name = ResolveDisplayName(candidates[i]);
             var (hasSR, stages) = mapInfo.GetValueOrDefault(name, (false, 0));
-            var stageTag = stages > 0 ? $" Staged({stages})" : " Linear";
+            var tier = tiers.GetValueOrDefault(name, 0);
+            var tierTag = tier > 0 ? $"T{tier}" : "";
+            var stageTag = stages > 0 ? $"S{stages}" : "L";
             var recordTag = hasSR ? "" : " *";
-            Announce($"  [{i + 1}] {name}{stageTag}{recordTag}");
+            Announce($"  [{i + 1}] {name} {tierTag} {stageTag}{recordTag}");
         }
         Announce($"Type !1 - !{candidates.Count} to vote. 2 minutes!");
         Announce("==================================");
@@ -902,6 +906,25 @@ public sealed class SurfMapCommand : IModSharpModule, IClientListener, IGameList
             }
         }
         catch (Exception ex) { _logger.LogError(ex, "ReadMapNames failed"); }
+        return result;
+    }
+
+    private Dictionary<string, int> ReadMapTiers()
+    {
+        var path = Path.Combine(_sharpPath, "configs", "maptiers.txt");
+        var result = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        if (!File.Exists(path)) return result;
+        try
+        {
+            foreach (var raw in File.ReadAllLines(path))
+            {
+                var line = raw.Trim();
+                if (line.Length == 0 || line.StartsWith('#')) continue;
+                var parts = line.Split([' ', '\t'], 2, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+                if (parts.Length == 2 && int.TryParse(parts[1], out var tier)) result[parts[0]] = tier;
+            }
+        }
+        catch (Exception ex) { _logger.LogError(ex, "ReadMapTiers failed"); }
         return result;
     }
 
