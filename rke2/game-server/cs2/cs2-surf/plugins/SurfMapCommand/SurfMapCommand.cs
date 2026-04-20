@@ -120,6 +120,38 @@ public sealed class SurfMapCommand : IModSharpModule, IClientListener, IGameList
         return (Ranks[0].Color, Ranks[0].Name);
     }
 
+    // Cache player points to avoid querying MySQL on every chat message.
+    private readonly Dictionary<ulong, int> _playerPointsCache = [];
+
+    private string GetPlayerRankTitle(SteamID steamId)
+    {
+        var id = (ulong)steamId;
+
+        // Try cache first.
+        if (!_playerPointsCache.TryGetValue(id, out var points))
+        {
+            // Query DB.
+            if (!string.IsNullOrEmpty(_mysqlConnStr))
+            {
+                try
+                {
+                    using var conn = new MySqlConnection(_mysqlConnStr);
+                    conn.Open();
+                    using var cmd = new MySqlCommand(
+                        "SELECT Points FROM surf_players WHERE SteamId = @sid", conn);
+                    cmd.Parameters.AddWithValue("@sid", (long)id);
+                    var result = cmd.ExecuteScalar();
+                    points = result is not null ? Convert.ToInt32(result) : 0;
+                    _playerPointsCache[id] = points;
+                }
+                catch { points = 0; }
+            }
+        }
+
+        var (color, name) = GetRank(points);
+        return $"{color}[{name}]";
+    }
+
     public SurfMapCommand(ISharedSystem sharedSystem,
                           string        dllPath,
                           string        sharpPath,
@@ -187,6 +219,7 @@ public sealed class SurfMapCommand : IModSharpModule, IClientListener, IGameList
     {
         _logger.LogInformation("OnServerActivate - resetting state");
         ScheduleTick();
+        _playerPointsCache.Clear();
         _rtvVoters.Clear();
         _nominations.Clear();
         _votes.Clear();
@@ -217,7 +250,19 @@ public sealed class SurfMapCommand : IModSharpModule, IClientListener, IGameList
     {
         var rawMsg = (message ?? "").TrimStart();
         if (rawMsg.Length > 0 && !client.IsFakeClient)
+        {
             _logger.LogInformation("CHAT {Id} ({Name}): {Msg}", client.SteamId, client.Name, rawMsg);
+
+            // Re-broadcast with rank title prefix (suppress original via Handled).
+            // Only for regular chat, not commands (commands get handled below).
+            if (rawMsg.Length > 0 && "!./`".IndexOf(rawMsg[0]) < 0)
+            {
+                var rankTitle = GetPlayerRankTitle(client.SteamId);
+                _shared.GetModSharp().PrintToChatAll(
+                    $" {rankTitle} \x01{client.Name}\x08: {rawMsg}");
+                return ECommandAction.Handled;
+            }
+        }
 
         // Check for trigger prefix.
         var body = rawMsg;
