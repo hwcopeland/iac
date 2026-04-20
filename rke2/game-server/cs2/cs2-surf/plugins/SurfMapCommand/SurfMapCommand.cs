@@ -439,7 +439,7 @@ public sealed class SurfMapCommand : IModSharpModule, IClientListener, IGameList
             var name = ResolveDisplayName(candidates[i]);
             var (hasSR, stages) = mapInfo.GetValueOrDefault(name, (false, 0));
             var tier = tiers.GetValueOrDefault(name, 0);
-            var tierTag = tier > 0 ? $"T{tier}" : "";
+            var tierTag = tier > 0 ? $"[T{tier}]" : "";
             var stageTag = stages > 0 ? $"S{stages}" : "L";
             var recordTag = hasSR ? "" : " *";
             Announce($"  [{i + 1}] {name} {tierTag} {stageTag}{recordTag}");
