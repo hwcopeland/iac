@@ -147,6 +147,13 @@ if [ -f "${CONFIGS_DIR}/mapnames.txt" ]; then
     log "Deployed mapnames.txt"
 fi
 
+# maptiers.txt → sharp/configs/ (tier data for vote display)
+if [ -f "${CONFIGS_DIR}/maptiers.txt" ]; then
+    mkdir -p "${CS2_DIR}/game/sharp/configs"
+    cp -f "${CONFIGS_DIR}/maptiers.txt" "${CS2_DIR}/game/sharp/configs/maptiers.txt"
+    log "Deployed maptiers.txt"
+fi
+
 # Clean up modules dropped from the image (MCS, AddonManager, the Tnms set).
 # apply-overlay does cp -rf which adds + overwrites but doesn't remove, so
 # deletions upstream in the image need explicit cleanup here.
