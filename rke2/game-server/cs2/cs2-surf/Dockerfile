@@ -120,9 +120,9 @@ COPY --from=plugin-builder /build/out/timer-rm/ /staging/sharp/modules/Timer.Req
 COPY --from=plugin-builder /build/out/timer-shared/ /staging/sharp/shared/Timer.Shared/
 
 # --- SR announcer sounds (UT announcer MP3s for record celebrations) ---
-# CS2's `play` command resolves from csgo/sound/, so these go into the
-# overlay's sound/ dir which maps to game/sound/ after overlay apply.
-COPY sounds/ /staging/sound/surf/
+# CS2's `play` command resolves from csgo/sound/, so these must go
+# under the csgo/ subdir in the overlay (game/csgo/sound/surf/).
+COPY sounds/ /staging/csgo/sound/surf/
 
 # --- SurfMapCommand (in-repo native !map plugin) ---
 COPY --from=plugin-builder /build/out/surf-map-command/ /staging/sharp/modules/SurfMapCommand/
