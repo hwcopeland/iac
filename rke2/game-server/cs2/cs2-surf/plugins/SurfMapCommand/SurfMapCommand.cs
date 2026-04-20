@@ -1,16 +1,16 @@
 /*
- * SurfMapCommand — native ModSharp module for map management.
+ * SurfMapCommand - native ModSharp module for map management.
  *
  * Commands:
- *   !map <id|name>         admin — immediate map change
- *   !rtv                   any   — rock-the-vote, triggers vote when threshold
- *   !nominate <id|name>    any   — add a map to the next vote's candidates
- *   !extend / !ext         any   — during a vote, vote for extend
- *   !maps / !maplist       any   — list rotation
- *   !addmap <id>           admin — add to rotation + download
- *   !removemap <id|name>   admin — remove from rotation
- *   !help / !commands      any   — list commands
- *   !1 .. !5               any   — vote for a candidate during vote phase
+ *   !map <id|name>         admin - immediate map change
+ *   !rtv                   any   - rock-the-vote, triggers vote when threshold
+ *   !nominate <id|name>    any   - add a map to the next vote's candidates
+ *   !extend / !ext         any   - during a vote, vote for extend
+ *   !maps / !maplist       any   - list rotation
+ *   !addmap <id>           admin - add to rotation + download
+ *   !removemap <id|name>   admin - remove from rotation
+ *   !help / !commands      any   - list commands
+ *   !1 .. !5               any   - vote for a candidate during vote phase
  *
  * Map cycle:
  *   1. Timer counts down MAP_ROTATION_MINUTES (default 30).
@@ -159,7 +159,7 @@ public sealed class SurfMapCommand : IModSharpModule, IClientListener, IGameList
         }
         else
         {
-            _logger.LogWarning("MYSQL_HOST/MYSQL_USER not set — !rank and !lb will not work");
+            _logger.LogWarning("MYSQL_HOST/MYSQL_USER not set - !rank and !lb will not work");
         }
 
         _nextRotationAt = DateTime.UtcNow.AddMinutes(_rotationMinutes);
@@ -168,7 +168,7 @@ public sealed class SurfMapCommand : IModSharpModule, IClientListener, IGameList
         ScheduleTick();
 
         _logger.LogInformation(
-            "SurfMapCommand loaded — rotation={Rot}m extend={Ext}m maxExt={Max} envAdmins={Adm}",
+            "SurfMapCommand loaded - rotation={Rot}m extend={Ext}m maxExt={Max} envAdmins={Adm}",
             _rotationMinutes, _extendMinutes, _maxExtends, _envAdminIds.Count);
     }
 
@@ -185,7 +185,7 @@ public sealed class SurfMapCommand : IModSharpModule, IClientListener, IGameList
 
     void IGameListener.OnServerActivate()
     {
-        _logger.LogInformation("OnServerActivate — resetting state");
+        _logger.LogInformation("OnServerActivate - resetting state");
         ScheduleTick();
         _rtvVoters.Clear();
         _nominations.Clear();
@@ -287,7 +287,7 @@ public sealed class SurfMapCommand : IModSharpModule, IClientListener, IGameList
                     var rem = (_voteDeadline - now).TotalSeconds;
                     if (rem <= 10 && !_countdown10sAnnounced)
                     {
-                        Announce($"[surf] Map changing to {ResolveDisplayName(_voteWinner!)} in 10 seconds…");
+                        Announce($" \x04[surf] \x01Map changing to \x09{ResolveDisplayName(_voteWinner!)} \x01in \x0710 seconds\x01...");
                         _countdown10sAnnounced = true;
                     }
                     if (now >= _voteDeadline)
@@ -367,12 +367,12 @@ public sealed class SurfMapCommand : IModSharpModule, IClientListener, IGameList
             catch { }
         }
 
-        Announce("\x04========= \x09VOTE: Next Map \x04=========");
+        Announce(" \x04========= \x09VOTE: Next Map \x04=========");
         for (int i = 0; i < candidates.Count; i++)
         {
             if (candidates[i] == "extend")
             {
-                Announce($" \x09!{i + 1} \x01>> \x04Extend \x08(+{_extendMinutes}m)");
+                Announce($" \x09!{i + 1} \x01>> \x0AExtend \x08(+{_extendMinutes}min)");
                 continue;
             }
             var name = ResolveDisplayName(candidates[i]);
@@ -381,7 +381,7 @@ public sealed class SurfMapCommand : IModSharpModule, IClientListener, IGameList
             Announce($" \x09!{i + 1} \x01>> \x04{name}{recordTag}");
         }
         Announce($"\x01Type \x09!1 \x01- \x09!{candidates.Count} \x01to vote. \x092 minutes!");
-        Announce("\x04======================================");
+        Announce(" \x04======================================");
         _logger.LogInformation("Vote started with {N} candidates", candidates.Count);
     }
 
@@ -422,7 +422,7 @@ public sealed class SurfMapCommand : IModSharpModule, IClientListener, IGameList
             _extendsUsed++;
             _nextRotationAt = DateTime.UtcNow.AddMinutes(_extendMinutes);
             _votePhase = VotePhase.None;
-            Announce($"[surf] Extend wins! Map extended by {_extendMinutes} minutes ({_extendsUsed}/{_maxExtends}).");
+            Announce($" \x04[surf] \x0AExtend wins! \x01Map extended by \x09{_extendMinutes} \x01min \x08({_extendsUsed}/{_maxExtends})");
             _logger.LogInformation("Vote result: extend ({Used}/{Max})", _extendsUsed, _maxExtends);
             return;
         }
@@ -433,7 +433,7 @@ public sealed class SurfMapCommand : IModSharpModule, IClientListener, IGameList
         _voteDeadline          = DateTime.UtcNow.AddSeconds(30);
         _countdown10sAnnounced = false;
         var display = ResolveDisplayName(winner);
-        Announce($"[surf] {display} wins! Changing in 30 seconds…");
+        Announce($" \x04[surf] \x09{display} \x01wins! Changing in \x0930 seconds\x01...");
         _logger.LogInformation("Vote result: {Map} ({Display})", winner, display);
     }
 
@@ -463,11 +463,11 @@ public sealed class SurfMapCommand : IModSharpModule, IClientListener, IGameList
         }
         _rtvVoters.Add(client.SteamId);
         var needed = VotesNeeded(CountConnectedPlayers());
-        Announce($"[surf] {_rtvVoters.Count}/{needed} players want to rock the vote.");
+        Announce($" \x04[surf] \x09{_rtvVoters.Count}/{needed} \x01players want to rock the vote.");
         if (_rtvVoters.Count >= needed)
         {
             _rtvVoters.Clear();
-            Announce("[surf] RTV passed!");
+            Announce(" \x04[surf] \x09RTV passed!");
             StartVote();
         }
         return ECommandAction.Handled;
@@ -490,7 +490,7 @@ public sealed class SurfMapCommand : IModSharpModule, IClientListener, IGameList
         }
         if (!_nominations.Contains(resolved))
             _nominations.Add(resolved);
-        Announce($"[surf] {ResolveDisplayName(resolved)} nominated for next vote.");
+        Announce($" \x04[surf] \x09{ResolveDisplayName(resolved)} \x01nominated for next vote.");
         return ECommandAction.Handled;
     }
 
@@ -535,7 +535,7 @@ public sealed class SurfMapCommand : IModSharpModule, IClientListener, IGameList
             { Reply(client, $"[surf] {trimmed} already in rotation."); return ECommandAction.Handled; }
             lines.Add(trimmed);
             File.WriteAllLines(path, lines);
-            Reply(client, $"[surf] Added {trimmed}. Downloading…");
+            Reply(client, $"[surf] Added {trimmed}. Downloading...");
         }
         catch (Exception ex) { _logger.LogError(ex, "!addmap failed"); Reply(client, "[surf] Failed."); return ECommandAction.Handled; }
         EnsureSubscribed(workshopId);
@@ -684,7 +684,7 @@ public sealed class SurfMapCommand : IModSharpModule, IClientListener, IGameList
                     3 => "\x02#3",
                     _ => $"\x01#{pos}",
                 };
-                Reply(client, $" {medal} \x01{name} \x08- {color}[{rankName}] \x09{points:N0}");
+                Reply(client, $" {medal} {color}[{rankName}] \x01{name} \x08- \x09{points:N0} pts");
                 pos++;
             }
             Reply(client, "\x04===========================");
