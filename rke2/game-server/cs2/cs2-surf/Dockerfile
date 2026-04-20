@@ -20,7 +20,7 @@ ARG RAMPFIX_VERSION="v1.0.6"
 ARG MSNOBLOCK_VERSION="MS-NoBlock-v.1.0.2"
 
 # Plugins built from source (pinned refs)
-ARG SOURCE2SURF_TIMER_REF="master"  # bust cache: 2ef0b43
+ARG SOURCE2SURF_TIMER_REF="2ef0b43"
 
 # ---------------------------------------------------------------------------
 # Stage 1: Build plugins that have no release artifacts
