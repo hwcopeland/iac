@@ -210,3 +210,4 @@ ENV PORT="27015" \
 EXPOSE 27015/tcp 27015/udp 27020/tcp 27020/udp
 
 ENTRYPOINT ["/opt/cs2-surf/entrypoint.sh"]
+# rebuild: f8e2e0b
