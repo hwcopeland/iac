@@ -1,9 +1,6 @@
 [
     {
-        // Replay bot disabled — causes "Failed to add bot" spam loop
-        // that degrades server performance over time.
-        // Re-enable once Source2Surf/Timer fixes bot spawning.
-        "enabled": false,
+        "enabled": true,
         "type": 0,
         "play_type": 0,
         "styles": [0],
