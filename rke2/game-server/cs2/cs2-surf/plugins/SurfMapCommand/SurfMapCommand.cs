@@ -576,7 +576,7 @@ public sealed class SurfMapCommand : IModSharpModule, IClientListener, IGameList
         Reply(client, "  \x09!stop \x08- stop timer  \x09!pause \x08- pause  \x09!resume \x08- resume");
         Reply(client, "  \x09!nc \x08- noclip  \x09!spec \x08- spectate");
         Reply(client, " \x09Records");
-        Reply(client, "  \x09!wr \x08- server record  \x09!swr \x08- stage SR  \x09!bwr \x08- bonus SR");
+        Reply(client, "  \x09!sr \x08- server record  \x09!ssr \x08- stage SR  \x09!bsr \x08- bonus SR");
         Reply(client, "  \x09!pb \x08- personal best  \x09!spb \x08- stage PB  \x09!bpb \x08- bonus PB");
         Reply(client, "  \x09!cpr \x08- checkpoint comparison  \x09!recent \x08- recent runs");
         Reply(client, " \x09Stats");
