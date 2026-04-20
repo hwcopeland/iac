@@ -20,7 +20,7 @@ ARG RAMPFIX_VERSION="v1.0.6"
 ARG MSNOBLOCK_VERSION="MS-NoBlock-v.1.0.2"
 
 # Plugins built from source (pinned refs)
-ARG SOURCE2SURF_TIMER_REF="6f23dc8"
+ARG SOURCE2SURF_TIMER_REF="master"
 
 # ---------------------------------------------------------------------------
 # Stage 1: Build plugins that have no release artifacts
@@ -38,7 +38,9 @@ WORKDIR /build
 # Fork carries: bhop enabled in start zone (upstream hard-disables it),
 # prejump velocity limiter removed entirely, WR → SR rename in user-facing
 # strings, graceful nav-patch failure.
-RUN git clone --depth 1 --branch "${SOURCE2SURF_TIMER_REF}" \
+# Clone full history (not --depth 1) so we can checkout a specific SHA
+# for cache busting. --branch works for branches/tags but not SHAs.
+RUN git clone --branch "${SOURCE2SURF_TIMER_REF}" \
         https://github.com/hwcopeland/Timer.git /build/timer
 WORKDIR /build/timer
 RUN sed -i '/<Target Name="PostBuild"/,/<\/Target>/d' Timer/Timer.csproj && \
