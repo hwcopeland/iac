@@ -125,29 +125,7 @@ public sealed class SurfMapCommand : IModSharpModule, IClientListener, IGameList
 
     private string GetPlayerRankTitle(SteamID steamId)
     {
-        var id = (ulong)steamId;
-
-        // Try cache first.
-        if (!_playerPointsCache.TryGetValue(id, out var points))
-        {
-            // Query DB.
-            if (!string.IsNullOrEmpty(_mysqlConnStr))
-            {
-                try
-                {
-                    using var conn = new MySqlConnection(_mysqlConnStr);
-                    conn.Open();
-                    using var cmd = new MySqlCommand(
-                        "SELECT Points FROM surf_players WHERE SteamId = @sid", conn);
-                    cmd.Parameters.AddWithValue("@sid", (long)id);
-                    var result = cmd.ExecuteScalar();
-                    points = result is not null ? Convert.ToInt32(result) : 0;
-                    _playerPointsCache[id] = points;
-                }
-                catch { points = 0; }
-            }
-        }
-
+        var points = GetPlayerPoints(steamId);
         var (color, name) = GetRank(points);
         return $"{color}[{name}]";
     }
@@ -235,8 +213,38 @@ public sealed class SurfMapCommand : IModSharpModule, IClientListener, IGameList
 
     public void OnClientPutInServer(IGameClient client)
     {
-        if (!client.IsFakeClient)
-            _logger.LogInformation("CONNECT {Id} ({Name})", client.SteamId, client.Name);
+        if (client.IsFakeClient) return;
+        _logger.LogInformation("CONNECT {Id} ({Name})", client.SteamId, client.Name);
+
+        // Set clan tag to rank title in tab menu / scoreboard.
+        try
+        {
+            var (_, rankName) = GetRank(GetPlayerPoints(client.SteamId));
+            if (client.GetPlayerController() is { } ctrl)
+            {
+                ctrl.SetClanTag(rankName);
+            }
+        }
+        catch { }
+    }
+
+    private int GetPlayerPoints(SteamID steamId)
+    {
+        var id = (ulong)steamId;
+        if (_playerPointsCache.TryGetValue(id, out var cached)) return cached;
+        if (string.IsNullOrEmpty(_mysqlConnStr)) return 0;
+        try
+        {
+            using var conn = new MySqlConnection(_mysqlConnStr);
+            conn.Open();
+            using var cmd = new MySqlCommand("SELECT Points FROM surf_players WHERE SteamId = @sid", conn);
+            cmd.Parameters.AddWithValue("@sid", (long)id);
+            var result = cmd.ExecuteScalar();
+            var pts = result is not null ? Convert.ToInt32(result) : 0;
+            _playerPointsCache[id] = pts;
+            return pts;
+        }
+        catch { return 0; }
     }
 
     public void OnClientDisconnecting(IGameClient client, NetworkDisconnectionReason reason)
@@ -391,8 +399,8 @@ public sealed class SurfMapCommand : IModSharpModule, IClientListener, IGameList
 
         _voteCandidates = candidates;
 
-        // Query DB for record info on each candidate.
-        var mapRecords = new Dictionary<string, bool>(); // name → has SR
+        // Query DB for record info + stage count for each candidate.
+        var mapInfo = new Dictionary<string, (bool hasSR, int stages)>();
         if (!string.IsNullOrEmpty(_mysqlConnStr))
         {
             try
@@ -403,30 +411,37 @@ public sealed class SurfMapCommand : IModSharpModule, IClientListener, IGameList
                 {
                     var name = ResolveDisplayName(c);
                     using var cmd = new MySqlCommand(
-                        "SELECT COUNT(*) FROM surf_player_best_runs r JOIN surf_maps m ON m.MapId = r.MapId WHERE m.File = @f AND r.RunType = 0 AND r.Style = 0 AND r.Track = 0",
+                        @"SELECT
+                            (SELECT COUNT(*) FROM surf_player_best_runs r JOIN surf_maps m ON m.MapId = r.MapId WHERE m.File = @f AND r.RunType = 0 AND r.Style = 0 AND r.Track = 0) AS has_sr,
+                            (SELECT COALESCE(MAX(r2.Stage), 0) FROM surf_player_best_runs r2 JOIN surf_maps m2 ON m2.MapId = r2.MapId WHERE m2.File = @f AND r2.RunType = 1) AS stages",
                         conn);
                     cmd.Parameters.AddWithValue("@f", name);
-                    mapRecords[name] = Convert.ToInt32(cmd.ExecuteScalar()) > 0;
+                    using var reader = cmd.ExecuteReader();
+                    if (reader.Read())
+                        mapInfo[name] = (reader.GetInt32(0) > 0, reader.GetInt32(1));
+                    else
+                        mapInfo[name] = (false, 0);
                 }
             }
             catch { }
         }
 
-        Announce(" \x04========= \x09VOTE: Next Map \x04=========");
+        Announce("========= VOTE: Next Map =========");
         for (int i = 0; i < candidates.Count; i++)
         {
             if (candidates[i] == "extend")
             {
-                Announce($" \x09!{i + 1} \x01>> \x0AExtend \x08(+{_extendMinutes}min)");
+                Announce($"  [{i + 1}] Extend (+{_extendMinutes}min)");
                 continue;
             }
             var name = ResolveDisplayName(candidates[i]);
-            var hasSR = mapRecords.GetValueOrDefault(name, false);
-            var recordTag = hasSR ? "" : " \x07*";
-            Announce($" \x09!{i + 1} \x01>> \x04{name}{recordTag}");
+            var (hasSR, stages) = mapInfo.GetValueOrDefault(name, (false, 0));
+            var stageTag = stages > 0 ? $" Staged({stages})" : " Linear";
+            var recordTag = hasSR ? "" : " *";
+            Announce($"  [{i + 1}] {name}{stageTag}{recordTag}");
         }
-        Announce($"\x01Type \x09!1 \x01- \x09!{candidates.Count} \x01to vote. \x092 minutes!");
-        Announce(" \x04======================================");
+        Announce($"Type !1 - !{candidates.Count} to vote. 2 minutes!");
+        Announce("==================================");
         _logger.LogInformation("Vote started with {N} candidates", candidates.Count);
     }
 
