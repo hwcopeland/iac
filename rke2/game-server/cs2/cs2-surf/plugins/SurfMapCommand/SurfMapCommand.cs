@@ -570,19 +570,25 @@ public sealed class SurfMapCommand : IModSharpModule, IClientListener, IGameList
 
     private ECommandAction HandleHelp(IGameClient client)
     {
-        Reply(client, "\x04\x01 \x04======= W4de Surf Commands =======");
-        Reply(client, " \x09!map \x01<id|name> \x08- change map (admin)");
-        Reply(client, " \x09!rtv \x08- rock the vote");
-        Reply(client, " \x09!nominate \x01<name> \x08- nominate for next vote");
-        Reply(client, " \x09!extend \x08- vote extend during a vote");
-        Reply(client, " \x09!1..!5 \x08- vote during map vote");
-        Reply(client, " \x09!maps \x08- list rotation");
-        Reply(client, " \x09!addmap \x01<id> \x08- add to rotation (admin)");
-        Reply(client, " \x09!removemap \x01<id|name> \x08- remove (admin)");
-        Reply(client, " \x09!h \x08- this menu");
-        Reply(client, " \x09!rank \x08- show your rank");
-        Reply(client, " \x09!lb \x08- leaderboard");
-        Reply(client, "\x04\x01 \x04============================");
+        Reply(client, " \x04===== W4de Surf Commands =====");
+        Reply(client, " \x09Timer");
+        Reply(client, "  \x09!r \x08- restart  \x09!s \x08- stage select  \x09!b \x08- bonus");
+        Reply(client, "  \x09!stop \x08- stop timer  \x09!pause \x08- pause  \x09!resume \x08- resume");
+        Reply(client, "  \x09!nc \x08- noclip  \x09!spec \x08- spectate");
+        Reply(client, " \x09Records");
+        Reply(client, "  \x09!wr \x08- server record  \x09!swr \x08- stage SR  \x09!bwr \x08- bonus SR");
+        Reply(client, "  \x09!pb \x08- personal best  \x09!spb \x08- stage PB  \x09!bpb \x08- bonus PB");
+        Reply(client, "  \x09!cpr \x08- checkpoint comparison  \x09!recent \x08- recent runs");
+        Reply(client, " \x09Stats");
+        Reply(client, "  \x09!rank \x08- your rank  \x09!top \x08- leaderboard  \x09!stats \x08- player stats");
+        Reply(client, "  \x09!profile \x08- profile  \x09!playtime \x08- play time  \x09!mi \x08- map info");
+        Reply(client, " \x09Practice");
+        Reply(client, "  \x09!save \x08- save position  \x09!tele \x08- teleport back  \x09!clearcp \x08- clear");
+        Reply(client, "  \x09!knife \x08- give knife  \x09!usp \x08- give usp  \x09!glock \x08- give glock");
+        Reply(client, " \x09Map Vote");
+        Reply(client, "  \x09!rtv \x08- rock the vote  \x09!nominate \x08- nominate map  \x09!extend \x08- extend");
+        Reply(client, "  \x09!maps \x08- map list  \x09!map \x01<name> \x08- change map (admin)");
+        Reply(client, " \x04=============================");
         return ECommandAction.Handled;
     }
 
