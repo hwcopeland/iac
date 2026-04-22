@@ -15,7 +15,7 @@
          ExcludeAssets="runtime" so we don't bundle the DLL into the module
          output dir — sharp/core/ already has it. -->
     <PackageReference Include="ModSharp.Sharp.Shared"
-                      Version="2.1.117"
+                      Version="2.1.120"
                       ExcludeAssets="runtime" />
     <PackageReference Include="MySqlConnector" Version="2.4.0" />
   </ItemGroup>
