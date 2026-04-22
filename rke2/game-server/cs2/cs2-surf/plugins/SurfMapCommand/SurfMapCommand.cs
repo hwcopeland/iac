@@ -222,7 +222,7 @@ public sealed class SurfMapCommand : IModSharpModule, IClientListener, IGameList
             var (_, rankName) = GetRank(GetPlayerPoints(client.SteamId));
             if (client.GetPlayerController() is { } ctrl)
             {
-                ctrl.SetClanTag(rankName);
+                ctrl.SetClanTag($"[{rankName}]");
             }
         }
         catch { }
