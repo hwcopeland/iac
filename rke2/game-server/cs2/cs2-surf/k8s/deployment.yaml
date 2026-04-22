@@ -136,7 +136,7 @@ spec:
             # @root and @admin entries in configs/admins.jsonc. If you add or
             # remove an admin, update both places.
             - name: MAP_ADMIN_STEAMIDS
-              value: "76561198808592972,76561198047424687,76561197987522730"
+              value: "76561198808592972,76561198047424687,76561197987522730,76561198121257296"
             - name: MAP_ROTATION_MINUTES
               value: "30"
             - name: MAP_EXTEND_MINUTES
