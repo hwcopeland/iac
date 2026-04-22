@@ -48,21 +48,20 @@ if [ ! -L "${STEAM_APPS}" ]; then
 fi
 
 # ── Step 1: Install / Update CS2 Dedicated Server ───────────────────────────
-if [ -f "${CS2_DIR}/game/bin/linuxsteamrt64/cs2" ] && [ "${FORCE_UPDATE:-0}" != "1" ]; then
-    log "CS2 already installed, skipping steamcmd. Set FORCE_UPDATE=1 to force."
-else
-    log "Installing/updating CS2 via steamcmd..."
-    "${STEAMCMD_DIR}/steamcmd.sh" \
-        +force_install_dir "${CS2_DIR}" \
-        +login anonymous \
-        +app_update 730 \
-        +quit
+# Always run app_update — steamcmd does a fast delta check and only
+# downloads what changed. Skipping this caused the server to fall behind
+# on CS2 updates, leaving players stuck on "client out of date".
+log "Checking for CS2 updates via steamcmd..."
+"${STEAMCMD_DIR}/steamcmd.sh" \
+    +force_install_dir "${CS2_DIR}" \
+    +login anonymous \
+    +app_update 730 \
+    +quit
 
-    if [ ! -f "${CS2_DIR}/game/bin/linuxsteamrt64/cs2" ]; then
-        die "CS2 binary not found after steamcmd update. Check disk space and network."
-    fi
-    log "CS2 server files up to date."
+if [ ! -f "${CS2_DIR}/game/bin/linuxsteamrt64/cs2" ]; then
+    die "CS2 binary not found after steamcmd update. Check disk space and network."
 fi
+log "CS2 server files up to date."
 
 # ── Step 2: Apply plugin overlay ────────────────────────────────────────────
 log "Checking plugin overlay..."
