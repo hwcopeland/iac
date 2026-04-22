@@ -12,8 +12,8 @@
 # ---------------------------------------------------------------------------
 # ARGs — pin every dependency version
 # ---------------------------------------------------------------------------
-ARG MODSHARP_VERSION="git-118"
-ARG MODSHARP_BUILD="118"
+ARG MODSHARP_VERSION="git-120"
+ARG MODSHARP_BUILD="120"
 
 # Plugins with GitHub releases (pinned versions)
 ARG RAMPFIX_VERSION="v1.0.6"
@@ -37,7 +37,7 @@ WORKDIR /build
 # --- Source2Surf/Timer (hwcopeland fork with surf patches) ---
 # TIMER_COMMIT is bumped whenever the fork is updated to bust Docker's
 # layer cache (git clone is cached by instruction text, not remote state).
-ARG TIMER_COMMIT="0cf49b7"
+ARG TIMER_COMMIT="6d66615"
 RUN echo "timer:${TIMER_COMMIT}" && git clone --branch "${SOURCE2SURF_TIMER_REF}" \
         https://github.com/hwcopeland/Timer.git /build/timer
 WORKDIR /build/timer
