@@ -154,10 +154,19 @@ if [ -f "${CONFIGS_DIR}/maptiers.txt" ]; then
     log "Deployed maptiers.txt"
 fi
 
-# Clean up modules dropped from the image (MCS, AddonManager, the Tnms set).
+# addon_manager.jsonc → sharp/configs/ (AddonManager workshop addon config)
+# NOTE: contains ${API_KEY} placeholder — entrypoint.sh runs envsubst on this
+# file separately (Step 3e) after apply-overlay copies the template.
+if [ -f "${CONFIGS_DIR}/addon_manager.jsonc" ]; then
+    mkdir -p "${CS2_DIR}/game/sharp/configs"
+    cp -f "${CONFIGS_DIR}/addon_manager.jsonc" "${CS2_DIR}/game/sharp/configs/addon_manager.jsonc"
+    log "Deployed addon_manager.jsonc"
+fi
+
+# Clean up modules dropped from the image (MCS, the Tnms set).
 # apply-overlay does cp -rf which adds + overwrites but doesn't remove, so
 # deletions upstream in the image need explicit cleanup here.
-for dead in MapChooserSharpMS AddonManager TnmsLocalizationPlatform \
+for dead in MapChooserSharpMS TnmsLocalizationPlatform \
             TnmsAdministrationPlatform TnmsExtendableTargeting; do
     if [ -d "${CS2_DIR}/game/sharp/modules/${dead}" ]; then
         rm -rf "${CS2_DIR}/game/sharp/modules/${dead}"
@@ -172,9 +181,6 @@ for dead in MapChooserSharpMS.Shared TnmsLocalizationPlatform.Shared \
         log "Removed stale shared ${dead}"
     fi
 done
-# addon_manager.jsonc is also dead
-rm -f "${CS2_DIR}/game/sharp/configs/addon_manager.jsonc"
-
 # Patch gameinfo.gi: add "Game sharp" before "Game csgo" per ModSharp docs
 # Also strip any leftover Metamod/CSS entries from kus
 GAMEINFO="${CS2_DIR}/game/csgo/gameinfo.gi"

@@ -142,8 +142,18 @@ if [ -f "${RAMPFIX_DISABLED}" ]; then
     log "Removed RampFix.disabled marker"
 fi
 
-# ── Step 4: Launch CS2 ──────────────────────────────────────────────────────
-# ── Step 3b: Ensure engine .so files are available to csgo/bin ──────────────
+# ── Step 3e: AddonManager config substitution ─────────────────────────────
+# addon_manager.jsonc contains ${API_KEY} for the Steam Web API key.
+# Substitute env vars and deploy to sharp/configs/.
+AM_TEMPLATE="/opt/cs2-surf/configs/addon_manager.jsonc"
+AM_TARGET="${CS2_DIR}/game/sharp/configs/addon_manager.jsonc"
+if [ -f "${AM_TEMPLATE}" ]; then
+    mkdir -p "$(dirname "${AM_TARGET}")"
+    envsubst < "${AM_TEMPLATE}" > "${AM_TARGET}"
+    log "AddonManager config written to ${AM_TARGET}"
+fi
+
+# ── Step 3f: Ensure engine .so files are available to csgo/bin ───────────────
 # ModSharp's libserver.so in csgo/bin/ needs libv8.so from game/bin/
 # CS2 16.9.2025 update requires these to be accessible from csgo/bin/
 ENGINE_BIN="${CS2_DIR}/game/bin/linuxsteamrt64"
@@ -273,18 +283,32 @@ s.close()
     ) &
 fi
 
-exec "${CS2_DIR}/game/bin/linuxsteamrt64/cs2" \
-    -dedicated \
-    -console \
-    -usercon \
-    -autoupdate \
-    -port "${PORT:-27015}" \
-    -tickrate "${TICKRATE:-128}" \
-    -authkey "${API_KEY}" \
-    +map "${MAP:-de_dust2}" \
-    +sv_setsteamaccount "${STEAM_ACCOUNT}" \
-    +rcon_password "${RCON_PASSWORD}" \
-    +sv_visiblemaxplayers "${MAXPLAYERS:-32}" \
-    +game_type "${GAME_TYPE:-0}" \
-    +game_mode "${GAME_MODE:-0}" \
+# Build the launch command. -dual_addon mounts a Steam Workshop addon so
+# AddonManager can manage it (force client downloads, extract VPK, auto-update).
+# NOTE: -dual_addon can cause the engine to sleep forever on first boot if the
+# addon is not yet cached on the PVC. AddonManager mitigates this by handling
+# the initial download, but if the server hangs on startup, check the PVC for
+# stale workshop state.
+LAUNCH_ARGS=(
+    -dedicated
+    -console
+    -usercon
+    -autoupdate
+    -port "${PORT:-27015}"
+    -tickrate "${TICKRATE:-128}"
+    -authkey "${API_KEY}"
+    +map "${MAP:-de_dust2}"
+    +sv_setsteamaccount "${STEAM_ACCOUNT}"
+    +rcon_password "${RCON_PASSWORD}"
+    +sv_visiblemaxplayers "${MAXPLAYERS:-32}"
+    +game_type "${GAME_TYPE:-0}"
+    +game_mode "${GAME_MODE:-0}"
     +hostname "${SERVER_NAME:-CS2 Surf Server}"
+)
+
+if [ -n "${WORKSHOP_ADDON_ID:-}" ]; then
+    log "  AddonID:    ${WORKSHOP_ADDON_ID} (via -dual_addon)"
+    LAUNCH_ARGS+=(-dual_addon "${WORKSHOP_ADDON_ID}")
+fi
+
+exec "${CS2_DIR}/game/bin/linuxsteamrt64/cs2" "${LAUNCH_ARGS[@]}"
