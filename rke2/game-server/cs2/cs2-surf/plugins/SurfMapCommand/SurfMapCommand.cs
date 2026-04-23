@@ -294,6 +294,7 @@ public sealed class SurfMapCommand : IModSharpModule, IClientListener, IGameList
         {
             case "map": case "changemap":       return HandleMap(client, arg);
             case "testsound":                    return HandleTestSound(client, arg);
+            case "testweapon":                   return HandleTestWeapon(client, arg);
             case "rtv":                          return HandleRtv(client);
             case "nominate": case "nom":         return HandleNominate(client, arg);
             case "extend": case "ext":
@@ -508,50 +509,137 @@ public sealed class SurfMapCommand : IModSharpModule, IClientListener, IGameList
     {
         if (!RequireAdmin(client, "!testsound")) return ECommandAction.Handled;
 
-        var sound = "cs2/quakesounds/default/godlike";
-        var method = (arg ?? "1").Trim();
+        var method = (arg ?? "help").Trim();
 
-        Reply(client, $"[surf] Testing sound method {method}...");
-        _logger.LogInformation("TESTSOUND method={M} for {Id}", method, client.SteamId);
+        Reply(client, $"[surf] Testing sound: {method}");
+        _logger.LogInformation("TESTSOUND {M} for {Id}", method, client.SteamId);
 
         try
         {
+            // Test different sound paths + APIs
             switch (method)
             {
-                case "1": // FakeCommand
-                    client.FakeCommand($"play {sound}");
-                    Reply(client, "[surf] FakeCommand sent");
+                // Built-in CS2 sounds (should definitely work if API is correct)
+                case "builtin1":
+                    client.ExecuteStringCommand("play sounds/ui/panorama/case_awarded_1_uncommon_01");
+                    Reply(client, "[surf] builtin case_awarded sent");
                     break;
-                case "2": // Command
-                    client.Command($"play {sound}");
-                    Reply(client, "[surf] Command sent");
+                case "builtin2":
+                    client.ExecuteStringCommand("play sounds/music/valve_csgo_03/startround_01");
+                    Reply(client, "[surf] builtin startround sent");
                     break;
-                case "3": // ExecuteStringCommand (known crasher)
-                    client.ExecuteStringCommand($"play {sound}");
-                    Reply(client, "[surf] ExecuteStringCommand sent");
+                case "builtin3":
+                    client.ExecuteStringCommand("play sounds/ui/panorama/music_mainmenu_01");
+                    Reply(client, "[surf] builtin mainmenu sent");
                     break;
-                case "4": // ISoundManager
-                    var sm = _shared.GetSoundManager();
-                    sm.StartSoundEvent(sound);
-                    Reply(client, "[surf] StartSoundEvent sent");
+
+                // Sound manager with built-in events
+                case "event1":
+                    _shared.GetSoundManager().StartSoundEvent("UIPanorama.case_awarded_uncommon");
+                    Reply(client, "[surf] event case_awarded_uncommon");
                     break;
-                case "5": // pawn EmitSound
-                    if (client.GetPlayerController()?.GetPlayerPawn() is { } pawn)
+                case "event2":
+                    _shared.GetSoundManager().StartSoundEvent("Music.MVPPreviewMusic");
+                    Reply(client, "[surf] event MVPPreviewMusic");
+                    break;
+
+                // Our custom sound with different path formats
+                case "custom1":
+                    client.ExecuteStringCommand("play cs2/quakesounds/default/godlike");
+                    Reply(client, "[surf] custom path 1");
+                    break;
+                case "custom2":
+                    client.ExecuteStringCommand("play sounds/surf/godlike");
+                    Reply(client, "[surf] custom path 2");
+                    break;
+                case "custom3":
+                    client.ExecuteStringCommand("play sound/surf/godlike");
+                    Reply(client, "[surf] custom path 3");
+                    break;
+
+                // Pawn emit with built-in
+                case "emit":
+                    if (client.GetPlayerController()?.GetPlayerPawn() is { } p)
                     {
-                        pawn.EmitSound(sound);
-                        Reply(client, "[surf] EmitSound sent");
+                        p.EmitSound("Player.DamageKevlar");
+                        Reply(client, "[surf] EmitSound Player.DamageKevlar");
                     }
                     break;
+
                 default:
-                    Reply(client, "[surf] Usage: !testsound <1-5>");
-                    Reply(client, "  1=FakeCommand  2=Command  3=ExecuteStringCommand");
-                    Reply(client, "  4=StartSoundEvent  5=EmitSound");
+                    Reply(client, "[surf] !testsound <test>");
+                    Reply(client, "  builtin1 builtin2 builtin3");
+                    Reply(client, "  event1 event2");
+                    Reply(client, "  custom1 custom2 custom3");
+                    Reply(client, "  emit");
                     break;
             }
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "TESTSOUND method {M} threw", method);
+            Reply(client, $"[surf] Method {method} threw: {ex.Message}");
+        }
+
+        return ECommandAction.Handled;
+    }
+
+    private ECommandAction HandleTestWeapon(IGameClient client, string arg)
+    {
+        if (!RequireAdmin(client, "!testweapon")) return ECommandAction.Handled;
+
+        var method = (arg ?? "1").Trim();
+        var ctrl = client.GetPlayerController();
+        var pawn = ctrl?.GetPlayerPawn();
+        if (pawn is null || !pawn.IsAlive)
+        {
+            Reply(client, "[surf] Must be alive");
+            return ECommandAction.Handled;
+        }
+
+        Reply(client, $"[surf] Testing weapon method {method}...");
+        _logger.LogInformation("TESTWEAPON method={M} for {Id}", method, client.SteamId);
+
+        try
+        {
+            switch (method)
+            {
+                case "1": // Strip all + give knife
+                    pawn.RemoveAllItems(true);
+                    _shared.GetModSharp().InvokeFrameAction(() =>
+                    {
+                        if (pawn.IsAlive) pawn.GiveNamedItem("weapon_knife");
+                    });
+                    Reply(client, "[surf] Stripped + knife given (next frame)");
+                    break;
+                case "2": // Give USP
+                    pawn.GiveNamedItem("weapon_usp_silencer");
+                    Reply(client, "[surf] USP given");
+                    break;
+                case "3": // Give Scout
+                    pawn.GiveNamedItem("weapon_ssg08");
+                    Reply(client, "[surf] Scout given");
+                    break;
+                case "4": // Full loadout: strip + knife + usp + scout
+                    pawn.RemoveAllItems(true);
+                    _shared.GetModSharp().InvokeFrameAction(() =>
+                    {
+                        if (!pawn.IsAlive) return;
+                        pawn.GiveNamedItem("weapon_knife");
+                        pawn.GiveNamedItem("weapon_usp_silencer");
+                        pawn.GiveNamedItem("weapon_ssg08");
+                    });
+                    Reply(client, "[surf] Full loadout (next frame)");
+                    break;
+                default:
+                    Reply(client, "[surf] Usage: !testweapon <1-4>");
+                    Reply(client, "  1=strip+knife  2=give usp  3=give scout  4=full loadout");
+                    break;
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "TESTWEAPON method {M} threw", method);
             Reply(client, $"[surf] Method {method} threw: {ex.Message}");
         }
 
