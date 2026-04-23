@@ -107,6 +107,22 @@
       "Permissions": [
         "@admin"
       ]
+    },
+    {
+      // Blue III
+      "Identity": 76561198121257296,
+      "Immunity": 60,
+      "Permissions": [
+        "@admin"
+      ]
+    },
+    {
+      // Tanner (TeamG | Tboner)
+      "Identity": 76561199579962707,
+      "Immunity": 60,
+      "Permissions": [
+        "@admin"
+      ]
     }
   ]
 }
