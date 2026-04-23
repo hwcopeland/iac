@@ -1,0 +1,10 @@
+{
+    // Steam Web API key — substituted from env at boot
+    "steam_api_key": "${API_KEY}",
+    // Delete local files not in the VPK on update
+    "remove_obsolete_files": true,
+    // Delete VPK after extraction
+    "remove_vpk": true,
+    // Check for updates every 30 minutes
+    "check_interval": 30
+}

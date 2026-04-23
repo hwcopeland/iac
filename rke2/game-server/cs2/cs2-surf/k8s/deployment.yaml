@@ -125,6 +125,8 @@ spec:
               value: "128"
             # Boot on a built-in map so the port binds quickly, then the
             # entrypoint RCON-switches to the workshop map once ready.
+            - name: WORKSHOP_ADDON_ID
+              value: "3461824328"
             - name: MAP
               value: "de_dust2"
             - name: STARTUP_MAP

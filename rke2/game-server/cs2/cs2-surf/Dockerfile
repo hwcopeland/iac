@@ -18,6 +18,7 @@ ARG MODSHARP_BUILD="120"
 # Plugins with GitHub releases (pinned versions)
 ARG RAMPFIX_VERSION="v1.0.6"
 ARG MSNOBLOCK_VERSION="MS-NoBlock-v.1.0.2"
+ARG ADDON_MANAGER_VERSION="v1.0.1"
 
 # Plugins built from source (pinned refs)
 ARG SOURCE2SURF_TIMER_REF="master"
@@ -70,6 +71,7 @@ ARG MODSHARP_VERSION
 ARG MODSHARP_BUILD
 ARG RAMPFIX_VERSION
 ARG MSNOBLOCK_VERSION
+ARG ADDON_MANAGER_VERSION
 RUN apt-get update && apt-get install -y --no-install-recommends \
         curl unzip ca-certificates \
     && rm -rf /var/lib/apt/lists/*
@@ -113,6 +115,15 @@ RUN curl -fsSL "https://github.com/darkerz7/MS-NoBlock/releases/download/${MSNOB
         -o /tmp/msnoblock.zip \
     && unzip -qo /tmp/msnoblock.zip -d /staging/sharp/ \
     && rm /tmp/msnoblock.zip
+
+# --- AddonManager (zip has AddonManager/ — extract into sharp/modules/) ---
+# Mounts a Steam Workshop addon via -dual_addon, forces client downloads,
+# extracts VPK contents, and auto-updates on a configurable interval.
+RUN curl -fsSL "https://github.com/Ariiisu/AddonManager/releases/download/${ADDON_MANAGER_VERSION}/AddonManager.zip" \
+        -o /tmp/addonmanager.zip \
+    && mkdir -p /staging/sharp/modules/AddonManager \
+    && unzip -qo /tmp/addonmanager.zip -d /staging/sharp/modules/AddonManager/ \
+    && rm /tmp/addonmanager.zip
 
 # --- Source2Surf/Timer (built from source) ---
 COPY --from=plugin-builder /build/out/timer/ /staging/sharp/modules/Timer/
@@ -217,5 +228,3 @@ ENV PORT="27015" \
 EXPOSE 27015/tcp 27015/udp 27020/tcp 27020/udp
 
 ENTRYPOINT ["/opt/cs2-surf/entrypoint.sh"]
-# rebuild: f8e2e0b
-# rebuild: f8e2e0b-fix2
