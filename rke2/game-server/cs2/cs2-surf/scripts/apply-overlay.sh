@@ -187,6 +187,13 @@ if [ -f "${GAMEINFO}" ]; then
         sed -i '/Game_LowViolence.*csgo_lv/a\\t\t\tGame\tsharp' "${GAMEINFO}"
         log "Patched gameinfo.gi: added Game sharp"
     fi
+    # Add "Game csgo_addons/cs2quakesounds" so the engine can resolve sound
+    # files referenced by the compiled Kandru .vsndevts_c manifests (which
+    # have SearchPath=csgo_addons/cs2quakesounds baked in at compile time).
+    if ! grep -q "Game[[:space:]]*csgo_addons/cs2quakesounds" "${GAMEINFO}"; then
+        sed -i '/Game\tsharp/a\\t\t\tGame\tcsgo_addons/cs2quakesounds' "${GAMEINFO}"
+        log "Patched gameinfo.gi: added Game csgo_addons/cs2quakesounds"
+    fi
 fi
 
 # Restore original libserver.so if previous runs messed with it
