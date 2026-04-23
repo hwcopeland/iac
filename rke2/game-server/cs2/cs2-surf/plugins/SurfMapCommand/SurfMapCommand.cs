@@ -293,6 +293,7 @@ public sealed class SurfMapCommand : IModSharpModule, IClientListener, IGameList
         switch (cmd)
         {
             case "map": case "changemap":       return HandleMap(client, arg);
+            case "testsound":                    return HandleTestSound(client, arg);
             case "rtv":                          return HandleRtv(client);
             case "nominate": case "nom":         return HandleNominate(client, arg);
             case "extend": case "ext":
@@ -502,6 +503,60 @@ public sealed class SurfMapCommand : IModSharpModule, IClientListener, IGameList
     }
 
     // ─── Commands ──────────────────────────────────────────────────────
+
+    private ECommandAction HandleTestSound(IGameClient client, string arg)
+    {
+        if (!RequireAdmin(client, "!testsound")) return ECommandAction.Handled;
+
+        var sound = "cs2/quakesounds/default/godlike";
+        var method = (arg ?? "1").Trim();
+
+        Reply(client, $"[surf] Testing sound method {method}...");
+        _logger.LogInformation("TESTSOUND method={M} for {Id}", method, client.SteamId);
+
+        try
+        {
+            switch (method)
+            {
+                case "1": // FakeCommand
+                    client.FakeCommand($"play {sound}");
+                    Reply(client, "[surf] FakeCommand sent");
+                    break;
+                case "2": // Command
+                    client.Command($"play {sound}");
+                    Reply(client, "[surf] Command sent");
+                    break;
+                case "3": // ExecuteStringCommand (known crasher)
+                    client.ExecuteStringCommand($"play {sound}");
+                    Reply(client, "[surf] ExecuteStringCommand sent");
+                    break;
+                case "4": // ISoundManager
+                    var sm = _shared.GetSoundManager();
+                    sm.StartSoundEvent(sound);
+                    Reply(client, "[surf] StartSoundEvent sent");
+                    break;
+                case "5": // pawn EmitSound
+                    if (client.GetPlayerController()?.GetPlayerPawn() is { } pawn)
+                    {
+                        pawn.EmitSound(sound);
+                        Reply(client, "[surf] EmitSound sent");
+                    }
+                    break;
+                default:
+                    Reply(client, "[surf] Usage: !testsound <1-5>");
+                    Reply(client, "  1=FakeCommand  2=Command  3=ExecuteStringCommand");
+                    Reply(client, "  4=StartSoundEvent  5=EmitSound");
+                    break;
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "TESTSOUND method {M} threw", method);
+            Reply(client, $"[surf] Method {method} threw: {ex.Message}");
+        }
+
+        return ECommandAction.Handled;
+    }
 
     private ECommandAction HandleMap(IGameClient client, string arg)
     {
