@@ -193,6 +193,15 @@ public sealed class SurfMapCommand : IModSharpModule, IClientListener, IGameList
     int IGameListener.ListenerVersion    => IGameListener.ApiVersion;
     int IGameListener.ListenerPriority   => 0;
 
+    void IGameListener.OnResourcePrecache()
+    {
+        // Precache Kandru quake sound event manifests so EmitSound() can
+        // resolve custom event names like QuakeSoundsD.Godlike.
+        _shared.GetModSharp().PrecacheResource("soundevents/soundevents_quakesounds.vsndevts");
+        _shared.GetModSharp().PrecacheResource("soundevents/soundevents_addon.vsndevts");
+        _logger.LogInformation("Precached quake sound event manifests");
+    }
+
     void IGameListener.OnServerActivate()
     {
         _logger.LogInformation("OnServerActivate - resetting state");

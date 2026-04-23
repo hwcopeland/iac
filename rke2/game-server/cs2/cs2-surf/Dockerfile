@@ -37,7 +37,7 @@ WORKDIR /build
 # --- Source2Surf/Timer (hwcopeland fork with surf patches) ---
 # TIMER_COMMIT is bumped whenever the fork is updated to bust Docker's
 # layer cache (git clone is cached by instruction text, not remote state).
-ARG TIMER_COMMIT="5c0ea2e"
+ARG TIMER_COMMIT="a5d08df"
 RUN echo "timer:${TIMER_COMMIT}" && git clone --branch "${SOURCE2SURF_TIMER_REF}" \
         https://github.com/hwcopeland/Timer.git /build/timer
 WORKDIR /build/timer
@@ -120,10 +120,13 @@ COPY --from=plugin-builder /build/out/timer-rm/ /staging/sharp/modules/Timer.Req
 COPY --from=plugin-builder /build/out/timer-shared/ /staging/sharp/shared/Timer.Shared/
 
 # --- Quake announcer sounds (Kandru cs2-quake-sounds-resources) ---
-# Sound events + vsnd_c files go under sharp/ which is in gameinfo.gi's
-# Game search path. csgo_addons/ doesn't auto-mount on dedicated servers.
+# Deploy to BOTH locations:
+#   1. sharp/ — in gameinfo.gi Game search path, found by PrecacheResource()
+#   2. csgo_addons/cs2quakesounds/ — matches the SearchPath baked into the
+#      compiled .vsndevts_c manifests by the Kandru resource compiler
 COPY addon/csgo_addons/cs2quakesounds/soundevents/ /staging/sharp/soundevents/
 COPY addon/csgo_addons/cs2quakesounds/sounds/ /staging/sharp/sounds/
+COPY addon/csgo_addons/cs2quakesounds/ /staging/csgo_addons/cs2quakesounds/
 
 # --- SurfMapCommand (in-repo native !map plugin) ---
 COPY --from=plugin-builder /build/out/surf-map-command/ /staging/sharp/modules/SurfMapCommand/
