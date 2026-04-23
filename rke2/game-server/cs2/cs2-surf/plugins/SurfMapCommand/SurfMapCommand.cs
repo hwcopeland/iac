@@ -602,12 +602,38 @@ public sealed class SurfMapCommand : IModSharpModule, IClientListener, IGameList
                     Reply(client, "[surf] global HEGrenade.Detonate");
                     break;
 
+                // Kandru addon sound events (proper CS2 addon with vsndevts)
+                case "godlike":
+                    if (client.GetPlayerController()?.GetPlayerPawn() is { } pg)
+                    { pg.EmitSound("QuakeSoundsD.Godlike"); Reply(client, "[surf] QuakeSoundsD.Godlike"); }
+                    break;
+                case "holyshit":
+                    if (client.GetPlayerController()?.GetPlayerPawn() is { } ph)
+                    { ph.EmitSound("QuakeSoundsD.Holyshit"); Reply(client, "[surf] QuakeSoundsD.Holyshit"); }
+                    break;
+                case "wickedsick":
+                    if (client.GetPlayerController()?.GetPlayerPawn() is { } pw)
+                    { pw.EmitSound("QuakeSoundsD.Wickedsick"); Reply(client, "[surf] QuakeSoundsD.Wickedsick"); }
+                    break;
+                case "dominating":
+                    if (client.GetPlayerController()?.GetPlayerPawn() is { } pd)
+                    { pd.EmitSound("QuakeSoundsD.Dominating"); Reply(client, "[surf] QuakeSoundsD.Dominating"); }
+                    break;
+                case "combowhore":
+                    if (client.GetPlayerController()?.GetPlayerPawn() is { } pc)
+                    { pc.EmitSound("QuakeSoundsD.Combowhore"); Reply(client, "[surf] QuakeSoundsD.Combowhore"); }
+                    break;
+                // Global (all players hear it)
+                case "allgodlike":
+                    _shared.GetSoundManager().StartSoundEvent("QuakeSoundsD.Godlike");
+                    Reply(client, "[surf] global QuakeSoundsD.Godlike");
+                    break;
+
                 default:
                     Reply(client, "[surf] !testsound <test>");
-                    Reply(client, "  builtin1 builtin2 builtin3");
-                    Reply(client, "  event1 event2");
-                    Reply(client, "  custom1 custom2 custom3");
-                    Reply(client, "  emit");
+                    Reply(client, "  godlike holyshit wickedsick dominating combowhore");
+                    Reply(client, "  allgodlike (plays to everyone)");
+                    Reply(client, "  emit emit2-5 global1-2 builtin1-3");
                     break;
             }
         }
