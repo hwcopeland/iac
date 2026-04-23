@@ -119,10 +119,12 @@ COPY --from=plugin-builder /build/out/timer/ /staging/sharp/modules/Timer/
 COPY --from=plugin-builder /build/out/timer-rm/ /staging/sharp/modules/Timer.RequestManager/
 COPY --from=plugin-builder /build/out/timer-shared/ /staging/sharp/shared/Timer.Shared/
 
-# --- SR announcer sounds (UT announcer MP3s for record celebrations) ---
-# CS2's `play` command resolves from csgo/sound/, so these must go
-# under the csgo/ subdir in the overlay (game/csgo/sound/surf/).
-COPY sounds/ /staging/csgo/sound/surf/
+# --- Quake announcer sounds (Kandru cs2-quake-sounds-resources addon) ---
+# Full CS2 addon with compiled .vsndevts_c soundevent manifest + .vsnd_c
+# files. Must be in csgo_addons/ so CS2 mounts it as an addon and
+# registers the sound events (QuakeSoundsD.Godlike etc). pawn.EmitSound()
+# then plays them via the proper sound system.
+COPY addon/ /staging/
 
 # --- SurfMapCommand (in-repo native !map plugin) ---
 COPY --from=plugin-builder /build/out/surf-map-command/ /staging/sharp/modules/SurfMapCommand/
