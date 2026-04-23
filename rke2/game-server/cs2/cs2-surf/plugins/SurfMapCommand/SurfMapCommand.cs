@@ -776,24 +776,61 @@ public sealed class SurfMapCommand : IModSharpModule, IClientListener, IGameList
     {
         var rotation = ReadRotationList();
         var names    = ReadMapNames();
+        var tiers    = ReadMapTiers();
         var idToName = new Dictionary<ulong, string>();
         foreach (var (n, id) in names) idToName.TryAdd(id, n);
 
         if (rotation.Count == 0) { Reply(client, "[surf] Rotation is empty."); return ECommandAction.Handled; }
 
-        Reply(client, $"[surf] {rotation.Count} maps in rotation:");
-        var line = new StringBuilder();
-        var c = 0;
+        // Resolve display names and sort into tier buckets
+        var resolved = new List<(string name, int tier)>();
         foreach (var entry in rotation)
         {
             string display = entry;
             if (ulong.TryParse(entry, out var id) && idToName.TryGetValue(id, out var n)) display = n;
-            if (c > 0) line.Append(", ");
-            line.Append(display);
-            if (++c >= 5) { Reply(client, "[surf] " + line); line.Clear(); c = 0; }
+            int tier = tiers.TryGetValue(display, out var t) ? t : 0;
+            resolved.Add((display, tier));
         }
-        if (line.Length > 0) Reply(client, "[surf] " + line);
+
+        // Group by tier, sorted alphabetically within each group
+        var tier1 = resolved.Where(m => m.tier == 1).OrderBy(m => m.name).Select(m => m.name).ToList();
+        var tier2 = resolved.Where(m => m.tier == 2).OrderBy(m => m.name).Select(m => m.name).ToList();
+        var other = resolved.Where(m => m.tier != 1 && m.tier != 2).OrderBy(m => m.name).Select(m => m.name).ToList();
+
+        Reply(client, $" \x04========== \x01Map Pool \x08({rotation.Count} maps) \x04==========");
+
+        if (tier1.Count > 0)
+        {
+            Reply(client, $" \x0BTier 1 \x08({tier1.Count})");
+            PrintMapColumns(client, tier1, "\x0B");
+        }
+        if (tier2.Count > 0)
+        {
+            Reply(client, $" \x10Tier 2 \x08({tier2.Count})");
+            PrintMapColumns(client, tier2, "\x10");
+        }
+        if (other.Count > 0)
+        {
+            Reply(client, $" \x08Untiered \x08({other.Count})");
+            PrintMapColumns(client, other, "\x08");
+        }
+
+        Reply(client, $" \x04=====================================");
         return ECommandAction.Handled;
+    }
+
+    private void PrintMapColumns(IGameClient client, List<string> maps, string color)
+    {
+        var line = new StringBuilder();
+        var c = 0;
+        foreach (var map in maps)
+        {
+            if (c > 0) line.Append("\x01, ");
+            line.Append(color);
+            line.Append(map);
+            if (++c >= 4) { Reply(client, "  " + line); line.Clear(); c = 0; }
+        }
+        if (line.Length > 0) Reply(client, "  " + line);
     }
 
     private ECommandAction HandleAddMap(IGameClient client, string arg)
