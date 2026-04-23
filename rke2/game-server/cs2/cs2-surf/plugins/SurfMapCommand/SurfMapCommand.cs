@@ -565,6 +565,42 @@ public sealed class SurfMapCommand : IModSharpModule, IClientListener, IGameList
                         Reply(client, "[surf] EmitSound Player.DamageKevlar");
                     }
                     break;
+                case "emit2":
+                    if (client.GetPlayerController()?.GetPlayerPawn() is { } p2)
+                    {
+                        p2.EmitSound("Player.Headshot");
+                        Reply(client, "[surf] Player.Headshot");
+                    }
+                    break;
+                case "emit3":
+                    if (client.GetPlayerController()?.GetPlayerPawn() is { } p3)
+                    {
+                        p3.EmitSound("HEGrenade.Detonate");
+                        Reply(client, "[surf] HEGrenade.Detonate");
+                    }
+                    break;
+                case "emit4":
+                    if (client.GetPlayerController()?.GetPlayerPawn() is { } p4)
+                    {
+                        p4.EmitSound("Flashbang.Detonate");
+                        Reply(client, "[surf] Flashbang.Detonate");
+                    }
+                    break;
+                case "emit5":
+                    if (client.GetPlayerController()?.GetPlayerPawn() is { } p5)
+                    {
+                        p5.EmitSound("Player.Death");
+                        Reply(client, "[surf] Player.Death");
+                    }
+                    break;
+                case "global1":
+                    _shared.GetSoundManager().StartSoundEvent("Player.Headshot");
+                    Reply(client, "[surf] global Player.Headshot");
+                    break;
+                case "global2":
+                    _shared.GetSoundManager().StartSoundEvent("HEGrenade.Detonate");
+                    Reply(client, "[surf] global HEGrenade.Detonate");
+                    break;
 
                 default:
                     Reply(client, "[surf] !testsound <test>");
