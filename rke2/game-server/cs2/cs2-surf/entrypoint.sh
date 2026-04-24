@@ -51,7 +51,7 @@ fi
 # Always run app_update — steamcmd does a fast delta check and only
 # downloads what changed. Skipping this caused the server to fall behind
 # on CS2 updates, leaving players stuck on "client out of date".
-# Clear stale download state that causes persistent 0x6 errors
+# Clear partial downloads that can cause 0x6 on restart
 rm -rf "${CS2_DIR}/steamapps/downloading" "${CS2_DIR}/steamapps/temp" 2>/dev/null || true
 
 log "Checking for CS2 updates via steamcmd..."
@@ -60,7 +60,10 @@ if ! "${STEAMCMD_DIR}/steamcmd.sh" \
     +login anonymous \
     +app_update 730 \
     +quit; then
-    log "WARNING: steamcmd failed (state 0x6 or network error). Retrying with validate..."
+    # State 0x6 = files corrupt. Nuke the manifest so steamcmd does a full
+    # re-validate instead of refusing to proceed.
+    log "WARNING: steamcmd failed. Clearing manifest and retrying with validate..."
+    rm -f "${CS2_DIR}/steamapps/appmanifest_730.acf" 2>/dev/null || true
     "${STEAMCMD_DIR}/steamcmd.sh" \
         +force_install_dir "${CS2_DIR}" \
         +login anonymous \
