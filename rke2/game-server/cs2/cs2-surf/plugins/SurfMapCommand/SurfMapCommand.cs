@@ -797,6 +797,8 @@ public sealed class SurfMapCommand : IModSharpModule, IClientListener, IGameList
         var tier2 = resolved.Where(m => m.tier == 2).OrderBy(m => m.name).Select(m => m.name).ToList();
         var other = resolved.Where(m => m.tier != 1 && m.tier != 2).OrderBy(m => m.name).Select(m => m.name).ToList();
 
+        _logger.LogInformation("!maps: {T1} tier1, {T2} tier2, {O} other", tier1.Count, tier2.Count, other.Count);
+
         Reply(client, $" \x04========== \x01Map Pool \x08({rotation.Count} maps) \x04==========");
 
         if (tier1.Count > 0)
@@ -806,8 +808,8 @@ public sealed class SurfMapCommand : IModSharpModule, IClientListener, IGameList
         }
         if (tier2.Count > 0)
         {
-            Reply(client, $" \x10Tier 2 \x08({tier2.Count})");
-            PrintMapColumns(client, tier2, "\x10");
+            Reply(client, $" \x0ETier 2 \x08({tier2.Count})");
+            PrintMapColumns(client, tier2, "\x0E");
         }
         if (other.Count > 0)
         {
@@ -1076,8 +1078,14 @@ public sealed class SurfMapCommand : IModSharpModule, IClientListener, IGameList
 
     private void Reply(IGameClient client, string msg)
     {
-        try { client.GetPlayerController()?.GetPlayerPawn()?.Print(HudPrintChannel.Chat, msg); }
-        catch { }
+        try
+        {
+            var ctrl = client.GetPlayerController();
+            var pawn = ctrl?.GetPlayerPawn();
+            if (pawn is null) { _logger.LogWarning("Reply: pawn null for {Id}", client.SteamId); return; }
+            pawn.Print(HudPrintChannel.Chat, msg);
+        }
+        catch (Exception ex) { _logger.LogError(ex, "Reply failed"); }
     }
 
     private void Announce(string msg)
