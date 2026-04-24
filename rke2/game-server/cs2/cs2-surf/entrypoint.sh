@@ -52,11 +52,18 @@ fi
 # downloads what changed. Skipping this caused the server to fall behind
 # on CS2 updates, leaving players stuck on "client out of date".
 log "Checking for CS2 updates via steamcmd..."
-"${STEAMCMD_DIR}/steamcmd.sh" \
+if ! "${STEAMCMD_DIR}/steamcmd.sh" \
     +force_install_dir "${CS2_DIR}" \
     +login anonymous \
     +app_update 730 \
-    +quit
+    +quit; then
+    log "WARNING: steamcmd failed (state 0x6 or network error). Retrying with validate..."
+    "${STEAMCMD_DIR}/steamcmd.sh" \
+        +force_install_dir "${CS2_DIR}" \
+        +login anonymous \
+        +app_update 730 validate \
+        +quit
+fi
 
 if [ ! -f "${CS2_DIR}/game/bin/linuxsteamrt64/cs2" ]; then
     die "CS2 binary not found after steamcmd update. Check disk space and network."
