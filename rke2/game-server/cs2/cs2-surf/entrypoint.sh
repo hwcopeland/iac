@@ -51,6 +51,9 @@ fi
 # Always run app_update — steamcmd does a fast delta check and only
 # downloads what changed. Skipping this caused the server to fall behind
 # on CS2 updates, leaving players stuck on "client out of date".
+# Clear stale download state that causes persistent 0x6 errors
+rm -rf "${CS2_DIR}/steamapps/downloading" "${CS2_DIR}/steamapps/temp" 2>/dev/null || true
+
 log "Checking for CS2 updates via steamcmd..."
 if ! "${STEAMCMD_DIR}/steamcmd.sh" \
     +force_install_dir "${CS2_DIR}" \
