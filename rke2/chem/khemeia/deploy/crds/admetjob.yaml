@@ -1,0 +1,177 @@
+---
+# ADMETJob CRD — ADMET property prediction stage.
+# Predicts Absorption, Distribution, Metabolism, Excretion, and Toxicity
+# properties using one or more prediction engines. Applies MPO (multi-parameter
+# optimization) profiles to filter compounds.
+# See docs/tdd/wp-9-infrastructure.md section 8 for design rationale.
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: admetjobs.khemeia.io
+  labels:
+    app.kubernetes.io/name: khemeia
+    app.kubernetes.io/component: crd
+spec:
+  group: khemeia.io
+  names:
+    kind: ADMETJob
+    listKind: ADMETJobList
+    plural: admetjobs
+    singular: admetjob
+    shortNames:
+      - aj
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              required: ["compoundRefs"]
+              properties:
+                compoundRefs:
+                  type: array
+                  description: "Provenance artifact_ids of compounds to evaluate"
+                  items:
+                    type: string
+                engines:
+                  type: array
+                  default: ["admet_ai"]
+                  description: "ADMET prediction engines to run"
+                  items:
+                    type: string
+                    enum: ["admet_ai", "admetlab3"]
+                mpoProfile:
+                  type: string
+                  default: "drug-like"
+                  description: "Multi-parameter optimization profile for filtering"
+                # -- Common fields --
+                computeClass:
+                  type: string
+                  default: "cpu"
+                  description: "Compute class — cpu is sufficient for ADMET prediction"
+                timeout:
+                  type: string
+                  default: "2h"
+                retryPolicy:
+                  type: string
+                  default: "on-failure"
+                  enum: ["never", "on-failure", "always"]
+                maxRetries:
+                  type: integer
+                  default: 3
+                gate:
+                  type: string
+                  default: "manual"
+                  enum: ["auto", "manual"]
+                parentJob:
+                  type: object
+                  properties:
+                    kind:
+                      type: string
+                    name:
+                      type: string
+                    selectedArtifactIds:
+                      type: array
+                      items:
+                        type: string
+            status:
+              type: object
+              properties:
+                phase:
+                  type: string
+                  default: "Pending"
+                  enum: ["Pending", "Running", "Succeeded", "Failed"]
+                startTime:
+                  type: string
+                  format: date-time
+                completionTime:
+                  type: string
+                  format: date-time
+                provenanceRef:
+                  type: string
+                  description: "Provenance artifact_id of the ADMET predictions"
+                predictions:
+                  type: array
+                  description: "Per-compound ADMET prediction summaries"
+                  items:
+                    type: object
+                    properties:
+                      compoundId:
+                        type: string
+                      engine:
+                        type: string
+                      passedMPO:
+                        type: boolean
+                        description: "Whether compound passed the MPO profile filter"
+                      lipinski:
+                        type: boolean
+                        description: "Lipinski rule-of-five compliance"
+                      caco2Perm:
+                        type: number
+                        description: "Predicted Caco-2 permeability (log cm/s)"
+                      hergIC50:
+                        type: number
+                        description: "Predicted hERG IC50 (uM) — cardiac toxicity indicator"
+                artifactIds:
+                  type: array
+                  description: "S3 keys of ADMET prediction artifacts"
+                  items:
+                    type: string
+                parentJob:
+                  type: object
+                  properties:
+                    kind:
+                      type: string
+                    name:
+                      type: string
+                retryCount:
+                  type: integer
+                  default: 0
+                conditions:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      type:
+                        type: string
+                      status:
+                        type: string
+                        enum: ["True", "False", "Unknown"]
+                      reason:
+                        type: string
+                      message:
+                        type: string
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+                events:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      timestamp:
+                        type: string
+                        format: date-time
+                      message:
+                        type: string
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Phase
+          type: string
+          jsonPath: .status.phase
+        - name: Engines
+          type: string
+          jsonPath: .spec.engines
+        - name: Compounds
+          type: integer
+          jsonPath: .status.predictions
+          priority: 1
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp

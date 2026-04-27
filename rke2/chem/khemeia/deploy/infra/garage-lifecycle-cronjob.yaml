@@ -1,0 +1,78 @@
+---
+# Daily CronJob to enforce object lifecycle policies on Garage buckets.
+# Garage does not support native S3 lifecycle policies, so this CronJob
+# sweeps expired objects using the AWS CLI against the Garage S3 endpoint.
+#
+# Policies:
+#   - khemeia-scratch:       delete objects older than 7 days
+#   - khemeia-trajectories:  delete objects older than 90 days
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: garage-lifecycle
+  namespace: chem
+  labels:
+    app.kubernetes.io/name: garage
+spec:
+  schedule: "0 3 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: garage
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: sweep
+              image: amazon/aws-cli:2.17.0
+              command: ["/bin/sh", "-c"]
+              args:
+                - |
+                  set -e
+                  ENDPOINT="http://garage.chem.svc.cluster.local:3900"
+
+                  echo "Starting lifecycle sweep at $(date -u)"
+
+                  # Delete objects older than 7 days in khemeia-scratch
+                  CUTOFF_7D=$(date -u -d '-7 days' +%Y-%m-%d 2>/dev/null || date -u -v-7d +%Y-%m-%d)
+                  echo "Sweeping khemeia-scratch (cutoff: $CUTOFF_7D)..."
+                  aws --endpoint-url "$ENDPOINT" s3 ls s3://khemeia-scratch/ --recursive 2>/dev/null | \
+                    awk -v cutoff="$CUTOFF_7D" '$1 < cutoff {print $4}' | \
+                    while read -r key; do
+                      [ -n "$key" ] && aws --endpoint-url "$ENDPOINT" s3 rm "s3://khemeia-scratch/$key"
+                    done
+
+                  # Delete objects older than 90 days in khemeia-trajectories
+                  CUTOFF_90D=$(date -u -d '-90 days' +%Y-%m-%d 2>/dev/null || date -u -v-90d +%Y-%m-%d)
+                  echo "Sweeping khemeia-trajectories (cutoff: $CUTOFF_90D)..."
+                  aws --endpoint-url "$ENDPOINT" s3 ls s3://khemeia-trajectories/ --recursive 2>/dev/null | \
+                    awk -v cutoff="$CUTOFF_90D" '$1 < cutoff {print $4}' | \
+                    while read -r key; do
+                      [ -n "$key" ] && aws --endpoint-url "$ENDPOINT" s3 rm "s3://khemeia-trajectories/$key"
+                    done
+
+                  echo "Lifecycle sweep complete at $(date -u)"
+              env:
+                - name: AWS_ACCESS_KEY_ID
+                  valueFrom:
+                    secretKeyRef:
+                      name: garage-secret
+                      key: access-key-id
+                - name: AWS_SECRET_ACCESS_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: garage-secret
+                      key: secret-access-key
+                - name: AWS_DEFAULT_REGION
+                  value: "garage"
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
+                limits:
+                  cpu: 200m
+                  memory: 128Mi

@@ -1,0 +1,9 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - garage-secret.yaml
+  - garage-config.yaml
+  - garage-statefulset.yaml
+  - garage-service.yaml
+  - garage-buckets-job.yaml
+  - garage-lifecycle-cronjob.yaml

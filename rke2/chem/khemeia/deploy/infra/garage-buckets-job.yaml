@@ -1,0 +1,74 @@
+---
+# One-shot Job to initialize Garage: configure cluster layout, create all 7
+# buckets, create the khemeia-app API key, and grant read/write/owner on each
+# bucket. Uses the Garage CLI (not the S3 API) because bucket lifecycle
+# policies and layout operations are admin-only.
+#
+# This Job is idempotent — all create/assign operations use `|| true` to
+# tolerate re-runs against an already-initialized Garage instance.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: garage-bucket-init
+  namespace: chem
+  labels:
+    app.kubernetes.io/name: garage
+spec:
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: garage
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: init
+          image: dxflrs/garage:v1.0.1
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -e
+              ADMIN="http://garage.chem.svc.cluster.local:3902"
+
+              # Wait for Garage to be ready
+              echo "Waiting for Garage health endpoint..."
+              until curl -sf "$ADMIN/health"; do sleep 2; done
+              echo "Garage is healthy."
+
+              # Configure cluster layout (single node)
+              NODE_ID=$(garage -c /etc/garage.toml node id 2>/dev/null | head -1 | awk '{print $1}')
+              garage -c /etc/garage.toml layout assign "$NODE_ID" -z dc1 -c 1G 2>/dev/null || true
+              garage -c /etc/garage.toml layout apply --version 1 2>/dev/null || true
+
+              # Create buckets
+              for BUCKET in khemeia-receptors khemeia-libraries khemeia-poses \
+                            khemeia-trajectories khemeia-reports khemeia-panels \
+                            khemeia-scratch; do
+                echo "Creating bucket: $BUCKET"
+                garage -c /etc/garage.toml bucket create "$BUCKET" 2>/dev/null || true
+              done
+
+              # Create API key and grant access
+              garage -c /etc/garage.toml key create khemeia-app 2>/dev/null || true
+              KEY_ID=$(garage -c /etc/garage.toml key info khemeia-app 2>/dev/null | grep "Key ID" | awk '{print $3}')
+              for BUCKET in khemeia-receptors khemeia-libraries khemeia-poses \
+                            khemeia-trajectories khemeia-reports khemeia-panels \
+                            khemeia-scratch; do
+                garage -c /etc/garage.toml bucket allow --read --write --owner "$BUCKET" --key khemeia-app 2>/dev/null || true
+              done
+
+              echo "Garage initialization complete"
+          env:
+            - name: GARAGE_RPC_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: garage-secret
+                  key: rpc-secret
+          volumeMounts:
+            - name: config
+              mountPath: /etc/garage.toml
+              subPath: garage.toml
+      volumes:
+        - name: config
+          configMap:
+            name: garage-config

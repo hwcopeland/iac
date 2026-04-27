@@ -1,0 +1,123 @@
+---
+# GPU Smoke Test — run manually via: kubectl apply -f tests/gpu-smoke.yaml
+# Verifies RTX 3070 is accessible from a pod using the gpu compute class settings
+# (NixOS host-path mounts, nodeSelector, toleration, LD_LIBRARY_PATH).
+#
+# After applying, check results:
+#   kubectl wait --for=condition=complete job/gpu-smoke -n chem --timeout=120s
+#   kubectl logs job/gpu-smoke -n chem
+#
+# Expected output: nvidia-smi listing RTX 3070 with driver/CUDA info.
+# Clean up:
+#   kubectl delete -f tests/gpu-smoke.yaml
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: gpu-smoke
+  namespace: chem
+  labels:
+    app.kubernetes.io/name: khemeia
+    app.kubernetes.io/component: gpu-smoke-test
+    khemeia.io/managed-by: manual-test
+spec:
+  ttlSecondsAfterFinished: 600
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: khemeia
+        app.kubernetes.io/component: gpu-smoke-test
+    spec:
+      restartPolicy: Never
+      # Schedule on the GPU node (matches gpu compute class nodeSelector).
+      nodeSelector:
+        gpu: "rtx3070"
+      # Tolerate the GPU taint (matches gpu compute class toleration).
+      tolerations:
+        - key: "gpu"
+          value: "true"
+          effect: "NoSchedule"
+      # NixOS host-path volumes for NVIDIA driver libraries.
+      # /run/opengl-driver contains the userspace driver (libcuda, libnvidia-ml).
+      # /nix/store is needed because some driver libs are symlinked into the store.
+      volumes:
+        - name: nvidia-driver
+          hostPath:
+            path: /run/opengl-driver
+        - name: nix-store
+          hostPath:
+            path: /nix/store
+      containers:
+        - name: gpu-smoke
+          image: ubuntu:22.04
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -euo pipefail
+              echo "=== GPU Smoke Test ==="
+              echo "Date: $(date -u)"
+              echo "Hostname: $(hostname)"
+              echo "Node: ${NODE_NAME:-unknown}"
+              echo ""
+
+              # Verify nvidia-smi is accessible via the NixOS driver path.
+              NVIDIA_SMI="/run/opengl-driver/bin/nvidia-smi"
+              if [ ! -f "$NVIDIA_SMI" ]; then
+                echo "FAIL: nvidia-smi not found at $NVIDIA_SMI"
+                echo "Contents of /run/opengl-driver/:"
+                ls -la /run/opengl-driver/ 2>/dev/null || echo "  (directory not found)"
+                ls -la /run/opengl-driver/bin/ 2>/dev/null || echo "  (bin/ not found)"
+                exit 1
+              fi
+
+              echo "--- nvidia-smi output ---"
+              "$NVIDIA_SMI"
+              echo ""
+
+              # Verify RTX 3070 is detected.
+              GPU_NAME=$("$NVIDIA_SMI" --query-gpu=name --format=csv,noheader 2>/dev/null || true)
+              echo "Detected GPU: $GPU_NAME"
+
+              if echo "$GPU_NAME" | grep -qi "3070"; then
+                echo "PASS: RTX 3070 detected"
+              else
+                echo "FAIL: Expected RTX 3070, got: $GPU_NAME"
+                exit 1
+              fi
+
+              # Print driver and CUDA version for records.
+              echo ""
+              echo "--- Driver Info ---"
+              "$NVIDIA_SMI" --query-gpu=driver_version,compute_cap --format=csv 2>/dev/null || true
+
+              echo ""
+              echo "--- Library Path ---"
+              echo "LD_LIBRARY_PATH=$LD_LIBRARY_PATH"
+              ls /run/opengl-driver/lib/libcuda* 2>/dev/null || echo "(no libcuda found in driver path)"
+
+              echo ""
+              echo "=== GPU Smoke Test Complete ==="
+          env:
+            - name: LD_LIBRARY_PATH
+              value: /run/opengl-driver/lib
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          volumeMounts:
+            - name: nvidia-driver
+              mountPath: /run/opengl-driver
+              readOnly: true
+            - name: nix-store
+              mountPath: /nix/store
+              readOnly: true
+          resources:
+            requests:
+              cpu: "1"
+              memory: "512Mi"
+              nvidia.com/gpu: "1"
+            limits:
+              cpu: "1"
+              memory: "512Mi"
+              nvidia.com/gpu: "1"

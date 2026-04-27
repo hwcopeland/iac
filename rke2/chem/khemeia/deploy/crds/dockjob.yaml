@@ -1,0 +1,178 @@
+---
+# DockJob CRD — molecular docking stage.
+# Runs virtual screening of a compound library against a prepared receptor.
+# Supports multiple docking engines (vina, smina, gnina, diffdock).
+# See docs/tdd/wp-9-infrastructure.md section 8 for design rationale.
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: dockjobs.khemeia.io
+  labels:
+    app.kubernetes.io/name: khemeia
+    app.kubernetes.io/component: crd
+spec:
+  group: khemeia.io
+  names:
+    kind: DockJob
+    listKind: DockJobList
+    plural: dockjobs
+    singular: dockjob
+    shortNames:
+      - dj
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              required: ["receptorRef", "libraryRef"]
+              properties:
+                engine:
+                  type: string
+                  default: "vina"
+                  enum: ["vina", "gnina", "diffdock"]
+                  description: "Docking engine to use"
+                receptorRef:
+                  type: string
+                  description: "Provenance artifact_id of the prepared receptor"
+                libraryRef:
+                  type: string
+                  description: "Provenance artifact_id of the prepared ligand library"
+                exhaustiveness:
+                  type: integer
+                  default: 8
+                  description: "Exhaustiveness of the global search (higher = more thorough)"
+                numModes:
+                  type: integer
+                  default: 9
+                  description: "Maximum number of binding modes to generate per ligand"
+                energyRange:
+                  type: number
+                  default: 3.0
+                  description: "Maximum energy difference (kcal/mol) between best and worst mode"
+                scoringFunction:
+                  type: string
+                  default: "vina"
+                  enum: ["vina", "vinardo", "ad4"]
+                  description: "Scoring function for pose ranking"
+                # -- Common fields --
+                computeClass:
+                  type: string
+                  default: "gpu"
+                  description: "Compute class: cpu, cpu-high-mem, or gpu"
+                timeout:
+                  type: string
+                  default: "168h"
+                  description: "Maximum wall-clock time (default 7 days for large screens)"
+                retryPolicy:
+                  type: string
+                  default: "on-failure"
+                  enum: ["never", "on-failure", "always"]
+                maxRetries:
+                  type: integer
+                  default: 3
+                gate:
+                  type: string
+                  default: "manual"
+                  enum: ["auto", "manual"]
+                parentJob:
+                  type: object
+                  properties:
+                    kind:
+                      type: string
+                    name:
+                      type: string
+                    selectedArtifactIds:
+                      type: array
+                      items:
+                        type: string
+            status:
+              type: object
+              properties:
+                phase:
+                  type: string
+                  default: "Pending"
+                  enum: ["Pending", "Running", "Succeeded", "Failed"]
+                startTime:
+                  type: string
+                  format: date-time
+                completionTime:
+                  type: string
+                  format: date-time
+                provenanceRef:
+                  type: string
+                  description: "Provenance artifact_id of this job's output"
+                workerCount:
+                  type: integer
+                  description: "Number of parallel docking workers launched"
+                resultCount:
+                  type: integer
+                  description: "Total compounds docked"
+                bestAffinity:
+                  type: number
+                  description: "Best (lowest) binding affinity in kcal/mol"
+                artifactIds:
+                  type: array
+                  description: "S3 keys of docking result artifacts"
+                  items:
+                    type: string
+                parentJob:
+                  type: object
+                  properties:
+                    kind:
+                      type: string
+                    name:
+                      type: string
+                retryCount:
+                  type: integer
+                  default: 0
+                conditions:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      type:
+                        type: string
+                      status:
+                        type: string
+                        enum: ["True", "False", "Unknown"]
+                      reason:
+                        type: string
+                      message:
+                        type: string
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+                events:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      timestamp:
+                        type: string
+                        format: date-time
+                      message:
+                        type: string
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Phase
+          type: string
+          jsonPath: .status.phase
+        - name: Engine
+          type: string
+          jsonPath: .spec.engine
+        - name: Compounds
+          type: integer
+          jsonPath: .status.resultCount
+        - name: Best Affinity
+          type: number
+          jsonPath: .status.bestAffinity
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp

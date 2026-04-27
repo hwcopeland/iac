@@ -1,0 +1,176 @@
+---
+# RefineJob CRD — post-docking refinement stage.
+# Runs MD refinement (GROMACS) and MM-GBSA rescoring on top docking hits.
+# Consumes DockJob output; produces refined affinity estimates.
+# See docs/tdd/wp-9-infrastructure.md section 8 for design rationale.
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: refinejobs.khemeia.io
+  labels:
+    app.kubernetes.io/name: khemeia
+    app.kubernetes.io/component: crd
+spec:
+  group: khemeia.io
+  names:
+    kind: RefineJob
+    listKind: RefineJobList
+    plural: refinejobs
+    singular: refinejob
+    shortNames:
+      - rj
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              required: ["dockJobRef"]
+              properties:
+                dockJobRef:
+                  type: string
+                  description: "Name of the parent DockJob whose results will be refined"
+                topN:
+                  type: integer
+                  default: 10
+                  description: "Number of top-scoring poses to refine"
+                mdEngine:
+                  type: string
+                  default: "gromacs"
+                  enum: ["gromacs"]
+                  description: "Molecular dynamics engine for refinement"
+                mdDuration:
+                  type: string
+                  default: "10ns"
+                  description: "MD simulation duration (e.g. 2ns, 10ns, 50ns)"
+                rescoring:
+                  type: string
+                  default: "mmgbsa"
+                  enum: ["mmgbsa", "mmpbsa", "none"]
+                  description: "Rescoring method to apply after MD"
+                # -- Common fields --
+                computeClass:
+                  type: string
+                  default: "gpu"
+                  description: "Compute class — defaults to gpu for MD simulations"
+                timeout:
+                  type: string
+                  default: "24h"
+                  description: "Maximum wall-clock time"
+                retryPolicy:
+                  type: string
+                  default: "on-failure"
+                  enum: ["never", "on-failure", "always"]
+                maxRetries:
+                  type: integer
+                  default: 3
+                gate:
+                  type: string
+                  default: "manual"
+                  enum: ["auto", "manual"]
+                parentJob:
+                  type: object
+                  properties:
+                    kind:
+                      type: string
+                    name:
+                      type: string
+                    selectedArtifactIds:
+                      type: array
+                      items:
+                        type: string
+            status:
+              type: object
+              properties:
+                phase:
+                  type: string
+                  default: "Pending"
+                  enum: ["Pending", "Running", "Succeeded", "Failed"]
+                startTime:
+                  type: string
+                  format: date-time
+                completionTime:
+                  type: string
+                  format: date-time
+                provenanceRef:
+                  type: string
+                  description: "Provenance artifact_id of the refinement output"
+                refinedResults:
+                  type: array
+                  description: "Per-compound refinement results"
+                  items:
+                    type: object
+                    properties:
+                      compoundId:
+                        type: string
+                      dockingAffinity:
+                        type: number
+                        description: "Original docking score in kcal/mol"
+                      refinedAffinity:
+                        type: number
+                        description: "MM-GBSA rescored affinity in kcal/mol"
+                      trajectoryRef:
+                        type: string
+                        description: "S3 key of the MD trajectory in khemeia-trajectories"
+                artifactIds:
+                  type: array
+                  description: "S3 keys of refinement artifacts"
+                  items:
+                    type: string
+                parentJob:
+                  type: object
+                  properties:
+                    kind:
+                      type: string
+                    name:
+                      type: string
+                retryCount:
+                  type: integer
+                  default: 0
+                conditions:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      type:
+                        type: string
+                      status:
+                        type: string
+                        enum: ["True", "False", "Unknown"]
+                      reason:
+                        type: string
+                      message:
+                        type: string
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+                events:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      timestamp:
+                        type: string
+                        format: date-time
+                      message:
+                        type: string
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Phase
+          type: string
+          jsonPath: .status.phase
+        - name: Top N
+          type: integer
+          jsonPath: .spec.topN
+        - name: MD Engine
+          type: string
+          jsonPath: .spec.mdEngine
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp

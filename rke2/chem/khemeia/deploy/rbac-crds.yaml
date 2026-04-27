@@ -1,0 +1,67 @@
+---
+# ClusterRole for Khemeia CRD instance CRUD.
+# CRD *definitions* are cluster-scoped and applied by Flux with cluster-admin.
+# CRD *instances* are namespaced — this ClusterRole grants the khemeia-controller
+# ServiceAccount access to all Khemeia CRD resources in any namespace (though
+# the controller only operates in chem). A ClusterRole is used instead of a
+# namespace-scoped Role because the khemeia.io API group is cluster-wide.
+# See docs/tdd/wp-9-infrastructure.md section 8, RBAC Extension.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: khemeia-crd-controller
+  labels:
+    app.kubernetes.io/name: khemeia
+    app.kubernetes.io/component: rbac
+rules:
+  # Full CRUD on all Khemeia CRD instances.
+  # Listed explicitly to make RBAC auditing straightforward.
+  - apiGroups: ["khemeia.io"]
+    resources:
+      - targetpreps
+      - dockjobs
+      - refinejobs
+      - admetjobs
+      - generatejobs
+      - linkjobs
+      - selectivityjobs
+      - rbfejobs
+      - abfejobs
+      - librarypreps
+      - ingeststructurejobs
+      - reportjobs
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Status subresource updates — required for the controller to write phase,
+  # conditions, events, and stage-specific status fields.
+  - apiGroups: ["khemeia.io"]
+    resources:
+      - targetpreps/status
+      - dockjobs/status
+      - refinejobs/status
+      - admetjobs/status
+      - generatejobs/status
+      - linkjobs/status
+      - selectivityjobs/status
+      - rbfejobs/status
+      - abfejobs/status
+      - librarypreps/status
+      - ingeststructurejobs/status
+      - reportjobs/status
+    verbs: ["get", "update", "patch"]
+---
+# Bind the ClusterRole to the khemeia-controller ServiceAccount in chem namespace.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: khemeia-crd-controller
+  labels:
+    app.kubernetes.io/name: khemeia
+    app.kubernetes.io/component: rbac
+subjects:
+  - kind: ServiceAccount
+    name: khemeia-controller
+    namespace: chem
+roleRef:
+  kind: ClusterRole
+  name: khemeia-crd-controller
+  apiGroup: rbac.authorization.k8s.io

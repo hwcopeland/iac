@@ -1,7 +1,10 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources:
+  - crds/
   - rbac.yaml
+  - rbac-crds.yaml
+  - compute-classes.yaml
   - plugins-configmap.yaml
   - api-deployment.yaml
   - web-deployment.yaml
@@ -12,3 +15,4 @@ resources:
   - httproute.yaml
   - flux-webhook-secret.yaml
   - flux-webhook-receiver.yaml
+  - infra/
