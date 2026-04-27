@@ -131,6 +131,15 @@
   async function handleView(result: any) {
     viewError = '';
     viewingCompound = result.compound_id;
+
+    // Reset the interaction network overlay when switching compounds.
+    // Without this, the old compound's ProLIF iframe/data persists in +page.svelte
+    // because showNetwork stays true and the network props are never cleared.
+    if (showNetwork) {
+      showNetwork = false;
+      onNetworkToggle(false, '', [], '', '');
+    }
+
     try {
       // Load the preprocessed receptor
       const receptor = selectedJob?.receptor_pdbqt;
