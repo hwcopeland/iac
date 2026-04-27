@@ -1,0 +1,75 @@
+# Deployment for the ADMET prediction sidecar service (WP-4)
+# Serves Stanford Chemprop-D models (admet_ai) for full ADMET endpoint prediction.
+# Runs as a persistent Deployment (not a per-job Job) to avoid model loading
+# overhead on every request. Model load takes 30-60s at startup.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: admet
+  namespace: chem
+  labels:
+    app: admet
+    khemeia.io/component: admet
+spec:
+  replicas: 2
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app: admet
+  template:
+    metadata:
+      labels:
+        app: admet
+        khemeia.io/component: admet
+    spec:
+      imagePullSecrets:
+        - name: zot-pull-secret
+      containers:
+        - name: admet
+          image: zot.hwcopeland.net/chem/admet-ai:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8000
+              name: http
+              protocol: TCP
+          resources:
+            requests:
+              cpu: "1"
+              memory: 4Gi
+            limits:
+              cpu: "4"
+              memory: 8Gi
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 90
+            periodSeconds: 15
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8000
+            initialDelaySeconds: 60
+            periodSeconds: 10
+            failureThreshold: 6
+---
+# Service for the ADMET sidecar
+# Reachable at admet.chem.svc.cluster.local
+apiVersion: v1
+kind: Service
+metadata:
+  name: admet
+  namespace: chem
+  labels:
+    app: admet
+    khemeia.io/component: admet
+spec:
+  type: ClusterIP
+  ports:
+    - port: 80
+      targetPort: 8000
+      protocol: TCP
+      name: http
+  selector:
+    app: admet

@@ -315,7 +315,10 @@ func (c *Controller) initPluginDB(p Plugin) error {
 		if err := EnsureDockingV2Schema(db); err != nil {
 			log.Printf("Warning: failed to create docking_v2 tables in %s: %v", p.Database, err)
 		}
-		log.Printf("Shared tables (api_tokens, basis_sets, provenance, target_prep_results, library_prep, docking_v2) created in %s database", p.Database)
+		if err := EnsureADMETSchema(db); err != nil {
+			log.Printf("Warning: failed to create admet tables in %s: %v", p.Database, err)
+		}
+		log.Printf("Shared tables (api_tokens, basis_sets, provenance, target_prep_results, library_prep, docking_v2, admet) created in %s database", p.Database)
 	}
 
 	return nil
@@ -632,6 +635,15 @@ func (c *Controller) startAPIServer() error {
 	// GET  /api/v1/docking/v2/jobs/{name}/results — paginated consensus-ranked results
 	mux.HandleFunc("/api/v1/docking/v2/", wrap(handler.DockingV2Dispatch))
 	log.Println("Registered docking v2 routes: /api/v1/docking/v2/{submit,jobs/{name},jobs/{name}/results}")
+
+	// ADMET prediction endpoints (WP-4).
+	// POST /api/v1/admet/predict                        — submit an ADMET prediction job
+	// GET  /api/v1/admet/jobs/{name}                    — get ADMET job status
+	// GET  /api/v1/admet/jobs/{name}/results            — paginated per-compound ADMET results
+	// GET  /api/v1/admet/compound/{compoundId}          — single compound ADMET profile
+	// GET  /api/v1/admet/presets                        — list available MPO presets
+	mux.HandleFunc("/api/v1/admet/", wrap(handler.ADMETDispatch))
+	log.Println("Registered ADMET routes: /api/v1/admet/{predict,jobs/{name},jobs/{name}/results,compound/{id},presets}")
 
 	// Token management — admin only (no external auth, internal IPs only).
 	mux.HandleFunc("/api/v1/tokens", func(w http.ResponseWriter, r *http.Request) {

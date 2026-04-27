@@ -1,0 +1,6 @@
+numpy<2
+rdkit-pypi
+flask
+gunicorn
+torch --index-url https://download.pytorch.org/whl/cpu
+admet_ai
