@@ -37,6 +37,8 @@ jobs:
       psi4: ${{ steps.filter.outputs.psi4 }}
       prolif-runner: ${{ steps.filter.outputs.prolif-runner }}
       target-prep: ${{ steps.filter.outputs.target-prep }}
+      fpocket: ${{ steps.filter.outputs.fpocket }}
+      p2rank: ${{ steps.filter.outputs.p2rank }}
       web: ${{ steps.filter.outputs.web }}
     steps:
       - name: Checkout repository
@@ -58,6 +60,8 @@ jobs:
             echo "psi4=true" >> "$GITHUB_OUTPUT"
             echo "prolif-runner=true" >> "$GITHUB_OUTPUT"
             echo "target-prep=true" >> "$GITHUB_OUTPUT"
+            echo "fpocket=true" >> "$GITHUB_OUTPUT"
+            echo "p2rank=true" >> "$GITHUB_OUTPUT"
             echo "web=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -71,6 +75,8 @@ jobs:
             echo "psi4=true" >> "$GITHUB_OUTPUT"
             echo "prolif-runner=true" >> "$GITHUB_OUTPUT"
             echo "target-prep=true" >> "$GITHUB_OUTPUT"
+            echo "fpocket=true" >> "$GITHUB_OUTPUT"
+            echo "p2rank=true" >> "$GITHUB_OUTPUT"
             echo "web=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -114,6 +120,16 @@ jobs:
             echo "target-prep=true" >> "$GITHUB_OUTPUT"
           else
             echo "target-prep=false" >> "$GITHUB_OUTPUT"
+          fi
+          if echo "$CHANGED" | grep -q '^rke2/chem/khemeia/containers/fpocket/'; then
+            echo "fpocket=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "fpocket=false" >> "$GITHUB_OUTPUT"
+          fi
+          if echo "$CHANGED" | grep -q '^rke2/chem/khemeia/containers/p2rank/'; then
+            echo "p2rank=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "p2rank=false" >> "$GITHUB_OUTPUT"
           fi
           if echo "$CHANGED" | grep -q '^rke2/chem/khemeia/web/'; then
             echo "web=true" >> "$GITHUB_OUTPUT"
@@ -176,6 +192,18 @@ jobs:
             dockerfile: rke2/chem/khemeia/containers/target-prep/Dockerfile
             context: rke2/chem/khemeia/containers/target-prep/
             changed: ${{ needs.detect-changes.outputs.target-prep }}
+
+          - name: fpocket
+            image: zot.hwcopeland.net/chem/fpocket
+            dockerfile: rke2/chem/khemeia/containers/fpocket/Dockerfile
+            context: rke2/chem/khemeia/containers/fpocket/
+            changed: ${{ needs.detect-changes.outputs.fpocket }}
+
+          - name: p2rank
+            image: zot.hwcopeland.net/chem/p2rank
+            dockerfile: rke2/chem/khemeia/containers/p2rank/Dockerfile
+            context: rke2/chem/khemeia/containers/p2rank/
+            changed: ${{ needs.detect-changes.outputs.p2rank }}
 
           - name: khemeia-web
             image: zot.hwcopeland.net/chem/khemeia-web
