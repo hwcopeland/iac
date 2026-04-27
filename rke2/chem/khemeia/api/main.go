@@ -8,6 +8,7 @@ import (
 	"bufio"
 	"context"
 	"database/sql"
+	"flag"
 	"fmt"
 	"io"
 	"log"
@@ -22,6 +23,7 @@ import (
 	_ "github.com/go-sql-driver/mysql"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	typed "k8s.io/client-go/kubernetes/typed/batch/v1"
 	rest "k8s.io/client-go/rest"
@@ -31,12 +33,13 @@ import (
 // Controller handles the lifecycle of plugin-driven compute jobs.
 // State is persisted in MySQL; no in-memory maps.
 type Controller struct {
-	client    *kubernetes.Clientset
-	namespace string
-	jobClient typed.JobInterface
-	plugins   []Plugin
-	pluginDBs map[string]*sql.DB
-	stopCh    chan struct{}
+	client        *kubernetes.Clientset
+	dynamicClient dynamic.Interface
+	namespace     string
+	jobClient     typed.JobInterface
+	plugins       []Plugin
+	pluginDBs     map[string]*sql.DB
+	stopCh        chan struct{}
 
 	// MySQL connection parameters (reused when creating per-plugin databases).
 	mysqlHost     string
@@ -51,6 +54,15 @@ type Controller struct {
 	// chemblDB is an optional read-only connection to the ChEMBL compound database.
 	// Used for ligand search/filtering. Nil if ChEMBL is not available.
 	chemblDB *sql.DB
+
+	// s3Client provides S3 operations against Garage for artifact storage.
+	// Initialized from GARAGE_* env vars; returns a no-op client when
+	// GARAGE_ENABLED != "true".
+	s3Client S3Client
+
+	// crdController manages the lifecycle of CRD-based jobs (TargetPrep, DockJob, etc.).
+	// Runs alongside the plugin-based job runner; both coexist.
+	crdController *CRDController
 }
 
 // NewController creates a new Controller, initializing K8s client, MySQL connections,
@@ -64,6 +76,11 @@ func NewController() (*Controller, error) {
 	client, err := kubernetes.NewForConfig(config)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create client: %v", err)
+	}
+
+	dynClient, err := dynamic.NewForConfig(config)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create dynamic client: %v", err)
 	}
 
 	namespace := os.Getenv("NAMESPACE")
@@ -97,6 +114,7 @@ func NewController() (*Controller, error) {
 
 	controller := &Controller{
 		client:        client,
+		dynamicClient: dynClient,
 		namespace:     namespace,
 		jobClient:     client.BatchV1().Jobs(namespace),
 		plugins:       plugins,
@@ -142,6 +160,21 @@ func NewController() (*Controller, error) {
 	} else {
 		log.Printf("Warning: failed to open ChEMBL database (%v) — ligand search disabled", err)
 	}
+
+	// Initialize S3 client for Garage artifact storage.
+	s3Client, err := NewS3ClientFromEnv()
+	if err != nil {
+		controller.closeAllDBs()
+		return nil, fmt.Errorf("failed to initialize S3 client: %w", err)
+	}
+	controller.s3Client = s3Client
+
+	// Initialize CRD controller for CRD-based job lifecycle management.
+	// Uses sharedDB for provenance queries. Falls back gracefully if sharedDB
+	// is nil (provenance queries will return empty results).
+	controller.crdController = NewCRDController(
+		client, dynClient, namespace, controller.sharedDB, s3Client)
+	log.Println("CRD controller initialized")
 
 	return controller, nil
 }
@@ -270,7 +303,10 @@ func (c *Controller) initPluginDB(p Plugin) error {
 		if err := EnsureBasisSetSchema(db); err != nil {
 			log.Printf("Warning: failed to create basis_sets table in %s: %v", p.Database, err)
 		}
-		log.Printf("Shared tables (api_tokens, basis_sets) created in %s database", p.Database)
+		if err := EnsureProvenanceSchema(db); err != nil {
+			log.Printf("Warning: failed to create provenance tables in %s: %v", p.Database, err)
+		}
+		log.Printf("Shared tables (api_tokens, basis_sets, provenance) created in %s database", p.Database)
 	}
 
 	return nil
@@ -310,6 +346,13 @@ func (c *Controller) Run(ctx context.Context) error {
 	// Recover any jobs orphaned by a previous controller restart.
 	c.reconcileOrphanedJobs()
 
+	// Start the CRD controller in a goroutine. It watches CRD instances
+	// and manages their lifecycle (create K8s Jobs, monitor, retry).
+	if c.crdController != nil {
+		go c.crdController.Start(ctx)
+		log.Println("CRD controller started in background")
+	}
+
 	go func() {
 		if err := c.startAPIServer(); err != nil && err != http.ErrServerClosed {
 			log.Printf("API server error: %v", err)
@@ -317,6 +360,9 @@ func (c *Controller) Run(ctx context.Context) error {
 	}()
 
 	<-ctx.Done()
+	if c.crdController != nil {
+		c.crdController.Stop()
+	}
 	c.closeAllDBs()
 	return ctx.Err()
 }
@@ -531,6 +577,31 @@ func (c *Controller) startAPIServer() error {
 		}
 	}))
 
+	// Provenance tracking — artifact lineage DAG.
+	// POST /api/v1/provenance/record          — create a provenance entry
+	// GET  /api/v1/provenance/job/{name}       — list artifacts by job
+	// GET  /api/v1/provenance/{id}             — get single record
+	// GET  /api/v1/provenance/{id}/ancestors   — ancestor chain (recursive CTE)
+	// GET  /api/v1/provenance/{id}/descendants — descendant chain (recursive CTE)
+	mux.HandleFunc("/api/v1/provenance/", wrap(handler.provenanceDispatch))
+
+	// CRD job advance and status endpoints.
+	crdHandlers := NewCRDHandlers(c.dynamicClient, c.sharedDB, c.namespace)
+
+	// POST /api/v1/jobs/{kind}/{name}/advance — advance pipeline to next stage.
+	// GET  /api/v1/jobs/{kind}/{name}/status  — get CRD job status.
+	mux.HandleFunc("/api/v1/jobs/", wrap(func(w http.ResponseWriter, r *http.Request) {
+		path := r.URL.Path
+		if strings.HasSuffix(path, "/advance") && r.Method == http.MethodPost {
+			crdHandlers.HandleAdvance(w, r)
+		} else if strings.HasSuffix(path, "/status") && r.Method == http.MethodGet {
+			crdHandlers.HandleJobStatus(w, r)
+		} else {
+			writeError(w, "not found", http.StatusNotFound)
+		}
+	}))
+	log.Println("Registered CRD routes: /api/v1/jobs/{kind}/{name}/{advance,status}")
+
 	// Token management — admin only (no external auth, internal IPs only).
 	mux.HandleFunc("/api/v1/tokens", func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
@@ -690,6 +761,9 @@ func ptrInt32(i int32) *int32 {
 }
 
 func main() {
+	migrateBlobs := flag.Bool("migrate-blobs", false, "Run BLOB-to-S3 migration and exit")
+	flag.Parse()
+
 	log.Println("Khemeia API Controller starting...")
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -706,6 +780,38 @@ func main() {
 	controller, err := NewController()
 	if err != nil {
 		log.Fatalf("Failed to create controller: %v", err)
+	}
+
+	// If --migrate-blobs is set, run the BLOB migration and exit.
+	if *migrateBlobs {
+		log.Println("Running BLOB-to-S3 migration...")
+		if err := RunBlobMigrationAllDBs(ctx, controller.pluginDBs, controller.s3Client); err != nil {
+			log.Fatalf("BLOB migration failed: %v", err)
+		}
+
+		// Verify migration completeness.
+		dockingDB := controller.pluginDB("docking")
+		if dockingDB != nil {
+			unmigrated, err := VerifyMigration(ctx, dockingDB)
+			if err != nil {
+				log.Printf("Warning: migration verification failed: %v", err)
+			} else {
+				allClear := true
+				for table, count := range unmigrated {
+					if count > 0 {
+						log.Printf("WARNING: %d unmigrated rows in %s", count, table)
+						allClear = false
+					}
+				}
+				if allClear {
+					log.Println("Migration verification: all BLOBs migrated successfully")
+				}
+			}
+		}
+
+		controller.closeAllDBs()
+		log.Println("BLOB migration complete, exiting.")
+		return
 	}
 
 	if err := controller.Run(ctx); err != nil {

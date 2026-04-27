@@ -1,0 +1,93 @@
+# K8s Job to run the BLOB-to-S3 migration.
+#
+# Reads all MySQL BLOB data from docking_workflows, docking_results, ligands,
+# and job_artifacts tables, uploads to Garage (S3), and records S3 keys + provenance.
+#
+# Idempotent: safe to re-run. Rows already migrated (s3_*_key IS NOT NULL) are skipped.
+#
+# Prerequisites:
+#   - Garage is deployed and running (garage-s3.chem.svc.cluster.local)
+#   - All 7 buckets exist (khemeia-receptors, khemeia-poses, etc.)
+#   - docking-mysql is accessible
+#   - GARAGE_ENABLED=true in the env below
+#
+# Usage:
+#   kubectl apply -f deploy/migration-job.yaml
+#   kubectl logs -f -n chem job/blob-migration
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: blob-migration
+  namespace: chem
+  labels:
+    app.kubernetes.io/name: blob-migration
+    app.kubernetes.io/component: migration
+    app.kubernetes.io/part-of: khemeia
+spec:
+  backoffLimit: 2
+  ttlSecondsAfterFinished: 86400  # Clean up after 24h
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: blob-migration
+    spec:
+      restartPolicy: OnFailure
+      serviceAccountName: khemeia-controller
+      imagePullSecrets:
+        - name: zot-pull-secret
+      containers:
+        - name: migration
+          image: zot.hwcopeland.net/chem/khemeia-controller:latest
+          imagePullPolicy: Always
+          command: ["/app/khemeia-controller"]
+          args: ["--migrate-blobs"]
+          env:
+            # MySQL connection
+            - name: NAMESPACE
+              value: "chem"
+            - name: PLUGINS_DIR
+              value: "/app/plugins"
+            - name: MYSQL_HOST
+              value: "docking-mysql.chem.svc.cluster.local"
+            - name: MYSQL_PORT
+              value: "3306"
+            - name: MYSQL_USER
+              value: "root"
+            - name: MYSQL_DATABASE
+              value: "docking"
+            - name: MYSQL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: docking-mysql-secret
+                  key: root-password
+            # Garage S3 connection
+            - name: GARAGE_ENABLED
+              value: "true"
+            - name: GARAGE_ENDPOINT
+              value: "http://garage-s3.chem.svc.cluster.local:3900"
+            - name: GARAGE_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: garage-s3-secret
+                  key: access-key
+            - name: GARAGE_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: garage-s3-secret
+                  key: secret-key
+            - name: GARAGE_REGION
+              value: "garage"
+          volumeMounts:
+            - name: plugins
+              mountPath: /app/plugins
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+      volumes:
+        - name: plugins
+          configMap:
+            name: khemeia-plugins

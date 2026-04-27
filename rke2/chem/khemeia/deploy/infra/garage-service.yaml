@@ -1,0 +1,24 @@
+---
+# ClusterIP service for the Garage S3-compatible object store.
+# Exposes S3 API (3900) and admin API (3902) within the cluster.
+# Endpoint: garage.chem.svc.cluster.local
+apiVersion: v1
+kind: Service
+metadata:
+  name: garage
+  namespace: chem
+  labels:
+    app.kubernetes.io/name: garage
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: garage
+  ports:
+    - port: 3900
+      targetPort: 3900
+      protocol: TCP
+      name: s3
+    - port: 3902
+      targetPort: 3902
+      protocol: TCP
+      name: admin

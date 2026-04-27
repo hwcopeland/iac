@@ -7,9 +7,16 @@ TBD
 ## Scope
 
 Build the shared infrastructure that all other work packages depend on: a provenance system,
-S3 object store, common job CRD framework, event bus, compute class scheduling, and a steering
-API. This WP runs in parallel from day one. It produces the foundation that every stage-specific
+object store, common job CRD framework, compute class scheduling, and a stage-advance API.
+This WP runs in parallel from day one. It produces the foundation that every stage-specific
 WP consumes.
+
+The pipeline is researcher-driven, not auto-driven. Every stage defaults to `gate: manual` —
+results land, the researcher reviews them in the UI (WP-7), selects a subset, and explicitly
+advances to the next stage. There is no pause/resume/branch surface; "branch" is implicit in
+each `advance` (selected subset becomes a child job with parent provenance). Auto-advance is
+opt-in for cases where it makes sense (e.g. parallel docking shards rolling up to a single
+DockJob result).
 
 ### Current state
 
@@ -64,10 +71,15 @@ framework.
    - `POST /api/v1/provenance/record` -- record a new provenance entry (used by job
      containers)
 
-### S3 object store (MinIO)
+### Object store (Garage)
 
-3. **MinIO deployment:**
-   - Deploy MinIO in the `chem` namespace as a StatefulSet with persistent storage
+3. **Garage deployment:**
+   - Deploy [Garage](https://garagehq.deuxfleurs.fr) in the `chem` namespace as a StatefulSet
+     with Longhorn-backed persistent storage. Garage is a small, self-hostable, S3-compatible
+     object store. It replaces MinIO, whose community edition has been stripped of features and
+     whose licensing trajectory is hostile to self-hosters.
+   - Why Garage over PVC-only: bucket lifecycle policies (auto-expire scratch and trajectories)
+     are first-class. With raw PVCs we'd write a CronJob to sweep old files.
    - Bucket structure:
 
      | Bucket | Purpose | Lifecycle |
@@ -83,14 +95,19 @@ framework.
    - Key naming convention: `{bucket}/{job-type}/{job-name}/{artifact-name}.{ext}`
    - Access: S3-compatible API. Credentials via ExternalSecret (consistent with existing
      `zot-pull-secret` pattern).
-   - Internal endpoint: `minio.chem.svc.cluster.local:9000`
+   - Internal endpoint: `garage.chem.svc.cluster.local:3900` (S3 API), `:3902` (admin)
 
 4. **S3 client library** (Go, for the API server):
-   - Thin wrapper around the MinIO Go client
+   - Thin wrapper around the AWS Go SDK v2 (Garage speaks S3, no Garage-specific client needed)
    - Functions: `PutArtifact(bucket, key, reader)`, `GetArtifact(bucket, key)`,
      `GetPresignedURL(bucket, key, expiry)`, `ListArtifacts(bucket, prefix)`
    - Automatic provenance recording: every `PutArtifact` call registers a provenance record
    - Configurable: feature flag to fall back to MySQL BLOB storage during migration
+
+The split: queryable metadata (descriptors, scores, ADMET predictions, fingerprints,
+provenance) stays in MySQL; opaque blob bytes (PDBQT, trajectories, reports) live in Garage
+with the S3 key recorded in MySQL. The "generalized queryable database" property is
+preserved — every searchable property is a SQL column, not an object-store object.
 
 ### Job CRD framework
 
@@ -99,16 +116,19 @@ framework.
      LinkJob, SelectivityJob, RBFEJob, ABFEJob, IngestStructureJob, ReportJob) derive from
      a common base
    - Common status fields (every CRD has these):
-     - `phase`: enum (Pending, Running, Succeeded, Failed, Paused)
+     - `phase`: enum (Pending, Running, Succeeded, Failed)
      - `startTime`, `completionTime`
      - `provenance`: reference to the provenance record for this job's outputs
+     - `parentJob`: reference to the upstream Job and the artifact subset that seeded this
+       one (set by the `advance` API; null for root jobs)
      - `retryCount`, `maxRetries` (default 3)
      - `conditions`: array of Kubernetes-style conditions (type, status, reason, message,
        lastTransitionTime)
      - `events`: array of timestamped event messages (job lifecycle events)
    - Common spec fields:
-     - `gate`: enum (auto, manual). If `manual`, the job is created in `Pending` and waits
-       for user approval. If `auto`, it starts immediately when dependencies are met.
+     - `gate`: enum (auto, manual). **Default is `manual`.** Manual jobs are created in
+       `Pending` and wait for an `advance` call from the UI. Auto is opt-in for internal
+       fan-in cases (e.g. parallel docking shards rolling up to a parent DockJob).
      - `timeout`: duration (default per CRD type, overridable)
      - `retryPolicy`: enum (never, on-failure, always)
      - `computeClass`: reference to a compute class (see Deliverable 7)
@@ -119,158 +139,179 @@ framework.
    - Watch all Khemeia CRD instances
    - For each CRD in `Pending` with `gate: auto`: check dependency readiness, create K8s
      Jobs
-   - For each CRD in `Running`: monitor K8s Job status, update CRD status, emit events
+   - For each CRD in `Pending` with `gate: manual`: leave alone. Wait for the `advance` API
+     (Deliverable 10) to create the K8s Job
+   - For each CRD in `Running`: monitor K8s Job status, update CRD status
    - For each CRD in `Failed` with `retryCount < maxRetries`: recreate the K8s Job
-   - Handle `Paused`: do not create new Jobs, preserve existing state
-   - Emit events to the event bus (Deliverable 8) on every phase transition
+   - Status updates use the K8s informer / watch stream — no separate event bus needed
+     for the v0 controller (see "Deferred" section below)
 
 ### Compute classes
 
 7. **Compute class definitions:**
 
-   | Class | Node Selector | Resource Requests | Use Cases |
-   |-------|--------------|-------------------|-----------|
-   | `cpu` | No GPU required | `cpu: 2, memory: 4Gi` | Library prep, filtering, analysis, reporting |
-   | `cpu-high-mem` | No GPU, high memory nodes | `cpu: 4, memory: 16Gi` | Large library processing, AiZynthFinder |
-   | `gpu` | `nvidia.com/gpu` | `cpu: 4, memory: 8Gi, nvidia.com/gpu: 1` | Docking (Gnina, DiffDock), generation (ChemMamba, DiffLinker), FEP |
-   | `gpu-multi` | `nvidia.com/gpu` | `cpu: 8, memory: 16Gi, nvidia.com/gpu: 2` | Large RBFE jobs, batch DiffDock |
+   | Class | Node Selector | Tolerations | Resource Requests | Use Cases |
+   |-------|--------------|------------|-------------------|-----------|
+   | `cpu` | none | none | `cpu: 2, memory: 4Gi` | Library prep, filtering, analysis, reporting |
+   | `cpu-high-mem` | high-memory nodes | none | `cpu: 4, memory: 16Gi` | Large library processing, AiZynthFinder |
+   | `gpu` | `gpu=rtx3070` | `gpu=true:NoSchedule` | `cpu: 4, memory: 8Gi, nvidia.com/gpu: 1` | Docking (Gnina, DiffDock), generation (ChemMamba, DiffLinker), FEP |
 
    - Compute classes are stored as a ConfigMap (`deploy/compute-classes.yaml`)
    - Each CRD spec references a compute class by name. The job controller translates the
-     class into node selectors and resource requests when creating K8s Jobs.
+     class into node selectors, tolerations, and resource requests when creating K8s Jobs.
    - Default compute class per CRD type (e.g., DockJob defaults to `gpu`, LibraryPrep
      defaults to `cpu`). Overridable in the CRD spec.
 
-### Event bus
+   **NixOS GPU node footnote.** The `gpu` class targets `nixos-gpu` (RTX 3070, 8 GB VRAM),
+   which is a NixOS workstation joined to the cluster. NVIDIA driver libs and binaries live
+   under `/run/opengl-driver` (symlinks into `/nix/store`), not the FHS `/usr/lib`. The
+   k8s-device-plugin advertises `nvidia.com/gpu` and exposes `/dev/nvidia*` device files,
+   but CDI auto-injection of libcuda/nvidia-smi doesn't work cleanly on NixOS. Pods built
+   from the `gpu` class therefore include three additional spec elements:
 
-8. **Event bus deployment:**
-   - **Primary choice: NATS** (lightweight, K8s-native, simple pub/sub)
-   - **Fallback: Redis Streams** (if NATS is not feasible; Redis is already familiar from
-     other cluster services)
-   - Deploy in the `chem` namespace
-   - Topic naming convention: `khemeia.{crd-kind}.{job-name}.{event-type}`
-     - Event types: `created`, `running`, `succeeded`, `failed`, `paused`, `resumed`,
-       `progress` (for periodic progress updates during long jobs)
-   - Consumers:
-     - **API server**: subscribes to all events, updates CRD status, pushes WebSocket updates
-       to UI (WP-7)
-     - **Job controller**: subscribes to dependency completion events to trigger downstream
-       jobs
-     - **Provenance recorder**: subscribes to `succeeded` events to finalize provenance
-       records
-   - Retention: 7 days for event replay. Old events are garbage-collected.
-
-9. **Event schema** (JSON):
-   ```json
-   {
-     "event_id": "uuid-v7",
-     "timestamp": "2026-04-19T12:00:00Z",
-     "kind": "DockJob",
-     "job_name": "dock-7jrn-run1",
-     "event_type": "succeeded",
-     "payload": {
-       "phase": "Succeeded",
-       "duration_seconds": 1823,
-       "artifacts_produced": ["artifact-uuid-1", "artifact-uuid-2"],
-       "summary": "Docked 100 compounds, best affinity -9.2 kcal/mol"
-     }
-   }
+   ```yaml
+   volumeMounts:
+     - { name: nvidia-driver, mountPath: /run/opengl-driver, readOnly: true }
+     - { name: nix-store,     mountPath: /nix/store,         readOnly: true }
+   volumes:
+     - { name: nvidia-driver, hostPath: { path: /run/opengl-driver } }
+     - { name: nix-store,     hostPath: { path: /nix/store } }
+   env:
+     - { name: LD_LIBRARY_PATH, value: /run/opengl-driver/lib }
    ```
 
-### Steering API
+   This is baked into the job controller's GPU-class job-template so individual stage CRDs
+   don't need to care. Single GPU per node — no `gpu-multi` class until more hardware
+   joins.
 
-10. **Steering API endpoints:**
-    - `POST /api/v1/jobs/{kind}/{name}/pause` -- pause a running job. For multi-pod jobs
-      (parallel docking), pause means: do not launch new pods, let in-progress pods finish.
-      Collect partial results.
-    - `POST /api/v1/jobs/{kind}/{name}/resume` -- resume a paused job from where it left
-      off. Relaunch pods for remaining work.
-    - `POST /api/v1/jobs/{kind}/{name}/branch` -- create a new job with modified parameters,
-      linked to the original via provenance. The branch starts from the original's inputs
-      (not from scratch). Example: branch a DockJob with different engine parameters.
-    - `POST /api/v1/jobs/{kind}/{name}/approve` -- approve a job with `gate: manual` to
-      transition from `Pending` to `Running`.
-    - `GET /api/v1/jobs/{kind}/{name}/status` -- unified status endpoint for any CRD kind.
-    - All steering actions are recorded in provenance (who, when, what action, on which job).
+### Stage advance API
 
-11. **Gate conditions:**
-    - Per-stage configurable conditions that must be met before auto-advancing to the next
-      stage. Examples:
-      - DockJob -> RefineJob: "at least 10 compounds with affinity < -7 kcal/mol"
-      - RefineJob -> ADMETJob: "at least 5 refined poses completed"
-      - ADMETJob -> GenerateJob: "at least 3 compounds with MPO score > 60"
-    - Gate conditions are defined in the downstream CRD's spec as a `gateCondition` field
-      (JSON expression evaluated against the upstream job's status)
-    - If `gate: manual`, the condition is advisory (shown to the user in WP-7 UI) but the
-      user must still manually approve
+8. **`advance` endpoint:**
+   - `POST /api/v1/jobs/{kind}/{name}/advance` -- the single primitive for moving the
+     pipeline forward. Body:
+     ```json
+     {
+       "downstream_kind": "RefineJob",
+       "selected_artifact_ids": ["uuid-1", "uuid-2", "..."],
+       "downstream_params": { "engine": "gnina", "exhaustiveness": 32 }
+     }
+     ```
+   - Behavior:
+     1. Validate that the source job is in `Succeeded` and that the selected artifact IDs
+        belong to it.
+     2. Create a new CRD instance of `downstream_kind` with `parentJob` pointing at the
+        source job and the selected artifact subset, plus the supplied parameters.
+     3. Record the advance action in provenance (who, when, source → downstream link).
+     4. Return the new CRD's name and namespace.
+   - Implicit branching: every `advance` call is effectively a branch — selecting a
+     different subset or different params from the same source produces a new sibling
+     CRD with its own provenance lineage. There's no separate "branch" primitive.
+
+9. **`status` endpoint:**
+   - `GET /api/v1/jobs/{kind}/{name}/status` -- unified status endpoint for any CRD kind.
+     Returns phase, conditions, produced artifact IDs, and gate-condition evaluation if
+     applicable.
+
+10. **Gate conditions (advisory):**
+    - Per-stage `gateCondition` field on the downstream CRD's spec — a JSON expression
+      evaluated against the upstream job's status. Examples:
+      - DockJob → RefineJob: "at least 10 compounds with affinity < -7 kcal/mol"
+      - RefineJob → ADMETJob: "at least 5 refined poses completed"
+      - ADMETJob → GenerateJob: "at least 3 compounds with MPO score > 60"
+    - With the default `gate: manual`, gate conditions are advisory only — they're shown
+      to the researcher in the UI as "this stage is ready to advance" badges. The
+      researcher decides whether to advance.
+    - With `gate: auto`, the condition gates the controller's auto-creation of the
+      downstream Job.
+
+### Deferred (not in this WP)
+
+The following pieces were considered and explicitly deferred:
+
+- **Event bus** (NATS / Redis Streams). The v0 controller can drive UI updates via the
+  K8s informer/watch stream plus a WebSocket endpoint on the API server — same effect
+  with one less moving part. Revisit when there are multiple controller processes that
+  need to coordinate, or when event replay for late-joining subscribers becomes useful.
+- **Pause / resume / branch primitives.** Folded into `advance`. Pause/resume in
+  particular has no value in a manual-gate model — if the researcher hasn't advanced the
+  stage, nothing downstream is running to pause.
+- **`gpu-multi` compute class.** Single-GPU node today. Defer until additional hardware
+  joins.
 
 ### Tests
 
-12. **Tests:**
+11. **Tests:**
     - Unit tests for provenance graph traversal (build a test graph, verify ancestor and
       descendant queries)
-    - Unit tests for S3 client wrapper (mock MinIO, verify put/get/list operations)
+    - Unit tests for S3 client wrapper (against a Garage test instance via testcontainers,
+      verify put/get/list operations)
     - Unit tests for compute class resolution (given a CRD with `computeClass: gpu`, verify
-      the K8s Job has `nvidia.com/gpu` resource requests)
+      the K8s Job has `nvidia.com/gpu: 1` request, the `gpu=true:NoSchedule` toleration,
+      and the NixOS lib mounts)
     - Unit tests for gate condition evaluation (given a DockJob status, verify the condition
       evaluator correctly returns pass/fail)
-    - Integration test: deploy MinIO, write an artifact, read it back, verify checksum
+    - Unit tests for `advance` (selected artifact IDs that don't belong to source job →
+      400; valid call → child CRD created with `parentJob` link)
+    - Integration test: deploy Garage, write an artifact, read it back, verify checksum
     - Integration test: create a DockJob CRD instance, verify the job controller creates
       K8s Jobs and updates CRD status
-    - Integration test: publish an event to the event bus, verify a subscriber receives it
-    - E2E smoke test: create a TargetPrep -> DockJob chain with `gate: auto`, verify that
-      completing TargetPrep automatically triggers DockJob
+    - E2E smoke test: TargetPrep succeeds → researcher calls `advance` with selected
+      artifact IDs → DockJob is created with `parentJob` referencing TargetPrep, and runs
+    - E2E smoke test on real GPU: a small CUDA workload pod scheduled via the `gpu`
+      compute class on `nixos-gpu` reports the RTX 3070 via `nvidia-smi`
 
 ## Acceptance Criteria
 
 1. Provenance: given a compound that has been through library prep (WP-2) and docking (WP-3),
    the `GET /api/v1/provenance/{artifactId}/ancestors` endpoint returns a chain that includes
    the LibraryPrep job, the source SDF file, and the TargetPrep job.
-2. Provenance: every artifact stored in S3 has a corresponding provenance record. There are
-   no orphan artifacts (S3 objects without provenance) and no orphan provenance records
-   (records pointing to non-existent S3 objects).
-3. MinIO: all buckets listed in Deliverable 3 exist and are accessible from pods in the
+2. Provenance: every artifact stored in Garage has a corresponding provenance record. There
+   are no orphan artifacts (Garage objects without provenance) and no orphan provenance
+   records (records pointing to non-existent Garage objects).
+3. Garage: all buckets listed in Deliverable 3 exist and are accessible from pods in the
    `chem` namespace. Write a test file, read it back, verify content matches.
-4. MinIO: the `khemeia-scratch` bucket automatically deletes objects older than 7 days.
+4. Garage: the `khemeia-scratch` bucket automatically deletes objects older than 7 days.
    The `khemeia-trajectories` bucket deletes objects older than 90 days.
-5. CRD framework: a TargetPrep CRD instance created with `gate: auto` transitions to
-   `Running` within 30 seconds and the controller creates the expected K8s Job.
-6. CRD framework: a DockJob CRD instance created with `gate: manual` stays in `Pending`
-   until `POST /api/v1/jobs/DockJob/{name}/approve` is called, then transitions to
-   `Running`.
+5. CRD framework: a child CRD created via `advance` (with the parent in `gate: auto`)
+   transitions to `Running` within 30 seconds and the controller creates the expected K8s
+   Job.
+6. CRD framework: a DockJob CRD instance with `gate: manual` (the default) stays in
+   `Pending` until `POST /api/v1/jobs/DockJob/{name}/advance` is called from the UI; then
+   the child CRD it produces transitions to `Running`.
 7. Retry: a Job that fails (pod exit code != 0) is retried up to `maxRetries` times. After
    `maxRetries`, the CRD status is `Failed` with an event describing the failure.
-8. Event bus: a `succeeded` event published when a DockJob completes is received by a test
-   subscriber within 5 seconds.
-9. Steering: pausing a parallel docking job (with 5 remaining chunk pods) stops new pod
-   creation. Resuming relaunches the remaining chunks. The final result includes results
-   from both pre-pause and post-resume pods.
-10. Steering: branching a DockJob creates a new DockJob CRD with a `branchedFrom` field in
-    provenance linking to the original. The branch uses the same TargetPrep and LibraryPrep
-    inputs.
-11. Compute classes: a DockJob with `computeClass: gpu` produces K8s Jobs with
-    `nvidia.com/gpu: 1` resource requests. A LibraryPrep with `computeClass: cpu` produces
-    K8s Jobs without GPU requests.
+8. Advance: calling `advance` with selected artifact IDs that don't belong to the source
+   job returns 400. Valid call creates a child CRD with `parentJob` referencing the source
+   and the artifact subset; the provenance graph reflects the parent → child link.
+9. Compute classes: a DockJob with `computeClass: gpu` produces K8s Jobs with
+   `nvidia.com/gpu: 1`, the `gpu=true:NoSchedule` toleration, the NixOS host-path mounts
+   (`/run/opengl-driver`, `/nix/store`), and `LD_LIBRARY_PATH=/run/opengl-driver/lib`.
+   A LibraryPrep with `computeClass: cpu` produces K8s Jobs without GPU requests.
+10. GPU smoke: a CUDA workload submitted with `computeClass: gpu` runs on `nixos-gpu`,
+    sees the RTX 3070 via `nvidia-smi`, and successfully links against `libcuda.so` from
+    the host driver.
 
 ## Dependencies
 
 | Relationship | WP | Detail |
 |---|---|---|
 | Blocked by | None | This WP has no upstream dependencies. It starts on day one. |
-| Blocks | WP-1 | TargetPrep CRD, S3 storage, provenance |
-| Blocks | WP-2 | LibraryPrep CRD, S3 storage, provenance |
-| Blocks | WP-3 | DockJob/RefineJob CRDs, GPU compute classes, S3 storage |
-| Blocks | WP-4 | ADMETJob CRD, event bus for status, S3 for results |
-| Blocks | WP-5 | GenerateJob/LinkJob CRDs, GPU compute classes, provenance chain |
-| Blocks | WP-6 | SelectivityJob/RBFEJob/ABFEJob CRDs, GPU compute classes |
-| Blocks | WP-7 | Event bus for live status updates, provenance for the provenance browser |
-| Blocks | WP-8 | IngestStructureJob/ReportJob CRDs, S3 for report storage |
+| Blocks | WP-1 | TargetPrep CRD, Garage storage, provenance |
+| Blocks | WP-2 | LibraryPrep CRD, Garage storage, provenance |
+| Blocks | WP-3 | DockJob/RefineJob CRDs, GPU compute class, Garage storage |
+| Blocks | WP-4 | ADMETJob CRD, Garage for results, advance API for triage handoff |
+| Blocks | WP-5 | GenerateJob/LinkJob CRDs, GPU compute class, provenance chain |
+| Blocks | WP-6 | SelectivityJob/RBFEJob/ABFEJob CRDs, GPU compute class |
+| Blocks | WP-7 | Provenance graph for the browser, advance API as the UI's stage-handoff verb, K8s informer status stream |
+| Blocks | WP-8 | IngestStructureJob/ReportJob CRDs, Garage for report storage |
 
 ## Out of Scope
 
 - Multi-cluster scheduling (all jobs run on the single RKE2 cluster)
 - Workflow engine (Argo Workflows, Tekton, etc.) -- the job controller handles sequencing
-  directly via CRD watches and gate conditions
+  directly via CRD watches plus the `advance` API
+- Pause / resume / branch primitives — folded into `advance` (see Deferred section)
+- Full event bus (NATS, Redis Streams) — deferred; K8s informers + WebSocket cover v0
 - Data lake or data warehouse (this is operational storage, not analytics)
 - External API gateway (the Go API server handles all external-facing traffic)
 - Secret management changes (existing ExternalSecret pattern is sufficient)
@@ -279,19 +320,21 @@ framework.
 
 ## Open Questions
 
-1. **NATS vs Redis Streams**: NATS is purpose-built for messaging and has a smaller footprint.
-   Redis Streams reuses existing Redis knowledge. The cluster does not currently run either
-   in the `chem` namespace. Which introduces less operational burden?
+1. **Garage vs Longhorn-PVC for blobs**: Garage gives us bucket lifecycle (auto-expire
+   scratch and trajectories) and S3 semantics, at the cost of one more StatefulSet to
+   operate. Longhorn-PVC would mean every job writes to a shared volume and we sweep old
+   files with a CronJob. Which is the right complexity floor for our scale?
 
-2. **Provenance storage**: MySQL for provenance records keeps the stack simple (existing MySQL
-   instance) but graph traversal queries (ancestor/descendant) are not MySQL's strength.
-   Should provenance be stored in a graph-aware system (e.g., embedded SQLite with recursive
-   CTEs, or a purpose-built graph) or is MySQL with recursive CTE queries sufficient?
+2. **Provenance storage**: MySQL for provenance records keeps the stack simple (existing
+   MySQL instance) but graph traversal queries (ancestor/descendant) are not MySQL's
+   strength. Should provenance be stored in a graph-aware system (e.g., embedded SQLite
+   with recursive CTEs, or a purpose-built graph) or is MySQL with recursive CTE queries
+   sufficient?
 
-3. **MinIO sizing**: How much storage is needed? Estimate: receptors (small, <1 MB each),
-   libraries (10-100 MB for 100K compounds), trajectories (10-50 MB per compound), reports
-   (<10 MB each). For 100 docking runs with 1000 compound refinements each: ~50-500 GB
-   trajectory storage. What PV size to provision?
+3. **Object store sizing**: Estimate: receptors (small, <1 MB each), libraries (10-100 MB
+   for 100K compounds), trajectories (10-50 MB per compound), reports (<10 MB each). For
+   100 docking runs with 1000 compound refinements each: ~50-500 GB trajectory storage.
+   What PV size to provision for Garage's data nodes?
 
 4. **CRD vs ConfigMap for job definitions**: The current plugin YAML system uses ConfigMaps
    (`deploy/plugins-configmap.yaml`). CRDs are more Kubernetes-native and support status
@@ -300,25 +343,30 @@ framework.
 5. **Gate condition language**: What expression language for gate conditions? Options:
    (a) CEL (Common Expression Language, used by K8s ValidatingAdmissionPolicy),
    (b) JSONPath expressions against the upstream CRD status, (c) simple key-threshold pairs
-   (e.g., `{"field": "bestAffinity", "op": "lt", "value": -7}`). CEL is powerful but complex;
-   simple pairs cover 90% of cases.
+   (e.g., `{"field": "bestAffinity", "op": "lt", "value": -7}`). CEL is powerful but
+   complex; simple pairs cover 90% of cases.
 
 6. **Migration from MySQL BLOBs**: The existing `docking_workflows.receptor_pdbqt` column
-   stores receptor files as BLOBs. When should migration to S3 happen? Options: (a) big-bang
-   migration before WP-1 starts, (b) dual-write during a transition period (feature flag),
-   (c) write-new-to-S3, read-old-from-MySQL, never migrate historical data.
+   stores receptor files as BLOBs. When should migration to Garage happen? Options:
+   (a) big-bang migration before WP-1 starts, (b) dual-write during a transition period
+   (feature flag), (c) write-new-to-Garage, read-old-from-MySQL, never migrate historical
+   data.
+
+7. **`nixos-gpu` reachability**: the desktop is a workstation that may be rebooted ad-hoc.
+   Are jobs allowed to fail/retry across reboots, or do we taint the node out of the
+   cluster when interactive use is expected? Also, RKE2 version skew (agent 1.33 vs server
+   1.34) — when do we align?
 
 ## Technical Constraints
 
 - **Namespace**: All infrastructure components deploy in the `chem` namespace. No new
-  namespaces unless required for isolation (e.g., MinIO operator in `minio-operator`
-  namespace).
-- **Flux GitOps**: All manifests must be compatible with the existing Flux deployment model.
-  CRDs go in `deploy/crds/`, controllers in `deploy/`, infrastructure (MinIO, NATS) in
+  namespaces unless required for isolation.
+- **Flux GitOps**: All manifests must be compatible with the existing Flux deployment
+  model. CRDs go in `deploy/crds/`, controllers in `deploy/`, infrastructure (Garage) in
   `deploy/infra/`.
-- **RBAC**: The `khemeia-controller` ServiceAccount needs extended permissions for CRD CRUD,
-  MinIO access, and event bus publish/subscribe. Define a new ClusterRole
-  `khemeia-infrastructure` or extend the existing role.
+- **RBAC**: The `khemeia-controller` ServiceAccount needs extended permissions for CRD
+  CRUD and Garage access. Define a new ClusterRole `khemeia-infrastructure` or extend the
+  existing role.
 - **Existing job_runner.go**: The new job controller extends (not replaces) the existing
   `job_runner.go`. The existing plugin-based job system must continue to work for current
   plugins. CRD-based jobs are a parallel path that eventually supersedes the plugin jobs.
@@ -326,5 +374,12 @@ framework.
   indexed queries). Do not deploy a second database for provenance.
 - **No Helm**: The cluster uses Kustomize via Flux, not Helm. All manifests must be
   Kustomize-compatible.
-- **Image registry**: MinIO, NATS/Redis images must be mirrored to `zot.hwcopeland.net/infra/`
-  (not `chem/`, which is for application containers).
+- **Image registry**: Garage container images must be mirrored to
+  `zot.hwcopeland.net/infra/` (not `chem/`, which is for application containers).
+- **NixOS GPU node**: the `gpu` compute class targets `nixos-gpu` (RTX 3070, NixOS 25.11,
+  10.41.0.10). NVIDIA driver libs/binaries live under `/run/opengl-driver` (symlinks
+  into `/nix/store`). The job controller's GPU-class job-template must inject the host-path
+  mounts for `/run/opengl-driver` and `/nix/store` and set
+  `LD_LIBRARY_PATH=/run/opengl-driver/lib` on every GPU pod. Tolerations for
+  `gpu=true:NoSchedule` are mandatory. See `memory/project_gpu_node.md` for the full
+  caveats list.

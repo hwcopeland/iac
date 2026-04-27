@@ -1,0 +1,70 @@
+---
+# Compute class definitions for the Khemeia CRD job controller.
+# The controller reads this ConfigMap at startup and merges the resolved class
+# into each K8s Job pod spec (nodeSelector, tolerations, resources, volumes, env).
+# See docs/tdd/wp-9-infrastructure.md section 10 for design rationale.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: khemeia-compute-classes
+  namespace: chem
+  labels:
+    app.kubernetes.io/name: khemeia
+    app.kubernetes.io/component: compute-classes
+data:
+  classes.yaml: |
+    classes:
+      cpu:
+        description: "Standard CPU workloads"
+        resources:
+          cpu: "2"
+          memory: "4Gi"
+        nodeSelector: {}
+        tolerations: []
+        volumes: []
+        volumeMounts: []
+        env: []
+
+      cpu-high-mem:
+        description: "Memory-intensive CPU workloads (MD analysis, large libraries)"
+        resources:
+          cpu: "4"
+          memory: "16Gi"
+        nodeSelector: {}
+        tolerations: []
+        volumes: []
+        volumeMounts: []
+        env: []
+
+      gpu:
+        description: "GPU workloads on NixOS node (nixos-gpu, RTX 3070)"
+        resources:
+          cpu: "4"
+          memory: "8Gi"
+          nvidia.com/gpu: "1"
+        nodeSelector:
+          gpu: "rtx3070"
+        tolerations:
+          - key: "gpu"
+            value: "true"
+            effect: "NoSchedule"
+        # NixOS uses non-FHS paths for NVIDIA driver libraries.
+        # /run/opengl-driver contains the userspace driver (libcuda, libnvidia-ml, etc.)
+        # /nix/store is needed because some driver libs are symlinked into the store.
+        volumes:
+          - name: nvidia-driver
+            hostPath:
+              path: /run/opengl-driver
+          - name: nix-store
+            hostPath:
+              path: /nix/store
+        volumeMounts:
+          - name: nvidia-driver
+            mountPath: /run/opengl-driver
+            readOnly: true
+          - name: nix-store
+            mountPath: /nix/store
+            readOnly: true
+        env:
+          - name: LD_LIBRARY_PATH
+            value: /run/opengl-driver/lib

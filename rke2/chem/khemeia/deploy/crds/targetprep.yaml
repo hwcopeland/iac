@@ -1,0 +1,216 @@
+---
+# TargetPrep CRD — protein target preparation stage.
+# Prepares a PDB structure for docking: receptor conversion, binding site
+# detection (native ligand or pocket-based), protonation at specified pH.
+# See docs/tdd/wp-9-infrastructure.md section 8 for design rationale.
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: targetpreps.khemeia.io
+  labels:
+    app.kubernetes.io/name: khemeia
+    app.kubernetes.io/component: crd
+spec:
+  group: khemeia.io
+  names:
+    kind: TargetPrep
+    listKind: TargetPrepList
+    plural: targetpreps
+    singular: targetprep
+    shortNames:
+      - tp
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              required: ["pdbId"]
+              properties:
+                pdbId:
+                  type: string
+                  description: "PDB ID of the target protein (e.g. 1HSG)"
+                uploadRef:
+                  type: string
+                  description: "S3 key for user-uploaded structure (mutually exclusive with pdbId fetch)"
+                bindingSiteMode:
+                  type: string
+                  default: "native-ligand"
+                  enum: ["native-ligand", "fpocket", "custom-box"]
+                  description: "How to determine the binding site"
+                nativeLigandId:
+                  type: string
+                  default: "TTT"
+                  description: "Residue name of the native ligand for binding site detection"
+                customBox:
+                  type: object
+                  description: "Explicit box definition when bindingSiteMode is custom-box"
+                  properties:
+                    centerX:
+                      type: number
+                    centerY:
+                      type: number
+                    centerZ:
+                      type: number
+                    sizeX:
+                      type: number
+                    sizeY:
+                      type: number
+                    sizeZ:
+                      type: number
+                pocketCount:
+                  type: integer
+                  default: 3
+                  description: "Number of pockets to detect when using fpocket mode"
+                padding:
+                  type: number
+                  default: 10.0
+                  description: "Angstrom padding around the binding site for grid box"
+                pH:
+                  type: number
+                  default: 7.4
+                  description: "pH for protonation state assignment"
+                # -- Common fields --
+                computeClass:
+                  type: string
+                  default: "cpu"
+                  description: "Compute class: cpu, cpu-high-mem, or gpu"
+                timeout:
+                  type: string
+                  default: "1h"
+                  description: "Maximum wall-clock time before the job is killed"
+                retryPolicy:
+                  type: string
+                  default: "on-failure"
+                  enum: ["never", "on-failure", "always"]
+                  description: "When to retry failed jobs"
+                maxRetries:
+                  type: integer
+                  default: 3
+                  description: "Maximum number of retry attempts"
+                gate:
+                  type: string
+                  default: "manual"
+                  enum: ["auto", "manual"]
+                  description: "auto = start immediately; manual = wait for /advance API call"
+                parentJob:
+                  type: object
+                  description: "Reference to the parent CRD that spawned this job"
+                  properties:
+                    kind:
+                      type: string
+                    name:
+                      type: string
+                    selectedArtifactIds:
+                      type: array
+                      items:
+                        type: string
+            status:
+              type: object
+              properties:
+                phase:
+                  type: string
+                  default: "Pending"
+                  enum: ["Pending", "Running", "Succeeded", "Failed"]
+                  description: "Current lifecycle phase"
+                receptor:
+                  type: string
+                  description: "S3 key of the prepared receptor PDBQT in khemeia-receptors bucket"
+                bindingSite:
+                  type: object
+                  description: "Detected or specified binding site geometry"
+                  properties:
+                    centerX:
+                      type: number
+                    centerY:
+                      type: number
+                    centerZ:
+                      type: number
+                    sizeX:
+                      type: number
+                    sizeY:
+                      type: number
+                    sizeZ:
+                      type: number
+                pockets:
+                  type: array
+                  description: "Detected binding pockets (fpocket mode)"
+                  items:
+                    type: object
+                    properties:
+                      rank:
+                        type: integer
+                      score:
+                        type: number
+                      centerX:
+                        type: number
+                      centerY:
+                        type: number
+                      centerZ:
+                        type: number
+                startTime:
+                  type: string
+                  format: date-time
+                completionTime:
+                  type: string
+                  format: date-time
+                provenanceRef:
+                  type: string
+                  description: "Provenance artifact_id of this job's output"
+                parentJob:
+                  type: object
+                  properties:
+                    kind:
+                      type: string
+                    name:
+                      type: string
+                retryCount:
+                  type: integer
+                  default: 0
+                conditions:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      type:
+                        type: string
+                      status:
+                        type: string
+                        enum: ["True", "False", "Unknown"]
+                      reason:
+                        type: string
+                      message:
+                        type: string
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+                events:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      timestamp:
+                        type: string
+                        format: date-time
+                      message:
+                        type: string
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Phase
+          type: string
+          jsonPath: .status.phase
+        - name: PDB ID
+          type: string
+          jsonPath: .spec.pdbId
+        - name: Mode
+          type: string
+          jsonPath: .spec.bindingSiteMode
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
