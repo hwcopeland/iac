@@ -10,6 +10,7 @@ resources:
   - web-deployment.yaml
   - result-writer.yaml
   - prolif-runner.yaml
+  - library-prep.yaml
   - mysql.yaml
   - mysql-secret.yaml
   - httproute.yaml

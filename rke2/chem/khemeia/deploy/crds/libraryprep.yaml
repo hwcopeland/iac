@@ -1,0 +1,201 @@
+---
+# LibraryPrep CRD — compound library preparation stage.
+# Ingests compound libraries from multiple sources (SMILES, SDF, ChEMBL, Enamine),
+# standardizes structures, applies drug-likeness filters, and generates 3D conformers.
+# See docs/spec/wp-2-library-prep.md for design rationale.
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: librarypreps.khemeia.io
+  labels:
+    app.kubernetes.io/name: khemeia
+    app.kubernetes.io/component: crd
+spec:
+  group: khemeia.io
+  names:
+    kind: LibraryPrep
+    listKind: LibraryPrepList
+    plural: librarypreps
+    singular: libraryprep
+    shortNames:
+      - lp
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              required: ["source"]
+              properties:
+                source:
+                  type: string
+                  enum: ["smiles", "sdf", "chembl", "enamine"]
+                  description: "Compound source type"
+                name:
+                  type: string
+                  description: "Human-readable library name"
+                filters:
+                  type: object
+                  description: "Pre-filter toggles (each independently enabled/disabled)"
+                  properties:
+                    lipinski:
+                      type: boolean
+                      default: true
+                      description: "Lipinski Rule of Five (MW<=500, LogP<=5, HBA<=10, HBD<=5; pass if <=1 violation)"
+                    veber:
+                      type: boolean
+                      default: true
+                      description: "Veber rules (PSA<=140, rotatable bonds<=10)"
+                    pains:
+                      type: boolean
+                      default: true
+                      description: "PAINS-A/B/C substructure filter"
+                    brenk:
+                      type: boolean
+                      default: false
+                      description: "Brenk unwanted substructure filter"
+                    reos:
+                      type: boolean
+                      default: false
+                      description: "Rapid Elimination of Swill filter"
+                conformerMethod:
+                  type: string
+                  default: "etkdg"
+                  enum: ["etkdg"]
+                  description: "3D conformer generation method"
+                outputFormat:
+                  type: string
+                  default: "sdf"
+                  enum: ["sdf", "pdbqt"]
+                  description: "Output format for 3D conformers"
+                chunkSize:
+                  type: integer
+                  default: 10000
+                  description: "Number of compounds per processing chunk for parallel execution"
+                # -- Common fields --
+                computeClass:
+                  type: string
+                  default: "cpu"
+                  description: "Compute class: cpu, cpu-high-mem, or gpu"
+                timeout:
+                  type: string
+                  default: "2h"
+                  description: "Maximum wall-clock time before the job is killed"
+                retryPolicy:
+                  type: string
+                  default: "on-failure"
+                  enum: ["never", "on-failure", "always"]
+                  description: "When to retry failed jobs"
+                maxRetries:
+                  type: integer
+                  default: 3
+                  description: "Maximum number of retry attempts"
+                gate:
+                  type: string
+                  default: "manual"
+                  enum: ["auto", "manual"]
+                  description: "auto = start immediately; manual = wait for /advance API call"
+                parentJob:
+                  type: object
+                  description: "Reference to the parent CRD that spawned this job"
+                  properties:
+                    kind:
+                      type: string
+                    name:
+                      type: string
+                    selectedArtifactIds:
+                      type: array
+                      items:
+                        type: string
+            status:
+              type: object
+              properties:
+                phase:
+                  type: string
+                  default: "Pending"
+                  enum: ["Pending", "Running", "Succeeded", "Failed"]
+                  description: "Current lifecycle phase"
+                totalCompounds:
+                  type: integer
+                  description: "Total number of compounds ingested"
+                passedFilter:
+                  type: integer
+                  description: "Number of compounds that passed all enabled filters"
+                failedFilter:
+                  type: integer
+                  description: "Number of compounds that failed at least one enabled filter"
+                conformersFailed:
+                  type: integer
+                  description: "Number of compounds where 3D conformer generation failed"
+                duplicatesFound:
+                  type: integer
+                  description: "Number of duplicate compounds (same InChIKey) detected"
+                startTime:
+                  type: string
+                  format: date-time
+                completionTime:
+                  type: string
+                  format: date-time
+                provenanceRef:
+                  type: string
+                  description: "Provenance artifact_id of this job's output"
+                parentJob:
+                  type: object
+                  properties:
+                    kind:
+                      type: string
+                    name:
+                      type: string
+                retryCount:
+                  type: integer
+                  default: 0
+                conditions:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      type:
+                        type: string
+                      status:
+                        type: string
+                        enum: ["True", "False", "Unknown"]
+                      reason:
+                        type: string
+                      message:
+                        type: string
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+                events:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      timestamp:
+                        type: string
+                        format: date-time
+                      message:
+                        type: string
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Phase
+          type: string
+          jsonPath: .status.phase
+        - name: Source
+          type: string
+          jsonPath: .spec.source
+        - name: Compounds
+          type: integer
+          jsonPath: .status.totalCompounds
+        - name: Filtered
+          type: integer
+          jsonPath: .status.failedFilter
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp

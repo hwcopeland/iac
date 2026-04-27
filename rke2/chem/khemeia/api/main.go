@@ -309,7 +309,10 @@ func (c *Controller) initPluginDB(p Plugin) error {
 		if err := EnsureTargetPrepSchema(db); err != nil {
 			log.Printf("Warning: failed to create target_prep_results table in %s: %v", p.Database, err)
 		}
-		log.Printf("Shared tables (api_tokens, basis_sets, provenance, target_prep_results) created in %s database", p.Database)
+		if err := EnsureLibraryPrepSchema(db); err != nil {
+			log.Printf("Warning: failed to create library_prep tables in %s: %v", p.Database, err)
+		}
+		log.Printf("Shared tables (api_tokens, basis_sets, provenance, target_prep_results, library_prep) created in %s database", p.Database)
 	}
 
 	return nil
@@ -612,6 +615,13 @@ func (c *Controller) startAPIServer() error {
 	// POST /api/v1/targets/{name}/pockets/{index}/select — select a pocket
 	mux.HandleFunc("/api/v1/targets/", wrap(handler.TargetDispatch))
 	log.Println("Registered target prep routes: /api/v1/targets/{prepare,{name},{name}/pockets,{name}/pockets/{index}/select}")
+
+	// Library preparation endpoints (WP-2).
+	// POST /api/v1/libraries/prepare                 — submit a library prep job
+	// GET  /api/v1/libraries/{name}                  — get library prep status
+	// GET  /api/v1/libraries/{name}/compounds        — paginated compound list
+	mux.HandleFunc("/api/v1/libraries/", wrap(handler.LibraryDispatch))
+	log.Println("Registered library prep routes: /api/v1/libraries/{prepare,{name},{name}/compounds}")
 
 	// Token management — admin only (no external auth, internal IPs only).
 	mux.HandleFunc("/api/v1/tokens", func(w http.ResponseWriter, r *http.Request) {

@@ -1,0 +1,57 @@
+name: library-prep
+slug: library-prep
+version: "1.0"
+image: zot.hwcopeland.net/chem/library-prep:latest
+type: job
+database: library_prep
+visible: true
+
+input:
+  - name: source
+    type: string
+    required: true
+    description: "Compound source type: smiles, sdf, chembl, or enamine"
+  - name: name
+    type: string
+    required: true
+    description: "Human-readable library name (e.g., aspirin-analogs)"
+  - name: smiles_list
+    type: json
+    required: false
+    description: "JSON array of SMILES strings (source=smiles or source=enamine)"
+  - name: sdf_data
+    type: text
+    required: false
+    description: "Raw SDF file content (source=sdf)"
+  - name: s3_ref
+    type: string
+    required: false
+    description: "S3 key for SDF or Enamine SMILES file (source=sdf or source=enamine)"
+  - name: filters
+    type: json
+    required: false
+    default: '{"lipinski": true, "veber": true, "pains": true, "brenk": false, "reos": false}'
+    description: "Filter toggles: lipinski, veber, pains, brenk, reos (each true/false)"
+
+output:
+  - name: s3_key
+    type: text
+    description: "S3 key for the library summary JSON in khemeia-libraries bucket"
+  - name: compound_count
+    type: int
+    description: "Total number of compounds processed"
+  - name: filtered_count
+    type: int
+    description: "Number of compounds that failed enabled filters"
+  - name: log
+    type: text
+
+resources:
+  cpu: "4"
+  memory: "8192Mi"
+  timeout: 2h
+
+command: |
+  echo "Library preparation is handled by the API controller via the library-prep sidecar."
+  echo "This plugin YAML exists for route generation and UI visibility."
+  echo "Use POST /api/v1/libraries/prepare to submit library prep jobs."

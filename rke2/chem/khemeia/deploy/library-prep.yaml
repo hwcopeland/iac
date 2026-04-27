@@ -1,0 +1,89 @@
+# Deployment for the library-prep sidecar service (WP-2)
+# Handles compound standardization (RDKit MolStandardize, ChEMBL Structure Pipeline),
+# pre-filter annotation (Lipinski, Veber, PAINS, Brenk, REOS),
+# and 3D conformer generation (ETKDGv3 + MMFF94).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: library-prep
+  namespace: chem
+  labels:
+    app: library-prep
+    khemeia.io/component: library-prep
+spec:
+  replicas: 1
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app: library-prep
+  template:
+    metadata:
+      labels:
+        app: library-prep
+        khemeia.io/component: library-prep
+    spec:
+      imagePullSecrets:
+        - name: zot-pull-secret
+      containers:
+        - name: library-prep
+          image: zot.hwcopeland.net/chem/library-prep:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8000
+              name: http
+              protocol: TCP
+          env:
+            - name: GARAGE_ENDPOINT
+              valueFrom:
+                secretKeyRef:
+                  name: garage-secret
+                  key: endpoint
+            - name: GARAGE_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: garage-secret
+                  key: access-key
+            - name: GARAGE_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: garage-secret
+                  key: secret-key
+          resources:
+            requests:
+              cpu: "1"
+              memory: 2Gi
+            limits:
+              cpu: "4"
+              memory: 8Gi
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8000
+            initialDelaySeconds: 20
+            periodSeconds: 5
+---
+# Service for the library-prep sidecar
+# Reachable at library-prep.chem.svc.cluster.local
+apiVersion: v1
+kind: Service
+metadata:
+  name: library-prep
+  namespace: chem
+  labels:
+    app: library-prep
+    khemeia.io/component: library-prep
+spec:
+  type: ClusterIP
+  ports:
+    - port: 80
+      targetPort: 8000
+      protocol: TCP
+      name: http
+  selector:
+    app: library-prep
