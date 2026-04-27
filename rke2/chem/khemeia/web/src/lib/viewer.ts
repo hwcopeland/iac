@@ -38,7 +38,12 @@ function applyCanvasProps(): void {
   if (!plugin?.canvas3d) return;
   plugin.canvas3d.setProps({
     renderer: { ...plugin.canvas3d.props.renderer, backgroundColor: 0x0d1117 },
-    trackball: { ...plugin.canvas3d.props.trackball, maxWheelDelta: 0.005 },
+    trackball: {
+      ...plugin.canvas3d.props.trackball,
+      zoomSpeed: 1.0,              // default is 7 — way too fast
+      maxWheelDelta: 0.002,        // clamp wheel/trackpad delta hard
+      gestureScaleFactor: 0.2,     // Mac pinch-to-zoom (default 1.0)
+    },
   });
 }
 
@@ -973,7 +978,7 @@ function ensureIxCanvas(): boolean {
   if (_ixCanvas && _ixCtx) return true;
   if (!plugin?.canvas3d) return false;
 
-  const glCanvas = plugin.canvas3d.webgl?.canvas;
+  const glCanvas = plugin.canvas3d.canvas ?? plugin.canvas3d.webgl?.canvas;
   if (!glCanvas?.parentElement) return false;
 
   _ixCanvas = document.createElement('canvas');

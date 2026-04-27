@@ -165,10 +165,23 @@ export interface PocketResidue {
   contact_atoms: number;
 }
 
+export interface InteractionLine {
+  type: string;
+  rec_x: number; rec_y: number; rec_z: number;
+  lig_x: number; lig_y: number; lig_z: number;
+  distance: number;
+  rec_atom: string;
+  lig_atom: string;
+  res_name: string;
+  res_id: number;
+  chain_id: string;
+}
+
 export interface PocketAnalysis {
   compound_id: string;
   cutoff_angstrom: number;
   pocket_residues: PocketResidue[];
+  interaction_lines: InteractionLine[];
   total_contacts: number;
   ligand_atoms: number;
 }
