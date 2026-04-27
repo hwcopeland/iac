@@ -39,7 +39,7 @@
   let pocket = $state<PocketAnalysis | null>(null);
   let pocketLoading = $state(false);
   let pocketError = $state('');
-  let pocketCutoff = $state(5.0);
+  let pocketCutoff = $state(6.0);
   let pocketOpen = $state(true);
   let showSurfaceMesh = $state(false);
   let surfaceType = $state('charge');

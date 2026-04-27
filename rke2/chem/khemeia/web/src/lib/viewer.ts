@@ -773,11 +773,44 @@ export function getSequence(): { chainId: string; residues: { resId: number; res
   } catch { return []; }
 }
 
+/** Focus camera on the ligand (HETATM/UNL) component if present,
+ *  otherwise fall back to the last loaded structure. */
 export function focusLastStructure(): void {
   if (!plugin) return;
   try {
     const structures = plugin.managers?.structure?.hierarchy?.current?.structures;
     if (!structures?.length) return;
+
+    const { StructureElement, StructureProperties } = getLib().structure;
+
+    // Try to find and focus just the ligand atoms (HETATM / residue name UNL)
+    const structData = structures[0]?.cell?.obj?.data;
+    if (structData) {
+      const lociElements: any[] = [];
+      for (const unit of structData.units) {
+        const indices: number[] = [];
+        for (let i = 0, len = unit.elements.length; i < len; i++) {
+          const elIdx = unit.elements[i];
+          const loc = StructureElement.Location.create(structData, unit, elIdx);
+          const resName = StructureProperties.residue.label_comp_id(loc);
+          // UNL = our docked ligand, also match common ligand indicators
+          if (resName === 'UNL' || resName === 'LIG' || resName === 'MOL') {
+            indices.push(i);
+          }
+        }
+        if (indices.length > 0) {
+          lociElements.push({ unit, indices: toSortedArray(indices) });
+        }
+      }
+
+      if (lociElements.length > 0) {
+        const loci = StructureElement.Loci(structData, lociElements);
+        plugin.managers.camera.focusLoci(loci, { durationMs: 250 });
+        return;
+      }
+    }
+
+    // Fallback: focus the whole last structure
     const last = structures[structures.length - 1];
     if (last?.cell?.obj?.data) {
       const loci = getLib().structure.Structure.Loci(last.cell.obj.data);
@@ -1223,8 +1256,15 @@ export async function togglePocketSurface(show: boolean, colorTheme: string = 'r
       }
     }
 
+    // Save camera so adding/removing surface doesn't reset the view
+    const cam = saveCameraSnapshot();
+
     await clearSurfaceRefs();
-    if (!show) return;
+    if (!show) {
+      // Restore camera after surface removal
+      if (cam) requestAnimationFrame(() => restoreCameraSnapshot(cam));
+      return;
+    }
 
     ensureDarkChargeTheme();
     ensureDarkElementTheme();
@@ -1233,6 +1273,9 @@ export async function togglePocketSurface(show: boolean, colorTheme: string = 'r
     if (!ref) return;
     const { StateTransforms } = getLib().plugin;
     const resolvedTheme = DARK_THEME_MAP[colorTheme] ?? colorTheme;
+
+    // Prevent Molstar from auto-resetting camera on new representation
+    plugin.canvas3d?.setProps({ camera: { ...plugin.canvas3d.props.camera, manualReset: true } });
 
     const update = plugin.build();
     const node = update.to(ref).apply(StateTransforms.Representation.StructureRepresentation3D, {
@@ -1243,7 +1286,10 @@ export async function togglePocketSurface(show: boolean, colorTheme: string = 'r
     await update.commit();
     try { if (node.ref) _surfaceRefs.push(node.ref); } catch {}
 
-    applyCanvasProps();
+    // Restore camera position
+    if (cam) requestAnimationFrame(() => restoreCameraSnapshot(cam));
+    // Re-enable auto reset for future loads
+    plugin.canvas3d?.setProps({ camera: { ...plugin.canvas3d.props.camera, manualReset: false } });
   } catch (e) {
     console.error('togglePocketSurface failed:', e);
   }
