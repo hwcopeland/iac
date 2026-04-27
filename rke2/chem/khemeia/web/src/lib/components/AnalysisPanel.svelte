@@ -3,7 +3,7 @@
   import InteractionNetwork from './InteractionNetwork.svelte';
   import { getJobs, getJob, getPocketAnalysis, getReceptorContacts, getFingerprints, getLigandSmiles, getDockingResult } from '$lib/api';
   import type { PocketResidue, PocketAnalysis, ResidueContact, ReceptorContactsResponse, FingerprintCompound } from '$lib/api';
-  import { loadFile, overlayStructure, focusLastStructure, focusResidue, highlightResidue, drawInteractionLines, showPocketView, togglePocketSurface, clearPocketView } from '$lib/viewer';
+  import { loadFile, focusLastStructure, focusResidue, highlightResidue, drawInteractionLines, showPocketView, togglePocketSurface, clearPocketView } from '$lib/viewer';
   import type { InteractionLine } from '$lib/viewer';
   import { isAuthenticated } from '$lib/auth';
 
@@ -105,9 +105,9 @@
     }
   }
 
-  /** Extract only unique HETATM/ATOM lines from MODEL 1 of a Vina PDBQT.
+  /** Extract unique HETATM/ATOM lines from MODEL 1 of a Vina PDBQT.
    *  Vina's BRANCH tree duplicates atoms — deduplicate by atom serial number. */
-  function extractBestPose(pdbqt: string): string {
+  function extractBestPoseLines(pdbqt: string): string[] {
     const lines = pdbqt.split('\n');
     const seen = new Set<string>();
     const out: string[] = [];
@@ -120,7 +120,6 @@
       }
       if (line.startsWith('ENDMDL')) break;
       if (inFirstModel && (line.startsWith('HETATM') || line.startsWith('ATOM'))) {
-        // Atom serial is columns 7-11 (0-indexed 6-10)
         const serial = line.substring(6, 11).trim();
         if (!seen.has(serial)) {
           seen.add(serial);
@@ -128,7 +127,33 @@
         }
       }
     }
-    return out.join('\n');
+    return out;
+  }
+
+  /** Convert receptor PDBQT to PDB lines (ATOM only, strip Vina columns). */
+  function receptorToPdbLines(pdbqt: string): string[] {
+    return pdbqt.split('\n')
+      .filter(line => line.startsWith('ATOM'))
+      .map(line => line.substring(0, 66).padEnd(80));
+  }
+
+  /** Convert ligand PDBQT lines to HETATM with residue name UNL so Molstar
+   *  classifies it as a ligand and computes non-covalent interactions with the protein. */
+  function ligandToPdbLines(pdbqtLines: string[]): string[] {
+    return pdbqtLines.map(line => {
+      // Force HETATM record type + residue name UNL, strip Vina columns
+      const pdb = 'HETATM' + line.substring(6, 17) + 'UNL' + line.substring(20, 66);
+      return pdb.padEnd(80);
+    });
+  }
+
+  /** Combine receptor + ligand into a single PDB so Molstar detects
+   *  non-covalent interactions (H-bonds, hydrophobic, etc.) natively. */
+  function buildCombinedPdb(receptorPdbqt: string, ligandPdbqt: string): string {
+    const recLines = receptorToPdbLines(receptorPdbqt);
+    const ligPdbqtLines = extractBestPoseLines(ligandPdbqt);
+    const ligLines = ligandToPdbLines(ligPdbqtLines);
+    return [...recLines, 'TER', ...ligLines, 'END'].join('\n');
   }
 
   async function handleView(result: any) {
@@ -136,25 +161,21 @@
     viewingCompound = result.compound_id;
 
     // Reset the interaction network overlay when switching compounds.
-    // Without this, the old compound's ProLIF iframe/data persists in +page.svelte
-    // because showNetwork stays true and the network props are never cleared.
     if (showNetwork) {
       showNetwork = false;
       onNetworkToggle(false, '', [], '', '');
     }
 
     try {
-      // Load the preprocessed receptor
       const receptor = selectedJob?.receptor_pdbqt;
-      if (receptor) {
-        await loadFile(receptor, 'pdbqt');
-      }
-      // Overlay only the best docked pose (MODEL 1, deduplicated)
-      if (result.pose_pdbqt) {
-        const bestPose = extractBestPose(result.pose_pdbqt);
-        await overlayStructure(bestPose, 'pdbqt');
-        // Short delay to let Molstar finish rendering, then focus on ligand
+      if (receptor && result.pose_pdbqt) {
+        // Load receptor + ligand as ONE structure so Molstar's native
+        // interaction detection (H-bonds, hydrophobic, etc.) works.
+        const combinedPdb = buildCombinedPdb(receptor, result.pose_pdbqt);
+        await loadFile(combinedPdb, 'pdb');
         setTimeout(() => focusLastStructure(), 200);
+      } else if (receptor) {
+        await loadFile(receptor, 'pdbqt');
       }
       // Fetch pocket analysis + SMILES for interaction network
       fetchPocket(result.compound_id);
