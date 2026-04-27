@@ -18,9 +18,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libboost-all-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Install gnina from GitHub releases (static build)
+# Install gnina from GitHub releases (static build, pinned to v1.3.2)
 RUN wget -q -O /usr/local/bin/gnina \
-    "https://github.com/gnina/gnina/releases/latest/download/gnina" \
+    "https://github.com/gnina/gnina/releases/download/v1.3.2/gnina.1.3.2" \
     && chmod +x /usr/local/bin/gnina
 
 WORKDIR /app
