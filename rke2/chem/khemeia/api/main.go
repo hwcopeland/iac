@@ -306,7 +306,10 @@ func (c *Controller) initPluginDB(p Plugin) error {
 		if err := EnsureProvenanceSchema(db); err != nil {
 			log.Printf("Warning: failed to create provenance tables in %s: %v", p.Database, err)
 		}
-		log.Printf("Shared tables (api_tokens, basis_sets, provenance) created in %s database", p.Database)
+		if err := EnsureTargetPrepSchema(db); err != nil {
+			log.Printf("Warning: failed to create target_prep_results table in %s: %v", p.Database, err)
+		}
+		log.Printf("Shared tables (api_tokens, basis_sets, provenance, target_prep_results) created in %s database", p.Database)
 	}
 
 	return nil
@@ -601,6 +604,14 @@ func (c *Controller) startAPIServer() error {
 		}
 	}))
 	log.Println("Registered CRD routes: /api/v1/jobs/{kind}/{name}/{advance,status}")
+
+	// Target preparation endpoints (WP-1).
+	// POST /api/v1/targets/prepare          — submit a target prep job
+	// GET  /api/v1/targets/{name}           — get target prep status
+	// GET  /api/v1/targets/{name}/pockets   — list detected pockets
+	// POST /api/v1/targets/{name}/pockets/{index}/select — select a pocket
+	mux.HandleFunc("/api/v1/targets/", wrap(handler.TargetDispatch))
+	log.Println("Registered target prep routes: /api/v1/targets/{prepare,{name},{name}/pockets,{name}/pockets/{index}/select}")
 
 	// Token management — admin only (no external auth, internal IPs only).
 	mux.HandleFunc("/api/v1/tokens", func(w http.ResponseWriter, r *http.Request) {

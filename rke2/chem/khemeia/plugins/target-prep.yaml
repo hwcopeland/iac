@@ -1,0 +1,54 @@
+name: target-prep
+slug: target-prep
+version: "1.0"
+image: zot.hwcopeland.net/chem/target-prep:latest
+type: job
+database: target_prep
+visible: true
+
+input:
+  - name: pdb_id
+    type: string
+    required: true
+    description: "PDB ID of target protein (e.g., 7jrn)"
+  - name: binding_site_mode
+    type: string
+    required: true
+    description: "Binding site definition mode: native-ligand, custom-box, or pocket-detection"
+  - name: native_ligand_id
+    type: string
+    required: false
+    description: "Three-letter code of the co-crystallized ligand (required for native-ligand mode)"
+  - name: padding
+    type: float
+    required: false
+    default: 10.0
+    description: "Padding in Angstroms around the binding site (default: 10)"
+  - name: pH
+    type: float
+    required: false
+    default: 7.4
+    description: "pH for protonation state assignment (default: 7.4)"
+
+output:
+  - name: receptor_s3_key
+    type: text
+    description: "S3 key for the cleaned receptor PDB in khemeia-receptors bucket"
+  - name: binding_site
+    type: text
+    description: "JSON object with center [x,y,z] and size [sx,sy,sz] of the binding box"
+  - name: pocket_count
+    type: int
+    description: "Number of detected pockets (pocket-detection mode only)"
+  - name: log
+    type: text
+
+resources:
+  cpu: "2"
+  memory: "4096Mi"
+  timeout: 30m
+
+command: |
+  echo "Target preparation is handled by the API controller via sidecar services."
+  echo "This plugin YAML exists for route generation and UI visibility."
+  echo "Use POST /api/v1/targets/prepare to submit target prep jobs."
