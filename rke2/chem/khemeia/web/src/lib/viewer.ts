@@ -38,18 +38,16 @@ function applyCanvasProps(): void {
   if (!plugin?.canvas3d) return;
   plugin.canvas3d.setProps({
     renderer: { ...plugin.canvas3d.props.renderer, backgroundColor: 0x0d1117 },
-    trackball: {
-      ...plugin.canvas3d.props.trackball,
-      zoomSpeed: 1.0,              // default is 7 — way too fast
-      maxWheelDelta: 0.002,        // clamp wheel/trackpad delta hard
-      gestureScaleFactor: 0.2,     // Mac pinch-to-zoom (default 1.0)
-    },
+    trackball: { ...plugin.canvas3d.props.trackball, maxWheelDelta: 0.005 },
   });
 }
 
 // ─── Initialization ───
 
+let _viewerContainer: HTMLDivElement | null = null;
+
 export async function init(container: HTMLDivElement): Promise<void> {
+  _viewerContainer = container;
   const instance = await molstar.Viewer.create(container, {
     layoutIsExpanded: false,
     layoutShowControls: true,
@@ -975,28 +973,26 @@ function project3Dto2D(x: number, y: number, z: number): { sx: number; sy: numbe
 }
 
 function ensureIxCanvas(): boolean {
-  if (_ixCanvas && _ixCtx) return true;
-  if (!plugin?.canvas3d) return false;
+  if (_ixCanvas && _ixCtx && _ixCanvas.parentElement) return true;
+  if (!plugin?.canvas3d || !_viewerContainer) return false;
 
-  const glCanvas = plugin.canvas3d.canvas ?? plugin.canvas3d.webgl?.canvas;
-  if (!glCanvas?.parentElement) return false;
+  // Clean up old canvas if orphaned
+  if (_ixCanvas) { _ixCanvas.remove(); _ixCanvas = null; _ixCtx = null; }
 
   _ixCanvas = document.createElement('canvas');
   _ixCanvas.style.cssText = 'position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:10';
-  glCanvas.parentElement.style.position = 'relative';
-  glCanvas.parentElement.appendChild(_ixCanvas);
+  // Append to the viewer container we control (not Molstar internals)
+  _viewerContainer.style.position = 'relative';
+  _viewerContainer.appendChild(_ixCanvas);
   _ixCtx = _ixCanvas.getContext('2d');
   return !!_ixCtx;
 }
 
 function renderIxLines(): void {
-  if (!_ixCtx || !_ixCanvas || !_ixLines.length) return;
-
-  const glCanvas = plugin?.canvas3d?.webgl?.canvas;
-  if (!glCanvas) return;
+  if (!_ixCtx || !_ixCanvas || !_ixLines.length || !_viewerContainer) return;
 
   const dpr = window.devicePixelRatio || 1;
-  const rect = glCanvas.getBoundingClientRect();
+  const rect = _viewerContainer.getBoundingClientRect();
   const w = Math.round(rect.width * dpr);
   const h = Math.round(rect.height * dpr);
 
