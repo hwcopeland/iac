@@ -59,6 +59,9 @@
   // Top-N selector for analysis
   let analysisTopN = $state(100);
 
+  // Expanded compound in Hit table (shows full ADMET profile)
+  let expandedCompoundId = $state<string | null>(null);
+
   const PLUGIN_SLUG = 'docking';
 
   $effect(() => {
@@ -543,12 +546,18 @@
             <p class="rc-summary">Top {receptorContacts.top_n} compounds, {receptorContacts.total_compounds_analyzed} analyzed</p>
             <div class="pocket-table-wrap">
               <table class="pocket-table">
-                <thead><tr><th>Res</th><th>Freq</th><th>Dist</th></tr></thead>
+                <thead><tr>
+                  <th>Res</th>
+                  <th title="Influence score: 0.4×frequency + 0.35×affinity-weighted freq + 0.25×beneficial interaction ratio. Higher = more important for binding.">Influence</th>
+                  <th>Freq</th>
+                  <th>Dist</th>
+                </tr></thead>
                 <tbody>
-                  {#each receptorContacts.residue_contacts.slice(0, 20) as rc}
+                  {#each receptorContacts.residue_contacts.slice(0, 25) as rc}
                     <tr class="pocket-row" onclick={() => focusResidue(rc.chain_id, rc.res_id)}>
                       <td class="mono">{rc.res_name}{rc.res_id}.{rc.chain_id}</td>
-                      <td><div class="freq-bar-wrap"><div class="freq-bar" style="width:{rc.contact_frequency*100}%"></div><span class="freq-label">{(rc.contact_frequency*100).toFixed(0)}%</span></div></td>
+                      <td><div class="freq-bar-wrap"><div class="influence-bar" style="width:{Math.min(rc.influence_score * 100, 100)}%"></div><span class="freq-label">{(rc.influence_score * 100).toFixed(0)}</span></div></td>
+                      <td class="mono freq-secondary">{(rc.contact_frequency*100).toFixed(0)}%</td>
                       <td class="mono">{rc.avg_distance.toFixed(1)}</td>
                     </tr>
                   {/each}
@@ -579,7 +588,7 @@
               <thead><tr><th>#</th><th>ID</th><th>Aff.</th><th>MW</th><th>LogP</th><th>QED</th><th>ADMET</th></tr></thead>
               <tbody>
                 {#each fpCompounds.slice(0, 50) as comp, i}
-                  <tr class="pocket-row" onclick={() => viewCompoundFromTable(comp.compound_id)}>
+                  <tr class="pocket-row" onclick={() => { expandedCompoundId = expandedCompoundId === comp.compound_id ? null : comp.compound_id; }}>
                     <td>{i+1}</td>
                     <td class="mono">{comp.compound_id}</td>
                     <td class="mono">{(comp.affinity ?? 0).toFixed(1)}</td>
@@ -596,6 +605,62 @@
                       {/if}
                     </td>
                   </tr>
+                  {#if expandedCompoundId === comp.compound_id}
+                    <tr class="admet-detail-row">
+                      <td colspan="7">
+                        <div class="admet-detail">
+                          <div class="admet-detail-header">
+                            <span class="admet-detail-title">{comp.compound_id}</span>
+                            <button class="view-btn" onclick|stopPropagation={() => viewCompoundFromTable(comp.compound_id)}>View 3D</button>
+                          </div>
+                          <div class="admet-props-grid">
+                            <div class="admet-prop">
+                              <span class="admet-prop-label">MW</span>
+                              <span class="admet-prop-val" class:warn={comp.mw != null && comp.mw > 500}>{comp.mw?.toFixed(1) ?? '—'}</span>
+                            </div>
+                            <div class="admet-prop">
+                              <span class="admet-prop-label">LogP</span>
+                              <span class="admet-prop-val" class:warn={comp.logp != null && comp.logp > 5}>{comp.logp?.toFixed(2) ?? '—'}</span>
+                            </div>
+                            <div class="admet-prop">
+                              <span class="admet-prop-label">HBA</span>
+                              <span class="admet-prop-val" class:warn={comp.hba != null && comp.hba > 10}>{comp.hba ?? '—'}</span>
+                            </div>
+                            <div class="admet-prop">
+                              <span class="admet-prop-label">HBD</span>
+                              <span class="admet-prop-val" class:warn={comp.hbd != null && comp.hbd > 5}>{comp.hbd ?? '—'}</span>
+                            </div>
+                            <div class="admet-prop">
+                              <span class="admet-prop-label">PSA</span>
+                              <span class="admet-prop-val" class:warn={comp.psa != null && comp.psa > 140}>{comp.psa?.toFixed(1) ?? '—'} A</span>
+                            </div>
+                            <div class="admet-prop">
+                              <span class="admet-prop-label">QED</span>
+                              <span class="admet-prop-val" class:good={comp.qed != null && comp.qed >= 0.5}>{comp.qed?.toFixed(3) ?? '—'}</span>
+                            </div>
+                            <div class="admet-prop">
+                              <span class="admet-prop-label">RO5 Violations</span>
+                              <span class="admet-prop-val" class:warn={comp.ro5_violations != null && comp.ro5_violations > 1}>{comp.ro5_violations ?? '—'}</span>
+                            </div>
+                            <div class="admet-prop">
+                              <span class="admet-prop-label">Affinity</span>
+                              <span class="admet-prop-val">{(comp.affinity ?? 0).toFixed(2)} kcal/mol</span>
+                            </div>
+                          </div>
+                          {#if comp.admet}
+                            <div class="admet-flags-detail">
+                              <span class="admet-flag" class:pass={comp.admet.lipinski} class:fail={!comp.admet.lipinski}>Lipinski {comp.admet.lipinski ? 'PASS' : 'FAIL'}</span>
+                              <span class="admet-flag" class:pass={comp.admet.veber} class:fail={!comp.admet.veber}>Veber {comp.admet.veber ? 'PASS' : 'FAIL'}</span>
+                              <span class="admet-flag" class:pass={comp.admet.lead_like} class:neutral={!comp.admet.lead_like}>Lead-like {comp.admet.lead_like ? 'YES' : 'NO'}</span>
+                              <span class="admet-flag" class:pass={comp.admet.good_qed} class:neutral={!comp.admet.good_qed}>QED {comp.admet.good_qed ? 'GOOD' : 'LOW'}</span>
+                              {#if comp.admet.p450_risk}<span class="admet-flag warn">CYP Metabolism Risk</span>{/if}
+                              {#if comp.admet.high_psa}<span class="admet-flag fail">High PSA (poor absorption)</span>{/if}
+                            </div>
+                          {/if}
+                        </div>
+                      </td>
+                    </tr>
+                  {/if}
                 {/each}
               </tbody>
             </table>
@@ -1209,6 +1274,114 @@
     background: linear-gradient(90deg, #3fb950, #58a6ff);
     border-radius: 4px;
     min-width: 2px;
+  }
+
+  .influence-bar {
+    height: 8px;
+    background: linear-gradient(90deg, #d29922, #f85149);
+    border-radius: 4px;
+    min-width: 2px;
+  }
+
+  .freq-secondary {
+    color: var(--text-muted, #484f58);
+    font-size: 9px;
+  }
+
+  /* ---- ADMET Detail (expanded compound row) ---- */
+  .admet-detail-row td {
+    padding: 0 !important;
+    border-bottom: 1px solid rgba(48,54,61,0.4);
+  }
+
+  .admet-detail {
+    padding: 8px;
+    background: rgba(0,0,0,0.2);
+    border-top: 1px solid rgba(48,54,61,0.3);
+  }
+
+  .admet-detail-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 6px;
+  }
+
+  .admet-detail-title {
+    font-family: 'SF Mono', monospace;
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--accent, #58a6ff);
+  }
+
+  .admet-props-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 4px;
+    margin-bottom: 6px;
+  }
+
+  .admet-prop {
+    display: flex;
+    flex-direction: column;
+    padding: 3px 6px;
+    background: rgba(0,0,0,0.15);
+    border-radius: 4px;
+  }
+
+  .admet-prop-label {
+    font-size: 8px;
+    font-weight: 600;
+    color: var(--text-muted, #484f58);
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+  }
+
+  .admet-prop-val {
+    font-family: 'SF Mono', monospace;
+    font-size: 11px;
+    color: var(--text-primary, #e6edf3);
+  }
+
+  .admet-prop-val.warn {
+    color: #d29922;
+  }
+
+  .admet-prop-val.good {
+    color: #3fb950;
+  }
+
+  .admet-flags-detail {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+
+  .admet-flag {
+    font-size: 9px;
+    font-weight: 600;
+    padding: 2px 6px;
+    border-radius: 4px;
+  }
+
+  .admet-flag.pass {
+    background: rgba(63,185,80,0.15);
+    color: #3fb950;
+  }
+
+  .admet-flag.fail {
+    background: rgba(248,81,73,0.1);
+    color: #f85149;
+  }
+
+  .admet-flag.warn {
+    background: rgba(210,153,34,0.15);
+    color: #d29922;
+  }
+
+  .admet-flag.neutral {
+    background: rgba(48,54,61,0.3);
+    color: var(--text-muted, #484f58);
   }
 
   .freq-label {

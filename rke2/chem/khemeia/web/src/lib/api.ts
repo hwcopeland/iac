@@ -198,6 +198,7 @@ export interface ResidueContact {
   res_id: number;
   res_name: string;
   contact_frequency: number;
+  influence_score: number;
   avg_distance: number;
   interaction_counts: Record<string, number>;
   compounds_contacting: number;
