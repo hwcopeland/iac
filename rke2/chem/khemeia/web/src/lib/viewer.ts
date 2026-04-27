@@ -17,6 +17,10 @@ export type AtomInfo = {
   x: number;
   y: number;
   z: number;
+  // Interaction info (populated when hovering over non-covalent interaction lines)
+  interactionType?: string;
+  distance?: number;
+  partnerResidue?: string;
 };
 
 type InteractionCallback = (info: AtomInfo | null) => void;
@@ -89,23 +93,76 @@ function setupInteractions(): void {
   const safeExtract = (reprLoci: any): AtomInfo | null => {
     try {
       const loci = reprLoci?.loci ?? reprLoci;
-      if (!loci || loci.kind !== 'element-loci' || !loci.elements?.length) return null;
+      if (!loci) return null;
 
       const { StructureElement, StructureProperties } = getLib().structure;
-      const stats = StructureElement.Stats.ofLoci(loci);
-      const loc = stats.firstElementLoc;
-      if (!loc?.unit) return null;
 
-      return {
-        element: String(StructureProperties.atom.type_symbol(loc)),
-        atomName: StructureProperties.atom.label_atom_id(loc),
-        residueName: StructureProperties.residue.label_comp_id(loc),
-        residueId: StructureProperties.residue.auth_seq_id(loc),
-        chainId: StructureProperties.chain.auth_asym_id(loc),
-        x: StructureProperties.atom.x(loc),
-        y: StructureProperties.atom.y(loc),
-        z: StructureProperties.atom.z(loc),
-      };
+      // Standard element loci (atoms)
+      if (loci.kind === 'element-loci' && loci.elements?.length) {
+        const stats = StructureElement.Stats.ofLoci(loci);
+        const loc = stats.firstElementLoc;
+        if (!loc?.unit) return null;
+
+        return {
+          element: String(StructureProperties.atom.type_symbol(loc)),
+          atomName: StructureProperties.atom.label_atom_id(loc),
+          residueName: StructureProperties.residue.label_comp_id(loc),
+          residueId: StructureProperties.residue.auth_seq_id(loc),
+          chainId: StructureProperties.chain.auth_asym_id(loc),
+          x: StructureProperties.atom.x(loc),
+          y: StructureProperties.atom.y(loc),
+          z: StructureProperties.atom.z(loc),
+        };
+      }
+
+      // Bond loci (hovering over a bond/interaction line)
+      if (loci.kind === 'bond-loci' && loci.bonds?.length) {
+        const bond = loci.bonds[0];
+        const unitA = bond.aUnit;
+        const unitB = bond.bUnit;
+        const idxA = bond.aIndex;
+        const idxB = bond.bIndex;
+
+        if (unitA && unitB) {
+          const locA = StructureElement.Location.create(loci.structure, unitA, unitA.elements[idxA]);
+          const locB = StructureElement.Location.create(loci.structure, unitB, unitB.elements[idxB]);
+
+          const resA = StructureProperties.residue.label_comp_id(locA);
+          const resIdA = StructureProperties.residue.auth_seq_id(locA);
+          const chainA = StructureProperties.chain.auth_asym_id(locA);
+          const resB = StructureProperties.residue.label_comp_id(locB);
+          const resIdB = StructureProperties.residue.auth_seq_id(locB);
+          const chainB = StructureProperties.chain.auth_asym_id(locB);
+
+          const ax = StructureProperties.atom.x(locA);
+          const ay = StructureProperties.atom.y(locA);
+          const az = StructureProperties.atom.z(locA);
+          const bx = StructureProperties.atom.x(locB);
+          const by = StructureProperties.atom.y(locB);
+          const bz = StructureProperties.atom.z(locB);
+          const dist = Math.sqrt((ax-bx)**2 + (ay-by)**2 + (az-bz)**2);
+
+          // Determine which is the protein residue and which is ligand
+          const aIsLigand = resA === 'UNL' || resA === 'LIG';
+          const proteinLoc = aIsLigand ? locB : locA;
+          const ligandLoc = aIsLigand ? locA : locB;
+
+          return {
+            element: String(StructureProperties.atom.type_symbol(proteinLoc)),
+            atomName: StructureProperties.atom.label_atom_id(proteinLoc),
+            residueName: StructureProperties.residue.label_comp_id(proteinLoc),
+            residueId: StructureProperties.residue.auth_seq_id(proteinLoc),
+            chainId: StructureProperties.chain.auth_asym_id(proteinLoc),
+            x: StructureProperties.atom.x(proteinLoc),
+            y: StructureProperties.atom.y(proteinLoc),
+            z: StructureProperties.atom.z(proteinLoc),
+            distance: Math.round(dist * 100) / 100,
+            partnerResidue: `${aIsLigand ? resA : resB}${aIsLigand ? resIdA : resIdB}.${aIsLigand ? chainA : chainB}`,
+          };
+        }
+      }
+
+      return null;
     } catch {
       return null;
     }
@@ -830,62 +887,60 @@ export function getCurrentRepresentation(): string { return _currentRepresentati
 export function onRepresentationChange(cb: (repr: string) => void): void { _reprChangeListeners.push(cb); }
 
 /**
- * Change representation type for all structures. Uses in-place update when
- * possible (same number of structures), falls back to delete+add if needed.
+ * Change representation type for all structures.
+ * Deletes all existing representations, adds the new type to the structure root.
+ * Preserves camera position.
  */
 export async function setRepresentation(type: string): Promise<void> {
   if (!plugin) return;
   try {
     const { StateTransforms } = getLib().plugin;
+    const cam = saveCameraSnapshot();
 
     // Clear pocket view and surface overlays
     await clearPocketView();
     await clearSurfaceRefs();
 
-    await plugin.dataTransaction(async () => {
-      const structures = plugin.managers?.structure?.hierarchy?.current?.structures ?? [];
+    // Prevent camera reset during representation changes
+    plugin.canvas3d?.setProps({ camera: { ...plugin.canvas3d.props.camera, manualReset: true } });
 
-      for (const structRef of structures) {
-        // Collect existing representation refs
-        const reprRefs: string[] = [];
-        for (const comp of (structRef.components ?? [])) {
-          for (const repr of (comp.representations ?? [])) {
-            if (repr.cell?.transform?.ref) reprRefs.push(repr.cell.transform.ref);
-          }
-        }
-        for (const repr of (structRef.representations ?? [])) {
+    const structures = plugin.managers?.structure?.hierarchy?.current?.structures ?? [];
+
+    for (const structRef of structures) {
+      // Collect ALL representation refs (from components + top-level)
+      const reprRefs: string[] = [];
+      for (const comp of (structRef.components ?? [])) {
+        for (const repr of (comp.representations ?? [])) {
           if (repr.cell?.transform?.ref) reprRefs.push(repr.cell.transform.ref);
         }
-
-        const ref = structRef.cell?.transform?.ref;
-        if (!ref) continue;
-
-        if (reprRefs.length === 1) {
-          // In-place update: change the existing representation's type
-          const builder = plugin.build();
-          builder.to(reprRefs[0]).update(StateTransforms.Representation.StructureRepresentation3D, (old: any) => ({
-            ...old,
-            type: { name: type, params: {} },
-          }));
-          await builder.commit();
-        } else {
-          // Multiple or zero representations — delete all, add one
-          if (reprRefs.length > 0) {
-            const delBuilder = plugin.build();
-            for (const r of reprRefs) { try { delBuilder.delete(r); } catch {} }
-            await delBuilder.commit();
-          }
-          await plugin.build()
-            .to(ref)
-            .apply(StateTransforms.Representation.StructureRepresentation3D, {
-              type: { name: type, params: {} },
-              colorTheme: { name: 'element-symbol', params: {} },
-              sizeTheme: { name: 'physical', params: {} },
-            })
-            .commit();
-        }
       }
-    });
+      for (const repr of (structRef.representations ?? [])) {
+        if (repr.cell?.transform?.ref) reprRefs.push(repr.cell.transform.ref);
+      }
+
+      // Delete all in one batch
+      if (reprRefs.length > 0) {
+        const delBuilder = plugin.build();
+        for (const r of reprRefs) { try { delBuilder.delete(r); } catch {} }
+        await delBuilder.commit();
+      }
+
+      // Add new representation to structure root
+      const ref = structRef.cell?.transform?.ref;
+      if (!ref) continue;
+      await plugin.build()
+        .to(ref)
+        .apply(StateTransforms.Representation.StructureRepresentation3D, {
+          type: { name: type, params: {} },
+          colorTheme: { name: 'element-symbol', params: {} },
+          sizeTheme: { name: 'physical', params: {} },
+        })
+        .commit();
+    }
+
+    // Restore camera
+    plugin.canvas3d?.setProps({ camera: { ...plugin.canvas3d.props.camera, manualReset: false } });
+    if (cam) requestAnimationFrame(() => restoreCameraSnapshot(cam));
 
     _currentRepresentation = type;
     for (const cb of _reprChangeListeners) cb(type);

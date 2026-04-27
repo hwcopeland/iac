@@ -5,7 +5,15 @@
 </script>
 
 <footer class="status-bar">
-  {#if hoverInfo}
+  {#if hoverInfo?.distance != null}
+    <span class="status-interaction">Interaction</span>
+    <span class="status-sep">&middot;</span>
+    <span class="status-residue">{hoverInfo.residueName} {hoverInfo.residueId}.{hoverInfo.chainId}</span>
+    <span class="status-sep">&mdash;</span>
+    <span class="status-partner">{hoverInfo.partnerResidue ?? 'ligand'}</span>
+    <span class="status-sep">&middot;</span>
+    <span class="status-distance">{hoverInfo.distance.toFixed(2)} A</span>
+  {:else if hoverInfo}
     <span class="status-element">{hoverInfo.element}</span>
     <span class="status-atom">{hoverInfo.atomName}</span>
     <span class="status-sep">&middot;</span>
@@ -58,6 +66,20 @@
 
   .status-coords {
     color: var(--text-muted);
+  }
+
+  .status-interaction {
+    color: #d29922;
+    font-weight: 700;
+  }
+
+  .status-partner {
+    color: var(--accent);
+  }
+
+  .status-distance {
+    color: var(--text-primary);
+    font-weight: 600;
   }
 
   .status-idle {
