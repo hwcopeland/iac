@@ -11,6 +11,7 @@ resources:
   - result-writer.yaml
   - prolif-runner.yaml
   - library-prep.yaml
+  - admet.yaml
   - mysql.yaml
   - mysql-secret.yaml
   - httproute.yaml

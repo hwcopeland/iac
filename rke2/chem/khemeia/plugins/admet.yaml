@@ -1,0 +1,53 @@
+name: admet
+slug: admet
+version: "1.0"
+image: zot.hwcopeland.net/chem/admet-ai:latest
+type: job
+database: admet
+visible: true
+
+input:
+  - name: library_ref
+    type: string
+    required: true
+    description: "Library-prep job name to source compounds from"
+  - name: compound_refs
+    type: json
+    required: false
+    description: "JSON array of specific compound IDs (filters from library_ref)"
+  - name: engines
+    type: json
+    required: false
+    default: '["admet_ai"]'
+    description: "ADMET prediction engines: admet_ai, admetlab3"
+  - name: mpo_profile
+    type: string
+    required: false
+    default: "oral"
+    description: "MPO scoring profile: oral, cns, oncology, antimicrobial"
+
+output:
+  - name: s3_key
+    type: text
+    description: "S3 key for the ADMET summary JSON in khemeia-results bucket"
+  - name: predicted_count
+    type: int
+    description: "Number of compounds with successful ADMET predictions"
+  - name: failed_count
+    type: int
+    description: "Number of compounds that failed prediction"
+  - name: avg_mpo_score
+    type: float
+    description: "Average MPO score across all predicted compounds"
+  - name: log
+    type: text
+
+resources:
+  cpu: "4"
+  memory: "8192Mi"
+  timeout: 4h
+
+command: |
+  echo "ADMET prediction is handled by the API controller via the ADMET sidecar."
+  echo "This plugin YAML exists for route generation and UI visibility."
+  echo "Use POST /api/v1/admet/predict to submit ADMET prediction jobs."
