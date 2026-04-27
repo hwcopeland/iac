@@ -1,0 +1,6 @@
+numpy<2
+rdkit-pypi
+chembl_structure_pipeline
+flask
+gunicorn
+meeko

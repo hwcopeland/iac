@@ -39,6 +39,7 @@ jobs:
       target-prep: ${{ steps.filter.outputs.target-prep }}
       fpocket: ${{ steps.filter.outputs.fpocket }}
       p2rank: ${{ steps.filter.outputs.p2rank }}
+      library-prep: ${{ steps.filter.outputs.library-prep }}
       web: ${{ steps.filter.outputs.web }}
     steps:
       - name: Checkout repository
@@ -62,6 +63,7 @@ jobs:
             echo "target-prep=true" >> "$GITHUB_OUTPUT"
             echo "fpocket=true" >> "$GITHUB_OUTPUT"
             echo "p2rank=true" >> "$GITHUB_OUTPUT"
+            echo "library-prep=true" >> "$GITHUB_OUTPUT"
             echo "web=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -77,6 +79,7 @@ jobs:
             echo "target-prep=true" >> "$GITHUB_OUTPUT"
             echo "fpocket=true" >> "$GITHUB_OUTPUT"
             echo "p2rank=true" >> "$GITHUB_OUTPUT"
+            echo "library-prep=true" >> "$GITHUB_OUTPUT"
             echo "web=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -130,6 +133,11 @@ jobs:
             echo "p2rank=true" >> "$GITHUB_OUTPUT"
           else
             echo "p2rank=false" >> "$GITHUB_OUTPUT"
+          fi
+          if echo "$CHANGED" | grep -q '^rke2/chem/khemeia/containers/library-prep/'; then
+            echo "library-prep=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "library-prep=false" >> "$GITHUB_OUTPUT"
           fi
           if echo "$CHANGED" | grep -q '^rke2/chem/khemeia/web/'; then
             echo "web=true" >> "$GITHUB_OUTPUT"
@@ -204,6 +212,12 @@ jobs:
             dockerfile: rke2/chem/khemeia/containers/p2rank/Dockerfile
             context: rke2/chem/khemeia/containers/p2rank/
             changed: ${{ needs.detect-changes.outputs.p2rank }}
+
+          - name: library-prep
+            image: zot.hwcopeland.net/chem/library-prep
+            dockerfile: rke2/chem/khemeia/containers/library-prep/Dockerfile
+            context: rke2/chem/khemeia/containers/library-prep/
+            changed: ${{ needs.detect-changes.outputs.library-prep }}
 
           - name: khemeia-web
             image: zot.hwcopeland.net/chem/khemeia-web

@@ -45,10 +45,11 @@ const khemeiaVersion = "v1alpha1"
 // registeredCRDs maps CRD kind names to their GroupVersionResource.
 // New CRD kinds are added here to register them with the controller.
 var registeredCRDs = map[string]schema.GroupVersionResource{
-	"TargetPrep": {Group: khemeiaGroup, Version: khemeiaVersion, Resource: "targetpreps"},
-	"DockJob":    {Group: khemeiaGroup, Version: khemeiaVersion, Resource: "dockjobs"},
-	"RefineJob":  {Group: khemeiaGroup, Version: khemeiaVersion, Resource: "refinejobs"},
-	"ADMETJob":   {Group: khemeiaGroup, Version: khemeiaVersion, Resource: "admetjobs"},
+	"TargetPrep":  {Group: khemeiaGroup, Version: khemeiaVersion, Resource: "targetpreps"},
+	"LibraryPrep": {Group: khemeiaGroup, Version: khemeiaVersion, Resource: "librarypreps"},
+	"DockJob":     {Group: khemeiaGroup, Version: khemeiaVersion, Resource: "dockjobs"},
+	"RefineJob":   {Group: khemeiaGroup, Version: khemeiaVersion, Resource: "refinejobs"},
+	"ADMETJob":    {Group: khemeiaGroup, Version: khemeiaVersion, Resource: "admetjobs"},
 }
 
 // defaultComputeClassForKind maps CRD kinds to their default compute class.
@@ -70,10 +71,11 @@ var defaultComputeClassForKind = map[string]string{
 
 // crdImageMapping maps CRD kinds to their container image.
 var crdImageMapping = map[string]string{
-	"TargetPrep": "zot.hwcopeland.net/chem/target-prep:latest",
-	"DockJob":    "zot.hwcopeland.net/chem/vina:1.2",
-	"RefineJob":  "zot.hwcopeland.net/chem/refine:latest",
-	"ADMETJob":   "zot.hwcopeland.net/chem/admet:latest",
+	"TargetPrep":  "zot.hwcopeland.net/chem/target-prep:latest",
+	"LibraryPrep": "zot.hwcopeland.net/chem/library-prep:latest",
+	"DockJob":     "zot.hwcopeland.net/chem/vina:1.2",
+	"RefineJob":   "zot.hwcopeland.net/chem/refine:latest",
+	"ADMETJob":    "zot.hwcopeland.net/chem/admet:latest",
 }
 
 // ComputeClass defines the scheduling and resource configuration for a job.
