@@ -38,8 +38,7 @@ function applyCanvasProps(): void {
   if (!plugin?.canvas3d) return;
   plugin.canvas3d.setProps({
     renderer: { ...plugin.canvas3d.props.renderer, backgroundColor: 0x0d1117 },
-    // maxWheelDelta: 0 disables scroll-wheel zoom entirely (user request)
-    trackball: { ...plugin.canvas3d.props.trackball, maxWheelDelta: 0 },
+    trackball: { ...plugin.canvas3d.props.trackball, maxWheelDelta: 0.005 },
   });
 }
 
@@ -1017,8 +1016,8 @@ export async function clearPocketView(): Promise<void> {
 
 /**
  * Show protein as faded cartoon with pocket residues as ball-and-stick.
- * Uses MolScript expressions to create a component for just the pocket residues,
- * so ball-and-stick only applies to the binding pocket.
+ * Preserves ligand (HETATM/UNL) component representations so the docked
+ * ligand stays visible. Only modifies polymer representations.
  */
 export async function showPocketView(residues: { chain_id: string; res_id: number }[]): Promise<void> {
   if (!plugin) return;
@@ -1033,22 +1032,38 @@ export async function showPocketView(residues: { chain_id: string; res_id: numbe
 
     await clearPocketView();
 
-    // Remove existing representations on the protein
-    const allReprs = [
-      ...(structRef.components ?? []).flatMap((c: any) => c.representations ?? []),
-      ...(structRef.representations ?? []),
-    ];
-    if (allReprs.length > 0) {
-      const delBuilder = plugin.build();
-      for (const repr of allReprs) {
-        if (repr.cell?.transform?.ref) delBuilder.delete(repr.cell.transform.ref);
+    // Only remove POLYMER representations — leave ligand/HETATM components alone.
+    // Molstar creates components like "polymer", "ligand", "water", etc.
+    // We identify polymer components by checking if their key/label contains 'polymer'
+    // or if they're top-level (non-component) representations on the structure.
+    const polymerReprRefs: string[] = [];
+    for (const comp of (structRef.components ?? [])) {
+      const key = comp.key ?? '';
+      const label = comp.cell?.obj?.label ?? '';
+      const isLigand = key.includes('ligand') || key.includes('non-standard') ||
+                        label.toLowerCase().includes('ligand') || label.toLowerCase().includes('het') ||
+                        label.includes('UNL');
+      if (!isLigand) {
+        for (const repr of (comp.representations ?? [])) {
+          if (repr.cell?.transform?.ref) polymerReprRefs.push(repr.cell.transform.ref);
+        }
       }
+    }
+    // Also remove top-level (non-component) representations
+    for (const repr of (structRef.representations ?? [])) {
+      if (repr.cell?.transform?.ref) polymerReprRefs.push(repr.cell.transform.ref);
+    }
+
+    if (polymerReprRefs.length > 0) {
+      const delBuilder = plugin.build();
+      for (const r of polymerReprRefs) delBuilder.delete(r);
       await delBuilder.commit();
     }
 
-    // Build everything in a single transaction
+    // Build pocket view representations
     await plugin.dataTransaction(async () => {
-      // 1. Whole protein as faded cartoon
+      // 1. Whole protein as faded cartoon (applied to structure root —
+      //    Molstar will only render polymer backbone for cartoon type)
       const cartoonBuilder = plugin.build();
       const cartoonNode = cartoonBuilder.to(ref).apply(StateTransforms.Representation.StructureRepresentation3D, {
         type: { name: 'cartoon', params: { sizeFactor: 0.2, alpha: 0.15 } },
