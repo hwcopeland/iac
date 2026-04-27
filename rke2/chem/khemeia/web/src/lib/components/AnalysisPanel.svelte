@@ -130,20 +130,52 @@
     return out;
   }
 
-  /** Convert receptor PDBQT to PDB lines (ATOM only, strip Vina columns). */
+  /** Extract element symbol from PDBQT atom type (col 77+).
+   *  PDBQT types: C, A (aromatic C), N, NA, NS, O, OA, OS, S, SA, H, HD, etc.
+   *  Maps to PDB element: C, C, N, N, N, O, O, O, S, S, H, H, etc. */
+  function pdbqtElement(line: string): string {
+    // PDBQT atom type is at column 77+ (0-indexed)
+    const atomType = line.substring(77).trim();
+    if (!atomType) {
+      // Fallback: derive from atom name (cols 12-15)
+      const name = line.substring(12, 16).trim();
+      return name.replace(/[0-9]/g, '').substring(0, 1).toUpperCase() || 'C';
+    }
+    // Map PDBQT types to elements
+    const first = atomType[0];
+    if (first === 'A') return ' C'; // aromatic carbon
+    if (atomType === 'HD' || atomType === 'HS') return ' H';
+    if (atomType === 'OA' || atomType === 'OS') return ' O';
+    if (atomType === 'NA' || atomType === 'NS') return ' N';
+    if (atomType === 'SA') return ' S';
+    // Single-letter types: C, N, O, S, H, P, F, Cl, Br, I
+    if (atomType.length === 1) return ' ' + atomType;
+    // Two-letter elements (Cl, Br, Fe, Zn, etc.)
+    return atomType.substring(0, 2).padStart(2);
+  }
+
+  /** Convert PDBQT line to proper PDB with element symbol in cols 77-78. */
+  function pdbqtLineToPdb(line: string, recType?: string): string {
+    const base = (recType ?? line.substring(0, 6)) + line.substring(6, 66);
+    const element = pdbqtElement(line);
+    // PDB format: cols 1-66 = coordinates, 67-76 = padding, 77-78 = element
+    return base.padEnd(76) + element.padStart(2);
+  }
+
+  /** Convert receptor PDBQT to PDB lines with proper element symbols. */
   function receptorToPdbLines(pdbqt: string): string[] {
     return pdbqt.split('\n')
       .filter(line => line.startsWith('ATOM'))
-      .map(line => line.substring(0, 66).padEnd(80));
+      .map(line => pdbqtLineToPdb(line));
   }
 
-  /** Convert ligand PDBQT lines to HETATM with residue name UNL so Molstar
-   *  classifies it as a ligand and computes non-covalent interactions with the protein. */
+  /** Convert ligand PDBQT lines to HETATM with residue name UNL + element symbols. */
   function ligandToPdbLines(pdbqtLines: string[]): string[] {
     return pdbqtLines.map(line => {
-      // Force HETATM record type + residue name UNL, strip Vina columns
-      const pdb = 'HETATM' + line.substring(6, 17) + 'UNL' + line.substring(20, 66);
-      return pdb.padEnd(80);
+      // Force HETATM + residue name UNL, keep coordinates, add element
+      const base = 'HETATM' + line.substring(6, 17) + 'UNL' + line.substring(20, 66);
+      const element = pdbqtElement(line);
+      return base.padEnd(76) + element.padStart(2);
     });
   }
 
@@ -160,26 +192,28 @@
     viewError = '';
     viewingCompound = result.compound_id;
 
-    // Reset the interaction network overlay when switching compounds.
-    if (showNetwork) {
-      showNetwork = false;
-      onNetworkToggle(false, '', [], '', '');
-    }
-
     try {
       const receptor = selectedJob?.receptor_pdbqt;
       if (receptor && result.pose_pdbqt) {
-        // Load receptor + ligand as ONE structure so Molstar's native
-        // interaction detection (H-bonds, hydrophobic, etc.) works.
         const combinedPdb = buildCombinedPdb(receptor, result.pose_pdbqt);
         await loadFile(combinedPdb, 'pdb');
-        setTimeout(() => focusLastStructure(), 200);
       } else if (receptor) {
         await loadFile(receptor, 'pdbqt');
       }
-      // Fetch pocket analysis + SMILES for interaction network
-      fetchPocket(result.compound_id);
-      getLigandSmiles(result.compound_id).then(s => { if (s) viewedSmiles = s; });
+
+      // Fetch pocket analysis — this applies pocket view + focuses ligand
+      await fetchPocket(result.compound_id);
+
+      // Fetch SMILES for interaction network
+      const smiles = await getLigandSmiles(result.compound_id);
+      if (smiles) viewedSmiles = smiles;
+
+      // Auto-show interaction network if we have pocket data
+      if (pocket?.pocket_residues?.length && viewedSmiles) {
+        showNetwork = true;
+        onNetworkToggle(true, viewedSmiles, pocket.pocket_residues,
+          selectedJob?.name ?? '', result.compound_id);
+      }
     } catch (e: any) {
       viewError = e.message || 'Failed to load structure';
     }
@@ -197,8 +231,10 @@
       }
       // Show pocket view — protein as thin cartoon, interacting residues as sticks
       if (pocket?.pocket_residues?.length) {
-        showPocketView(pocket.pocket_residues.map(r => ({ chain_id: r.chain_id, res_id: r.res_id })));
+        await showPocketView(pocket.pocket_residues.map(r => ({ chain_id: r.chain_id, res_id: r.res_id })));
       }
+      // Focus on the ligand after pocket view is applied
+      setTimeout(() => focusLastStructure(), 100);
     } catch (e: any) {
       pocketError = e.message || 'Pocket analysis failed';
     } finally {
