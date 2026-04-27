@@ -888,8 +888,9 @@ export function onRepresentationChange(cb: (repr: string) => void): void { _repr
 
 /**
  * Change representation type for all structures.
- * Deletes all existing representations, adds the new type to the structure root.
- * Preserves camera position.
+ * Uses plugin.clear() + reload approach since incremental deletion
+ * consistently fails to remove all representations (stacking bug).
+ * Preserves the structure data by re-loading from currentStructureText.
  */
 export async function setRepresentation(type: string): Promise<void> {
   if (!plugin) return;
@@ -897,50 +898,56 @@ export async function setRepresentation(type: string): Promise<void> {
     const { StateTransforms } = getLib().plugin;
     const cam = saveCameraSnapshot();
 
-    // Clear pocket view and surface overlays
-    await clearPocketView();
-    await clearSurfaceRefs();
+    // Nuclear option: clear everything and reload the structure with the new repr.
+    // The incremental delete approach (collecting refs from hierarchy) consistently
+    // misses representations added by showPocketView/MolScript components.
+    if (currentStructureText) {
+      const { content, fmt } = prepareData(currentStructureText, currentStructureFormat);
 
-    // Prevent camera reset during representation changes
-    plugin.canvas3d?.setProps({ camera: { ...plugin.canvas3d.props.camera, manualReset: true } });
+      plugin.canvas3d?.setProps({ camera: { ...plugin.canvas3d.props.camera, manualReset: true } });
 
-    const structures = plugin.managers?.structure?.hierarchy?.current?.structures ?? [];
+      await plugin.clear();
+      _structureRefs.clear();
+      _pocketViewRefs = [];
+      _surfaceRefs = [];
 
-    for (const structRef of structures) {
-      // Collect ALL representation refs (from components + top-level)
-      const reprRefs: string[] = [];
-      for (const comp of (structRef.components ?? [])) {
-        for (const repr of (comp.representations ?? [])) {
+      const blob = new Blob([content], { type: 'text/plain' });
+      const url = URL.createObjectURL(blob);
+      try {
+        await viewerInstance.loadStructureFromUrl(url, fmt, false);
+      } finally {
+        setTimeout(() => URL.revokeObjectURL(url), 5000);
+      }
+
+      // Now update ALL representations to the requested type
+      const structures = plugin.managers?.structure?.hierarchy?.current?.structures ?? [];
+      for (const structRef of structures) {
+        // Collect auto-added representation refs
+        const reprRefs: string[] = [];
+        for (const comp of (structRef.components ?? [])) {
+          for (const repr of (comp.representations ?? [])) {
+            if (repr.cell?.transform?.ref) reprRefs.push(repr.cell.transform.ref);
+          }
+        }
+        for (const repr of (structRef.representations ?? [])) {
           if (repr.cell?.transform?.ref) reprRefs.push(repr.cell.transform.ref);
         }
-      }
-      for (const repr of (structRef.representations ?? [])) {
-        if (repr.cell?.transform?.ref) reprRefs.push(repr.cell.transform.ref);
+
+        // Update each repr in-place to the new type
+        for (const r of reprRefs) {
+          try {
+            await plugin.build().to(r).update(
+              StateTransforms.Representation.StructureRepresentation3D,
+              (old: any) => ({ ...old, type: { name: type, params: {} } })
+            ).commit();
+          } catch {}
+        }
       }
 
-      // Delete all in one batch
-      if (reprRefs.length > 0) {
-        const delBuilder = plugin.build();
-        for (const r of reprRefs) { try { delBuilder.delete(r); } catch {} }
-        await delBuilder.commit();
-      }
-
-      // Add new representation to structure root
-      const ref = structRef.cell?.transform?.ref;
-      if (!ref) continue;
-      await plugin.build()
-        .to(ref)
-        .apply(StateTransforms.Representation.StructureRepresentation3D, {
-          type: { name: type, params: {} },
-          colorTheme: { name: 'element-symbol', params: {} },
-          sizeTheme: { name: 'physical', params: {} },
-        })
-        .commit();
+      applyCanvasProps();
+      plugin.canvas3d?.setProps({ camera: { ...plugin.canvas3d.props.camera, manualReset: false } });
+      if (cam) requestAnimationFrame(() => restoreCameraSnapshot(cam));
     }
-
-    // Restore camera
-    plugin.canvas3d?.setProps({ camera: { ...plugin.canvas3d.props.camera, manualReset: false } });
-    if (cam) requestAnimationFrame(() => restoreCameraSnapshot(cam));
 
     _currentRepresentation = type;
     for (const cb of _reprChangeListeners) cb(type);
