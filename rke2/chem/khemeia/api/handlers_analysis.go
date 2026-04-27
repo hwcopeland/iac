@@ -33,6 +33,7 @@ type AggregateResidueContact struct {
 	ResID               int               `json:"res_id"`
 	ResName             string            `json:"res_name"`
 	ContactFrequency    float64           `json:"contact_frequency"`
+	InfluenceScore      float64           `json:"influence_score"`
 	AvgDistance          float64           `json:"avg_distance"`
 	InteractionCounts   InteractionCounts `json:"interaction_counts"`
 	CompoundsContacting int               `json:"compounds_contacting"`
@@ -97,6 +98,10 @@ type residueAccumulator struct {
 	Ionic       int
 	Dipole      int
 	Contact     int
+	// For influence score computation
+	AffinityWeightedSum float64 // sum of normalized affinity for contacting compounds
+	BeneficialCount     int     // H-bond + ionic + dipole (beneficial interactions)
+	TotalInteractions   int     // all interactions (for beneficial ratio)
 }
 
 // --- HTTP handlers ---
@@ -176,7 +181,7 @@ func (h *APIHandler) receptorContacts(w http.ResponseWriter, r *http.Request, jo
 
 	// Fetch top N docking results (best affinity = most negative) with docked poses.
 	rows, err := db.QueryContext(r.Context(),
-		`SELECT compound_id, docked_pdbqt
+		`SELECT compound_id, affinity_kcal_mol, docked_pdbqt
 		 FROM docking_results
 		 WHERE workflow_name = ? AND docked_pdbqt IS NOT NULL
 		 ORDER BY affinity_kcal_mol ASC
@@ -189,31 +194,67 @@ func (h *APIHandler) receptorContacts(w http.ResponseWriter, r *http.Request, jo
 	}
 	defer rows.Close()
 
+	// First pass: collect all compound data (need affinities for normalization).
+	type compoundData struct {
+		CompoundID string
+		Affinity   float64
+		PosePDBQT  string
+	}
+	var compounds []compoundData
+	for rows.Next() {
+		var cd compoundData
+		var pdbqt []byte
+		if err := rows.Scan(&cd.CompoundID, &cd.Affinity, &pdbqt); err != nil {
+			continue
+		}
+		if len(pdbqt) == 0 {
+			continue
+		}
+		cd.PosePDBQT = string(pdbqt)
+		compounds = append(compounds, cd)
+	}
+	if err := rows.Err(); err != nil {
+		writeError(w, fmt.Sprintf("error reading docking results: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// Normalize affinities to [0, 1] where best (most negative) = 1.0.
+	// Affinities are negative (e.g., -10 is better than -6).
+	bestAffinity := 0.0
+	worstAffinity := 0.0
+	if len(compounds) > 0 {
+		bestAffinity = compounds[0].Affinity  // most negative (sorted ASC)
+		worstAffinity = compounds[len(compounds)-1].Affinity
+	}
+	affinityRange := worstAffinity - bestAffinity // positive number
+	normalizeAffinity := func(aff float64) float64 {
+		if affinityRange < 0.01 {
+			return 1.0 // all compounds have similar affinity
+		}
+		return (worstAffinity - aff) / affinityRange // best → 1.0, worst → 0.0
+	}
+
+	// Compute total normalized affinity across all compounds (for affinity-weighted freq).
+	totalNormAffinity := 0.0
+	for _, cd := range compounds {
+		totalNormAffinity += normalizeAffinity(cd.Affinity)
+	}
+
 	// Accumulate per-residue contact stats across all compounds.
 	const cutoff = 5.0
 	accumulators := make(map[residueKey]*residueAccumulator)
 	compoundsAnalyzed := 0
 
-	for rows.Next() {
-		var compoundID string
-		var dockedPDBQT []byte
-		if err := rows.Scan(&compoundID, &dockedPDBQT); err != nil {
-			continue
-		}
-		if len(dockedPDBQT) == 0 {
-			continue
-		}
-
-		ligandAtoms := parseModel1Atoms(string(dockedPDBQT))
+	for _, cd := range compounds {
+		ligandAtoms := parseModel1Atoms(cd.PosePDBQT)
 		if len(ligandAtoms) == 0 {
 			continue
 		}
 
-		// Run the same pocket classification used by the single-compound endpoint.
 		pocketResidues, _ := classifyPocket(receptorAtoms, ligandAtoms, cutoff)
 		compoundsAnalyzed++
+		normAff := normalizeAffinity(cd.Affinity)
 
-		// Merge this compound's pocket residues into the accumulators.
 		for _, pr := range pocketResidues {
 			key := residueKey{ChainID: pr.ChainID, ResID: pr.ResID, ResName: pr.ResName}
 			acc, exists := accumulators[key]
@@ -228,29 +269,40 @@ func (h *APIHandler) receptorContacts(w http.ResponseWriter, r *http.Request, jo
 
 			acc.TotalDist += pr.MinDistance
 			acc.CompCount++
+			acc.AffinityWeightedSum += normAff
 
 			for _, inter := range pr.Interactions {
+				acc.TotalInteractions++
 				switch inter {
 				case "hbond":
 					acc.HBond++
+					acc.BeneficialCount++ // H-bond = beneficial
 				case "hydrophobic":
 					acc.Hydrophobic++
+					// hydrophobic = neutral (not counted as beneficial)
 				case "ionic":
 					acc.Ionic++
+					acc.BeneficialCount++ // ionic/salt bridge = beneficial
 				case "dipole":
 					acc.Dipole++
+					acc.BeneficialCount++ // pi-stacking/dipole = beneficial
 				case "contact":
 					acc.Contact++
+					// van der Waals contact = neutral
 				}
 			}
 		}
 	}
-	if err := rows.Err(); err != nil {
-		writeError(w, fmt.Sprintf("error reading docking results: %v", err), http.StatusInternalServerError)
-		return
-	}
 
-	// Build the response slice from accumulators.
+	// Build the response slice from accumulators with influence scores.
+	//
+	// Influence Score = 0.4 * contact_freq
+	//                 + 0.35 * affinity_weighted_freq
+	//                 + 0.25 * beneficial_interaction_ratio
+	//
+	// contact_freq = compounds_contacting / total_compounds_analyzed
+	// affinity_weighted_freq = sum(norm_affinity for contacting compounds) / sum(norm_affinity for all compounds)
+	// beneficial_interaction_ratio = beneficial_count / total_interactions (H-bond, ionic, dipole = beneficial)
 	contacts := make([]AggregateResidueContact, 0, len(accumulators))
 	for _, acc := range accumulators {
 		freq := 0.0
@@ -262,11 +314,27 @@ func (h *APIHandler) receptorContacts(w http.ResponseWriter, r *http.Request, jo
 			avgDist = acc.TotalDist / float64(acc.CompCount)
 		}
 
+		// Affinity-weighted frequency
+		affinityWeightedFreq := 0.0
+		if totalNormAffinity > 0 {
+			affinityWeightedFreq = acc.AffinityWeightedSum / totalNormAffinity
+		}
+
+		// Beneficial interaction ratio
+		beneficialRatio := 0.5 // default neutral if no interactions
+		if acc.TotalInteractions > 0 {
+			beneficialRatio = float64(acc.BeneficialCount) / float64(acc.TotalInteractions)
+		}
+
+		influence := 0.4*freq + 0.35*affinityWeightedFreq + 0.25*beneficialRatio
+		influence = math.Round(influence*1000) / 1000 // 3 decimal places
+
 		contacts = append(contacts, AggregateResidueContact{
 			ChainID:          acc.ChainID,
 			ResID:            acc.ResID,
 			ResName:          acc.ResName,
 			ContactFrequency: math.Round(freq*100) / 100,
+			InfluenceScore:   influence,
 			AvgDistance:       math.Round(avgDist*10) / 10,
 			InteractionCounts: InteractionCounts{
 				HBond:       acc.HBond,
@@ -279,12 +347,11 @@ func (h *APIHandler) receptorContacts(w http.ResponseWriter, r *http.Request, jo
 		})
 	}
 
-	// Sort by contact_frequency descending (most commonly contacted first).
+	// Sort by influence_score descending (most important residues first).
 	sort.Slice(contacts, func(i, j int) bool {
-		if contacts[i].ContactFrequency != contacts[j].ContactFrequency {
-			return contacts[i].ContactFrequency > contacts[j].ContactFrequency
+		if contacts[i].InfluenceScore != contacts[j].InfluenceScore {
+			return contacts[i].InfluenceScore > contacts[j].InfluenceScore
 		}
-		// Tie-break: lower residue ID first for deterministic ordering.
 		if contacts[i].ChainID != contacts[j].ChainID {
 			return contacts[i].ChainID < contacts[j].ChainID
 		}
