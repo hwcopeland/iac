@@ -1,0 +1,6 @@
+numpy<2
+vina>=1.2.5
+meeko
+rdkit-pypi
+flask
+gunicorn

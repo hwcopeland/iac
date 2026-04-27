@@ -312,7 +312,10 @@ func (c *Controller) initPluginDB(p Plugin) error {
 		if err := EnsureLibraryPrepSchema(db); err != nil {
 			log.Printf("Warning: failed to create library_prep tables in %s: %v", p.Database, err)
 		}
-		log.Printf("Shared tables (api_tokens, basis_sets, provenance, target_prep_results, library_prep) created in %s database", p.Database)
+		if err := EnsureDockingV2Schema(db); err != nil {
+			log.Printf("Warning: failed to create docking_v2 tables in %s: %v", p.Database, err)
+		}
+		log.Printf("Shared tables (api_tokens, basis_sets, provenance, target_prep_results, library_prep, docking_v2) created in %s database", p.Database)
 	}
 
 	return nil
@@ -622,6 +625,13 @@ func (c *Controller) startAPIServer() error {
 	// GET  /api/v1/libraries/{name}/compounds        — paginated compound list
 	mux.HandleFunc("/api/v1/libraries/", wrap(handler.LibraryDispatch))
 	log.Println("Registered library prep routes: /api/v1/libraries/{prepare,{name},{name}/compounds}")
+
+	// Multi-engine docking endpoints (WP-3, v2 API).
+	// POST /api/v1/docking/v2/submit              — submit a multi-engine docking job
+	// GET  /api/v1/docking/v2/jobs/{name}         — get job status with per-engine progress
+	// GET  /api/v1/docking/v2/jobs/{name}/results — paginated consensus-ranked results
+	mux.HandleFunc("/api/v1/docking/v2/", wrap(handler.DockingV2Dispatch))
+	log.Println("Registered docking v2 routes: /api/v1/docking/v2/{submit,jobs/{name},jobs/{name}/results}")
 
 	// Token management — admin only (no external auth, internal IPs only).
 	mux.HandleFunc("/api/v1/tokens", func(w http.ResponseWriter, r *http.Request) {
