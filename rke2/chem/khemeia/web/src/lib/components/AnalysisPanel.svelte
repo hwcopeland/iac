@@ -134,8 +134,8 @@
    *  PDBQT types: C, A (aromatic C), N, NA, NS, O, OA, OS, S, SA, H, HD, etc.
    *  Maps to PDB element: C, C, N, N, N, O, O, O, S, S, H, H, etc. */
   function pdbqtElement(line: string): string {
-    // PDBQT atom type is at column 77+ (0-indexed)
-    const atomType = line.substring(77).trim();
+    // PDBQT atom type starts at column 77 (1-indexed) = index 76 (0-indexed)
+    const atomType = line.substring(76).trim();
     if (!atomType) {
       // Fallback: derive from atom name (cols 12-15)
       const name = line.substring(12, 16).trim();
