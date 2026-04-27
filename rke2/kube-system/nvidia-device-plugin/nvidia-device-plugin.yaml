@@ -1,0 +1,108 @@
+---
+# NVIDIA GPU device plugin for RKE2.
+#
+# Advertises `nvidia.com/gpu` as an allocatable resource on nodes labeled
+# `gpu=rtx3070` (currently just nixos-gpu). Tolerates the gpu=true:NoSchedule
+# taint so it lands on GPU nodes.
+#
+# Uses CDI (Container Device Interface) for device exposure. CDI specs are
+# generated on the node by NixOS's hardware.nvidia-container-toolkit module;
+# the plugin advertises them and RKE2's containerd consumes them.
+#
+# Apply with: kubectl apply -f nvidia-device-plugin.yaml
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: nvidia-device-plugin-daemonset
+  namespace: kube-system
+  labels:
+    app.kubernetes.io/name: nvidia-device-plugin
+spec:
+  selector:
+    matchLabels:
+      name: nvidia-device-plugin-ds
+  updateStrategy:
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        name: nvidia-device-plugin-ds
+    spec:
+      nodeSelector:
+        gpu: rtx3070
+      tolerations:
+        - key: gpu
+          operator: Equal
+          value: "true"
+          effect: NoSchedule
+        - key: nvidia.com/gpu
+          operator: Exists
+          effect: NoSchedule
+      priorityClassName: system-node-critical
+      containers:
+        - name: nvidia-device-plugin
+          image: nvcr.io/nvidia/k8s-device-plugin:v0.17.0
+          # NixOS quirk: libnvidia-ml.so lives under /run/opengl-driver/lib
+          # which isn't in the container's ld.so cache. dlopen via NVML
+          # bypasses LD_LIBRARY_PATH for security reasons. Register the
+          # path with ldconfig before exec'ing the plugin so NVML init
+          # finds the lib. Also force --device-discovery-strategy=nvml
+          # because auto-detection can't probe the non-FHS path.
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              echo /run/opengl-driver/lib > /etc/ld.so.conf.d/nvidia-nixos.conf
+              ldconfig
+              exec /usr/bin/nvidia-device-plugin --device-discovery-strategy=nvml
+          env:
+            - name: FAIL_ON_INIT_ERROR
+              value: "true"
+            # envvar strategy: plugin advertises nvidia.com/gpu and
+            # injects /dev/nvidia* device files via the CRI Allocate
+            # response. CDI-based lib/binary injection doesn't work
+            # cleanly on NixOS because the plugin's ld.so.cache lookup
+            # can't reconcile with /nix/store paths. Consumer pods
+            # needing libcuda/nvidia-smi must mount /run/opengl-driver
+            # and /nix/store from the host themselves — see
+            # docs/spec/wp-9-infrastructure.md compute-class section.
+            - name: DEVICE_LIST_STRATEGY
+              value: "envvar"
+            - name: DEVICE_ID_STRATEGY
+              value: "uuid"
+            - name: PASS_DEVICE_SPECS
+              value: "true"
+            - name: LD_LIBRARY_PATH
+              value: /run/opengl-driver/lib
+          securityContext:
+            privileged: true
+          volumeMounts:
+            - name: device-plugin
+              mountPath: /var/lib/kubelet/device-plugins
+            - name: cdi-root
+              mountPath: /var/run/cdi
+            - name: nvidia-driver
+              mountPath: /run/opengl-driver
+              readOnly: true
+            # NixOS: /run/opengl-driver libs are symlinks into /nix/store.
+            # Mount the store read-only so symlinks resolve inside the container.
+            - name: nix-store
+              mountPath: /nix/store
+              readOnly: true
+            - name: dev
+              mountPath: /dev
+      volumes:
+        - name: device-plugin
+          hostPath:
+            path: /var/lib/kubelet/device-plugins
+        - name: cdi-root
+          hostPath:
+            path: /var/run/cdi
+        - name: nvidia-driver
+          hostPath:
+            path: /run/opengl-driver
+        - name: nix-store
+          hostPath:
+            path: /nix/store
+        - name: dev
+          hostPath:
+            path: /dev
