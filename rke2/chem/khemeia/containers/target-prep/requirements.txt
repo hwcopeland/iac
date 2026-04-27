@@ -1,0 +1,8 @@
+numpy<2
+pdbfixer
+openmm
+biopython
+rdkit-pypi
+flask
+gunicorn
+requests

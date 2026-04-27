@@ -1,0 +1,216 @@
+# Deployment for the target-prep sidecar service (WP-1)
+# Handles receptor cleaning (PDBFixer), hydrogen addition, protonation,
+# and native-ligand binding site extraction.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: target-prep
+  namespace: chem
+  labels:
+    app: target-prep
+    khemeia.io/component: target-prep
+spec:
+  replicas: 1
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app: target-prep
+  template:
+    metadata:
+      labels:
+        app: target-prep
+        khemeia.io/component: target-prep
+    spec:
+      imagePullSecrets:
+        - name: zot-pull-secret
+      containers:
+        - name: target-prep
+          image: zot.hwcopeland.net/chem/target-prep:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8000
+              name: http
+              protocol: TCP
+          resources:
+            requests:
+              cpu: 500m
+              memory: 1Gi
+            limits:
+              cpu: "2"
+              memory: 4Gi
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 5
+---
+# Service for the target-prep sidecar
+# Reachable at target-prep.chem.svc.cluster.local
+apiVersion: v1
+kind: Service
+metadata:
+  name: target-prep
+  namespace: chem
+  labels:
+    app: target-prep
+    khemeia.io/component: target-prep
+spec:
+  type: ClusterIP
+  ports:
+    - port: 80
+      targetPort: 8000
+      protocol: TCP
+      name: http
+  selector:
+    app: target-prep
+---
+# Deployment for the fpocket sidecar service
+# Runs fpocket 4.x for pocket detection
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fpocket
+  namespace: chem
+  labels:
+    app: fpocket
+    khemeia.io/component: fpocket
+spec:
+  replicas: 1
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app: fpocket
+  template:
+    metadata:
+      labels:
+        app: fpocket
+        khemeia.io/component: fpocket
+    spec:
+      imagePullSecrets:
+        - name: zot-pull-secret
+      containers:
+        - name: fpocket
+          image: zot.hwcopeland.net/chem/fpocket:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8000
+              name: http
+              protocol: TCP
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 2Gi
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 5
+---
+# Service for the fpocket sidecar
+# Reachable at fpocket.chem.svc.cluster.local
+apiVersion: v1
+kind: Service
+metadata:
+  name: fpocket
+  namespace: chem
+  labels:
+    app: fpocket
+    khemeia.io/component: fpocket
+spec:
+  type: ClusterIP
+  ports:
+    - port: 80
+      targetPort: 8000
+      protocol: TCP
+      name: http
+  selector:
+    app: fpocket
+---
+# Deployment for the P2Rank sidecar service
+# Runs P2Rank 2.4+ for pocket prediction
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: p2rank
+  namespace: chem
+  labels:
+    app: p2rank
+    khemeia.io/component: p2rank
+spec:
+  replicas: 1
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app: p2rank
+  template:
+    metadata:
+      labels:
+        app: p2rank
+        khemeia.io/component: p2rank
+    spec:
+      imagePullSecrets:
+        - name: zot-pull-secret
+      containers:
+        - name: p2rank
+          image: zot.hwcopeland.net/chem/p2rank:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8000
+              name: http
+              protocol: TCP
+          resources:
+            requests:
+              cpu: 500m
+              memory: 1Gi
+            limits:
+              cpu: "2"
+              memory: 4Gi
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 5
+---
+# Service for the P2Rank sidecar
+# Reachable at p2rank.chem.svc.cluster.local
+apiVersion: v1
+kind: Service
+metadata:
+  name: p2rank
+  namespace: chem
+  labels:
+    app: p2rank
+    khemeia.io/component: p2rank
+spec:
+  type: ClusterIP
+  ports:
+    - port: 80
+      targetPort: 8000
+      protocol: TCP
+      name: http
+  selector:
+    app: p2rank
