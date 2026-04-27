@@ -920,11 +920,16 @@ export async function hideSurface(): Promise<void> {
   await clearSurfaceRefs();
 }
 
-// ─── Interaction Lines (Camera-synced 2D Canvas Overlay) ───
-// Draws dashed lines between receptor and ligand atoms using a transparent
-// 2D canvas on top of the Molstar WebGL viewport. Lines are projected from
-// 3D world coordinates using Molstar's camera matrices.
-// Only re-renders when the camera moves (not every frame) to avoid lag.
+// ─── Interaction Lines ───
+// 2D canvas overlay approach was attempted but causes severe lag (didDraw
+// fires every frame) and incorrect positioning. Disabled until we can either
+// build a custom Molstar ES module bundle exposing the Lines geometry API,
+// or integrate with Molstar's native non-covalent interaction detection.
+//
+// Interaction data is still returned by the backend and displayed in the
+// pocket residue table (type pills, distances). The 3D visualization of
+// specific atom-atom interactions requires native Molstar Shape support
+// which is not accessible through the pre-built UMD viewer bundle.
 
 export type InteractionLine = {
   type: string;
@@ -932,175 +937,8 @@ export type InteractionLine = {
   lig_x: number; lig_y: number; lig_z: number;
 };
 
-const IX_LINE_COLORS: Record<string, string> = {
-  hbond: '#58a6ff',
-  hydrophobic: '#8b949e',
-  ionic: '#d29922',
-  dipole: '#bb33bb',
-  contact: '#484f58',
-};
-
-const IX_DASH_PATTERNS: Record<string, number[]> = {
-  hbond: [6, 4],
-  hydrophobic: [4, 6],
-  ionic: [8, 4],
-  dipole: [4, 4],
-  contact: [2, 6],
-};
-
-let _ixCanvas: HTMLCanvasElement | null = null;
-let _ixCtx: CanvasRenderingContext2D | null = null;
-let _ixLines: InteractionLine[] = [];
-let _ixActiveTypes: Set<string> | null = null;
-let _ixCameraUnsub: (() => void) | null = null;
-let _ixPendingRender = false;
-
-/** Project a 3D world position to 2D screen coordinates via Molstar's camera. */
-function project3Dto2D(x: number, y: number, z: number): { sx: number; sy: number } | null {
-  if (!plugin?.canvas3d) return null;
-  try {
-    const cam = plugin.canvas3d.camera;
-    const vp = cam.viewport;
-    const view = cam.view;
-    const proj = cam.projection;
-
-    // View transform
-    const vx = view[0] * x + view[4] * y + view[8] * z + view[12];
-    const vy = view[1] * x + view[5] * y + view[9] * z + view[13];
-    const vz = view[2] * x + view[6] * y + view[10] * z + view[14];
-    const vw = view[3] * x + view[7] * y + view[11] * z + view[15];
-
-    // Projection transform
-    const cx = proj[0] * vx + proj[4] * vy + proj[8] * vz + proj[12] * vw;
-    const cy = proj[1] * vx + proj[5] * vy + proj[9] * vz + proj[13] * vw;
-    const cw = proj[3] * vx + proj[7] * vy + proj[11] * vz + proj[15] * vw;
-
-    if (cw < 1e-6) return null; // behind camera
-
-    const sx = (cx / cw * 0.5 + 0.5) * vp.width + vp.x;
-    const sy = (1 - (cy / cw * 0.5 + 0.5)) * vp.height + vp.y;
-    return { sx, sy };
-  } catch { return null; }
-}
-
-/** Find Molstar's actual WebGL canvas element inside the viewer container. */
-function getMolstarCanvas(): HTMLCanvasElement | null {
-  if (!_viewerContainer) return null;
-  // Molstar renders into a <canvas> inside a nested .msp-plugin viewport div.
-  // The WebGL canvas is the one with a data attribute or the deepest canvas.
-  return _viewerContainer.querySelector<HTMLCanvasElement>('canvas')
-    ?? null;
-}
-
-function ensureIxCanvas(): boolean {
-  if (_ixCanvas && _ixCtx && _ixCanvas.parentElement) return true;
-  if (!plugin?.canvas3d || !_viewerContainer) return false;
-
-  // Clean up old canvas if orphaned
-  if (_ixCanvas) { _ixCanvas.remove(); _ixCanvas = null; _ixCtx = null; }
-
-  // Find Molstar's WebGL canvas and overlay on top of it, not the outer
-  // container — otherwise interaction lines are offset by panel/toolbar height.
-  const molstarCanvas = getMolstarCanvas();
-  const parent = molstarCanvas?.parentElement ?? _viewerContainer;
-
-  _ixCanvas = document.createElement('canvas');
-  _ixCanvas.style.cssText = 'position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:10';
-  parent.style.position = 'relative';
-  parent.appendChild(_ixCanvas);
-  _ixCtx = _ixCanvas.getContext('2d');
-  return !!_ixCtx;
-}
-
-function renderIxLines(): void {
-  if (!_ixCtx || !_ixCanvas || !_ixLines.length) return;
-
-  // Use the overlay canvas's parent (Molstar's canvas container) for sizing,
-  // not _viewerContainer which may include panels/toolbars.
-  const sizeEl = _ixCanvas.parentElement;
-  if (!sizeEl) return;
-
-  const dpr = window.devicePixelRatio || 1;
-  const rect = sizeEl.getBoundingClientRect();
-  const w = Math.round(rect.width * dpr);
-  const h = Math.round(rect.height * dpr);
-
-  if (_ixCanvas.width !== w || _ixCanvas.height !== h) {
-    _ixCanvas.width = w;
-    _ixCanvas.height = h;
-    _ixCanvas.style.width = rect.width + 'px';
-    _ixCanvas.style.height = rect.height + 'px';
-  }
-
-  const ctx = _ixCtx;
-  ctx.clearRect(0, 0, w, h);
-  ctx.save();
-  ctx.scale(dpr, dpr);
-
-  const lines = _ixActiveTypes
-    ? _ixLines.filter(l => _ixActiveTypes!.has(l.type))
-    : _ixLines;
-
-  for (const line of lines) {
-    const p1 = project3Dto2D(line.rec_x, line.rec_y, line.rec_z);
-    const p2 = project3Dto2D(line.lig_x, line.lig_y, line.lig_z);
-    if (!p1 || !p2) continue;
-
-    ctx.beginPath();
-    ctx.strokeStyle = IX_LINE_COLORS[line.type] ?? '#8b949e';
-    ctx.lineWidth = 1.5;
-    ctx.setLineDash(IX_DASH_PATTERNS[line.type] ?? [4, 4]);
-    ctx.globalAlpha = 0.7;
-    ctx.moveTo(p1.sx, p1.sy);
-    ctx.lineTo(p2.sx, p2.sy);
-    ctx.stroke();
-  }
-  ctx.restore();
-}
-
-function scheduleIxRender(): void {
-  if (_ixPendingRender) return;
-  _ixPendingRender = true;
-  requestAnimationFrame(() => {
-    _ixPendingRender = false;
-    renderIxLines();
-  });
-}
-
-/**
- * Draw dashed interaction lines between receptor and ligand atoms.
- * Subscribes to Molstar's camera changes so lines track the 3D view
- * without a continuous rAF loop.
- */
-export function drawInteractionLines(lines: InteractionLine[], activeTypes?: Set<string>): void {
-  _ixLines = lines;
-  _ixActiveTypes = activeTypes ?? null;
-
-  if (lines.length === 0) {
-    removeInteractionLines();
-    return;
-  }
-
-  if (!ensureIxCanvas()) return;
-
-  // Subscribe to camera/canvas changes (only once)
-  if (!_ixCameraUnsub && plugin?.canvas3d) {
-    const sub = plugin.canvas3d.didDraw.subscribe(() => scheduleIxRender());
-    _ixCameraUnsub = () => sub.unsubscribe();
-  }
-
-  // Initial render
-  scheduleIxRender();
-}
-
-export function removeInteractionLines(): void {
-  _ixLines = [];
-  _ixActiveTypes = null;
-  if (_ixCameraUnsub) { _ixCameraUnsub(); _ixCameraUnsub = null; }
-  if (_ixCtx && _ixCanvas) {
-    _ixCtx.clearRect(0, 0, _ixCanvas.width, _ixCanvas.height);
-  }
-}
+export function drawInteractionLines(_lines: InteractionLine[], _activeTypes?: Set<string>): void {}
+export function removeInteractionLines(): void {}
 
 // ─── Custom Dark-Theme Color Themes ───
 
