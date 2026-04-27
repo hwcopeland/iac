@@ -611,7 +611,7 @@
                         <div class="admet-detail">
                           <div class="admet-detail-header">
                             <span class="admet-detail-title">{comp.compound_id}</span>
-                            <button class="view-btn" onclick|stopPropagation={() => viewCompoundFromTable(comp.compound_id)}>View 3D</button>
+                            <button class="view-btn" onclick={(e) => { e.stopPropagation(); viewCompoundFromTable(comp.compound_id); }}>View 3D</button>
                           </div>
                           <div class="admet-props-grid">
                             <div class="admet-prop">
