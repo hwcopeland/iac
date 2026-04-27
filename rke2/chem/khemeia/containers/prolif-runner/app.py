@@ -265,42 +265,46 @@ def _generate_network_html(
   canvas { background-color: #0d1117 !important; }
 </style>
 <script>
-  document.addEventListener('DOMContentLoaded', function() {
-    setTimeout(function() {
-      if (typeof network !== 'undefined') {
-        // Reduce zoom speed significantly
-        network.setOptions({
-          interaction: {
-            zoomSpeed: 0.15,
-            zoomView: true
-          }
-        });
+  // Intercept wheel events to dampen Mac trackpad zoom
+  document.addEventListener('wheel', function(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (typeof network !== 'undefined') {
+      // Manual zoom with heavy dampening
+      var scale = network.getScale();
+      var delta = -e.deltaY * 0.001;
+      network.moveTo({ scale: Math.max(0.1, Math.min(5, scale * (1 + delta))) });
+    }
+  }, { passive: false, capture: true });
 
-        // Click residue → post to parent for 3D viewer focus
-        network.on('click', function(params) {
-          if (params.nodes.length > 0) {
-            var nodeId = params.nodes[0];
-            var node = network.body.data.nodes.get(nodeId);
-            if (node) {
-              var label = node.label || node.title || String(nodeId);
-              // Only post for protein residue nodes (have format like ASP107.A)
-              if (label.match(/[A-Z]{3}\\d+/)) {
-                window.parent.postMessage({
-                  type: 'prolif-residue-click',
-                  residue: label
-                }, '*');
-              }
-            }
+  function setupNetwork() {
+    if (typeof network === 'undefined') return false;
+    network.setOptions({
+      interaction: { zoomSpeed: 0.05, zoomView: false }
+    });
+    network.on('click', function(params) {
+      if (params.nodes.length > 0) {
+        var nodeId = params.nodes[0];
+        var node = network.body.data.nodes.get(nodeId);
+        if (node) {
+          var label = node.label || node.title || String(nodeId);
+          if (label.match(/[A-Z]{3}\\d+/)) {
+            window.parent.postMessage({
+              type: 'prolif-residue-click',
+              residue: label
+            }, '*');
           }
-        });
+        }
       }
-    }, 3000);
-    // Also try immediately in case it's already loaded
-    try {
-      if (typeof network !== 'undefined') {
-        network.setOptions({ interaction: { zoomSpeed: 0.15, zoomView: true } });
-      }
-    } catch(e) {}
+    });
+    return true;
+  }
+
+  document.addEventListener('DOMContentLoaded', function() {
+    if (!setupNetwork()) {
+      setTimeout(setupNetwork, 1000);
+      setTimeout(setupNetwork, 3000);
+    }
   });
 </script>
 """
