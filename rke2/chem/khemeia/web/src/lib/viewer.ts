@@ -38,7 +38,8 @@ function applyCanvasProps(): void {
   if (!plugin?.canvas3d) return;
   plugin.canvas3d.setProps({
     renderer: { ...plugin.canvas3d.props.renderer, backgroundColor: 0x0d1117 },
-    trackball: { ...plugin.canvas3d.props.trackball, maxWheelDelta: 0.005 },
+    // maxWheelDelta: 0 disables scroll-wheel zoom entirely (user request)
+    trackball: { ...plugin.canvas3d.props.trackball, maxWheelDelta: 0 },
   });
 }
 
@@ -209,8 +210,11 @@ function getAllStructureRefs(): { ref: string; structRef: any }[] {
 // ─── Loading Structures (Additive — no clear) ───
 
 /**
- * Load a structure into the viewer. If a structure with the same label
- * already exists, it is removed first. Does NOT clear other structures.
+ * Load a structure into the viewer. Clears the scene first, then loads fresh.
+ * The persistent-scene approach (removeStructureByLabel) was fragile — walking
+ * the parent chain to find the root data node could delete wrong nodes or miss
+ * entirely, causing the viewer to flash-load then go blank. Using plugin.clear()
+ * is reliable; overlays are re-added after loadFile() by the caller anyway.
  */
 export async function loadFile(data: string, format: string, preserveCamera = false): Promise<void> {
   if (!viewerInstance) throw new Error('Viewer not initialized');
@@ -220,10 +224,14 @@ export async function loadFile(data: string, format: string, preserveCamera = fa
   const { content, fmt } = prepareData(data, format);
   const cam = preserveCamera ? saveCameraSnapshot() : null;
 
-  // Remove existing 'primary' structure if present, but keep overlays
-  await removeStructureByLabel('primary');
+  // Clear the whole scene — reliable replacement for the fragile
+  // removeStructureByLabel('primary') parent-chain walk
+  await plugin.clear();
+  _structureRefs.clear();
+  _pocketViewRefs = [];
+  _surfaceRefs = [];
 
-  // Load via Molstar Viewer API (adds to scene without clearing)
+  // Load via Molstar Viewer API
   const blob = new Blob([content], { type: 'text/plain' });
   const url = URL.createObjectURL(blob);
   try {
@@ -250,8 +258,11 @@ export async function loadFile(data: string, format: string, preserveCamera = fa
 export async function loadPdb(id: string): Promise<void> {
   if (!viewerInstance) throw new Error('Viewer not initialized');
 
-  // Remove existing primary structure
-  await removeStructureByLabel('primary');
+  // Clear the whole scene before loading (same rationale as loadFile)
+  await plugin.clear();
+  _structureRefs.clear();
+  _pocketViewRefs = [];
+  _surfaceRefs = [];
 
   await viewerInstance.loadStructureFromUrl(
     `https://files.rcsb.org/download/${id.toUpperCase()}.cif`,
@@ -972,6 +983,15 @@ function project3Dto2D(x: number, y: number, z: number): { sx: number; sy: numbe
   } catch { return null; }
 }
 
+/** Find Molstar's actual WebGL canvas element inside the viewer container. */
+function getMolstarCanvas(): HTMLCanvasElement | null {
+  if (!_viewerContainer) return null;
+  // Molstar renders into a <canvas> inside a nested .msp-plugin viewport div.
+  // The WebGL canvas is the one with a data attribute or the deepest canvas.
+  return _viewerContainer.querySelector<HTMLCanvasElement>('canvas')
+    ?? null;
+}
+
 function ensureIxCanvas(): boolean {
   if (_ixCanvas && _ixCtx && _ixCanvas.parentElement) return true;
   if (!plugin?.canvas3d || !_viewerContainer) return false;
@@ -979,20 +999,29 @@ function ensureIxCanvas(): boolean {
   // Clean up old canvas if orphaned
   if (_ixCanvas) { _ixCanvas.remove(); _ixCanvas = null; _ixCtx = null; }
 
+  // Find Molstar's WebGL canvas and overlay on top of it, not the outer
+  // container — otherwise interaction lines are offset by panel/toolbar height.
+  const molstarCanvas = getMolstarCanvas();
+  const parent = molstarCanvas?.parentElement ?? _viewerContainer;
+
   _ixCanvas = document.createElement('canvas');
   _ixCanvas.style.cssText = 'position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:10';
-  // Append to the viewer container we control (not Molstar internals)
-  _viewerContainer.style.position = 'relative';
-  _viewerContainer.appendChild(_ixCanvas);
+  parent.style.position = 'relative';
+  parent.appendChild(_ixCanvas);
   _ixCtx = _ixCanvas.getContext('2d');
   return !!_ixCtx;
 }
 
 function renderIxLines(): void {
-  if (!_ixCtx || !_ixCanvas || !_ixLines.length || !_viewerContainer) return;
+  if (!_ixCtx || !_ixCanvas || !_ixLines.length) return;
+
+  // Use the overlay canvas's parent (Molstar's canvas container) for sizing,
+  // not _viewerContainer which may include panels/toolbars.
+  const sizeEl = _ixCanvas.parentElement;
+  if (!sizeEl) return;
 
   const dpr = window.devicePixelRatio || 1;
-  const rect = _viewerContainer.getBoundingClientRect();
+  const rect = sizeEl.getBoundingClientRect();
   const w = Math.round(rect.width * dpr);
   const h = Math.round(rect.height * dpr);
 
