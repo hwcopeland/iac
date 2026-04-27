@@ -200,15 +200,17 @@
         {/if}
 
         {#if showNetwork && networkSmiles && networkResidues.length > 0}
-          <div class="network-overlay">
-            <InteractionNetwork
-              smiles={networkSmiles}
-              residues={networkResidues}
-              jobName={networkJobName}
-              compoundId={networkCompoundId}
-              onResidueClick={(r) => focusResidue(r.chain_id, r.res_id)}
-            />
-          </div>
+          {#key networkCompoundId}
+            <div class="network-overlay">
+              <InteractionNetwork
+                smiles={networkSmiles}
+                residues={networkResidues}
+                jobName={networkJobName}
+                compoundId={networkCompoundId}
+                onResidueClick={(r) => focusResidue(r.chain_id, r.res_id)}
+              />
+            </div>
+          {/key}
         {/if}
       </div>
 
