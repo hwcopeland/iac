@@ -902,7 +902,7 @@ func (h *APIHandler) callFpocketSidecar(ctx context.Context, receptorPDB string)
 	client := &http.Client{Timeout: 2 * time.Minute}
 
 	reqBody, _ := json.Marshal(map[string]string{
-		"receptor_pdb": receptorPDB,
+		"pdb_data": receptorPDB,
 	})
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost,
@@ -941,7 +941,7 @@ func (h *APIHandler) callP2RankSidecar(ctx context.Context, receptorPDB string) 
 	client := &http.Client{Timeout: 5 * time.Minute}
 
 	reqBody, _ := json.Marshal(map[string]string{
-		"receptor_pdb": receptorPDB,
+		"pdb_data": receptorPDB,
 	})
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost,
