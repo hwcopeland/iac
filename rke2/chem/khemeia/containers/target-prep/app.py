@@ -65,6 +65,7 @@ def clean_receptor(
     ph: float = 7.4,
     keep_cofactors: frozenset[str] | None = None,
     add_hydrogens: bool = False,
+    quick_clean: bool = True,
 ) -> tuple[str, dict[str, int]]:
     """Clean a receptor structure using PDBFixer.
 
@@ -119,12 +120,19 @@ def clean_receptor(
     fixer = PDBFixer(pdbfile=io.StringIO(cleaned_pdb_text))
 
     # 3. Find and add missing heavy atoms (and optionally missing residues).
-    fixer.findMissingResidues()
-    fixer.findMissingAtoms()
-    missing_atoms_count = sum(
-        len(atoms) for atoms in fixer.missingAtoms.values()
-    )
-    fixer.addMissingAtoms()
+    # quick_clean=True (default) skips this — PDBFixer's missing-atom detection
+    # is very slow on large proteins (>2000 residues) because it iterates all
+    # residue templates. For well-resolved X-ray structures, this step is
+    # usually a no-op anyway. Set quick_clean=False for NMR or low-resolution
+    # structures that may have missing atoms.
+    missing_atoms_count = 0
+    if not quick_clean:
+        fixer.findMissingResidues()
+        fixer.findMissingAtoms()
+        missing_atoms_count = sum(
+            len(atoms) for atoms in fixer.missingAtoms.values()
+        )
+        fixer.addMissingAtoms()
 
     # 4. Optionally add hydrogens at the target pH.
     hydrogens_added = 0
