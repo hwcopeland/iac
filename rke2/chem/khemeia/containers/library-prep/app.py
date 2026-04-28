@@ -75,7 +75,8 @@ def standardize_molecule(mol: Chem.Mol) -> Chem.Mol | None:
     try:
         Chem.SanitizeMol(mol)
         mol = rdMolStandardize.Normalize(mol)
-        mol = rdMolStandardize.Uncharge(mol)
+        uncharger = rdMolStandardize.Uncharger()
+        mol = uncharger.uncharge(mol)
 
         # Canonical tautomer
         enumerator = rdMolStandardize.TautomerEnumerator()
