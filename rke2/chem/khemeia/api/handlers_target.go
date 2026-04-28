@@ -596,10 +596,18 @@ func (h *APIHandler) runTargetPrepPipeline(jobName string, req TargetPrepRequest
 		log.Printf("[target-prep] %s: failed to update status to Running: %v", jobName, err)
 	}
 
-	// Step 1: Call target-prep sidecar to clean the receptor AND compute binding site.
-	// The sidecar handles everything in one call — receptor cleaning, native ligand
-	// extraction, custom box validation. No need for separate binding-site call.
-	sidecarResp, err := h.callTargetPrepSidecar(ctx, req)
+	// Step 1: Call target-prep sidecar to clean the receptor.
+	// For native-ligand and custom-box modes, the sidecar also computes the binding site.
+	// For pocket-detection, we only clean the receptor here — fpocket + p2rank run separately.
+	sidecarReq := req
+	if req.BindingSiteMode == "pocket-detection" {
+		// Don't send pocket-detection to the sidecar — it only handles
+		// native-ligand and custom-box. Send custom-box with a dummy box
+		// so it just cleans the receptor without computing a binding site.
+		sidecarReq.BindingSiteMode = "custom-box"
+		sidecarReq.CustomBox = &BoxSpec{Center: [3]float64{0, 0, 0}, Size: [3]float64{999, 999, 999}}
+	}
+	sidecarResp, err := h.callTargetPrepSidecar(ctx, sidecarReq)
 	if err != nil {
 		h.failTargetPrep(ctx, db, jobName, fmt.Sprintf("receptor preparation failed: %v", err))
 		return
@@ -626,7 +634,7 @@ func (h *APIHandler) runTargetPrepPipeline(jobName string, req TargetPrepRequest
 		if sidecarResp.BindingSite != nil {
 			bindingSiteJSON, _ := json.Marshal(sidecarResp.BindingSite)
 			if _, err := db.ExecContext(ctx,
-				`UPDATE target_prep_results SET binding_site = ?, phase = 'Succeeded', completion_time = NOW() WHERE name = ?`,
+				`UPDATE target_prep_results SET binding_site = ? WHERE name = ?`,
 				string(bindingSiteJSON), jobName); err != nil {
 				h.failTargetPrep(ctx, db, jobName, fmt.Sprintf("failed to store binding site: %v", err))
 				return
@@ -637,7 +645,7 @@ func (h *APIHandler) runTargetPrepPipeline(jobName string, req TargetPrepRequest
 			h.failTargetPrep(ctx, db, jobName, "sidecar returned no binding site for "+req.BindingSiteMode+" mode")
 			return
 		}
-		err = nil // Success — skip the old processNativeLigandMode/processCustomBoxMode
+		err = nil
 	case "pocket-detection":
 		err = h.processPocketDetectionMode(ctx, db, jobName, cleanedPDB)
 	default:
@@ -835,14 +843,20 @@ func (h *APIHandler) processPocketDetectionMode(ctx context.Context, db *sql.DB,
 func (h *APIHandler) callTargetPrepSidecar(ctx context.Context, req TargetPrepRequest) (*targetPrepSidecarResponse, error) {
 	client := &http.Client{Timeout: 10 * time.Minute}
 
-	reqBody, _ := json.Marshal(map[string]interface{}{
+	sidecarBody := map[string]interface{}{
 		"pdb_id":            req.PDBID,
 		"mode":              req.BindingSiteMode,
 		"native_ligand_id":  req.NativeLigandID,
 		"padding":           req.Padding,
 		"pH":                req.PH,
 		"keep_cofactors":    req.KeepCofactors,
-	})
+	}
+	// Sidecar expects center/size as flat top-level fields for custom-box mode
+	if req.CustomBox != nil {
+		sidecarBody["center"] = req.CustomBox.Center
+		sidecarBody["size"] = req.CustomBox.Size
+	}
+	reqBody, _ := json.Marshal(sidecarBody)
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost,
 		targetPrepServiceURL+"/prepare", bytes.NewReader(reqBody))
