@@ -760,7 +760,7 @@ func (h *APIHandler) resolveChEMBLSource(ctx context.Context, params *ChEMBLSour
 
 // libraryPrepSidecarRequest is the request body sent to the library-prep sidecar.
 type libraryPrepSidecarRequest struct {
-	SMILES  []string           `json:"smiles"`
+	SMILES  []string           `json:"smiles_list"`
 	Filters LibraryPrepFilters `json:"filters"`
 	JobName string             `json:"job_name"`
 }
