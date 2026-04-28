@@ -32,22 +32,6 @@ spec:
             - containerPort: 8000
               name: http
               protocol: TCP
-          env:
-            - name: GARAGE_ENDPOINT
-              valueFrom:
-                secretKeyRef:
-                  name: garage-secret
-                  key: endpoint
-            - name: GARAGE_ACCESS_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: garage-secret
-                  key: access-key
-            - name: GARAGE_SECRET_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: garage-secret
-                  key: secret-key
           resources:
             requests:
               cpu: "1"
