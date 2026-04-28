@@ -15,14 +15,8 @@ from typing import Any
 
 from flask import Flask, jsonify, request
 from rdkit import Chem, RDLogger
-from rdkit.Chem import (
-    AllChem,
-    Descriptors,
-    FilterCatalog,
-    QED,
-    rdMolDescriptors,
-    rdMolStandardize,
-)
+from rdkit.Chem import AllChem, Descriptors, FilterCatalog, QED, rdMolDescriptors
+from rdkit.Chem.MolStandardize import rdMolStandardize
 
 # Suppress RDKit warnings that would flood gunicorn logs during batch
 # processing.  Actual molecule-level errors are caught and logged.
