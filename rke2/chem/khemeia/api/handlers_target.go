@@ -818,7 +818,7 @@ func (h *APIHandler) processPocketDetectionMode(ctx context.Context, db *sql.DB,
 // sidecar for receptor cleaning (PDBFixer, hydrogen addition, etc.).
 // Returns the cleaned receptor PDB content.
 func (h *APIHandler) callTargetPrepSidecar(ctx context.Context, req TargetPrepRequest) (string, error) {
-	client := &http.Client{Timeout: 5 * time.Minute}
+	client := &http.Client{Timeout: 10 * time.Minute}
 
 	reqBody, _ := json.Marshal(map[string]interface{}{
 		"pdb_id":            req.PDBID,

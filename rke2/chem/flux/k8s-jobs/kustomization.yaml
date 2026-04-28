@@ -1,8 +1,10 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources:
-  - config/rbac.yaml
-  - config/deployment.yaml
+  # NOTE: rbac.yaml and deployment.yaml were removed — those resources migrated to
+  # rke2/chem/khemeia/deploy/ (khemeia-controller in the chem namespace).
+  # The legacy docking-controller manifests that used to live here targeted the
+  # default namespace and are no longer valid.
   - config/result-writer-deployment.yaml
   - config/mysql.yaml
   - config/mysql-secret.yaml

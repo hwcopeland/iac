@@ -13,6 +13,11 @@ WORKDIR /app
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Install meeko separately with --no-deps to avoid dependency conflicts
+# with rdkit-pypi. Meeko's required runtime deps (numpy, rdkit) are already
+# satisfied by requirements.txt above.
+RUN pip install --no-cache-dir --no-deps meeko
+
 COPY app.py ./
 
 EXPOSE 8000

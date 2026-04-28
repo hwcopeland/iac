@@ -1,7 +1,10 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources:
-  - garage-secret.yaml
+  # garage-secret.yaml is the ExternalSecret (Bitwarden) — swap back once
+  # Bitwarden item UUIDs are populated. Using dev overlay for now.
+  # - garage-secret.yaml
+  - garage-secret-dev.yaml
   - garage-config.yaml
   - garage-statefulset.yaml
   - garage-service.yaml
