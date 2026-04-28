@@ -596,19 +596,21 @@ func (h *APIHandler) runTargetPrepPipeline(jobName string, req TargetPrepRequest
 		log.Printf("[target-prep] %s: failed to update status to Running: %v", jobName, err)
 	}
 
-	// Step 1: Call target-prep sidecar to clean the receptor.
-	cleanedPDB, err := h.callTargetPrepSidecar(ctx, req)
+	// Step 1: Call target-prep sidecar to clean the receptor AND compute binding site.
+	// The sidecar handles everything in one call — receptor cleaning, native ligand
+	// extraction, custom box validation. No need for separate binding-site call.
+	sidecarResp, err := h.callTargetPrepSidecar(ctx, req)
 	if err != nil {
 		h.failTargetPrep(ctx, db, jobName, fmt.Sprintf("receptor preparation failed: %v", err))
 		return
 	}
+	cleanedPDB := sidecarResp.ReceptorPDB
 
 	// Step 2: Store cleaned receptor in Garage.
 	s3Key := ArtifactKey("TargetPrep", jobName, "receptor", "pdb")
 	if err := h.s3Client.PutArtifact(ctx, BucketReceptors, s3Key,
 		strings.NewReader(cleanedPDB), "chemical/x-pdb"); err != nil {
 		log.Printf("[target-prep] %s: warning: failed to store receptor in S3: %v", jobName, err)
-		// Non-fatal — continue with the pipeline.
 	}
 
 	// Update receptor S3 key.
@@ -617,12 +619,25 @@ func (h *APIHandler) runTargetPrepPipeline(jobName string, req TargetPrepRequest
 		log.Printf("[target-prep] %s: warning: failed to update receptor_s3_key: %v", jobName, err)
 	}
 
-	// Step 3: Determine binding site based on mode.
+	// Step 3: Handle binding site from sidecar response or run pocket detection.
 	switch req.BindingSiteMode {
-	case "native-ligand":
-		err = h.processNativeLigandMode(ctx, db, jobName, req, cleanedPDB)
-	case "custom-box":
-		err = h.processCustomBoxMode(ctx, db, jobName, req)
+	case "native-ligand", "custom-box":
+		// Sidecar already computed the binding site — store it.
+		if sidecarResp.BindingSite != nil {
+			bindingSiteJSON, _ := json.Marshal(sidecarResp.BindingSite)
+			if _, err := db.ExecContext(ctx,
+				`UPDATE target_prep_results SET binding_site = ?, phase = 'Succeeded', completion_time = NOW() WHERE name = ?`,
+				string(bindingSiteJSON), jobName); err != nil {
+				h.failTargetPrep(ctx, db, jobName, fmt.Sprintf("failed to store binding site: %v", err))
+				return
+			}
+			log.Printf("[target-prep] %s: binding site: center=%v size=%v",
+				jobName, sidecarResp.BindingSite.Center, sidecarResp.BindingSite.Size)
+		} else {
+			h.failTargetPrep(ctx, db, jobName, "sidecar returned no binding site for "+req.BindingSiteMode+" mode")
+			return
+		}
+		err = nil // Success — skip the old processNativeLigandMode/processCustomBoxMode
 	case "pocket-detection":
 		err = h.processPocketDetectionMode(ctx, db, jobName, cleanedPDB)
 	default:
@@ -817,7 +832,7 @@ func (h *APIHandler) processPocketDetectionMode(ctx context.Context, db *sql.DB,
 // callTargetPrepSidecar sends the PDB ID and parameters to the target-prep
 // sidecar for receptor cleaning (PDBFixer, hydrogen addition, etc.).
 // Returns the cleaned receptor PDB content.
-func (h *APIHandler) callTargetPrepSidecar(ctx context.Context, req TargetPrepRequest) (string, error) {
+func (h *APIHandler) callTargetPrepSidecar(ctx context.Context, req TargetPrepRequest) (*targetPrepSidecarResponse, error) {
 	client := &http.Client{Timeout: 10 * time.Minute}
 
 	reqBody, _ := json.Marshal(map[string]interface{}{
@@ -832,39 +847,39 @@ func (h *APIHandler) callTargetPrepSidecar(ctx context.Context, req TargetPrepRe
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost,
 		targetPrepServiceURL+"/prepare", bytes.NewReader(reqBody))
 	if err != nil {
-		return "", fmt.Errorf("creating request: %w", err)
+		return nil, fmt.Errorf("creating request: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 
 	resp, err := client.Do(httpReq)
 	if err != nil {
-		return "", fmt.Errorf("contacting target-prep sidecar: %w", err)
+		return nil, fmt.Errorf("contacting target-prep sidecar: %w", err)
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return "", fmt.Errorf("reading target-prep sidecar response: %w", err)
+		return nil, fmt.Errorf("reading target-prep sidecar response: %w", err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("target-prep sidecar returned %d: %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("target-prep sidecar returned %d: %s", resp.StatusCode, string(body))
 	}
 
 	var sidecarResp targetPrepSidecarResponse
 	if err := json.Unmarshal(body, &sidecarResp); err != nil {
-		return "", fmt.Errorf("parsing target-prep sidecar response: %w", err)
+		return nil, fmt.Errorf("parsing target-prep sidecar response: %w", err)
 	}
 
 	if sidecarResp.Error != "" {
-		return "", fmt.Errorf("target-prep sidecar: %s", sidecarResp.Error)
+		return nil, fmt.Errorf("target-prep sidecar: %s", sidecarResp.Error)
 	}
 
 	if sidecarResp.ReceptorPDB == "" {
-		return "", fmt.Errorf("target-prep sidecar returned empty receptor")
+		return nil, fmt.Errorf("target-prep sidecar returned empty receptor")
 	}
 
-	return sidecarResp.ReceptorPDB, nil
+	return &sidecarResp, nil
 }
 
 // callFpocketSidecar sends the cleaned receptor PDB to the fpocket sidecar
