@@ -1,8 +1,8 @@
 """Target preparation sidecar for the Khemeia SBDD pipeline.
 
 Cleans receptor PDB structures via PDBFixer (remove waters, add missing
-heavy atoms, add hydrogens at specified pH) and defines binding-site boxes
-using native-ligand extraction or user-specified coordinates.
+heavy atoms, optionally add hydrogens at specified pH) and defines binding-site
+boxes using native-ligand extraction or user-specified coordinates.
 
 Replaces the embedded receptor prep in containers/autodock-vina/scripts/proteinprepv2.py
 with a standalone, reusable service.
@@ -64,6 +64,7 @@ def clean_receptor(
     pdb_text: str,
     ph: float = 7.4,
     keep_cofactors: frozenset[str] | None = None,
+    add_hydrogens: bool = False,
 ) -> tuple[str, dict[str, int]]:
     """Clean a receptor structure using PDBFixer.
 
@@ -71,7 +72,11 @@ def clean_receptor(
       1. Remove water molecules.
       2. Remove heteroatoms except those in *keep_cofactors*.
       3. Find and add missing residues / heavy atoms.
-      4. Add hydrogens at the specified pH.
+      4. (Optional) Add hydrogens at the specified pH.
+
+    Hydrogen addition is off by default because docking engines (Vina, Smina)
+    add their own protons, and OpenMM's addMissingHydrogens can take >5 min
+    on large proteins (e.g. 7JRN), causing worker timeouts.
 
     Returns:
         (cleaned_pdb_text, stats_dict) where stats_dict contains counts of
@@ -121,11 +126,13 @@ def clean_receptor(
     )
     fixer.addMissingAtoms()
 
-    # 4. Add hydrogens at the target pH.
-    atoms_before_h = sum(1 for _ in fixer.topology.atoms())
-    fixer.addMissingHydrogens(ph)
-    atoms_after_h = sum(1 for _ in fixer.topology.atoms())
-    hydrogens_added = atoms_after_h - atoms_before_h
+    # 4. Optionally add hydrogens at the target pH.
+    hydrogens_added = 0
+    if add_hydrogens:
+        atoms_before_h = sum(1 for _ in fixer.topology.atoms())
+        fixer.addMissingHydrogens(ph)
+        atoms_after_h = sum(1 for _ in fixer.topology.atoms())
+        hydrogens_added = atoms_after_h - atoms_before_h
 
     # Serialise the cleaned structure to PDB text.
     out = io.StringIO()
@@ -312,6 +319,8 @@ def prepare():
       - native_ligand_id (str):  Required for native-ligand mode.
       - padding (float):         Box padding in Angstroms (default 10).
       - pH (float):              Protonation pH (default 7.4).
+      - add_hydrogens (bool):    Add hydrogens at pH (default false). Off by default
+                                 because docking engines add their own protons.
       - keep_cofactors (list):   Residue names to retain (default ["ZN","MG","CA","FE"]).
       - center (list[float]):    Required for custom-box mode.
       - size (list[float]):      Required for custom-box mode.
@@ -344,6 +353,7 @@ def prepare():
     # --- Parameters ---
     mode = data.get("mode", "native-ligand")
     ph = float(data.get("pH", 7.4))
+    add_hydrogens = bool(data.get("add_hydrogens", False))
     padding = float(data.get("padding", 10.0))
     keep_list = data.get("keep_cofactors", list(DEFAULT_KEEP_COFACTORS))
     keep_set = frozenset(keep_list)
@@ -391,7 +401,9 @@ def prepare():
 
     # --- Receptor cleaning ---
     try:
-        receptor_pdb, stats = clean_receptor(raw_pdb, ph=ph, keep_cofactors=keep_set)
+        receptor_pdb, stats = clean_receptor(
+            raw_pdb, ph=ph, keep_cofactors=keep_set, add_hydrogens=add_hydrogens,
+        )
     except Exception as exc:
         app.logger.exception("Receptor cleaning failed for %s", source_label)
         return jsonify({
