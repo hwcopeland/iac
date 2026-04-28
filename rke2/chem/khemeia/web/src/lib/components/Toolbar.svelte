@@ -2,7 +2,7 @@
   import { isAuthenticated, getUser, login, logout } from '$lib/auth';
   import type { UserInfo } from '$lib/auth';
 
-  type Tab = 'explorer' | 'analysis' | 'calculations';
+  type Tab = 'explorer' | 'analysis' | 'calculations' | 'pipeline';
 
   let { activeTab = $bindable('explorer'), onCommandPalette, authReady = false }: {
     activeTab: Tab;
@@ -14,6 +14,7 @@
     { id: 'explorer', label: 'Explorer' },
     { id: 'analysis', label: 'Analysis' },
     { id: 'calculations', label: 'Calculations' },
+    { id: 'pipeline', label: 'Pipeline' },
   ];
 
   const isMac = typeof navigator !== 'undefined' && navigator.platform?.includes('Mac');

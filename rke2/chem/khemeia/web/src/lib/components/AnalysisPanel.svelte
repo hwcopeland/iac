@@ -1,7 +1,7 @@
 <script lang="ts">
   import Panel from './Panel.svelte';
   import InteractionNetwork from './InteractionNetwork.svelte';
-  import { getJobs, getJob, getPocketAnalysis, getReceptorContacts, getFingerprints, getLigandSmiles, getDockingResult } from '$lib/api';
+  import { getJobs, getJob, getPocketAnalysis, getReceptorContacts, getFingerprints, getLigandSmiles, getDockingResult, getADMETCompound } from '$lib/api';
   import type { PocketResidue, PocketAnalysis, ResidueContact, ReceptorContactsResponse, FingerprintCompound } from '$lib/api';
   import { loadFile, focusLastStructure, focusResidue, highlightResidue, drawInteractionLines, showPocketView, togglePocketSurface, clearPocketView } from '$lib/viewer';
   import type { InteractionLine } from '$lib/viewer';
@@ -61,6 +61,11 @@
 
   // Expanded compound in Hit table (shows full ADMET profile)
   let expandedCompoundId = $state<string | null>(null);
+
+  // WP-4 ADMET per-compound predictions (inline when viewing a compound)
+  let admetPred = $state<any | null>(null);
+  let admetPredLoading = $state(false);
+  let admetPredError = $state('');
 
   const PLUGIN_SLUG = 'docking';
 
@@ -214,6 +219,9 @@
         onNetworkToggle(true, viewedSmiles, pocket.pocket_residues,
           selectedJob?.name ?? '', result.compound_id);
       }
+
+      // Fetch WP-4 ADMET predictions for this compound (non-blocking)
+      fetchADMETPrediction(result.compound_id);
     } catch (e: any) {
       viewError = e.message || 'Failed to load structure';
     }
@@ -252,6 +260,24 @@
 
   function handleResidueHover(res: PocketResidue) {
     highlightResidue(res.chain_id, res.res_id);
+  }
+
+  async function fetchADMETPrediction(compoundId: string) {
+    admetPredLoading = true;
+    admetPredError = '';
+    admetPred = null;
+    try {
+      admetPred = await getADMETCompound(compoundId);
+    } catch (e: any) {
+      // 404 means predictions not available — not an error
+      if (e.message?.includes('404') || e.message?.includes('Not Found')) {
+        admetPredError = '';
+      } else {
+        admetPredError = e.message || 'Failed to load ADMET predictions';
+      }
+    } finally {
+      admetPredLoading = false;
+    }
   }
 
   async function fetchReceptorContacts() {
@@ -426,7 +452,7 @@
       {#if viewingCompound}
         <!-- Back button + stats when viewing a compound -->
         <div class="viewing-header">
-          <button class="back-btn" onclick={() => { viewingCompound = null; pocket = null; showSurfaceMesh = false; showNetwork = false; clearPocketView(); onSurfaceChange(null); }}>
+          <button class="back-btn" onclick={() => { viewingCompound = null; pocket = null; admetPred = null; admetPredError = ''; showSurfaceMesh = false; showNetwork = false; clearPocketView(); onSurfaceChange(null); }}>
             Back to Results
           </button>
           {#each results.filter((r) => r.compound_id === viewingCompound).slice(0, 1) as viewedResult}
@@ -578,6 +604,75 @@
               <span class="cutoff-val">{Math.round(surfaceAlpha * 100)}%</span>
             </label>
           </details>
+        {/if}
+      </Panel>
+
+      <!-- WP-4: ADMET Predictions for viewed compound -->
+      <Panel title="ADMET Predictions">
+        {#if admetPredLoading}
+          <p class="loading">Loading ADMET predictions...</p>
+        {:else if admetPred}
+          {#if admetPred.mpo_score != null}
+            <div class="admet-inline-mpo">
+              <span class="admet-inline-mpo-label">MPO Score</span>
+              <span class="admet-inline-mpo-val" class:good={admetPred.mpo_score >= 4} class:warn={admetPred.mpo_score >= 2 && admetPred.mpo_score < 4} class:bad={admetPred.mpo_score < 2}>
+                {admetPred.mpo_score.toFixed(2)}
+              </span>
+              {#if admetPred.mpo_profile}
+                <span class="admet-inline-profile">{admetPred.mpo_profile}</span>
+              {/if}
+            </div>
+          {/if}
+
+          {#if admetPred.safety_flags?.length}
+            <div class="admet-inline-flags">
+              <span class="section-label">Safety Flags</span>
+              <div class="admet-inline-flag-list">
+                {#each admetPred.safety_flags as flag}
+                  <span class="admet-inline-flag warn">{flag}</span>
+                {/each}
+              </div>
+            </div>
+          {/if}
+
+          {#if admetPred.endpoints}
+            <div class="admet-inline-endpoints">
+              <span class="section-label">Key Endpoints</span>
+              <div class="admet-inline-grid">
+                {#each Object.entries(admetPred.endpoints) as [key, val]}
+                  <div class="admet-inline-ep">
+                    <span class="admet-inline-ep-label">{key.replace(/_/g, ' ')}</span>
+                    <span class="admet-inline-ep-val">{typeof val === 'number' ? (val as number).toFixed(2) : val}</span>
+                  </div>
+                {/each}
+              </div>
+            </div>
+          {/if}
+
+          {#if admetPred.absorption || admetPred.distribution || admetPred.metabolism || admetPred.excretion || admetPred.toxicity}
+            <details class="adv-section">
+              <summary class="adv-summary">Full ADMET Profile</summary>
+              {#each ['absorption', 'distribution', 'metabolism', 'excretion', 'toxicity'] as category}
+                {#if admetPred[category]}
+                  <div class="admet-category">
+                    <span class="admet-category-label">{category}</span>
+                    <div class="admet-inline-grid">
+                      {#each Object.entries(admetPred[category]) as [key, val]}
+                        <div class="admet-inline-ep">
+                          <span class="admet-inline-ep-label">{key.replace(/_/g, ' ')}</span>
+                          <span class="admet-inline-ep-val">{typeof val === 'number' ? (val as number).toFixed(2) : val}</span>
+                        </div>
+                      {/each}
+                    </div>
+                  </div>
+                {/if}
+              {/each}
+            </details>
+          {/if}
+        {:else if admetPredError}
+          <p class="error-msg">{admetPredError}</p>
+        {:else}
+          <p class="empty">ADMET predictions not available for this compound.</p>
         {/if}
       </Panel>
     {/if}
@@ -1571,5 +1666,116 @@
     color: var(--text-muted, #484f58);
     text-transform: uppercase;
     letter-spacing: 0.2px;
+  }
+
+  /* ---- WP-4 ADMET Inline Predictions ---- */
+
+  .admet-inline-mpo {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 0;
+    border-bottom: 1px solid rgba(48,54,61,0.3);
+    margin-bottom: 8px;
+  }
+
+  .admet-inline-mpo-label {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-secondary, #8b949e);
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+  }
+
+  .admet-inline-mpo-val {
+    font-size: 16px;
+    font-weight: 700;
+    font-family: 'SF Mono', monospace;
+  }
+
+  .admet-inline-mpo-val.good { color: #3fb950; }
+  .admet-inline-mpo-val.warn { color: #d29922; }
+  .admet-inline-mpo-val.bad  { color: #f85149; }
+
+  .admet-inline-profile {
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--text-muted, #484f58);
+    background: rgba(48,54,61,0.4);
+    padding: 1px 6px;
+    border-radius: 3px;
+    text-transform: uppercase;
+  }
+
+  .admet-inline-flags {
+    margin-bottom: 8px;
+  }
+
+  .admet-inline-flag-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-top: 4px;
+  }
+
+  .admet-inline-flag {
+    font-size: 10px;
+    font-weight: 600;
+    padding: 2px 6px;
+    border-radius: 3px;
+  }
+
+  .admet-inline-flag.warn {
+    background: rgba(210,153,34,0.15);
+    color: #d29922;
+  }
+
+  .admet-inline-endpoints {
+    margin-bottom: 8px;
+  }
+
+  .admet-inline-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 3px;
+    margin-top: 4px;
+  }
+
+  .admet-inline-ep {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 3px 6px;
+    background: rgba(0,0,0,0.15);
+    border-radius: 3px;
+  }
+
+  .admet-inline-ep-label {
+    font-size: 10px;
+    color: var(--text-muted, #484f58);
+    text-transform: capitalize;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 80px;
+  }
+
+  .admet-inline-ep-val {
+    font-size: 11px;
+    font-family: 'SF Mono', monospace;
+    color: var(--text-primary, #e6edf3);
+    font-weight: 600;
+  }
+
+  .admet-category {
+    margin-bottom: 8px;
+  }
+
+  .admet-category-label {
+    font-size: 10px;
+    font-weight: 700;
+    color: var(--text-secondary, #8b949e);
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
   }
 </style>
