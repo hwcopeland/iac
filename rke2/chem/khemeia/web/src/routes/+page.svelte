@@ -9,13 +9,14 @@
   import AnalysisPanel from '$lib/components/AnalysisPanel.svelte';
   import InteractionNetwork from '$lib/components/InteractionNetwork.svelte';
   import CalculationsPanel from '$lib/components/CalculationsPanel.svelte';
+  import PipelinePanel from '$lib/components/PipelinePanel.svelte';
   import SelectionInfo from '$lib/components/SelectionInfo.svelte';
   import { focusResidue, setRepresentation, onRepresentationChange } from '$lib/viewer';
   import StatusBar from '$lib/components/StatusBar.svelte';
   import CommandPalette from '$lib/components/CommandPalette.svelte';
   import Toast from '$lib/components/Toast.svelte';
 
-  type Tab = 'explorer' | 'analysis' | 'calculations';
+  type Tab = 'explorer' | 'analysis' | 'calculations' | 'pipeline';
 
   let activeTab = $state<Tab>('explorer');
   let viewerContainer = $state<HTMLDivElement>(undefined as unknown as HTMLDivElement);
@@ -108,6 +109,7 @@
         if (e.key === '1') activeTab = 'explorer';
         else if (e.key === '2') activeTab = 'analysis';
         else if (e.key === '3') activeTab = 'calculations';
+        else if (e.key === '4') activeTab = 'pipeline';
       }
       // Toggle panel: Ctrl/Cmd+B
       if (mod && e.key === 'b') {
@@ -227,6 +229,8 @@
               />
             {:else if activeTab === 'calculations'}
               <CalculationsPanel />
+            {:else if activeTab === 'pipeline'}
+              <PipelinePanel />
             {/if}
           </div>
         </aside>

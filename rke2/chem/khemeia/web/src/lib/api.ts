@@ -266,3 +266,82 @@ export async function getDockingResult(jobName: string, compoundId: string): Pro
   const res = await api<any>(`/api/v1/docking/jobs/${jobName}?compound=${encodeURIComponent(compoundId)}`);
   return res?.docking_results?.[0] ?? null;
 }
+
+// --- WP-1: Target Preparation ---
+
+export async function submitTargetPrep(params: any): Promise<any> {
+  return api('/api/v1/targets/prepare', { method: 'POST', body: JSON.stringify(params) });
+}
+
+export async function getTargetPrep(name: string): Promise<any> {
+  return api(`/api/v1/targets/${name}`);
+}
+
+export async function getTargetPockets(name: string): Promise<any> {
+  return api(`/api/v1/targets/${name}/pockets`);
+}
+
+export async function selectPocket(name: string, index: number): Promise<any> {
+  return api(`/api/v1/targets/${name}/pockets/${index}/select`, { method: 'POST' });
+}
+
+// --- WP-2: Library Preparation ---
+
+export async function submitLibraryPrep(params: any): Promise<any> {
+  return api('/api/v1/libraries/prepare', { method: 'POST', body: JSON.stringify(params) });
+}
+
+export async function getLibraryPrep(name: string): Promise<any> {
+  return api(`/api/v1/libraries/${name}`);
+}
+
+export async function getLibraryCompounds(name: string, page?: number, perPage?: number): Promise<any> {
+  const p = new URLSearchParams();
+  if (page) p.set('page', String(page));
+  if (perPage) p.set('per_page', String(perPage));
+  return api(`/api/v1/libraries/${name}/compounds?${p}`);
+}
+
+// --- WP-3: Docking V2 ---
+
+export async function submitDocking(params: any): Promise<any> {
+  return api('/api/v1/docking/v2/submit', { method: 'POST', body: JSON.stringify(params) });
+}
+
+export async function getDockingV2Job(name: string): Promise<any> {
+  return api(`/api/v1/docking/v2/jobs/${name}`);
+}
+
+export async function getDockingV2Results(name: string, page?: number, perPage?: number): Promise<any> {
+  const p = new URLSearchParams();
+  if (page) p.set('page', String(page));
+  if (perPage) p.set('per_page', String(perPage));
+  return api(`/api/v1/docking/v2/jobs/${name}/results?${p}`);
+}
+
+// --- WP-4: ADMET Predictions ---
+
+export async function submitADMET(params: any): Promise<any> {
+  return api('/api/v1/admet/predict', { method: 'POST', body: JSON.stringify(params) });
+}
+
+export async function getADMETJob(name: string): Promise<any> {
+  return api(`/api/v1/admet/jobs/${name}`);
+}
+
+export async function getADMETResults(name: string, page?: number, perPage?: number): Promise<any> {
+  const p = new URLSearchParams();
+  if (page) p.set('page', String(page));
+  if (perPage) p.set('per_page', String(perPage));
+  return api(`/api/v1/admet/jobs/${name}/results?${p}`);
+}
+
+export async function getADMETCompound(compoundId: string): Promise<any> {
+  return api(`/api/v1/admet/compound/${encodeURIComponent(compoundId)}`);
+}
+
+// --- WP-9: Stage Advance ---
+
+export async function advanceStage(kind: string, name: string, body: any): Promise<any> {
+  return api(`/api/v1/jobs/${kind}/${name}/advance`, { method: 'POST', body: JSON.stringify(body) });
+}
