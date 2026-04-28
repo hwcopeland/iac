@@ -821,9 +821,12 @@ func (h *APIHandler) callTargetPrepSidecar(ctx context.Context, req TargetPrepRe
 	client := &http.Client{Timeout: 5 * time.Minute}
 
 	reqBody, _ := json.Marshal(map[string]interface{}{
-		"pdb_id":         req.PDBID,
-		"pH":             req.PH,
-		"keep_cofactors": req.KeepCofactors,
+		"pdb_id":            req.PDBID,
+		"mode":              req.BindingSiteMode,
+		"native_ligand_id":  req.NativeLigandID,
+		"padding":           req.Padding,
+		"pH":                req.PH,
+		"keep_cofactors":    req.KeepCofactors,
 	})
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost,
