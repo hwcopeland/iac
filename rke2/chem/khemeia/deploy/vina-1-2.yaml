@@ -26,33 +26,12 @@ spec:
         - name: zot-pull-secret
       containers:
         - name: vina-1-2
-          image: zot.hwcopeland.net/chem/vina:1.2
+          image: zot.hwcopeland.net/chem/vina:latest
           imagePullPolicy: Always
           ports:
             - containerPort: 8000
               name: http
               protocol: TCP
-          env:
-            - name: MYSQL_HOST
-              valueFrom:
-                secretKeyRef:
-                  name: khemeia-mysql-secret
-                  key: host
-            - name: MYSQL_PORT
-              valueFrom:
-                secretKeyRef:
-                  name: khemeia-mysql-secret
-                  key: port
-            - name: MYSQL_USER
-              valueFrom:
-                secretKeyRef:
-                  name: khemeia-mysql-secret
-                  key: user
-            - name: MYSQL_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: khemeia-mysql-secret
-                  key: password
           resources:
             requests:
               cpu: "2"

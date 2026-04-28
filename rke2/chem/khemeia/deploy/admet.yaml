@@ -26,7 +26,7 @@ spec:
         - name: zot-pull-secret
       containers:
         - name: admet
-          image: zot.hwcopeland.net/chem/admet-ai:latest
+          image: zot.hwcopeland.net/chem/admet:latest
           imagePullPolicy: Always
           ports:
             - containerPort: 8000
