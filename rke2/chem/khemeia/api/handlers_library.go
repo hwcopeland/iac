@@ -803,7 +803,7 @@ func (h *APIHandler) callLibraryPrepSidecar(ctx context.Context, req libraryPrep
 	client := &http.Client{Timeout: 10 * time.Minute}
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		libraryPrepServiceURL+"/prepare", strings.NewReader(string(reqBody)))
+		libraryPrepServiceURL+"/standardize", strings.NewReader(string(reqBody)))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create sidecar request: %w", err)
 	}
