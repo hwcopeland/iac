@@ -52,9 +52,20 @@
   let mpoProfile = $state<'oral' | 'cns' | 'oncology' | 'antimicrobial'>('oral');
   let admetSubmitting = $state(false);
 
+  // --- Custom box inputs ---
+  let boxCenterX = $state(0);
+  let boxCenterY = $state(0);
+  let boxCenterZ = $state(0);
+  let boxSizeX = $state(20);
+  let boxSizeY = $state(20);
+  let boxSizeZ = $state(20);
+
   // --- Pocket detection results ---
   let pockets = $state<any[] | null>(null);
   let selectedPocketIdx = $state<number | null>(null);
+
+  // --- Target prep result (for displaying binding site info) ---
+  let targetPrepResult = $state<any | null>(null);
 
   // --- Polling ---
   let pollTimers = $state<Record<string, ReturnType<typeof setTimeout>>>({});
@@ -98,13 +109,15 @@
     const tick = async () => {
       try {
         const res = await pollFn(name);
-        const status = res.status?.toLowerCase();
-        if (status === 'completed' || status === 'succeeded') {
+        const phase = (res.phase || res.status || '').toLowerCase();
+        if (phase === 'completed' || phase === 'succeeded') {
           updateStage(stageKey, { status: 'succeeded', error: '' });
+          // Stash poll result so we can display binding site info
+          if (stageKey === 'target') targetPrepResult = res;
           return;
         }
-        if (status === 'failed') {
-          updateStage(stageKey, { status: 'failed', error: res.error || 'Job failed' });
+        if (phase === 'failed') {
+          updateStage(stageKey, { status: 'failed', error: res.error || res.error_output || 'Job failed' });
           return;
         }
         // Still running — poll again
@@ -118,7 +131,17 @@
 
   // --- Submit handlers ---
 
+  function targetFormValid(): boolean {
+    if (!pdbId) return false;
+    if (bindingSiteMode === 'native-ligand' && !nativeLigandId.trim()) return false;
+    return true;
+  }
+
   async function handleTargetSubmit() {
+    if (!targetFormValid()) {
+      updateStage('target', { error: 'Please fill in all required fields' });
+      return;
+    }
     targetSubmitting = true;
     updateStage('target', { error: '', status: 'running' });
     try {
@@ -128,6 +151,12 @@
       };
       if (bindingSiteMode === 'native-ligand') {
         params.native_ligand_id = nativeLigandId;
+      }
+      if (bindingSiteMode === 'custom-box') {
+        params.custom_box = {
+          center: [boxCenterX, boxCenterY, boxCenterZ],
+          size: [boxSizeX, boxSizeY, boxSizeZ],
+        };
       }
       const res = await submitTargetPrep(params);
       updateStage('target', { jobName: res.name || res.job_name, status: 'running' });
@@ -151,11 +180,14 @@
           pains: filterPAINS,
         },
       };
+      params.name = 'pipeline-lib-' + Date.now();
       if (libSource === 'smiles') {
-        params.smiles = smilesText;
+        params.smiles_list = smilesText.split('\n').map((s: string) => s.trim()).filter(Boolean);
       } else {
-        params.chembl_target = chemblTarget;
-        params.chembl_max_phase = chemblMaxPhase;
+        params.chembl = {
+          q: chemblTarget,
+          max_phase: chemblMaxPhase,
+        };
       }
       const res = await submitLibraryPrep(params);
       updateStage('library', { jobName: res.name || res.job_name, status: 'running' });
@@ -176,7 +208,7 @@
       if (engSmina) engines.push('smina');
       if (engGnina) engines.push('gnina');
       const params: any = {
-        target_ref: stages.target.jobName,
+        receptor_ref: stages.target.jobName,
         library_ref: stages.library.jobName,
         engines,
         exhaustiveness,
@@ -196,7 +228,7 @@
     updateStage('admet', { error: '', status: 'running' });
     try {
       const params: any = {
-        docking_ref: stages.docking.jobName,
+        library_ref: stages.library.jobName,
         mpo_profile: mpoProfile,
       };
       const res = await submitADMET(params);
@@ -257,7 +289,7 @@
 
   <!-- Stage 1: Target Prep -->
   <div id="stage-target">
-    <Panel title="" collapsed={stages.target.collapsed}>
+    <Panel title={stageLabels.target} collapsed={stages.target.collapsed}>
       {#snippet children()}
         <div class="stage-header" role="button" tabindex="0"
           onclick={() => updateStage('target', { collapsed: !stages.target.collapsed })}
@@ -284,12 +316,36 @@
 
             {#if bindingSiteMode === 'native-ligand'}
               <div class="form-field">
-                <label class="form-label" for="pp-lig">Native Ligand ID</label>
-                <input id="pp-lig" type="text" class="form-input" placeholder="e.g. ATP" bind:value={nativeLigandId} />
+                <label class="form-label" for="pp-lig">Native Ligand ID <span class="required">*</span></label>
+                <input id="pp-lig" type="text" class="form-input" placeholder="e.g. ATP" bind:value={nativeLigandId} required />
+              </div>
+              {#if !nativeLigandId.trim()}
+                <p class="validation-msg">Native Ligand ID is required for this mode.</p>
+              {/if}
+            {/if}
+
+            {#if bindingSiteMode === 'custom-box'}
+              <div class="box-grid">
+                <div class="box-group">
+                  <span class="box-group-label">Center (x, y, z)</span>
+                  <div class="box-inputs">
+                    <input type="number" step="0.1" class="form-input box-input" placeholder="x" bind:value={boxCenterX} />
+                    <input type="number" step="0.1" class="form-input box-input" placeholder="y" bind:value={boxCenterY} />
+                    <input type="number" step="0.1" class="form-input box-input" placeholder="z" bind:value={boxCenterZ} />
+                  </div>
+                </div>
+                <div class="box-group">
+                  <span class="box-group-label">Size (x, y, z)</span>
+                  <div class="box-inputs">
+                    <input type="number" step="0.1" min="1" class="form-input box-input" placeholder="x" bind:value={boxSizeX} />
+                    <input type="number" step="0.1" min="1" class="form-input box-input" placeholder="y" bind:value={boxSizeY} />
+                    <input type="number" step="0.1" min="1" class="form-input box-input" placeholder="z" bind:value={boxSizeZ} />
+                  </div>
+                </div>
               </div>
             {/if}
 
-            <button type="submit" class="submit-btn" disabled={targetSubmitting || !pdbId}>
+            <button type="submit" class="submit-btn" disabled={targetSubmitting || !targetFormValid()}>
               {targetSubmitting ? 'Submitting...' : 'Prepare Target'}
             </button>
           </form>
@@ -307,6 +363,27 @@
         {/if}
 
         {#if canAdvance('target')}
+          {#if targetPrepResult?.binding_site}
+            <div class="result-info">
+              <span class="result-label">Binding Site</span>
+              <div class="result-detail">
+                <span class="result-field">Center: ({targetPrepResult.binding_site.center.map((v: number) => v.toFixed(1)).join(', ')})</span>
+                <span class="result-field">Size: ({targetPrepResult.binding_site.size.map((v: number) => v.toFixed(1)).join(', ')})</span>
+              </div>
+            </div>
+          {/if}
+          {#if targetPrepResult?.pockets?.length}
+            <div class="result-info">
+              <span class="result-label">Detected Pockets ({targetPrepResult.pockets.length})</span>
+              {#each targetPrepResult.pockets.slice(0, 5) as pocket, i}
+                <div class="pocket-row" class:selected={targetPrepResult.selected_pocket === i}>
+                  <span class="pocket-rank">#{pocket.rank}</span>
+                  <span class="pocket-score">consensus: {pocket.consensus_score?.toFixed(2) ?? '?'}</span>
+                  <span class="pocket-center">({pocket.center.map((v: number) => v.toFixed(1)).join(', ')})</span>
+                </div>
+              {/each}
+            </div>
+          {/if}
           <div class="advance-row">
             <span class="done-label">Target ready: {stages.target.jobName}</span>
             <button class="advance-btn" onclick={() => handleAdvance('target')}>Next: Library Prep</button>
@@ -318,7 +395,7 @@
 
   <!-- Stage 2: Library Prep -->
   <div id="stage-library">
-    <Panel title="" collapsed={stages.library.collapsed}>
+    <Panel title={stageLabels.library} collapsed={stages.library.collapsed}>
       {#snippet children()}
         <div class="stage-header" role="button" tabindex="0"
           onclick={() => updateStage('library', { collapsed: !stages.library.collapsed })}
@@ -403,7 +480,7 @@
 
   <!-- Stage 3: Docking -->
   <div id="stage-docking">
-    <Panel title="" collapsed={stages.docking.collapsed}>
+    <Panel title={stageLabels.docking} collapsed={stages.docking.collapsed}>
       {#snippet children()}
         <div class="stage-header" role="button" tabindex="0"
           onclick={() => updateStage('docking', { collapsed: !stages.docking.collapsed })}
@@ -480,7 +557,7 @@
 
   <!-- Stage 4: ADMET -->
   <div id="stage-admet">
-    <Panel title="" collapsed={stages.admet.collapsed}>
+    <Panel title={stageLabels.admet} collapsed={stages.admet.collapsed}>
       {#snippet children()}
         <div class="stage-header" role="button" tabindex="0"
           onclick={() => updateStage('admet', { collapsed: !stages.admet.collapsed })}
@@ -505,7 +582,7 @@
               </div>
 
               <div class="ref-info">
-                <span class="ref-chip">Docking: {stages.docking.jobName}</span>
+                <span class="ref-chip">Library: {stages.library.jobName}</span>
               </div>
 
               <button type="submit" class="submit-btn" disabled={admetSubmitting}>
@@ -858,5 +935,102 @@
     text-overflow: ellipsis;
     white-space: nowrap;
     max-width: 140px;
+  }
+
+  /* Validation */
+  .validation-msg {
+    color: var(--danger, #f85149);
+    font-size: 11px;
+    margin: 0;
+  }
+
+  /* Custom box inputs */
+  .box-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .box-group {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+  }
+
+  .box-group-label {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-secondary, #8b949e);
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+  }
+
+  .box-inputs {
+    display: flex;
+    gap: 6px;
+  }
+
+  .box-input {
+    flex: 1;
+    min-width: 0;
+  }
+
+  /* Result info (binding site, pockets) */
+  .result-info {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 8px 0;
+    border-top: 1px solid rgba(48, 54, 61, 0.4);
+  }
+
+  .result-label {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-secondary, #8b949e);
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+  }
+
+  .result-detail {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+
+  .result-field {
+    font-size: 11px;
+    font-family: 'SF Mono', monospace;
+    color: var(--text-primary, #e6edf3);
+  }
+
+  .pocket-row {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    font-size: 11px;
+    font-family: 'SF Mono', monospace;
+    color: var(--text-secondary, #8b949e);
+    padding: 2px 4px;
+    border-radius: 3px;
+  }
+
+  .pocket-row.selected {
+    background: rgba(63, 185, 80, 0.1);
+    border: 1px solid rgba(63, 185, 80, 0.3);
+  }
+
+  .pocket-rank {
+    font-weight: 700;
+    color: var(--text-primary, #e6edf3);
+    min-width: 20px;
+  }
+
+  .pocket-score {
+    color: var(--accent, #58a6ff);
+  }
+
+  .pocket-center {
+    color: var(--text-muted, #484f58);
   }
 </style>
