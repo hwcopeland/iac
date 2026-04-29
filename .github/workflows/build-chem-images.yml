@@ -1,7 +1,5 @@
 ---
-# Build and push Khemeia Docker images to zot.hwcopeland.net/chem/.
-# Only builds images whose source directories actually changed, preventing
-# unnecessary controller/service restarts from unrelated pushes.
+# Build and push only the Khemeia Docker images whose sources changed.
 #
 # Runner: self-hosted runner labeled arc-chem running on the RKE2 cluster.
 
@@ -24,278 +22,233 @@ permissions:
   contents: read
 
 jobs:
-  # Determine which images need building based on changed files.
   detect-changes:
     name: Detect changed images
     runs-on: [self-hosted, arc-chem]
     outputs:
-      controller: ${{ steps.filter.outputs.controller }}
-      vina: ${{ steps.filter.outputs.vina }}
-      result-writer: ${{ steps.filter.outputs.result-writer }}
-      dfratom: ${{ steps.filter.outputs.dfratom }}
-      nwchem: ${{ steps.filter.outputs.nwchem }}
-      psi4: ${{ steps.filter.outputs.psi4 }}
-      prolif-runner: ${{ steps.filter.outputs.prolif-runner }}
-      target-prep: ${{ steps.filter.outputs.target-prep }}
-      fpocket: ${{ steps.filter.outputs.fpocket }}
-      p2rank: ${{ steps.filter.outputs.p2rank }}
-      library-prep: ${{ steps.filter.outputs.library-prep }}
-      web: ${{ steps.filter.outputs.web }}
-      vina-1-2: ${{ steps.filter.outputs.vina-1-2 }}
-      gnina: ${{ steps.filter.outputs.gnina }}
-      admet: ${{ steps.filter.outputs.admet }}
-      vina-gpu: ${{ steps.filter.outputs.vina-gpu }}
+      matrix: ${{ steps.filter.outputs.matrix }}
+      count: ${{ steps.filter.outputs.count }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
         with:
-          fetch-depth: 2
+          fetch-depth: 0
 
       - name: Check changed paths
         id: filter
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          PUSH_SHA: ${{ github.sha }}
         run: |
-          CHANGED=$(git diff --name-only HEAD~1 HEAD 2>/dev/null || echo "")
-          # On workflow_dispatch or if diff fails, build everything
-          if [ -z "$CHANGED" ]; then
-            echo "controller=true" >> "$GITHUB_OUTPUT"
-            echo "vina=true" >> "$GITHUB_OUTPUT"
-            echo "result-writer=true" >> "$GITHUB_OUTPUT"
-            echo "dfratom=true" >> "$GITHUB_OUTPUT"
-            echo "nwchem=true" >> "$GITHUB_OUTPUT"
-            echo "psi4=true" >> "$GITHUB_OUTPUT"
-            echo "prolif-runner=true" >> "$GITHUB_OUTPUT"
-            echo "target-prep=true" >> "$GITHUB_OUTPUT"
-            echo "fpocket=true" >> "$GITHUB_OUTPUT"
-            echo "p2rank=true" >> "$GITHUB_OUTPUT"
-            echo "library-prep=true" >> "$GITHUB_OUTPUT"
-            echo "web=true" >> "$GITHUB_OUTPUT"
-            echo "vina-1-2=true" >> "$GITHUB_OUTPUT"
-            echo "gnina=true" >> "$GITHUB_OUTPUT"
-            echo "admet=true" >> "$GITHUB_OUTPUT"
-            echo "vina-gpu=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          # Workflow file change rebuilds everything
-          if echo "$CHANGED" | grep -q '.github/workflows/build-chem-images.yml'; then
-            echo "controller=true" >> "$GITHUB_OUTPUT"
-            echo "vina=true" >> "$GITHUB_OUTPUT"
-            echo "result-writer=true" >> "$GITHUB_OUTPUT"
-            echo "dfratom=true" >> "$GITHUB_OUTPUT"
-            echo "nwchem=true" >> "$GITHUB_OUTPUT"
-            echo "psi4=true" >> "$GITHUB_OUTPUT"
-            echo "prolif-runner=true" >> "$GITHUB_OUTPUT"
-            echo "target-prep=true" >> "$GITHUB_OUTPUT"
-            echo "fpocket=true" >> "$GITHUB_OUTPUT"
-            echo "p2rank=true" >> "$GITHUB_OUTPUT"
-            echo "library-prep=true" >> "$GITHUB_OUTPUT"
-            echo "web=true" >> "$GITHUB_OUTPUT"
-            echo "vina-1-2=true" >> "$GITHUB_OUTPUT"
-            echo "gnina=true" >> "$GITHUB_OUTPUT"
-            echo "admet=true" >> "$GITHUB_OUTPUT"
-            echo "vina-gpu=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          # Plugin changes rebuild the controller (plugins are baked into the image)
-          if echo "$CHANGED" | grep -qE '^rke2/chem/khemeia/(api|plugins)/'; then
-            echo "controller=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "controller=false" >> "$GITHUB_OUTPUT"
-          fi
-          if echo "$CHANGED" | grep -q '^rke2/chem/khemeia/containers/autodock-vina/'; then
-            echo "vina=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "vina=false" >> "$GITHUB_OUTPUT"
-          fi
-          if echo "$CHANGED" | grep -q '^rke2/chem/khemeia/result-writer/'; then
-            echo "result-writer=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "result-writer=false" >> "$GITHUB_OUTPUT"
-          fi
-          if echo "$CHANGED" | grep -q '^rke2/chem/khemeia/containers/dfratom/'; then
-            echo "dfratom=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "dfratom=false" >> "$GITHUB_OUTPUT"
-          fi
-          if echo "$CHANGED" | grep -q '^rke2/chem/khemeia/containers/nwchem/'; then
-            echo "nwchem=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "nwchem=false" >> "$GITHUB_OUTPUT"
-          fi
-          if echo "$CHANGED" | grep -q '^rke2/chem/khemeia/containers/prolif-runner/'; then
-            echo "prolif-runner=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "prolif-runner=false" >> "$GITHUB_OUTPUT"
-          fi
-          if echo "$CHANGED" | grep -q '^rke2/chem/khemeia/containers/psi4/'; then
-            echo "psi4=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "psi4=false" >> "$GITHUB_OUTPUT"
-          fi
-          if echo "$CHANGED" | grep -q '^rke2/chem/khemeia/containers/target-prep/'; then
-            echo "target-prep=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "target-prep=false" >> "$GITHUB_OUTPUT"
-          fi
-          if echo "$CHANGED" | grep -q '^rke2/chem/khemeia/containers/fpocket/'; then
-            echo "fpocket=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "fpocket=false" >> "$GITHUB_OUTPUT"
-          fi
-          if echo "$CHANGED" | grep -q '^rke2/chem/khemeia/containers/p2rank/'; then
-            echo "p2rank=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "p2rank=false" >> "$GITHUB_OUTPUT"
-          fi
-          if echo "$CHANGED" | grep -q '^rke2/chem/khemeia/containers/library-prep/'; then
-            echo "library-prep=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "library-prep=false" >> "$GITHUB_OUTPUT"
-          fi
-          if echo "$CHANGED" | grep -q '^rke2/chem/khemeia/web/'; then
-            echo "web=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "web=false" >> "$GITHUB_OUTPUT"
-          fi
-          if echo "$CHANGED" | grep -q '^rke2/chem/khemeia/containers/vina-1.2/'; then
-            echo "vina-1-2=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "vina-1-2=false" >> "$GITHUB_OUTPUT"
-          fi
-          if echo "$CHANGED" | grep -q '^rke2/chem/khemeia/containers/gnina/'; then
-            echo "gnina=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "gnina=false" >> "$GITHUB_OUTPUT"
-          fi
-          if echo "$CHANGED" | grep -q '^rke2/chem/khemeia/containers/admet/'; then
-            echo "admet=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "admet=false" >> "$GITHUB_OUTPUT"
-          fi
-          if echo "$CHANGED" | grep -q '^rke2/chem/khemeia/containers/vina-gpu/'; then
-            echo "vina-gpu=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "vina-gpu=false" >> "$GITHUB_OUTPUT"
-          fi
+          python3 - <<'PY'
+          import json
+          import os
+          import subprocess
+          import sys
+
+          images = [
+              {
+                  "key": "controller",
+                  "name": "khemeia-controller",
+                  "image": "zot.hwcopeland.net/chem/khemeia-controller",
+                  "dockerfile": "rke2/chem/khemeia/api/Dockerfile",
+                  "context": "rke2/chem/khemeia/api/",
+                  "prefixes": [
+                      "rke2/chem/khemeia/api/",
+                      "rke2/chem/khemeia/plugins/",
+                  ],
+              },
+              {
+                  "key": "vina",
+                  "name": "autodock-vina",
+                  "image": "zot.hwcopeland.net/chem/autodock-vina",
+                  "dockerfile": "rke2/chem/khemeia/containers/autodock-vina/Dockerfile",
+                  "context": "rke2/chem/khemeia/containers/autodock-vina/",
+                  "prefixes": ["rke2/chem/khemeia/containers/autodock-vina/"],
+              },
+              {
+                  "key": "result-writer",
+                  "name": "khemeia-result-writer",
+                  "image": "zot.hwcopeland.net/chem/khemeia-result-writer",
+                  "dockerfile": "rke2/chem/khemeia/result-writer/Dockerfile",
+                  "context": "rke2/chem/khemeia/result-writer/",
+                  "prefixes": ["rke2/chem/khemeia/result-writer/"],
+              },
+              {
+                  "key": "dfratom",
+                  "name": "dfratom",
+                  "image": "zot.hwcopeland.net/chem/dfratom",
+                  "dockerfile": "rke2/chem/khemeia/containers/dfratom/Dockerfile",
+                  "context": "rke2/chem/khemeia/containers/dfratom/",
+                  "prefixes": ["rke2/chem/khemeia/containers/dfratom/"],
+              },
+              {
+                  "key": "nwchem",
+                  "name": "nwchem",
+                  "image": "zot.hwcopeland.net/chem/nwchem",
+                  "dockerfile": "rke2/chem/khemeia/containers/nwchem/Dockerfile",
+                  "context": "rke2/chem/khemeia/containers/nwchem/",
+                  "prefixes": ["rke2/chem/khemeia/containers/nwchem/"],
+              },
+              {
+                  "key": "psi4",
+                  "name": "psi4",
+                  "image": "zot.hwcopeland.net/chem/psi4",
+                  "dockerfile": "rke2/chem/khemeia/containers/psi4/Dockerfile",
+                  "context": "rke2/chem/khemeia/containers/psi4/",
+                  "prefixes": ["rke2/chem/khemeia/containers/psi4/"],
+              },
+              {
+                  "key": "prolif-runner",
+                  "name": "prolif-runner",
+                  "image": "zot.hwcopeland.net/chem/prolif-runner",
+                  "dockerfile": "rke2/chem/khemeia/containers/prolif-runner/Dockerfile",
+                  "context": "rke2/chem/khemeia/containers/prolif-runner/",
+                  "prefixes": ["rke2/chem/khemeia/containers/prolif-runner/"],
+              },
+              {
+                  "key": "target-prep",
+                  "name": "target-prep",
+                  "image": "zot.hwcopeland.net/chem/target-prep",
+                  "dockerfile": "rke2/chem/khemeia/containers/target-prep/Dockerfile",
+                  "context": "rke2/chem/khemeia/containers/target-prep/",
+                  "prefixes": ["rke2/chem/khemeia/containers/target-prep/"],
+              },
+              {
+                  "key": "fpocket",
+                  "name": "fpocket",
+                  "image": "zot.hwcopeland.net/chem/fpocket",
+                  "dockerfile": "rke2/chem/khemeia/containers/fpocket/Dockerfile",
+                  "context": "rke2/chem/khemeia/containers/fpocket/",
+                  "prefixes": ["rke2/chem/khemeia/containers/fpocket/"],
+              },
+              {
+                  "key": "p2rank",
+                  "name": "p2rank",
+                  "image": "zot.hwcopeland.net/chem/p2rank",
+                  "dockerfile": "rke2/chem/khemeia/containers/p2rank/Dockerfile",
+                  "context": "rke2/chem/khemeia/containers/p2rank/",
+                  "prefixes": ["rke2/chem/khemeia/containers/p2rank/"],
+              },
+              {
+                  "key": "library-prep",
+                  "name": "library-prep",
+                  "image": "zot.hwcopeland.net/chem/library-prep",
+                  "dockerfile": "rke2/chem/khemeia/containers/library-prep/Dockerfile",
+                  "context": "rke2/chem/khemeia/containers/library-prep/",
+                  "prefixes": ["rke2/chem/khemeia/containers/library-prep/"],
+              },
+              {
+                  "key": "web",
+                  "name": "khemeia-web",
+                  "image": "zot.hwcopeland.net/chem/khemeia-web",
+                  "dockerfile": "rke2/chem/khemeia/web/Dockerfile",
+                  "context": "rke2/chem/khemeia/web/",
+                  "prefixes": ["rke2/chem/khemeia/web/"],
+              },
+              {
+                  "key": "vina-1-2",
+                  "name": "vina-1.2",
+                  "image": "zot.hwcopeland.net/chem/vina",
+                  "dockerfile": "rke2/chem/khemeia/containers/vina-1.2/Dockerfile",
+                  "context": "rke2/chem/khemeia/containers/vina-1.2/",
+                  "prefixes": ["rke2/chem/khemeia/containers/vina-1.2/"],
+              },
+              {
+                  "key": "gnina",
+                  "name": "gnina",
+                  "image": "zot.hwcopeland.net/chem/gnina",
+                  "dockerfile": "rke2/chem/khemeia/containers/gnina/Dockerfile",
+                  "context": "rke2/chem/khemeia/containers/gnina/",
+                  "prefixes": ["rke2/chem/khemeia/containers/gnina/"],
+              },
+              {
+                  "key": "admet",
+                  "name": "admet",
+                  "image": "zot.hwcopeland.net/chem/admet",
+                  "dockerfile": "rke2/chem/khemeia/containers/admet/Dockerfile",
+                  "context": "rke2/chem/khemeia/containers/admet/",
+                  "prefixes": ["rke2/chem/khemeia/containers/admet/"],
+              },
+              {
+                  "key": "vina-gpu",
+                  "name": "vina-gpu",
+                  "image": "zot.hwcopeland.net/chem/vina-gpu",
+                  "dockerfile": "rke2/chem/khemeia/containers/vina-gpu/Dockerfile",
+                  "context": "rke2/chem/khemeia/containers/vina-gpu/",
+                  "prefixes": ["rke2/chem/khemeia/containers/vina-gpu/"],
+              },
+          ]
+
+          def run(cmd):
+              return subprocess.check_output(cmd, text=True).strip()
+
+          event_name = os.environ["EVENT_NAME"]
+          changed = []
+
+          if event_name == "push":
+              before = os.environ.get("PUSH_BEFORE", "")
+              after = os.environ.get("PUSH_SHA", "HEAD")
+              if before and before != "0000000000000000000000000000000000000000":
+                  diff_cmd = ["git", "diff", "--name-only", before, after]
+              else:
+                  diff_cmd = ["git", "diff-tree", "--no-commit-id", "--name-only", "-r", after]
+          else:
+              run(["git", "fetch", "--no-tags", "origin", "main"])
+              base = run(["git", "merge-base", "origin/main", "HEAD"])
+              diff_cmd = ["git", "diff", "--name-only", f"{base}...HEAD"]
+
+          output = run(diff_cmd)
+          if output:
+              changed = [line for line in output.splitlines() if line]
+
+          selected = []
+          for image in images:
+              if any(path.startswith(prefix) for path in changed for prefix in image["prefixes"]):
+                  selected.append({
+                      "name": image["name"],
+                      "image": image["image"],
+                      "dockerfile": image["dockerfile"],
+                      "context": image["context"],
+                  })
+
+          github_output = os.environ["GITHUB_OUTPUT"]
+          with open(github_output, "a", encoding="utf-8") as fh:
+              fh.write(f"count={len(selected)}\n")
+              fh.write(f"matrix={json.dumps(selected, separators=(',', ':'))}\n")
+
+          print("Changed paths:")
+          if changed:
+              print("\n".join(changed))
+          else:
+              print("(none)")
+          print("\nSelected images:")
+          if selected:
+              for image in selected:
+                  print(f"- {image['name']}")
+          else:
+              print("(none)")
+          PY
 
   build-and-push:
     name: Build ${{ matrix.name }}
     needs: detect-changes
+    if: needs.detect-changes.outputs.count != '0'
     runs-on: [self-hosted, arc-chem]
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - name: khemeia-controller
-            image: zot.hwcopeland.net/chem/khemeia-controller
-            dockerfile: rke2/chem/khemeia/api/Dockerfile
-            context: rke2/chem/khemeia/api/
-            changed: ${{ needs.detect-changes.outputs.controller }}
-
-          - name: autodock-vina
-            image: zot.hwcopeland.net/chem/autodock-vina
-            dockerfile: rke2/chem/khemeia/containers/autodock-vina/Dockerfile
-            context: rke2/chem/khemeia/containers/autodock-vina/
-            changed: ${{ needs.detect-changes.outputs.vina }}
-
-          - name: khemeia-result-writer
-            image: zot.hwcopeland.net/chem/khemeia-result-writer
-            dockerfile: rke2/chem/khemeia/result-writer/Dockerfile
-            context: rke2/chem/khemeia/result-writer/
-            changed: ${{ needs.detect-changes.outputs.result-writer }}
-
-          - name: dfratom
-            image: zot.hwcopeland.net/chem/dfratom
-            dockerfile: rke2/chem/khemeia/containers/dfratom/Dockerfile
-            context: rke2/chem/khemeia/containers/dfratom/
-            changed: ${{ needs.detect-changes.outputs.dfratom }}
-
-          - name: nwchem
-            image: zot.hwcopeland.net/chem/nwchem
-            dockerfile: rke2/chem/khemeia/containers/nwchem/Dockerfile
-            context: rke2/chem/khemeia/containers/nwchem/
-            changed: ${{ needs.detect-changes.outputs.nwchem }}
-
-          - name: psi4
-            image: zot.hwcopeland.net/chem/psi4
-            dockerfile: rke2/chem/khemeia/containers/psi4/Dockerfile
-            context: rke2/chem/khemeia/containers/psi4/
-            changed: ${{ needs.detect-changes.outputs.psi4 }}
-
-          - name: prolif-runner
-            image: zot.hwcopeland.net/chem/prolif-runner
-            dockerfile: rke2/chem/khemeia/containers/prolif-runner/Dockerfile
-            context: rke2/chem/khemeia/containers/prolif-runner/
-            changed: ${{ needs.detect-changes.outputs.prolif-runner }}
-
-          - name: target-prep
-            image: zot.hwcopeland.net/chem/target-prep
-            dockerfile: rke2/chem/khemeia/containers/target-prep/Dockerfile
-            context: rke2/chem/khemeia/containers/target-prep/
-            changed: ${{ needs.detect-changes.outputs.target-prep }}
-
-          - name: fpocket
-            image: zot.hwcopeland.net/chem/fpocket
-            dockerfile: rke2/chem/khemeia/containers/fpocket/Dockerfile
-            context: rke2/chem/khemeia/containers/fpocket/
-            changed: ${{ needs.detect-changes.outputs.fpocket }}
-
-          - name: p2rank
-            image: zot.hwcopeland.net/chem/p2rank
-            dockerfile: rke2/chem/khemeia/containers/p2rank/Dockerfile
-            context: rke2/chem/khemeia/containers/p2rank/
-            changed: ${{ needs.detect-changes.outputs.p2rank }}
-
-          - name: library-prep
-            image: zot.hwcopeland.net/chem/library-prep
-            dockerfile: rke2/chem/khemeia/containers/library-prep/Dockerfile
-            context: rke2/chem/khemeia/containers/library-prep/
-            changed: ${{ needs.detect-changes.outputs.library-prep }}
-
-          - name: khemeia-web
-            image: zot.hwcopeland.net/chem/khemeia-web
-            dockerfile: rke2/chem/khemeia/web/Dockerfile
-            context: rke2/chem/khemeia/web/
-            changed: ${{ needs.detect-changes.outputs.web }}
-
-          - name: vina-1.2
-            image: zot.hwcopeland.net/chem/vina
-            dockerfile: rke2/chem/khemeia/containers/vina-1.2/Dockerfile
-            context: rke2/chem/khemeia/containers/vina-1.2/
-            changed: ${{ needs.detect-changes.outputs.vina-1-2 }}
-
-          - name: gnina
-            image: zot.hwcopeland.net/chem/gnina
-            dockerfile: rke2/chem/khemeia/containers/gnina/Dockerfile
-            context: rke2/chem/khemeia/containers/gnina/
-            changed: ${{ needs.detect-changes.outputs.gnina }}
-
-          - name: admet
-            image: zot.hwcopeland.net/chem/admet
-            dockerfile: rke2/chem/khemeia/containers/admet/Dockerfile
-            context: rke2/chem/khemeia/containers/admet/
-            changed: ${{ needs.detect-changes.outputs.admet }}
-
-          - name: vina-gpu
-            image: zot.hwcopeland.net/chem/vina-gpu
-            dockerfile: rke2/chem/khemeia/containers/vina-gpu/Dockerfile
-            context: rke2/chem/khemeia/containers/vina-gpu/
-            changed: ${{ needs.detect-changes.outputs.vina-gpu }}
+        include: ${{ fromJSON(needs.detect-changes.outputs.matrix) }}
 
     steps:
-      - name: Skip unchanged image
-        if: matrix.changed != 'true'
-        run: echo "Skipping ${{ matrix.name }} — no changes detected"
-
       - name: Checkout repository
-        if: matrix.changed == 'true'
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
 
       - name: Set up Docker Buildx
-        if: matrix.changed == 'true'
         uses: docker/setup-buildx-action@b5ca514318bd6ebac0fb2aedd5d36ec1b5c232a2  # v3.10.0
 
       - name: Log in to Zot registry
-        if: matrix.changed == 'true'
         uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772  # v3.4.0
         with:
           registry: zot.hwcopeland.net
@@ -303,7 +256,6 @@ jobs:
           password: ${{ secrets.ZOT_PASSWORD }}
 
       - name: Compute image tags
-        if: matrix.changed == 'true'
         id: tags
         run: |
           SHORT_SHA="${GITHUB_SHA::7}"
@@ -312,7 +264,6 @@ jobs:
           echo "build_tag=${BUILD_TAG}" >> "$GITHUB_OUTPUT"
 
       - name: Build and push ${{ matrix.name }}
-        if: matrix.changed == 'true'
         uses: docker/build-push-action@14487ce63c7a62a4a324b0bfb37086795e31c6c1  # v6.16.0
         with:
           context: ${{ matrix.context }}

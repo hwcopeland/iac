@@ -52,7 +52,7 @@ consensus scoring, and a full refinement pipeline.
    - Output: docked poses (PDBQT), affinity scores (kcal/mol)
    - Compute class: `cpu` (16 threads recommended)
 
-2. **Vina-GPU container** (`zot.hwcopeland.net/chem/vina-gpu:2.1`)
+2. **Vina-GPU container** (`zot.hwcopeland.net/chem/vina-gpu:latest`)
    - GPU-accelerated AutoDock Vina (Vina-GPU 2.1 from the Sun Lab at Nanjing Tech).
      OpenCL-based, runs on the RTX 3070 in `nixos-gpu`. 10–50× speedup over CPU Vina at
      equivalent exhaustiveness on small ligand batches; bigger speedups on larger batches.
@@ -297,7 +297,9 @@ consensus scoring, and a full refinement pipeline.
   relaxation and any trajectory analysis. GROMACS 2024.x or later.
 - **GPU scheduling**: `vina-gpu`, `gnina`, and `diffdock` require `nvidia.com/gpu`
   resource requests, the `gpu=true:NoSchedule` toleration, and the WP-9 NixOS host-path
-  mounts (`/run/opengl-driver`, `/nix/store`, `LD_LIBRARY_PATH=/run/opengl-driver/lib`).
+  mounts (`/run/opengl-driver`, `/nix/store`,
+  `LD_LIBRARY_PATH=/run/opengl-driver/lib:/opt/boost/lib:/usr/lib/x86_64-linux-gnu`,
+  `OCL_ICD_VENDORS=/run/opengl-driver/etc/OpenCL/vendors`).
   All injected by the `gpu` compute class.
 - **Single-GPU constraint**: only one GPU pod scheduled at a time on `nixos-gpu`. The
   parallel orchestrator queues GPU engine pods serially within a job.

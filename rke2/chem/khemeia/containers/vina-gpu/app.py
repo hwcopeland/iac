@@ -1,12 +1,4 @@
-"""AutoDock-GPU docking engine sidecar.
-
-Uses NVIDIA's official AutoDock-GPU container (nvcr.io/hpc/autodock)
-for GPU-accelerated molecular docking. Exposes the same POST /dock
-contract as vina-1.2 and gnina for interchangeable use.
-
-AutoDock-GPU runs the AutoDock4 scoring function on CUDA GPUs with
-massive parallelism (thousands of concurrent evaluations).
-"""
+"""Vina-GPU 2.1 docking sidecar."""
 
 import logging
 import os
@@ -14,6 +6,7 @@ import re
 import subprocess
 import tempfile
 import traceback
+from pathlib import Path
 
 from flask import Flask, jsonify, request
 
@@ -21,8 +14,17 @@ app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
 
-# AutoDock-GPU binary path (pre-installed in the NVIDIA container)
-AUTODOCK_GPU = os.environ.get("AUTODOCK_GPU_BIN", "autodock_gpu_128wi")
+VINA_GPU_BIN = os.environ.get("VINA_GPU_BIN", "/usr/local/bin/vina-gpu")
+VINA_GPU_WARMUP_BIN = os.environ.get(
+    "VINA_GPU_WARMUP_BIN",
+    "/opt/vina-gpu/bin/AutoDock-Vina-GPU-2-1-source",
+)
+OPENCL_BINARY_PATH = os.environ.get("VINA_GPU_OPENCL_BINARY_PATH", "/opt/vina-gpu/bin")
+KERNEL_BINARIES = (
+    Path(OPENCL_BINARY_PATH) / "Kernel1_Opt.bin",
+    Path(OPENCL_BINARY_PATH) / "Kernel2_Opt.bin",
+)
+_RESULT_RE = re.compile(r"^REMARK VINA RESULT:\s+(-?\d+(?:\.\d+)?)", re.MULTILINE)
 
 
 @app.route("/health", methods=["GET"])
@@ -33,121 +35,140 @@ def health():
 @app.route("/readyz", methods=["GET"])
 def readyz():
     try:
-        result = subprocess.run(
-            [AUTODOCK_GPU, "--help"],
-            capture_output=True, text=True, timeout=10,
-        )
-        return jsonify({"status": "ready", "engine": "autodock-gpu"})
-    except Exception as e:
-        return jsonify({"status": "not ready", "error": str(e)}), 503
+        result = subprocess.run([VINA_GPU_BIN, "--help"], capture_output=True, text=True, timeout=10)
+        if result.returncode != 0:
+            return jsonify({"status": "not ready", "stderr": result.stderr[:500]}), 503
+        return jsonify({"status": "ready", "engine": "vina-gpu"})
+    except Exception as exc:
+        return jsonify({"status": "not ready", "error": str(exc)}), 503
+
+
+def parse_pose(path: Path):
+    contents = path.read_text()
+    match = _RESULT_RE.search(contents)
+    if not match:
+        return None
+    return {
+        "affinity": float(match.group(1)),
+        "rmsd_lb": 0.0,
+        "rmsd_ub": 0.0,
+        "pdbqt": contents,
+    }
+
+
+def _vina_env():
+    env = os.environ.copy()
+    env.setdefault("LD_LIBRARY_PATH", "/run/opengl-driver/lib:/opt/boost/lib:/usr/lib/x86_64-linux-gnu")
+    return env
+
+
+def _kernels_ready():
+    return all(path.exists() and path.stat().st_size > 0 for path in KERNEL_BINARIES)
+
+
+def ensure_opencl_kernels(receptor_path: Path, ligand_path: Path, center, size, output_path: Path):
+    if _kernels_ready():
+        return
+
+    cmd = [
+        VINA_GPU_WARMUP_BIN,
+        "--receptor", str(receptor_path),
+        "--ligand", str(ligand_path),
+        "--out", str(output_path),
+        "--opencl_binary_path", OPENCL_BINARY_PATH,
+        "--center_x", str(float(center[0])),
+        "--center_y", str(float(center[1])),
+        "--center_z", str(float(center[2])),
+        "--size_x", str(float(size[0])),
+        "--size_y", str(float(size[1])),
+        "--size_z", str(float(size[2])),
+        "--thread", "1",
+        "--search_depth", "1",
+    ]
+    log.info("Warming OpenCL kernel cache: %s", " ".join(cmd))
+    result = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        timeout=600,
+        cwd=OPENCL_BINARY_PATH,
+        env=_vina_env(),
+    )
+    if _kernels_ready():
+        if result.returncode != 0:
+            log.warning("Kernel warmup exited with code %s after generating binaries", result.returncode)
+        return
+    raise RuntimeError(
+        f"Vina-GPU kernel warmup failed with code {result.returncode}: "
+        f"{(result.stderr or result.stdout)[-1000:]}"
+    )
 
 
 @app.route("/dock", methods=["POST"])
 def dock():
     data = request.get_json(force=True)
-
     receptor_pdbqt = data.get("receptor_pdbqt", "")
     ligand_pdbqt = data.get("ligand_pdbqt", "")
     center = data.get("center", [0, 0, 0])
     size = data.get("size", [20, 20, 20])
-    exhaustiveness = data.get("exhaustiveness", 32)
-    n_poses = data.get("n_poses", 9)
+    exhaustiveness = int(data.get("exhaustiveness", 32))
+    threads = int(data.get("threads", 256))
 
     if not receptor_pdbqt or not ligand_pdbqt:
         return jsonify({"error": "receptor_pdbqt and ligand_pdbqt required"}), 400
 
     try:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            rec_path = os.path.join(tmpdir, "receptor.pdbqt")
-            lig_path = os.path.join(tmpdir, "ligand.pdbqt")
-            out_path = os.path.join(tmpdir, "output.dlg")
+        with tempfile.TemporaryDirectory(prefix="vina_gpu_api_") as tmpdir:
+            root = Path(tmpdir)
+            receptor_path = root / "receptor.pdbqt"
+            receptor_path.write_text(receptor_pdbqt)
+            ligand_path = root / "ligand.pdbqt"
+            ligand_path.write_text(ligand_pdbqt)
+            output_path = root / "ligand_out.pdbqt"
+            warmup_output_path = root / "ligand_warmup_out.pdbqt"
 
-            with open(rec_path, "w") as f:
-                f.write(receptor_pdbqt)
-            with open(lig_path, "w") as f:
-                f.write(ligand_pdbqt)
+            ensure_opencl_kernels(receptor_path, ligand_path, center, size, warmup_output_path)
 
-            # AutoDock-GPU uses a .gpf (grid parameter file) or direct CLI args
-            # For simplicity, use Vina-style PDBQT input with the autodock binary
             cmd = [
-                AUTODOCK_GPU,
-                "--ffile", rec_path,
-                "--lfile", lig_path,
-                "--nrun", str(n_poses),
-                "--nev", str(exhaustiveness * 1000000),
-                "--resnam", out_path,
+                VINA_GPU_BIN,
+                "--receptor", str(receptor_path),
+                "--ligand", str(ligand_path),
+                "--out", str(output_path),
+                "--opencl_binary_path", OPENCL_BINARY_PATH,
+                "--center_x", str(float(center[0])),
+                "--center_y", str(float(center[1])),
+                "--center_z", str(float(center[2])),
+                "--size_x", str(float(size[0])),
+                "--size_y", str(float(size[1])),
+                "--size_z", str(float(size[2])),
+                "--thread", str(threads),
+                "--search_depth", str(max(1, exhaustiveness)),
             ]
-
-            log.info(f"Running: {' '.join(cmd)}")
+            log.info("Running: %s", " ".join(cmd))
             result = subprocess.run(
-                cmd, capture_output=True, text=True, timeout=600,
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=600,
+                cwd=OPENCL_BINARY_PATH,
+                env=_vina_env(),
             )
-
             if result.returncode != 0:
-                log.error(f"AutoDock-GPU failed: {result.stderr[:500]}")
                 return jsonify({
-                    "error": f"AutoDock-GPU exited with code {result.returncode}",
-                    "stderr": result.stderr[:500],
+                    "error": f"Vina-GPU exited with code {result.returncode}",
+                    "stdout": result.stdout[-1000:],
+                    "stderr": result.stderr[-1000:],
                 }), 500
 
-            # Parse output for poses and scores
-            poses = parse_autodock_output(result.stdout, out_path, tmpdir)
-
-            return jsonify({
-                "poses": poses,
-                "engine": "autodock-gpu",
-                "scoring": "ad4",
-            })
-
+            pose = parse_pose(output_path)
+            if pose is None:
+                return jsonify({"poses": [], "engine": "vina-gpu", "scoring": "vina"})
+            return jsonify({"poses": [pose], "engine": "vina-gpu", "scoring": "vina"})
     except subprocess.TimeoutExpired:
         return jsonify({"error": "Docking timed out (600s)"}), 504
-    except Exception as e:
-        log.error(f"Docking failed: {traceback.format_exc()}")
-        return jsonify({"error": str(e)}), 500
-
-
-def parse_autodock_output(stdout, dlg_path, tmpdir):
-    """Parse AutoDock-GPU output for poses and binding energies."""
-    poses = []
-
-    # Try parsing the DLG (docking log) file
-    try:
-        if os.path.exists(dlg_path):
-            with open(dlg_path) as f:
-                dlg = f.read()
-
-            # Extract ranked results
-            for match in re.finditer(
-                r"RANKING\s+(\d+)\s+(-?[\d.]+)\s+(-?[\d.]+)", dlg
-            ):
-                rank = int(match.group(1))
-                energy = float(match.group(2))
-                poses.append({
-                    "affinity": energy,
-                    "rmsd_lb": 0.0,
-                    "rmsd_ub": 0.0,
-                    "pdbqt": "",  # TODO: extract pose PDBQT from DLG
-                })
-    except Exception as e:
-        log.warning(f"Failed to parse DLG: {e}")
-
-    # Fallback: parse stdout for energy values
-    if not poses:
-        for match in re.finditer(
-            r"[-]?\d+\.\d+\s+kcal/mol", stdout
-        ):
-            energy = float(match.group().split()[0])
-            poses.append({
-                "affinity": energy,
-                "rmsd_lb": 0.0,
-                "rmsd_ub": 0.0,
-                "pdbqt": "",
-            })
-
-    # Sort by affinity (most negative first)
-    poses.sort(key=lambda p: p["affinity"])
-
-    return poses
+    except Exception as exc:
+        log.error("Docking failed: %s", traceback.format_exc())
+        return jsonify({"error": str(exc)}), 500
 
 
 if __name__ == "__main__":
