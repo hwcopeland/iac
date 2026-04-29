@@ -222,7 +222,9 @@ def _restore_kernel_cache():
     if KERNEL_CACHE_DIR is None or not KERNEL_CACHE_DIR.is_dir():
         return False
     cached = [KERNEL_CACHE_DIR / p.name for p in KERNEL_BINARIES]
-    if not all(p.exists() and p.stat().st_size > 0 for p in cached):
+    missing = [p for p in cached if not p.exists() or p.stat().st_size == 0]
+    if missing:
+        print(f"Kernel cache miss ({[p.name for p in missing]} not in {KERNEL_CACHE_DIR})", flush=True)
         return False
     for src in cached:
         dst = Path(OPENCL_BINARY_PATH) / src.name
@@ -237,7 +239,12 @@ def _save_kernel_cache():
         return
     for src in KERNEL_BINARIES:
         if src.exists() and src.stat().st_size > 0:
-            (KERNEL_CACHE_DIR / src.name).write_bytes(src.read_bytes())
+            dst = KERNEL_CACHE_DIR / src.name
+            data = src.read_bytes()
+            with dst.open("wb") as fh:
+                fh.write(data)
+                fh.flush()
+                os.fsync(fh.fileno())
     print(f"Saved OpenCL kernel cache to {KERNEL_CACHE_DIR}", flush=True)
 
 
