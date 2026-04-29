@@ -11,7 +11,7 @@ metadata:
     app: admet
     khemeia.io/component: admet
 spec:
-  replicas: 2
+  replicas: 1
   revisionHistoryLimit: 3
   selector:
     matchLabels:

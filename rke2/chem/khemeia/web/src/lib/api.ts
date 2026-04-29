@@ -10,14 +10,31 @@ export function getToken(): string | null {
 }
 
 export async function api<T>(path: string, options?: RequestInit): Promise<T> {
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-    ...(options?.headers as Record<string, string>),
+  const doFetch = async (): Promise<Response> => {
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      ...(options?.headers as Record<string, string>),
+    };
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+    return fetch(`${API_BASE}${path}`, { ...options, headers });
   };
-  if (token) {
-    headers['Authorization'] = `Bearer ${token}`;
+
+  let res = await doFetch();
+
+  // On 401, attempt a silent token refresh and retry once
+  if (res.status === 401 && token) {
+    try {
+      // Dynamically import to avoid circular dependency
+      const { restoreSession } = await import('./auth');
+      await restoreSession();
+      res = await doFetch();
+    } catch {
+      // Refresh failed — fall through to the error handling below
+    }
   }
-  const res = await fetch(`${API_BASE}${path}`, { ...options, headers });
+
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     throw new Error(body.error || res.statusText);

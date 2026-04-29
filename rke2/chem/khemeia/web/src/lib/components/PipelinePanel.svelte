@@ -7,6 +7,7 @@
     submitADMET, getADMETJob,
     advanceStage,
   } from '$lib/api';
+  import { loadFile, showPocketMarkers, clearPocketMarkers, focusPocketCenter } from '$lib/viewer';
 
   type StageStatus = 'pending' | 'running' | 'succeeded' | 'failed';
 
@@ -36,14 +37,38 @@
   let smilesText = $state('');
   let chemblTarget = $state('');
   let chemblMaxPhase = $state(0);
+  let chemblMwMin = $state('');
+  let chemblMwMax = $state('');
+  let chemblLogpMin = $state('');
+  let chemblLogpMax = $state('');
+  let chemblHbaMax = $state('');
+  let chemblHbdMax = $state('');
   let filterLipinski = $state(true);
   let filterVeber = $state(true);
   let filterPAINS = $state(true);
   let libSubmitting = $state(false);
 
+  // Example drug molecules for SMILES input
+  const EXAMPLE_SMILES = [
+    'CC(=O)Oc1ccccc1C(=O)O',           // Aspirin
+    'CC(C)Cc1ccc(cc1)C(C)C(=O)O',      // Ibuprofen
+    'OC(=O)c1ccccc1O',                   // Salicylic acid
+    'CC(=O)Nc1ccc(O)cc1',               // Acetaminophen
+    'CN1C=NC2=C1C(=O)N(C(=O)N2C)C',    // Caffeine
+    'c1ccc2c(c1)cc1ccc3cccc4ccc2c1c34', // Pyrene
+    'CC12CCC3C(C1CCC2O)CCC4=CC(=O)CCC34C', // Testosterone
+    'OC[C@H]1OC(O)[C@H](O)[C@@H](O)[C@@H]1O', // Glucose
+    'CC(C)NCC(O)c1ccc(O)c(CO)c1',       // Salbutamol
+    'Clc1ccc(cc1)C(c1ccc(Cl)cc1)C(Cl)(Cl)Cl', // DDT (historical ref)
+  ].join('\n');
+
+  // Computed: count of valid (non-empty) SMILES lines
+  let smilesCount = $derived(
+    smilesText.split('\n').map(s => s.trim()).filter(Boolean).length
+  );
+
   // --- Docking form ---
   let engVina = $state(true);
-  let engSmina = $state(false);
   let engGnina = $state(false);
   let exhaustiveness = $state(8);
   let dockSubmitting = $state(false);
@@ -113,7 +138,26 @@
         if (phase === 'completed' || phase === 'succeeded') {
           updateStage(stageKey, { status: 'succeeded', error: '' });
           // Stash poll result so we can display binding site info
-          if (stageKey === 'target') targetPrepResult = res;
+          if (stageKey === 'target') {
+            targetPrepResult = res;
+            // If pocket detection mode: load receptor PDB into viewer and show pocket markers
+            if (res?.pockets?.length && res?.receptor_pdb_url) {
+              try {
+                const pdbRes = await fetch(res.receptor_pdb_url);
+                if (pdbRes.ok) {
+                  const pdbText = await pdbRes.text();
+                  await loadFile(pdbText, 'pdb');
+                }
+                await showPocketMarkers(res.pockets.map((p: any) => ({
+                  center: p.center,
+                  score: p.consensus_score ?? 0,
+                  rank: p.rank ?? 0,
+                })));
+              } catch (e) {
+                console.warn('Failed to load receptor/pockets into viewer:', e);
+              }
+            }
+          }
           return;
         }
         if (phase === 'failed') {
@@ -184,10 +228,17 @@
       if (libSource === 'smiles') {
         params.smiles_list = smilesText.split('\n').map((s: string) => s.trim()).filter(Boolean);
       } else {
-        params.chembl = {
+        const chembl: Record<string, any> = {
           q: chemblTarget,
           max_phase: chemblMaxPhase,
         };
+        if (chemblMwMin) chembl.mw_min = parseFloat(chemblMwMin);
+        if (chemblMwMax) chembl.mw_max = parseFloat(chemblMwMax);
+        if (chemblLogpMin) chembl.logp_min = parseFloat(chemblLogpMin);
+        if (chemblLogpMax) chembl.logp_max = parseFloat(chemblLogpMax);
+        if (chemblHbaMax) chembl.hba_max = parseInt(chemblHbaMax);
+        if (chemblHbdMax) chembl.hbd_max = parseInt(chemblHbdMax);
+        params.chembl = chembl;
       }
       const res = await submitLibraryPrep(params);
       updateStage('library', { jobName: res.name || res.job_name, status: 'running' });
@@ -205,7 +256,6 @@
     try {
       const engines: string[] = [];
       if (engVina) engines.push('vina-1.2');
-      if (engSmina) engines.push('smina');
       if (engGnina) engines.push('gnina');
       const params: any = {
         receptor_ref: stages.target.jobName,
@@ -376,10 +426,28 @@
             <div class="result-info">
               <span class="result-label">Detected Pockets ({targetPrepResult.pockets.length})</span>
               {#each targetPrepResult.pockets.slice(0, 5) as pocket, i}
-                <div class="pocket-row" class:selected={targetPrepResult.selected_pocket === i}>
-                  <span class="pocket-rank">#{pocket.rank}</span>
-                  <span class="pocket-score">consensus: {pocket.consensus_score?.toFixed(2) ?? '?'}</span>
-                  <span class="pocket-center">({pocket.center.map((v: number) => v.toFixed(1)).join(', ')})</span>
+                <div class="pocket-row" class:selected={selectedPocketIdx === i}>
+                  <button class="pocket-focus-btn" type="button"
+                    onclick={() => { selectedPocketIdx = i; focusPocketCenter(pocket.center); }}
+                    title="Focus camera on this pocket">
+                    <span class="pocket-rank">#{pocket.rank}</span>
+                    <span class="pocket-score">consensus: {pocket.consensus_score?.toFixed(2) ?? '?'}</span>
+                    <span class="pocket-center">({pocket.center.map((v: number) => v.toFixed(1)).join(', ')})</span>
+                  </button>
+                  <button class="pocket-select-btn" type="button"
+                    disabled={selectedPocketIdx === i && targetPrepResult.selected_pocket === i}
+                    onclick={async () => {
+                      if (!stages.target.jobName) return;
+                      selectedPocketIdx = i;
+                      try {
+                        await selectPocket(stages.target.jobName, i);
+                        targetPrepResult = { ...targetPrepResult, selected_pocket: i };
+                      } catch (e) {
+                        updateStage('target', { error: (e as Error).message || 'Pocket selection failed' });
+                      }
+                    }}>
+                    {targetPrepResult.selected_pocket === i ? 'Selected' : 'Select'}
+                  </button>
                 </div>
               {/each}
             </div>
@@ -416,8 +484,14 @@
 
             {#if libSource === 'smiles'}
               <div class="form-field">
-                <label class="form-label" for="lp-smiles">SMILES (one per line)</label>
-                <textarea id="lp-smiles" class="form-textarea" rows="5" placeholder="CC(=O)Oc1ccccc1C(=O)O&#10;c1ccccc1" bind:value={smilesText}></textarea>
+                <label class="form-label" for="lp-smiles">Enter SMILES (one per line)</label>
+                <textarea id="lp-smiles" class="form-textarea" rows="6" placeholder="CC(=O)Oc1ccccc1C(=O)O&#10;c1ccccc1" bind:value={smilesText}></textarea>
+                <div class="smiles-meta">
+                  <span class="compound-count">{smilesCount} compound{smilesCount !== 1 ? 's' : ''}</span>
+                  <button type="button" class="load-example-btn" onclick={() => { smilesText = EXAMPLE_SMILES; }}>
+                    Load example
+                  </button>
+                </div>
               </div>
             {:else}
               <div class="form-field">
@@ -433,6 +507,30 @@
                   <option value={3}>Phase III+</option>
                   <option value={4}>Approved</option>
                 </select>
+              </div>
+              <div class="form-field">
+                <label class="form-label">MW Range</label>
+                <div class="range-row">
+                  <input type="number" step="1" class="form-input" placeholder="Min" bind:value={chemblMwMin} />
+                  <span class="range-sep">-</span>
+                  <input type="number" step="1" class="form-input" placeholder="Max" bind:value={chemblMwMax} />
+                </div>
+              </div>
+              <div class="form-field">
+                <label class="form-label">LogP Range</label>
+                <div class="range-row">
+                  <input type="number" step="0.1" class="form-input" placeholder="Min" bind:value={chemblLogpMin} />
+                  <span class="range-sep">-</span>
+                  <input type="number" step="0.1" class="form-input" placeholder="Max" bind:value={chemblLogpMax} />
+                </div>
+              </div>
+              <div class="form-field">
+                <label class="form-label" for="lp-hba">HBA Max</label>
+                <input id="lp-hba" type="number" step="1" min="0" class="form-input" placeholder="e.g. 10" bind:value={chemblHbaMax} />
+              </div>
+              <div class="form-field">
+                <label class="form-label" for="lp-hbd">HBD Max</label>
+                <input id="lp-hbd" type="number" step="1" min="0" class="form-input" placeholder="e.g. 5" bind:value={chemblHbdMax} />
               </div>
             {/if}
 
@@ -502,10 +600,6 @@
                     <span>Vina 1.2</span>
                   </label>
                   <label class="toggle-label">
-                    <input type="checkbox" bind:checked={engSmina} />
-                    <span>Smina</span>
-                  </label>
-                  <label class="toggle-label">
                     <input type="checkbox" bind:checked={engGnina} />
                     <span>GNINA</span>
                   </label>
@@ -527,7 +621,7 @@
                 <span class="ref-chip">Library: {stages.library.jobName}</span>
               </div>
 
-              <button type="submit" class="submit-btn" disabled={dockSubmitting || (!engVina && !engSmina && !engGnina)}>
+              <button type="submit" class="submit-btn" disabled={dockSubmitting || (!engVina && !engGnina)}>
                 {dockSubmitting ? 'Submitting...' : 'Start Docking'}
               </button>
             </form>
@@ -1032,5 +1126,102 @@
 
   .pocket-center {
     color: var(--text-muted, #484f58);
+  }
+
+  .pocket-focus-btn {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: none;
+    border: none;
+    padding: 2px 4px;
+    cursor: pointer;
+    font-family: 'SF Mono', monospace;
+    font-size: 11px;
+    color: inherit;
+    flex: 1;
+    min-width: 0;
+    text-align: left;
+    border-radius: 3px;
+    transition: background 0.15s;
+  }
+
+  .pocket-focus-btn:hover {
+    background: rgba(88, 166, 255, 0.1);
+  }
+
+  .pocket-select-btn {
+    background: rgba(88, 166, 255, 0.15);
+    border: 1px solid rgba(88, 166, 255, 0.3);
+    color: var(--accent, #58a6ff);
+    font-size: 10px;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 3px;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: all 0.15s;
+    flex-shrink: 0;
+  }
+
+  .pocket-select-btn:hover:not(:disabled) {
+    background: rgba(88, 166, 255, 0.25);
+  }
+
+  .pocket-select-btn:disabled {
+    opacity: 0.5;
+    cursor: default;
+    background: rgba(63, 185, 80, 0.15);
+    border-color: rgba(63, 185, 80, 0.3);
+    color: #3fb950;
+  }
+
+  .smiles-meta {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-top: 2px;
+  }
+
+  .compound-count {
+    font-size: 11px;
+    color: var(--text-secondary, #8b949e);
+    font-family: 'SF Mono', monospace;
+    padding: 2px 0;
+  }
+
+  .load-example-btn {
+    background: rgba(88, 166, 255, 0.1);
+    border: 1px solid rgba(88, 166, 255, 0.3);
+    color: var(--accent, #58a6ff);
+    font-size: 10px;
+    font-weight: 600;
+    padding: 3px 8px;
+    border-radius: 3px;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: all 0.15s;
+  }
+
+  .load-example-btn:hover {
+    background: rgba(88, 166, 255, 0.2);
+  }
+
+  .range-row {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+  }
+
+  .range-row .form-input {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .range-sep {
+    color: var(--text-muted, #484f58);
+    font-size: 11px;
+    flex-shrink: 0;
   }
 </style>

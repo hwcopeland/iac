@@ -125,7 +125,7 @@ func TestValidateEngineSelection_Valid(t *testing.T) {
 		{"vina-1.2"},
 		{"gnina"},
 		{"vina-1.2", "gnina"},
-		{"smina", "gnina"},
+		{"gnina", "diffdock"},
 		{"vina-gpu", "gnina"},
 	}
 
@@ -161,7 +161,7 @@ func TestValidateEngineSelection_Invalid(t *testing.T) {
 
 func TestEngineComputeClass(t *testing.T) {
 	gpuEngines := []string{"vina-gpu", "vina-gpu-batch", "gnina", "diffdock"}
-	cpuEngines := []string{"vina-1.2", "smina"}
+	cpuEngines := []string{"vina-1.2"}
 
 	for _, e := range gpuEngines {
 		if EngineComputeClass(e) != "gpu" {
@@ -176,10 +176,10 @@ func TestEngineComputeClass(t *testing.T) {
 }
 
 func TestSortEnginesForScheduling(t *testing.T) {
-	cpu, gpu := SortEnginesForScheduling([]string{"gnina", "vina-1.2", "smina", "vina-gpu"})
+	cpu, gpu := SortEnginesForScheduling([]string{"gnina", "vina-1.2", "vina-gpu"})
 
-	if len(cpu) != 2 {
-		t.Errorf("expected 2 CPU engines, got %d", len(cpu))
+	if len(cpu) != 1 {
+		t.Errorf("expected 1 CPU engine, got %d", len(cpu))
 	}
 	if len(gpu) != 2 {
 		t.Errorf("expected 2 GPU engines, got %d", len(gpu))

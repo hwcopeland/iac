@@ -873,7 +873,7 @@ func TestWP3_FlagDisagreements_NoFlagForClose(t *testing.T) {
 
 // TestWP3_EngineServiceURLs verifies all 6 engine URLs are defined.
 func TestWP3_EngineServiceURLs(t *testing.T) {
-	expectedEngines := []string{"vina-1.2", "vina-gpu", "vina-gpu-batch", "smina", "gnina", "diffdock"}
+	expectedEngines := []string{"vina-1.2", "vina-gpu", "vina-gpu-batch", "gnina", "diffdock"}
 	for _, engine := range expectedEngines {
 		url, ok := engineServiceURLs[engine]
 		if !ok {
@@ -891,7 +891,7 @@ func TestWP3_EngineServiceURLs(t *testing.T) {
 
 // TestWP3_EngineContainerImages verifies all 6 engine images are defined.
 func TestWP3_EngineContainerImages(t *testing.T) {
-	expectedEngines := []string{"vina-1.2", "vina-gpu", "vina-gpu-batch", "smina", "gnina", "diffdock"}
+	expectedEngines := []string{"vina-1.2", "vina-gpu", "vina-gpu-batch", "gnina", "diffdock"}
 	for _, engine := range expectedEngines {
 		image, ok := engineContainerImages[engine]
 		if !ok {
@@ -918,7 +918,6 @@ func TestWP3_IsGPUEngine(t *testing.T) {
 		{"gnina", true},
 		{"diffdock", true},
 		{"vina-1.2", false},
-		{"smina", false},
 		{"unknown", false},
 	}
 

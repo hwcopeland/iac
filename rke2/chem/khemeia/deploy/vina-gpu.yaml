@@ -1,0 +1,118 @@
+# Deployment + Service for the Vina-GPU 2.1 docking engine sidecar.
+# GPU engine — OpenCL-accelerated AutoDock Vina. Requires GPU compute class
+# (RTX 3070 on nixos-gpu). Exposes POST /dock for the docking orchestrator.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vina-gpu
+  namespace: chem
+  labels:
+    app: vina-gpu
+    khemeia.io/component: docking-engine
+    khemeia.io/engine: vina-gpu
+spec:
+  replicas: 1
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app: vina-gpu
+  template:
+    metadata:
+      labels:
+        app: vina-gpu
+        khemeia.io/engine: vina-gpu
+    spec:
+      imagePullSecrets:
+        - name: zot-pull-secret
+      # GPU scheduling: target the nixos-gpu node with the RTX 3070.
+      nodeSelector:
+        gpu: rtx3070
+      tolerations:
+        - key: "gpu"
+          value: "true"
+          effect: "NoSchedule"
+      containers:
+        - name: vina-gpu
+          image: zot.hwcopeland.net/chem/vina-gpu:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8000
+              name: http
+              protocol: TCP
+          env:
+            - name: LD_LIBRARY_PATH
+              value: /run/opengl-driver/lib
+            - name: MYSQL_HOST
+              valueFrom:
+                secretKeyRef:
+                  name: khemeia-mysql-secret
+                  key: host
+            - name: MYSQL_PORT
+              valueFrom:
+                secretKeyRef:
+                  name: khemeia-mysql-secret
+                  key: port
+            - name: MYSQL_USER
+              valueFrom:
+                secretKeyRef:
+                  name: khemeia-mysql-secret
+                  key: user
+            - name: MYSQL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: khemeia-mysql-secret
+                  key: password
+          resources:
+            requests:
+              cpu: "4"
+              memory: 8Gi
+              nvidia.com/gpu: "1"
+            limits:
+              cpu: "4"
+              memory: 8Gi
+              nvidia.com/gpu: "1"
+          volumeMounts:
+            # NixOS host-path mounts for NVIDIA driver (WP-9 compute class pattern).
+            - name: nvidia-driver
+              mountPath: /run/opengl-driver
+              readOnly: true
+            - name: nix-store
+              mountPath: /nix/store
+              readOnly: true
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8000
+            initialDelaySeconds: 20
+            periodSeconds: 5
+      volumes:
+        - name: nvidia-driver
+          hostPath:
+            path: /run/opengl-driver
+        - name: nix-store
+          hostPath:
+            path: /nix/store
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vina-gpu
+  namespace: chem
+  labels:
+    app: vina-gpu
+    khemeia.io/component: docking-engine
+spec:
+  type: ClusterIP
+  ports:
+    - port: 80
+      targetPort: 8000
+      protocol: TCP
+      name: http
+  selector:
+    app: vina-gpu

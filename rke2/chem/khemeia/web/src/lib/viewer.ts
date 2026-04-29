@@ -1296,6 +1296,167 @@ async function clearSurfaceRefs(): Promise<void> {
   _surfaceRefs = [];
 }
 
+// ─── Pocket Markers (Pipeline Pocket Detection) ───
+
+/**
+ * Show pocket detection results as colored spheres in the viewer.
+ * Since the UMD bundle doesn't expose custom Shape primitives, we generate
+ * a PDB with HETATM dummy atoms at each pocket center, load it as an overlay,
+ * and apply spacefill representation with uniform coloring based on score.
+ */
+export async function showPocketMarkers(pockets: { center: number[]; score: number; rank: number }[]): Promise<void> {
+  if (!viewerInstance || pockets.length === 0) return;
+
+  // Remove any previous pocket marker overlay
+  await clearPocketMarkers();
+
+  // Generate a PDB with one HETATM per pocket center.
+  // Use chain Z and residue name PKT to avoid collisions.
+  const lines: string[] = [];
+  for (let i = 0; i < pockets.length; i++) {
+    const p = pockets[i];
+    const serial = String(i + 1).padStart(5);
+    const x = p.center[0].toFixed(3).padStart(8);
+    const y = p.center[1].toFixed(3).padStart(8);
+    const z = p.center[2].toFixed(3).padStart(8);
+    const resSeq = String(i + 1).padStart(4);
+    // HETATM format: cols 1-6 record, 7-11 serial, 13-16 name, 18-20 resName, 22 chainID, 23-26 resSeq, 31-38 x, 39-46 y, 47-54 z, 77-78 element
+    lines.push(`HETATM${serial}  CA  PKT Z${resSeq}    ${x}${y}${z}  1.00  0.00          CA`);
+  }
+  lines.push('END');
+  const pocketPdb = lines.join('\n');
+
+  const blob = new Blob([pocketPdb], { type: 'text/plain' });
+  const url = URL.createObjectURL(blob);
+  try {
+    await viewerInstance.loadStructureFromUrl(url, 'pdb', false);
+  } finally {
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+  }
+
+  // Track the overlay
+  const structures = plugin.managers?.structure?.hierarchy?.current?.structures ?? [];
+  const pocketStruct = structures[structures.length - 1];
+  if (!pocketStruct?.cell?.transform?.ref) return;
+
+  const pocketRef = pocketStruct.cell.transform.ref;
+  _structureRefs.set('pocket-markers', pocketRef);
+
+  // Remove auto-added representations
+  const autoReprs = [
+    ...(pocketStruct.components ?? []).flatMap((c: any) => c.representations ?? []),
+    ...(pocketStruct.representations ?? []),
+  ];
+  if (autoReprs.length > 0) {
+    const d = plugin.build();
+    for (const repr of autoReprs) {
+      if (repr.cell?.transform?.ref) d.delete(repr.cell.transform.ref);
+    }
+    await d.commit();
+  }
+
+  // Apply spacefill representation with per-residue coloring based on score.
+  // We create individual components for each pocket so we can color by score.
+  const { StateTransforms } = getLib().plugin;
+
+  for (let i = 0; i < pockets.length; i++) {
+    const p = pockets[i];
+    // Score-based color: green (high) -> yellow -> red (low)
+    // Normalize score to 0-1 range (typical consensus scores are 0-1)
+    const t = Math.max(0, Math.min(1, p.score));
+    const r = Math.round(255 * (1 - t));
+    const g = Math.round(255 * t);
+    const color = (r << 16) | (g << 8) | 0x40; // slight blue tint
+
+    try {
+      const MS = getLib().script?.MolScriptBuilder ?? getLib().molScript?.MolScriptBuilder;
+      if (MS) {
+        const expr = MS.struct.generator.atomGroups({
+          'residue-test': MS.core.rel.eq([
+            MS.struct.atomProperty.macromolecular.auth_seq_id(),
+            i + 1,
+          ]),
+          'chain-test': MS.core.rel.eq([
+            MS.struct.atomProperty.macromolecular.auth_asym_id(),
+            'Z',
+          ]),
+        });
+
+        const compBuilder = plugin.build();
+        const compNode = compBuilder.to(pocketRef).apply(StateTransforms.Model.StructureComponent, {
+          type: { name: 'expression', params: expr },
+          label: `Pocket #${p.rank}`,
+        });
+        compNode.apply(StateTransforms.Representation.StructureRepresentation3D, {
+          type: { name: 'spacefill', params: { sizeFactor: 3.0 } },
+          colorTheme: { name: 'uniform', params: { value: color } },
+          sizeTheme: { name: 'uniform', params: { value: 3.0 } },
+        });
+        await compBuilder.commit();
+        try { if (compNode.ref) _pocketMarkerRefs.push(compNode.ref); } catch {}
+      }
+    } catch {
+      // Fallback: single spacefill for all pockets
+      const sfBuilder = plugin.build();
+      const sfNode = sfBuilder.to(pocketRef).apply(StateTransforms.Representation.StructureRepresentation3D, {
+        type: { name: 'spacefill', params: { sizeFactor: 3.0 } },
+        colorTheme: { name: 'uniform', params: { value: 0x58a6ff } },
+        sizeTheme: { name: 'uniform', params: { value: 3.0 } },
+      });
+      await sfBuilder.commit();
+      try { if (sfNode.ref) _pocketMarkerRefs.push(sfNode.ref); } catch {}
+      break; // Fallback only needs one pass
+    }
+  }
+
+  applyCanvasProps();
+}
+
+let _pocketMarkerRefs: string[] = [];
+
+/** Remove pocket marker overlay. */
+export async function clearPocketMarkers(): Promise<void> {
+  if (!plugin) return;
+  // Clean up component refs
+  if (_pocketMarkerRefs.length > 0) {
+    const builder = plugin.build();
+    let hasDeletes = false;
+    for (const ref of _pocketMarkerRefs) {
+      try {
+        if (plugin.state.data.cells.get(ref)) { builder.delete(ref); hasDeletes = true; }
+      } catch {}
+    }
+    if (hasDeletes) await builder.commit();
+    _pocketMarkerRefs = [];
+  }
+  // Remove the overlay structure
+  await removeStructureByLabel('pocket-markers');
+}
+
+/**
+ * Focus the camera on a specific pocket by its center coordinates.
+ */
+export function focusPocketCenter(center: number[]): void {
+  if (!plugin?.canvas3d) return;
+  try {
+    // Focus camera on the pocket center position
+    const structures = plugin.managers?.structure?.hierarchy?.current?.structures;
+    if (!structures?.length) return;
+
+    // Use the canvas3d camera to focus on a point
+    const snapshot = plugin.canvas3d.camera.getSnapshot?.() ?? plugin.canvas3d.camera.snapshot;
+    if (snapshot) {
+      plugin.canvas3d.requestCameraReset({
+        snapshot: {
+          ...snapshot,
+          target: [center[0], center[1], center[2]],
+        },
+        durationMs: 250,
+      });
+    }
+  } catch {}
+}
+
 export async function togglePocketSurface(show: boolean, colorTheme: string = 'residue-charge', alpha: number = 0.8): Promise<void> {
   if (!plugin) return;
   try {
