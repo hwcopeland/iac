@@ -23,7 +23,15 @@ except ImportError:  # pragma: no cover - Linux worker always has resource
     resource = None
 
 VINA_GPU_BIN = os.environ.get("VINA_GPU_BIN", "/usr/local/bin/vina-gpu")
+VINA_GPU_WARMUP_BIN = os.environ.get(
+    "VINA_GPU_WARMUP_BIN",
+    "/opt/vina-gpu/bin/AutoDock-Vina-GPU-2-1-source",
+)
 OPENCL_BINARY_PATH = os.environ.get("VINA_GPU_OPENCL_BINARY_PATH", "/opt/vina-gpu/bin")
+KERNEL_BINARIES = (
+    Path(OPENCL_BINARY_PATH) / "Kernel1_Opt.bin",
+    Path(OPENCL_BINARY_PATH) / "Kernel2_Opt.bin",
+)
 DATA_DIR = "/data"
 RECEPTOR_PATH = os.path.join(DATA_DIR, "receptor.pdbqt")
 BUCKET_RECEPTORS = "khemeia-receptors"
@@ -197,6 +205,60 @@ def _set_stack_limit():
         resource.setrlimit(resource.RLIMIT_STACK, (target, hard))
 
 
+def _vina_env():
+    env = os.environ.copy()
+    env.setdefault("LD_LIBRARY_PATH", "/run/opengl-driver/lib:/opt/boost/lib:/usr/lib/x86_64-linux-gnu")
+    return env
+
+
+def _kernels_ready():
+    return all(path.exists() and path.stat().st_size > 0 for path in KERNEL_BINARIES)
+
+
+def ensure_opencl_kernels(receptor_path, ligand_path, center, size, output_path):
+    if _kernels_ready():
+        return
+
+    cmd = [
+        VINA_GPU_WARMUP_BIN,
+        "--receptor", receptor_path,
+        "--ligand", str(ligand_path),
+        "--out", str(output_path),
+        "--opencl_binary_path", OPENCL_BINARY_PATH,
+        "--center_x", str(center[0]),
+        "--center_y", str(center[1]),
+        "--center_z", str(center[2]),
+        "--size_x", str(size[0]),
+        "--size_y", str(size[1]),
+        "--size_z", str(size[2]),
+        "--thread", "1",
+        "--search_depth", "1",
+    ]
+    print(f"Warming OpenCL kernel cache: {' '.join(cmd)}", flush=True)
+    result = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        timeout=600,
+        cwd=OPENCL_BINARY_PATH,
+        env=_vina_env(),
+        preexec_fn=_set_stack_limit,
+    )
+    if _kernels_ready():
+        if result.returncode != 0:
+            print(
+                f"WARNING: kernel warmup exited with code {result.returncode} after generating binaries",
+                flush=True,
+            )
+        return
+    print(f"FATAL: kernel warmup failed with code {result.returncode}", flush=True)
+    if result.stdout:
+        print(result.stdout[-2000:], flush=True)
+    if result.stderr:
+        print(result.stderr[-2000:], flush=True)
+    sys.exit(1)
+
+
 def parse_output_pose(output_path):
     if not output_path.exists():
         return None, None
@@ -238,8 +300,11 @@ def _run_vina_gpu_batch_mode(receptor_path, ligands, center, size, exhaustivenes
             "--search_depth", str(max(1, exhaustiveness)),
         ]
 
-        env = os.environ.copy()
-        env.setdefault("LD_LIBRARY_PATH", "/run/opengl-driver/lib:/usr/lib/x86_64-linux-gnu")
+        first_ligand = ligand_dir / f"{manifest[0][2]}.pdbqt"
+        first_warmup_output = output_dir / f"{manifest[0][2]}_warmup_out.pdbqt"
+        ensure_opencl_kernels(receptor_path, first_ligand, center, size, first_warmup_output)
+
+        env = _vina_env()
         result = subprocess.run(
             cmd,
             capture_output=True,
@@ -296,8 +361,10 @@ def _run_vina_gpu_single_mode(receptor_path, ligands, center, size, exhaustivene
                 "--search_depth", str(max(1, exhaustiveness)),
             ]
 
-            env = os.environ.copy()
-            env.setdefault("LD_LIBRARY_PATH", "/run/opengl-driver/lib:/usr/lib/x86_64-linux-gnu")
+            warmup_output_path = output_dir / f"{stem}_warmup_out.pdbqt"
+            ensure_opencl_kernels(receptor_path, ligand_path, center, size, warmup_output_path)
+
+            env = _vina_env()
             last_result = subprocess.run(
                 cmd,
                 capture_output=True,
