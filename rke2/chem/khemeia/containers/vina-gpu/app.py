@@ -15,7 +15,15 @@ logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
 
 VINA_GPU_BIN = os.environ.get("VINA_GPU_BIN", "/usr/local/bin/vina-gpu")
+VINA_GPU_WARMUP_BIN = os.environ.get(
+    "VINA_GPU_WARMUP_BIN",
+    "/opt/vina-gpu/bin/AutoDock-Vina-GPU-2-1-source",
+)
 OPENCL_BINARY_PATH = os.environ.get("VINA_GPU_OPENCL_BINARY_PATH", "/opt/vina-gpu/bin")
+KERNEL_BINARIES = (
+    Path(OPENCL_BINARY_PATH) / "Kernel1_Opt.bin",
+    Path(OPENCL_BINARY_PATH) / "Kernel2_Opt.bin",
+)
 _RESULT_RE = re.compile(r"^REMARK VINA RESULT:\s+(-?\d+(?:\.\d+)?)", re.MULTILINE)
 
 
@@ -48,6 +56,54 @@ def parse_pose(path: Path):
     }
 
 
+def _vina_env():
+    env = os.environ.copy()
+    env.setdefault("LD_LIBRARY_PATH", "/run/opengl-driver/lib:/opt/boost/lib:/usr/lib/x86_64-linux-gnu")
+    return env
+
+
+def _kernels_ready():
+    return all(path.exists() and path.stat().st_size > 0 for path in KERNEL_BINARIES)
+
+
+def ensure_opencl_kernels(receptor_path: Path, ligand_path: Path, center, size, output_path: Path):
+    if _kernels_ready():
+        return
+
+    cmd = [
+        VINA_GPU_WARMUP_BIN,
+        "--receptor", str(receptor_path),
+        "--ligand", str(ligand_path),
+        "--out", str(output_path),
+        "--opencl_binary_path", OPENCL_BINARY_PATH,
+        "--center_x", str(float(center[0])),
+        "--center_y", str(float(center[1])),
+        "--center_z", str(float(center[2])),
+        "--size_x", str(float(size[0])),
+        "--size_y", str(float(size[1])),
+        "--size_z", str(float(size[2])),
+        "--thread", "1",
+        "--search_depth", "1",
+    ]
+    log.info("Warming OpenCL kernel cache: %s", " ".join(cmd))
+    result = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        timeout=600,
+        cwd=OPENCL_BINARY_PATH,
+        env=_vina_env(),
+    )
+    if _kernels_ready():
+        if result.returncode != 0:
+            log.warning("Kernel warmup exited with code %s after generating binaries", result.returncode)
+        return
+    raise RuntimeError(
+        f"Vina-GPU kernel warmup failed with code {result.returncode}: "
+        f"{(result.stderr or result.stdout)[-1000:]}"
+    )
+
+
 @app.route("/dock", methods=["POST"])
 def dock():
     data = request.get_json(force=True)
@@ -69,6 +125,9 @@ def dock():
             ligand_path = root / "ligand.pdbqt"
             ligand_path.write_text(ligand_pdbqt)
             output_path = root / "ligand_out.pdbqt"
+            warmup_output_path = root / "ligand_warmup_out.pdbqt"
+
+            ensure_opencl_kernels(receptor_path, ligand_path, center, size, warmup_output_path)
 
             cmd = [
                 VINA_GPU_BIN,
@@ -92,6 +151,7 @@ def dock():
                 text=True,
                 timeout=600,
                 cwd=OPENCL_BINARY_PATH,
+                env=_vina_env(),
             )
             if result.returncode != 0:
                 return jsonify({

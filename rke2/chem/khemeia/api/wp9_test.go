@@ -516,7 +516,7 @@ const testComputeClassesYAML = `classes:
     description: "GPU workloads on NixOS node (nixos-gpu, RTX 3070)"
     resources:
       cpu: "4"
-      memory: "8Gi"
+      memory: "16Gi"
       nvidia.com/gpu: "1"
     nodeSelector:
       gpu: "rtx3070"
