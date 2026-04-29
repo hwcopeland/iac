@@ -157,12 +157,18 @@ def fetch_receptor(cursor, s3, receptor_ref):
     else:
         bs = json.loads(binding_site_json.decode("utf-8"))
 
-    center_x = float(bs.get("center_x", 0))
-    center_y = float(bs.get("center_y", 0))
-    center_z = float(bs.get("center_z", 0))
-    size_x = float(bs.get("size_x", 40))
-    size_y = float(bs.get("size_y", 40))
-    size_z = float(bs.get("size_z", 40))
+    center = bs.get("center")
+    size = bs.get("size")
+    if center is not None and size is not None:
+        center_x, center_y, center_z = (float(v) for v in center)
+        size_x, size_y, size_z = (float(v) for v in size)
+    else:
+        center_x = float(bs.get("center_x", 0))
+        center_y = float(bs.get("center_y", 0))
+        center_z = float(bs.get("center_z", 0))
+        size_x = float(bs.get("size_x", 40))
+        size_y = float(bs.get("size_y", 40))
+        size_z = float(bs.get("size_z", 40))
 
     return receptor_pdbqt, center_x, center_y, center_z, size_x, size_y, size_z
 
