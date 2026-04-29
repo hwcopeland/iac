@@ -177,7 +177,8 @@ preserved — every searchable property is a SQL column, not an object-store obj
      - { name: nvidia-driver, hostPath: { path: /run/opengl-driver } }
      - { name: nix-store,     hostPath: { path: /nix/store } }
    env:
-     - { name: LD_LIBRARY_PATH, value: /run/opengl-driver/lib }
+     - { name: LD_LIBRARY_PATH, value: /run/opengl-driver/lib:/opt/boost/lib:/usr/lib/x86_64-linux-gnu }
+     - { name: OCL_ICD_VENDORS, value: /run/opengl-driver/etc/OpenCL/vendors }
    ```
 
    This is baked into the job controller's GPU-class job-template so individual stage CRDs
@@ -285,7 +286,9 @@ The following pieces were considered and explicitly deferred:
    and the artifact subset; the provenance graph reflects the parent → child link.
 9. Compute classes: a DockJob with `computeClass: gpu` produces K8s Jobs with
    `nvidia.com/gpu: 1`, the `gpu=true:NoSchedule` toleration, the NixOS host-path mounts
-   (`/run/opengl-driver`, `/nix/store`), and `LD_LIBRARY_PATH=/run/opengl-driver/lib`.
+   (`/run/opengl-driver`, `/nix/store`), and
+   `LD_LIBRARY_PATH=/run/opengl-driver/lib:/opt/boost/lib:/usr/lib/x86_64-linux-gnu`,
+   `OCL_ICD_VENDORS=/run/opengl-driver/etc/OpenCL/vendors`.
    A LibraryPrep with `computeClass: cpu` produces K8s Jobs without GPU requests.
 10. GPU smoke: a CUDA workload submitted with `computeClass: gpu` runs on `nixos-gpu`,
     sees the RTX 3070 via `nvidia-smi`, and successfully links against `libcuda.so` from
@@ -380,6 +383,7 @@ The following pieces were considered and explicitly deferred:
   10.41.0.10). NVIDIA driver libs/binaries live under `/run/opengl-driver` (symlinks
   into `/nix/store`). The job controller's GPU-class job-template must inject the host-path
   mounts for `/run/opengl-driver` and `/nix/store` and set
-  `LD_LIBRARY_PATH=/run/opengl-driver/lib` on every GPU pod. Tolerations for
+  `LD_LIBRARY_PATH=/run/opengl-driver/lib:/opt/boost/lib:/usr/lib/x86_64-linux-gnu`
+  and `OCL_ICD_VENDORS=/run/opengl-driver/etc/OpenCL/vendors` on every GPU pod. Tolerations for
   `gpu=true:NoSchedule` are mandatory. See `memory/project_gpu_node.md` for the full
   caveats list.
