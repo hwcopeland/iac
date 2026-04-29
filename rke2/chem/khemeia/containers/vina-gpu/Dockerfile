@@ -47,7 +47,7 @@ RUN g++ -std=c++17 -O3 -DNDEBUG \
     /tmp/boost_${BOOST_VERSION_UNDERSCORE}/libs/thread/src/pthread/thread.cpp \
     /tmp/boost_${BOOST_VERSION_UNDERSCORE}/libs/thread/src/pthread/once.cpp \
     -L/tmp/boost_${BOOST_VERSION_UNDERSCORE}/stage/lib -L/usr/lib/x86_64-linux-gnu \
-    -lboost_program_options -lboost_system -lboost_filesystem -lOpenCL -lm -lpthread \
+    -lboost_program_options -lboost_system -lboost_filesystem -lOpenCL -lm -lpthread -lstdc++fs \
     -o /opt/AutoDock-Vina-GPU-2-1
 
 FROM ubuntu:22.04
