@@ -42,7 +42,7 @@ RUN sed -i 's/thread < 1000/thread < 1/' ./main/main.cpp \
     && sed -i 's/thread must be at least 1000/thread must be at least 1/' ./main/main.cpp
 
 RUN g++ -std=c++17 -O3 -DNDEBUG \
-    -DOPENCL_3_0 -DNVIDIA_PLATFORM -DLARGE_BOX -DBOOST_TIMER_ENABLE_DEPRECATED -DBUILD_KERNEL_FROM_SOURCE \
+    -DOPENCL_3_0 -DNVIDIA_PLATFORM -DSMALL_BOX -DBOOST_TIMER_ENABLE_DEPRECATED -DBUILD_KERNEL_FROM_SOURCE \
     -I/tmp/boost_${BOOST_VERSION_UNDERSCORE} \
     -I/tmp/boost_${BOOST_VERSION_UNDERSCORE}/boost \
     -I./lib -I./OpenCL/inc -I/usr/include \
