@@ -56,16 +56,14 @@ spec:
               cpu: 500m
               memory: 512Mi
           readinessProbe:
-            httpGet:
-              path: /health
-              port: 3903
-            initialDelaySeconds: 10
+            tcpSocket:
+              port: 3900
+            initialDelaySeconds: 5
             periodSeconds: 10
           livenessProbe:
-            httpGet:
-              path: /health
-              port: 3903
-            initialDelaySeconds: 30
+            tcpSocket:
+              port: 3900
+            initialDelaySeconds: 10
             periodSeconds: 30
       volumes:
         - name: config
