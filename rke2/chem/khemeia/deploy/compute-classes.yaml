@@ -51,6 +51,8 @@ data:
         # NixOS uses non-FHS paths for NVIDIA driver libraries.
         # /run/opengl-driver contains the userspace driver (libcuda, libnvidia-ml, etc.)
         # /nix/store is needed because some driver libs are symlinked into the store.
+        # /dev/dri is required for NVIDIA OpenCL compute on Ampere — the OpenCL runtime
+        # uses the DRM render node (renderD128) for GPU buffer allocation.
         volumes:
           - name: nvidia-driver
             hostPath:
@@ -58,6 +60,9 @@ data:
           - name: nix-store
             hostPath:
               path: /nix/store
+          - name: dri
+            hostPath:
+              path: /dev/dri
         volumeMounts:
           - name: nvidia-driver
             mountPath: /run/opengl-driver
@@ -65,6 +70,8 @@ data:
           - name: nix-store
             mountPath: /nix/store
             readOnly: true
+          - name: dri
+            mountPath: /dev/dri
         env:
           - name: LD_LIBRARY_PATH
             value: /run/opengl-driver/lib:/opt/boost/lib:/usr/lib/x86_64-linux-gnu

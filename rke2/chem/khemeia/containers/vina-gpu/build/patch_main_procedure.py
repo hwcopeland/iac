@@ -6,6 +6,9 @@ Changes applied:
 - Clear final_file between Kernel1 and Kernel2 compilation to avoid stale
   string data accumulating in the concatenation buffer.
 - Add fallback binary-load path in the #else branch (runtime binary).
+- Ignore clUnloadPlatformCompiler return value: NVIDIA's driver on Ampere
+  returns CL_OUT_OF_HOST_MEMORY for this call even when compilation succeeded.
+  The call is advisory only and its return value is safe to discard.
 """
 
 from pathlib import Path
@@ -13,7 +16,10 @@ from pathlib import Path
 SRC = Path("/src-vina-gpu/AutoDock-Vina-GPU-2.1/lib/main_procedure_cl.cpp")
 
 MARKER_START = "#ifdef BUILD_KERNEL_FROM_SOURCE"
-MARKER_END = "\terr = clUnloadPlatformCompiler(platforms[gpu_platform_id]); checkErr(err);"
+# Consume through clUnloadPlatformCompiler so we can replace checkErr with a
+# no-op — NVIDIA Ampere driver returns CL_OUT_OF_HOST_MEMORY here spuriously.
+MARKER_END_SEARCH = "\terr = clUnloadPlatformCompiler(platforms[gpu_platform_id]); checkErr(err);"
+MARKER_END_REPLACE = "\tclUnloadPlatformCompiler(platforms[gpu_platform_id]); /* ignore: NVIDIA Ampere returns CL_OUT_OF_HOST_MEMORY spuriously */"
 
 REPLACEMENT = r"""#ifdef BUILD_KERNEL_FROM_SOURCE
 	const std::string default_work_path = opencl_binary_path;
@@ -71,7 +77,9 @@ REPLACEMENT = r"""#ifdef BUILD_KERNEL_FROM_SOURCE
 text = SRC.read_text()
 
 start = text.index(MARKER_START)
-end = text.index(MARKER_END)
+end = text.index(MARKER_END_SEARCH)
+after = end + len(MARKER_END_SEARCH)
 
-SRC.write_text(text[:start] + REPLACEMENT + text[end:])
+patched = text[:start] + REPLACEMENT + MARKER_END_REPLACE + text[after:]
+SRC.write_text(patched)
 print(f"Patched {SRC}")
