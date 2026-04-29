@@ -1,8 +1,9 @@
-# Gnina CNN-scored docking engine sidecar
+# Gnina CNN-scored docking engine
 # GPU-accelerated docking with CNN affinity and pose scoring.
 # Requires CUDA runtime; actual GPU libs mounted from NixOS host at runtime.
 #
-# API: POST /dock, GET /health, GET /readyz
+# Primary mode: batch worker (dock_batch.py) invoked as a K8s Job.
+# The Flask app (app.py) is retained for health checks only.
 
 FROM nvidia/cuda:12.2.0-runtime-ubuntu22.04
 
@@ -28,9 +29,10 @@ WORKDIR /app
 COPY requirements.txt ./
 RUN pip3 install --no-cache-dir -r requirements.txt
 
+# Batch docking script (primary entrypoint for K8s Jobs)
+COPY scripts/ /scripts/
+
+# Flask app retained for health checks
 COPY app.py ./
 
-EXPOSE 8000
-
-# Single worker for GPU-bound workloads to avoid VRAM contention
-CMD ["gunicorn", "-w", "1", "-b", "0.0.0.0:8000", "--timeout", "600", "app:app"]
+CMD ["python3", "/scripts/dock_batch.py"]

@@ -871,25 +871,7 @@ func TestWP3_FlagDisagreements_NoFlagForClose(t *testing.T) {
 	}
 }
 
-// TestWP3_EngineServiceURLs verifies all 6 engine URLs are defined.
-func TestWP3_EngineServiceURLs(t *testing.T) {
-	expectedEngines := []string{"vina-1.2", "vina-gpu", "vina-gpu-batch", "gnina", "diffdock"}
-	for _, engine := range expectedEngines {
-		url, ok := engineServiceURLs[engine]
-		if !ok {
-			t.Errorf("missing service URL for engine %q", engine)
-			continue
-		}
-		if url == "" {
-			t.Errorf("empty service URL for engine %q", engine)
-		}
-		if !strings.HasPrefix(url, "http://") {
-			t.Errorf("engine %q URL should start with http://, got %q", engine, url)
-		}
-	}
-}
-
-// TestWP3_EngineContainerImages verifies all 6 engine images are defined.
+// TestWP3_EngineContainerImages verifies all engine images are defined.
 func TestWP3_EngineContainerImages(t *testing.T) {
 	expectedEngines := []string{"vina-1.2", "vina-gpu", "vina-gpu-batch", "gnina", "diffdock"}
 	for _, engine := range expectedEngines {

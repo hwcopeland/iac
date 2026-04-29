@@ -1,3 +1,5 @@
 numpy<2
 flask
 gunicorn
+mysql-connector-python
+boto3
