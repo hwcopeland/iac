@@ -138,6 +138,8 @@ FROM ubuntu:22.04
 ARG DEBIAN_FRONTEND=noninteractive
 ARG BOOST_VERSION_UNDERSCORE=1_84_0
 ARG VINA_GPU_METHOD=AutoDock-Vina-GPU-2.1
+ARG VINA_GPU_RUNTIME_ARTIFACT=/tmp/khemeia-vina-gpu-runtime.bin
+ARG VINA_GPU_WARMUP_ARTIFACT=/tmp/khemeia-vina-gpu-warmup.bin
 
 ENV PYTHONUNBUFFERED=1 \
     VINA_GPU_BIN=/opt/vina-gpu/bin/AutoDock-Vina-GPU-2-1 \
