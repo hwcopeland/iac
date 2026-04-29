@@ -64,21 +64,17 @@ def dock():
     try:
         with tempfile.TemporaryDirectory(prefix="vina_gpu_api_") as tmpdir:
             root = Path(tmpdir)
-            ligand_dir = root / "ligands"
-            output_dir = root / "out"
-            ligand_dir.mkdir()
-            output_dir.mkdir()
-
             receptor_path = root / "receptor.pdbqt"
             receptor_path.write_text(receptor_pdbqt)
-            ligand_path = ligand_dir / "ligand.pdbqt"
+            ligand_path = root / "ligand.pdbqt"
             ligand_path.write_text(ligand_pdbqt)
+            output_path = root / "ligand_out.pdbqt"
 
             cmd = [
                 VINA_GPU_BIN,
                 "--receptor", str(receptor_path),
-                "--ligand_directory", str(ligand_dir),
-                "--output_directory", str(output_dir),
+                "--ligand", str(ligand_path),
+                "--out", str(output_path),
                 "--opencl_binary_path", OPENCL_BINARY_PATH,
                 "--center_x", str(float(center[0])),
                 "--center_y", str(float(center[1])),
@@ -98,7 +94,7 @@ def dock():
                     "stderr": result.stderr[-1000:],
                 }), 500
 
-            pose = parse_pose(output_dir / "ligand_out.pdbqt")
+            pose = parse_pose(output_path)
             if pose is None:
                 return jsonify({"poses": [], "engine": "vina-gpu", "scoring": "vina"})
             return jsonify({"poses": [pose], "engine": "vina-gpu", "scoring": "vina"})

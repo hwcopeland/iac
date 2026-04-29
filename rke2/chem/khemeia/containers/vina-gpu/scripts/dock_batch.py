@@ -69,7 +69,7 @@ def parse_binding_site(binding_site_json):
 
 def get_config():
     engine = os.environ.get("ENGINE", "vina-gpu")
-    default_threads = 10000 if engine == "vina-gpu-batch" else 8000
+    default_threads = 8000 if engine == "vina-gpu-batch" else 1024
     return {
         "job_name": require_env("JOB_NAME"),
         "worker_name": require_env("WORKER_NAME"),
@@ -207,7 +207,7 @@ def parse_output_pose(output_path):
     return float(match.group(1)), contents.encode("utf-8")
 
 
-def run_vina_gpu_batch(receptor_path, ligands, center, size, exhaustiveness, threads):
+def _run_vina_gpu_batch_mode(receptor_path, ligands, center, size, exhaustiveness, threads):
     with tempfile.TemporaryDirectory(prefix="vina_gpu_") as tmpdir:
         root = Path(tmpdir)
         ligand_dir = root / "ligands"
@@ -264,6 +264,69 @@ def run_vina_gpu_batch(receptor_path, ligands, center, size, exhaustiveness, thr
         return parsed, result
 
 
+def _run_vina_gpu_single_mode(receptor_path, ligands, center, size, exhaustiveness, threads):
+    parsed = {}
+    last_result = None
+    with tempfile.TemporaryDirectory(prefix="vina_gpu_") as tmpdir:
+        root = Path(tmpdir)
+        output_dir = root / "out"
+        output_dir.mkdir()
+
+        for index, (ligand_db_id, compound_id, pdbqt_bytes) in enumerate(ligands, start=1):
+            stem = _safe_stem(compound_id, index)
+            ligand_path = root / f"{stem}.pdbqt"
+            output_path = output_dir / f"{stem}_out.pdbqt"
+            ligand_path.write_bytes(
+                pdbqt_bytes if isinstance(pdbqt_bytes, bytes) else pdbqt_bytes.encode("utf-8"),
+            )
+
+            cmd = [
+                VINA_GPU_BIN,
+                "--receptor", receptor_path,
+                "--ligand", str(ligand_path),
+                "--out", str(output_path),
+                "--opencl_binary_path", OPENCL_BINARY_PATH,
+                "--center_x", str(center[0]),
+                "--center_y", str(center[1]),
+                "--center_z", str(center[2]),
+                "--size_x", str(size[0]),
+                "--size_y", str(size[1]),
+                "--size_z", str(size[2]),
+                "--thread", str(threads),
+                "--search_depth", str(max(1, exhaustiveness)),
+            ]
+
+            env = os.environ.copy()
+            env.setdefault("LD_LIBRARY_PATH", "/run/opengl-driver/lib:/usr/lib/x86_64-linux-gnu")
+            last_result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=3600,
+                cwd=tmpdir,
+                env=env,
+                preexec_fn=_set_stack_limit,
+            )
+            if last_result.returncode != 0:
+                print(f"WARNING: Vina-GPU failed for {compound_id} (code {last_result.returncode})", flush=True)
+                if last_result.stdout:
+                    print(last_result.stdout[-2000:], flush=True)
+                if last_result.stderr:
+                    print(last_result.stderr[-2000:], flush=True)
+                continue
+
+            affinity, pose = parse_output_pose(output_path)
+            parsed[compound_id] = (ligand_db_id, affinity, pose)
+
+    return parsed, last_result
+
+
+def run_vina_gpu_batch(receptor_path, ligands, center, size, exhaustiveness, threads, engine):
+    if engine == "vina-gpu-batch":
+        return _run_vina_gpu_batch_mode(receptor_path, ligands, center, size, exhaustiveness, threads)
+    return _run_vina_gpu_single_mode(receptor_path, ligands, center, size, exhaustiveness, threads)
+
+
 def main():
     cfg = get_config()
     print(
@@ -313,6 +376,7 @@ def main():
         size=size,
         exhaustiveness=cfg["exhaustiveness"],
         threads=cfg["threads"],
+        engine=cfg["engine"],
     )
 
     docked = 0
