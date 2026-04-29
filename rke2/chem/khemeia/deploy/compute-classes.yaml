@@ -67,4 +67,6 @@ data:
             readOnly: true
         env:
           - name: LD_LIBRARY_PATH
-            value: /run/opengl-driver/lib
+            value: /run/opengl-driver/lib:/opt/boost/lib:/usr/lib/x86_64-linux-gnu
+          - name: OCL_ICD_VENDORS
+            value: /run/opengl-driver/etc/OpenCL/vendors

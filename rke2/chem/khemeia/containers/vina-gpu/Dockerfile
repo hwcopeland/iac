@@ -39,7 +39,7 @@ RUN wget -q -O vina-gpu.tar.gz https://github.com/DeltaGroupNJUPT/Vina-GPU-2.1/a
 WORKDIR /src-vina-gpu/${VINA_GPU_METHOD}
 
 RUN g++ -std=c++17 -O3 -DNDEBUG \
-    -DOPENCL_3_0 -DNVIDIA_PLATFORM -DSMALL_BOX -DBOOST_TIMER_ENABLE_DEPRECATED \
+    -DOPENCL_3_0 -DNVIDIA_PLATFORM -DLARGE_BOX -DBOOST_TIMER_ENABLE_DEPRECATED \
     -I/tmp/boost_${BOOST_VERSION_UNDERSCORE} \
     -I/tmp/boost_${BOOST_VERSION_UNDERSCORE}/boost \
     -I./lib -I./OpenCL/inc -I/usr/include \

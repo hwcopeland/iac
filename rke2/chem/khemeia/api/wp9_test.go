@@ -540,7 +540,9 @@ const testComputeClassesYAML = `classes:
         readOnly: true
     env:
       - name: LD_LIBRARY_PATH
-        value: /run/opengl-driver/lib
+        value: /run/opengl-driver/lib:/opt/boost/lib:/usr/lib/x86_64-linux-gnu
+      - name: OCL_ICD_VENDORS
+        value: /run/opengl-driver/etc/OpenCL/vendors
 `
 
 // TestComputeClassParsing parses the compute-classes.yaml ConfigMap format
@@ -631,12 +633,20 @@ func TestComputeClassParsing(t *testing.T) {
 	// (Covered by TestBuildJobForCRD which loads the same YAML through loadComputeClasses.)
 
 	// LD_LIBRARY_PATH env var.
-	if len(gpu.Env) != 1 {
-		t.Fatalf("gpu class: expected 1 env var, got %d", len(gpu.Env))
+	if len(gpu.Env) != 2 {
+		t.Fatalf("gpu class: expected 2 env vars, got %d", len(gpu.Env))
 	}
-	if gpu.Env[0].Name != "LD_LIBRARY_PATH" || gpu.Env[0].Value != "/run/opengl-driver/lib" {
-		t.Errorf("gpu env: want LD_LIBRARY_PATH=/run/opengl-driver/lib, got %s=%s",
-			gpu.Env[0].Name, gpu.Env[0].Value)
+	envMap := map[string]string{}
+	for _, env := range gpu.Env {
+		envMap[env.Name] = env.Value
+	}
+	if envMap["LD_LIBRARY_PATH"] != "/run/opengl-driver/lib:/opt/boost/lib:/usr/lib/x86_64-linux-gnu" {
+		t.Errorf("gpu env: want LD_LIBRARY_PATH=/run/opengl-driver/lib:/opt/boost/lib:/usr/lib/x86_64-linux-gnu, got %q",
+			envMap["LD_LIBRARY_PATH"])
+	}
+	if envMap["OCL_ICD_VENDORS"] != "/run/opengl-driver/etc/OpenCL/vendors" {
+		t.Errorf("gpu env: want OCL_ICD_VENDORS=/run/opengl-driver/etc/OpenCL/vendors, got %q",
+			envMap["OCL_ICD_VENDORS"])
 	}
 }
 
@@ -992,13 +1002,20 @@ func TestBuildJobForCRD(t *testing.T) {
 
 	// LD_LIBRARY_PATH.
 	foundLDPath := false
+	foundICDVendors := false
 	for _, env := range container.Env {
-		if env.Name == "LD_LIBRARY_PATH" && env.Value == "/run/opengl-driver/lib" {
+		if env.Name == "LD_LIBRARY_PATH" && env.Value == "/run/opengl-driver/lib:/opt/boost/lib:/usr/lib/x86_64-linux-gnu" {
 			foundLDPath = true
+		}
+		if env.Name == "OCL_ICD_VENDORS" && env.Value == "/run/opengl-driver/etc/OpenCL/vendors" {
+			foundICDVendors = true
 		}
 	}
 	if !foundLDPath {
-		t.Error("expected LD_LIBRARY_PATH=/run/opengl-driver/lib in container env")
+		t.Error("expected LD_LIBRARY_PATH=/run/opengl-driver/lib:/opt/boost/lib:/usr/lib/x86_64-linux-gnu in container env")
+	}
+	if !foundICDVendors {
+		t.Error("expected OCL_ICD_VENDORS=/run/opengl-driver/etc/OpenCL/vendors in container env")
 	}
 }
 
