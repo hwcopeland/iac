@@ -1,18 +1,21 @@
 # Vina-GPU 2.1 docking engine.
 # Build from source against Ubuntu 22.04/OpenCL so the resulting binary matches
 # the worker runtime ABI used on the cluster runners and GPU nodes.
+#
+# Two binaries are produced:
+#   warmup  (-DBUILD_KERNEL_FROM_SOURCE): compiles OpenCL kernels and saves
+#            Kernel1_Opt.bin / Kernel2_Opt.bin on first run.
+#   runtime (no flag): loads pre-compiled .bin files directly.
 
 FROM ubuntu:22.04 AS builder
 
 ARG DEBIAN_FRONTEND=noninteractive
 ARG VINA_GPU_REPO_COMMIT=180272b8a5265d6ed9664178345933cebe2cd349
 ARG VINA_GPU_METHOD=AutoDock-Vina-GPU-2.1
-ARG VINA_GPU_BINARY=AutoDock-Vina-GPU-2-1
-ARG VINA_GPU_WARMUP_BINARY=AutoDock-Vina-GPU-2-1-source
-ARG VINA_GPU_RUNTIME_ARTIFACT=/tmp/khemeia-vina-gpu-runtime.bin
-ARG VINA_GPU_WARMUP_ARTIFACT=/tmp/khemeia-vina-gpu-warmup.bin
 ARG BOOST_VERSION=1.84.0
 ARG BOOST_VERSION_UNDERSCORE=1_84_0
+ARG VINA_GPU_RUNTIME_ARTIFACT=/tmp/khemeia-vina-gpu-runtime.bin
+ARG VINA_GPU_WARMUP_ARTIFACT=/tmp/khemeia-vina-gpu-warmup.bin
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential ca-certificates wget python3 \
@@ -41,72 +44,22 @@ RUN wget -q -O vina-gpu.tar.gz https://github.com/DeltaGroupNJUPT/Vina-GPU-2.1/a
 
 WORKDIR /src-vina-gpu/${VINA_GPU_METHOD}
 
+# Lower the minimum thread count (upstream default 1000 is too high for single-GPU).
 RUN sed -i 's/thread < 1000/thread < 1/' ./main/main.cpp \
     && sed -i 's/thread must be at least 1000/thread must be at least 1/' ./main/main.cpp
 
-RUN python3 - <<'PY'
-from pathlib import Path
-path = Path("/src-vina-gpu/AutoDock-Vina-GPU-2.1/lib/main_procedure_cl.cpp")
-text = path.read_text()
-start = text.index("#ifdef BUILD_KERNEL_FROM_SOURCE")
-end = text.index("\terr = clUnloadPlatformCompiler(platforms[gpu_platform_id]); checkErr(err);")
-new = """#ifdef BUILD_KERNEL_FROM_SOURCE
-\tconst std::string default_work_path = opencl_binary_path;
-\tconst std::string include_path = default_work_path + \"/OpenCL/inc\";
-\tconst std::string addtion = \"\";
+# Patch main_procedure_cl.cpp:
+#   - Use opencl_binary_path for kernel source/binary paths instead of ".".
+#   - Clear the source concatenation buffer between Kernel1 and Kernel2 to
+#     prevent stale data leaking across compilations.
+#   - Add binary-load path in the runtime (#else) branch.
+COPY build/patch_main_procedure.py /tmp/patch_main_procedure.py
+RUN python3 /tmp/patch_main_procedure.py
 
-\tprintf(\"\\n\\nBuild kernel 1 from source\"); fflush(stdout);
-\tchar* program1_file_n[NUM_OF_FILES_KERNEL_1];
-\tsize_t program1_size_n[NUM_OF_FILES_KERNEL_1];
-\tstd::string file1_paths[NUM_OF_FILES_KERNEL_1] = {\tdefault_work_path + \"/OpenCL/src/kernels/code_head.cl\",
-\t\t\t\t\t\t\t\t\t\t\t\tdefault_work_path + \"/OpenCL/src/kernels/kernel1.cl\" };
-
-\tread_n_file(program1_file_n, program1_size_n, file1_paths, NUM_OF_FILES_KERNEL_1);
-\tstd::string final_file;
-\tsize_t final_size = NUM_OF_FILES_KERNEL_1 - 1;
-\tfor (int i = 0; i < NUM_OF_FILES_KERNEL_1; i++) {
-\t\tif (i == 0) final_file = program1_file_n[0];
-\t\telse final_file = final_file + '\\n' + (std::string)program1_file_n[i];
-\t\tfinal_size += program1_size_n[i];
-\t}
-\tconst char* final_files1_char = final_file.data();
-
-\tprograms[0] = clCreateProgramWithSource(context, 1, (const char**)&final_files1_char, &final_size, &err); checkErr(err);
-\tSetupBuildProgramWithSource(programs[0], NULL, devices, include_path, addtion);
-\tSaveProgramToBinary(programs[0], (opencl_binary_path + std::string(\"/Kernel1_Opt.bin\")).c_str());
-
-\tprintf(\"\\nBuild kernel 2 from source\"); fflush(stdout);
-\tchar* program2_file_n[NUM_OF_FILES_KERNEL_2];
-\tsize_t program2_size_n[NUM_OF_FILES_KERNEL_2];
-\tstd::string file2_paths[NUM_OF_FILES_KERNEL_2] = { default_work_path + \"/OpenCL/src/kernels/code_head.cl\",
-\t\t\t\t\t\t\t\t\t\t\t   default_work_path + \"/OpenCL/src/kernels/mutate_conf.cl\",
-\t\t\t\t\t\t\t\t\t\t\t   default_work_path + \"/OpenCL/src/kernels/matrix.cl\",
-\t\t\t\t\t\t\t\t\t\t\t   default_work_path + \"/OpenCL/src/kernels/quasi_newton.cl\",
-\t\t\t\t\t\t\t\t\t\t\t   default_work_path + \"/OpenCL/src/kernels/kernel2.cl\" };
-
-\tread_n_file(program2_file_n, program2_size_n, file2_paths, NUM_OF_FILES_KERNEL_2);
-\tfinal_file.clear();
-\tfinal_size = NUM_OF_FILES_KERNEL_2 - 1;
-\tfor (int i = 0; i < NUM_OF_FILES_KERNEL_2; i++) {
-\t\tif (i == 0) final_file = program2_file_n[0];
-\t\telse final_file = final_file + '\\n' + (std::string)program2_file_n[i];
-\t\tfinal_size += program2_size_n[i];
-\t}
-\tconst char* final_files2_char = final_file.data();
-
-\tprograms[1] = clCreateProgramWithSource(context, 1, (const char**)&final_files2_char, &final_size, &err); checkErr(err);
-\tSetupBuildProgramWithSource(programs[1], NULL, devices, include_path, addtion);
-\tSaveProgramToBinary(programs[1], (opencl_binary_path + std::string(\"/Kernel2_Opt.bin\")).c_str());
-#else
-\tprograms[0] = SetupBuildProgramWithBinary(context, devices, (opencl_binary_path + std::string(\"/Kernel1_Opt.bin\")).c_str());
-\tprograms[1] = SetupBuildProgramWithBinary(context, devices, (opencl_binary_path + std::string(\"/Kernel2_Opt.bin\")).c_str());
-#endif
-"""
-path.write_text(text[:start] + new + text[end:])
-PY
-
+# Warmup binary: compiles OpenCL kernels from source and saves .bin files.
 RUN g++ -std=c++17 -O3 -DNDEBUG \
-    -DOPENCL_3_0 -DNVIDIA_PLATFORM -DSMALL_BOX -DBOOST_TIMER_ENABLE_DEPRECATED -DBUILD_KERNEL_FROM_SOURCE \
+    -DOPENCL_3_0 -DNVIDIA_PLATFORM -DSMALL_BOX -DBOOST_TIMER_ENABLE_DEPRECATED \
+    -DBUILD_KERNEL_FROM_SOURCE \
     -I/tmp/boost_${BOOST_VERSION_UNDERSCORE} \
     -I/tmp/boost_${BOOST_VERSION_UNDERSCORE}/boost \
     -I./lib -I./OpenCL/inc -I/usr/include \
@@ -117,6 +70,7 @@ RUN g++ -std=c++17 -O3 -DNDEBUG \
     -lboost_program_options -lboost_system -lboost_filesystem -lOpenCL -lm -lpthread -lstdc++fs \
     -o ${VINA_GPU_WARMUP_ARTIFACT}
 
+# Runtime binary: loads pre-compiled .bin files (no JIT kernel compilation).
 RUN g++ -std=c++17 -O3 -DNDEBUG \
     -DOPENCL_3_0 -DNVIDIA_PLATFORM -DSMALL_BOX -DBOOST_TIMER_ENABLE_DEPRECATED \
     -I/tmp/boost_${BOOST_VERSION_UNDERSCORE} \
@@ -129,10 +83,7 @@ RUN g++ -std=c++17 -O3 -DNDEBUG \
     -lboost_program_options -lboost_system -lboost_filesystem -lOpenCL -lm -lpthread -lstdc++fs \
     -o ${VINA_GPU_RUNTIME_ARTIFACT}
 
-RUN test -f ${VINA_GPU_RUNTIME_ARTIFACT} \
-    && test -f ${VINA_GPU_WARMUP_ARTIFACT} \
-    && chmod 0755 ${VINA_GPU_RUNTIME_ARTIFACT} ${VINA_GPU_WARMUP_ARTIFACT}
-
+# ---- Runtime image ----
 FROM ubuntu:22.04
 
 ARG DEBIAN_FRONTEND=noninteractive
@@ -154,11 +105,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 RUN mkdir -p /opt/vina-gpu/bin /opt/boost
+
 COPY --from=builder ${VINA_GPU_RUNTIME_ARTIFACT} /opt/vina-gpu/bin/AutoDock-Vina-GPU-2-1
-COPY --from=builder ${VINA_GPU_WARMUP_ARTIFACT} /opt/vina-gpu/bin/AutoDock-Vina-GPU-2-1-source
+COPY --from=builder ${VINA_GPU_WARMUP_ARTIFACT}  /opt/vina-gpu/bin/AutoDock-Vina-GPU-2-1-source
 COPY --from=builder /src-vina-gpu/${VINA_GPU_METHOD}/OpenCL /opt/vina-gpu/bin/OpenCL
 COPY --from=builder /tmp/boost_${BOOST_VERSION_UNDERSCORE}/stage/lib /opt/boost/lib
-RUN chmod 0755 /opt/vina-gpu/bin/AutoDock-Vina-GPU-2-1 /opt/vina-gpu/bin/AutoDock-Vina-GPU-2-1-source \
+
+RUN chmod 0755 /opt/vina-gpu/bin/AutoDock-Vina-GPU-2-1 \
+               /opt/vina-gpu/bin/AutoDock-Vina-GPU-2-1-source \
     && ln -sf /opt/vina-gpu/bin/AutoDock-Vina-GPU-2-1 /usr/local/bin/vina-gpu
 
 COPY requirements.txt ./
