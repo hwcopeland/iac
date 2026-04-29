@@ -52,7 +52,7 @@ consensus scoring, and a full refinement pipeline.
    - Output: docked poses (PDBQT), affinity scores (kcal/mol)
    - Compute class: `cpu` (16 threads recommended)
 
-2. **Vina-GPU container** (`zot.hwcopeland.net/chem/vina-gpu:2.1`)
+2. **Vina-GPU container** (`zot.hwcopeland.net/chem/vina-gpu:latest`)
    - GPU-accelerated AutoDock Vina (Vina-GPU 2.1 from the Sun Lab at Nanjing Tech).
      OpenCL-based, runs on the RTX 3070 in `nixos-gpu`. 10–50× speedup over CPU Vina at
      equivalent exhaustiveness on small ligand batches; bigger speedups on larger batches.
