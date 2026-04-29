@@ -362,6 +362,9 @@ def _run_vina_gpu_batch_mode(receptor_path, ligands, center, size, exhaustivenes
 def _run_vina_gpu_single_mode(receptor_path, ligands, center, size, exhaustiveness, threads):
     parsed = {}
     last_result = None
+    total = len(ligands)
+    ok = 0
+    fail = 0
     with tempfile.TemporaryDirectory(prefix="vina_gpu_") as tmpdir:
         root = Path(tmpdir)
         output_dir = root / "out"
@@ -410,10 +413,16 @@ def _run_vina_gpu_single_mode(receptor_path, ligands, center, size, exhaustivene
                     print(last_result.stdout[-2000:], flush=True)
                 if last_result.stderr:
                     print(last_result.stderr[-2000:], flush=True)
+                fail += 1
+                if index % 50 == 0 or index == total:
+                    print(f"Docking progress: {index}/{total} (ok={ok}, fail={fail})", flush=True)
                 continue
 
             affinity, pose = parse_output_pose(output_path)
             parsed[compound_id] = (ligand_db_id, affinity, pose)
+            ok += 1
+            if index % 50 == 0 or index == total:
+                print(f"Docking progress: {index}/{total} (ok={ok}, fail={fail})", flush=True)
 
     return parsed, last_result
 
