@@ -45,61 +45,8 @@ RUN python3 - <<'PY'
 from pathlib import Path
 path = Path("/src-vina-gpu/AutoDock-Vina-GPU-2.1/lib/main_procedure_cl.cpp")
 text = path.read_text()
-old = """#ifdef BUILD_KERNEL_FROM_SOURCE
-\tconst std::string default_work_path = \".\";
-\tconst std::string include_path = default_work_path + \"/OpenCL/inc\"; //FIX it
-\tconst std::string addtion = \"\";
-
-\tprintf(\"\\n\\nBuild kernel 1 from source\"); fflush(stdout);
-\tchar* program1_file_n[NUM_OF_FILES_KERNEL_1];
-\tsize_t program1_size_n[NUM_OF_FILES_KERNEL_1];
-\tstd::string file1_paths[NUM_OF_FILES_KERNEL_1] = {\tdefault_work_path + \"/OpenCL/src/kernels/code_head.cl\",
-\t\t\t\t\t\t\t\t\t\t\t\t//default_work_path + \"/OpenCL/src/kernels/mutate_conf.cl\",
-\t\t\t\t\t\t\t\t\t\t\t\t//default_work_path + \"/OpenCL/src/kernels/matrix.cl\",
-\t\t\t\t\t\t\t\t\t\t\t\t//default_work_path + \"/OpenCL/src/kernels/quasi_newton.cl\",
-\t\t\t\t\t\t\t\t\t\t\t\tdefault_work_path + \"/OpenCL/src/kernels/kernel1.cl\" }; // The order of files is important!
-
-\tread_n_file(program1_file_n, program1_size_n, file1_paths, NUM_OF_FILES_KERNEL_1);
-\tstd::string final_file;
-\tsize_t final_size = NUM_OF_FILES_KERNEL_1 - 1; // count '\\n'
-\tfor (int i = 0; i < NUM_OF_FILES_KERNEL_1; i++) {
-\t\tif (i == 0) final_file = program1_file_n[0];
-\t\telse final_file = final_file + '\\n' + (std::string)program1_file_n[i];
-\t\tfinal_size += program1_size_n[i];
-\t}
-\tconst char* final_files1_char = final_file.data();
-
-\tprograms[0] = clCreateProgramWithSource(context, 1, (const char**)&final_files1_char, &final_size, &err); checkErr(err);
-\tSetupBuildProgramWithSource(programs[0], NULL, devices, include_path, addtion);
-\tSaveProgramToBinary(programs[0], \"Kernel1_Opt.bin\");
-
-
-\tprintf(\"\\nBuild kernel 2 from source\"); fflush(stdout);
-\tchar* program2_file_n[NUM_OF_FILES_KERNEL_2];
-\tsize_t program2_size_n[NUM_OF_FILES_KERNEL_2];
-\tstd::string file2_paths[NUM_OF_FILES_KERNEL_2] = { default_work_path + \"/OpenCL/src/kernels/code_head.cl\",
-\t\t\t\t\t\t\t\t\t\t\t   default_work_path + \"/OpenCL/src/kernels/mutate_conf.cl\",
-\t\t\t\t\t\t\t\t\t\t\t   default_work_path + \"/OpenCL/src/kernels/matrix.cl\",
-\t\t\t\t\t\t\t\t\t\t\t   default_work_path + \"/OpenCL/src/kernels/quasi_newton.cl\",
-\t\t\t\t\t\t\t\t\t\t\t   default_work_path + \"/OpenCL/src/kernels/kernel2.cl\" }; // The order of files is important!
-
-\tread_n_file(program2_file_n, program2_size_n, file2_paths, NUM_OF_FILES_KERNEL_2);
-\tfinal_size = NUM_OF_FILES_KERNEL_2 - 1; // count '\\n'
-\tfor (int i = 0; i < NUM_OF_FILES_KERNEL_2; i++) {
-\t\tif (i == 0) final_file = program2_file_n[0];
-\t\telse final_file = final_file + '\\n' + (std::string)program2_file_n[i];
-\t\tfinal_size += program2_size_n[i];
-\t}
-\tconst char* final_files2_char = final_file.data();
-
-\tprograms[1] = clCreateProgramWithSource(context, 1, (const char**)&final_files2_char, &final_size, &err); checkErr(err);
-\tSetupBuildProgramWithSource(programs[1], NULL, devices, include_path, addtion);
-\tSaveProgramToBinary(programs[1], \"Kernel2_Opt.bin\");
-#endif
-\tprograms[0] = SetupBuildProgramWithBinary(context, devices, (opencl_binary_path + std::string(\"/Kernel1_Opt.bin\")).c_str());
-
-\tprograms[1] = SetupBuildProgramWithBinary(context, devices, (opencl_binary_path + std::string(\"/Kernel2_Opt.bin\")).c_str());
-"""
+start = text.index("#ifdef BUILD_KERNEL_FROM_SOURCE")
+end = text.index("\terr = clUnloadPlatformCompiler(platforms[gpu_platform_id]); checkErr(err);")
 new = """#ifdef BUILD_KERNEL_FROM_SOURCE
 \tconst std::string default_work_path = opencl_binary_path;
 \tconst std::string include_path = default_work_path + \"/OpenCL/inc\";
@@ -152,9 +99,7 @@ new = """#ifdef BUILD_KERNEL_FROM_SOURCE
 \tprograms[1] = SetupBuildProgramWithBinary(context, devices, (opencl_binary_path + std::string(\"/Kernel2_Opt.bin\")).c_str());
 #endif
 """
-if old not in text:
-    raise SystemExit("expected upstream block not found")
-path.write_text(text.replace(old, new))
+path.write_text(text[:start] + new + text[end:])
 PY
 
 RUN g++ -std=c++17 -O3 -DNDEBUG \
