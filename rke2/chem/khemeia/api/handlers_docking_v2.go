@@ -4,6 +4,11 @@
 // backward compatibility. The v2 API adds engine selection, consensus scoring,
 // and cross-engine result aggregation.
 //
+// Docking engines run as K8s batch Jobs (not sidecars). Each engine pod runs
+// dock_batch.py which: pulls ligands from MySQL, fetches receptor/conformer
+// PDBQTs from S3, docks via engine CLI/bindings, writes results to
+// docking_v2_results, then exits. The pattern mirrors parallel_docking.go.
+//
 // Endpoints:
 //   POST /api/v1/docking/v2/submit         — submit a multi-engine docking job
 //   GET  /api/v1/docking/v2/jobs/{name}    — get job status with per-engine progress
@@ -29,33 +34,18 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// --- Engine routing ---
-
-// engineServiceURLs maps engine names to their in-cluster sidecar service URLs.
-// Each sidecar exposes POST /dock for receiving docking work.
-var engineServiceURLs = map[string]string{
-	"vina-1.2":       getEngineURL("VINA_1_2_SERVICE_URL", "http://vina-1-2.chem.svc.cluster.local"),
-	"vina-gpu":       getEngineURL("VINA_GPU_SERVICE_URL", "http://vina-gpu.chem.svc.cluster.local"),
-	"vina-gpu-batch": getEngineURL("VINA_GPU_BATCH_SERVICE_URL", "http://vina-gpu.chem.svc.cluster.local"),
-	"gnina":          getEngineURL("GNINA_SERVICE_URL", "http://gnina.chem.svc.cluster.local"),
-	"diffdock":       getEngineURL("DIFFDOCK_SERVICE_URL", "http://diffdock.chem.svc.cluster.local"),
-}
+// --- Engine container images ---
 
 // engineContainerImages maps engine names to their container images.
-// Used when creating K8s Jobs for engine workers.
+// Each engine runs as a K8s batch Job (not a sidecar). The Job pod
+// runs dock_batch.py which pulls ligands from MySQL, docks via CLI,
+// and writes results to docking_v2_results, then exits.
 var engineContainerImages = map[string]string{
 	"vina-1.2":       "zot.hwcopeland.net/chem/vina:1.2",
 	"vina-gpu":       "zot.hwcopeland.net/chem/vina-gpu:2.1",
 	"vina-gpu-batch": "zot.hwcopeland.net/chem/vina-gpu:2.1",
 	"gnina":          "zot.hwcopeland.net/chem/gnina:latest",
 	"diffdock":       "zot.hwcopeland.net/chem/diffdock:latest",
-}
-
-func getEngineURL(envVar, defaultURL string) string {
-	if url := os.Getenv(envVar); url != "" {
-		return url
-	}
-	return defaultURL
 }
 
 // --- Request/response types ---
@@ -799,12 +789,14 @@ func (c *Controller) createDockingV2Worker(
 }
 
 // buildDockingV2WorkerEnv creates environment variables for a v2 docking worker.
+// Includes MySQL credentials for result storage and Garage S3 credentials for
+// fetching receptor PDBQT and ligand conformer PDBQTs from artifact storage.
 func (c *Controller) buildDockingV2WorkerEnv(
 	jobName, workerName, engine string,
 	req DockingV2SubmitRequest,
 	offset, limit int,
 ) []corev1.EnvVar {
-	return []corev1.EnvVar{
+	envs := []corev1.EnvVar{
 		{Name: "JOB_NAME", Value: jobName},
 		{Name: "WORKER_NAME", Value: workerName},
 		{Name: "ENGINE", Value: engine},
@@ -821,6 +813,18 @@ func (c *Controller) buildDockingV2WorkerEnv(
 		{Name: "NAMESPACE", Value: c.namespace},
 	}
 
+	// Garage S3 credentials for fetching receptor/ligand PDBQTs from artifact storage.
+	if os.Getenv("GARAGE_ENABLED") == "true" {
+		envs = append(envs,
+			corev1.EnvVar{Name: "GARAGE_ENABLED", Value: "true"},
+			corev1.EnvVar{Name: "GARAGE_ENDPOINT", Value: os.Getenv("GARAGE_ENDPOINT")},
+			corev1.EnvVar{Name: "GARAGE_ACCESS_KEY", Value: os.Getenv("GARAGE_ACCESS_KEY")},
+			corev1.EnvVar{Name: "GARAGE_SECRET_KEY", Value: os.Getenv("GARAGE_SECRET_KEY")},
+			corev1.EnvVar{Name: "GARAGE_REGION", Value: os.Getenv("GARAGE_REGION")},
+		)
+	}
+
+	return envs
 }
 
 // buildV2WorkerJob constructs a batchv1.Job for a v2 docking worker.

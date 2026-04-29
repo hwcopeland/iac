@@ -1,8 +1,9 @@
-# AutoDock-GPU v1.6 docking engine sidecar
+# AutoDock-GPU v1.6 docking engine
 # Pre-built CUDA 12 binary from ccsb-scripps/AutoDock-GPU
 # GPU-accelerated molecular docking with AutoDock4 scoring function
 #
-# API: POST /dock, GET /health, GET /readyz
+# Primary mode: batch worker (dock_batch.py) invoked as a K8s Job.
+# The Flask app (app.py) is retained for health checks only.
 
 FROM nvidia/cuda:12.2.0-runtime-ubuntu22.04
 
@@ -22,8 +23,10 @@ WORKDIR /app
 COPY requirements.txt ./
 RUN pip3 install --no-cache-dir -r requirements.txt
 
+# Batch docking script (primary entrypoint for K8s Jobs)
+COPY scripts/ /scripts/
+
+# Flask app retained for health checks
 COPY app.py ./
 
-EXPOSE 8000
-
-CMD ["gunicorn", "-w", "1", "-b", "0.0.0.0:8000", "--timeout", "600", "app:app"]
+CMD ["python3", "/scripts/dock_batch.py"]

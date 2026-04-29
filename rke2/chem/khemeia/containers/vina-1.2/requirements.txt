@@ -4,3 +4,5 @@ meeko
 rdkit-pypi
 flask
 gunicorn
+mysql-connector-python
+boto3

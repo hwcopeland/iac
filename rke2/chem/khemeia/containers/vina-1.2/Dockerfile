@@ -1,8 +1,9 @@
-# AutoDock Vina 1.2 docking engine sidecar
+# AutoDock Vina 1.2 docking engine
 # Modern Vina from the Forli Lab with Python bindings.
 # CPU-only, replaces legacy Vina 1.1.2 as the default CPU engine.
 #
-# API: POST /dock, GET /health, GET /readyz
+# Primary mode: batch worker (dock_batch.py) invoked as a K8s Job.
+# The Flask app (dock.py) is retained for health checks only.
 
 FROM python:3.11-slim
 
@@ -17,8 +18,10 @@ WORKDIR /app
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Batch docking script (primary entrypoint for K8s Jobs)
+COPY scripts/ /scripts/
+
+# Flask app for health checks (retained for backward compat)
 COPY scripts/dock.py ./dock.py
 
-EXPOSE 8000
-
-CMD ["gunicorn", "-w", "2", "-b", "0.0.0.0:8000", "--timeout", "300", "dock:app"]
+CMD ["python3", "/scripts/dock_batch.py"]
