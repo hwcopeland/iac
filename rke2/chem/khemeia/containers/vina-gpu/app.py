@@ -56,7 +56,7 @@ def dock():
     center = data.get("center", [0, 0, 0])
     size = data.get("size", [20, 20, 20])
     exhaustiveness = int(data.get("exhaustiveness", 32))
-    threads = int(data.get("threads", 8000))
+    threads = int(data.get("threads", 256))
 
     if not receptor_pdbqt or not ligand_pdbqt:
         return jsonify({"error": "receptor_pdbqt and ligand_pdbqt required"}), 400
@@ -86,7 +86,13 @@ def dock():
                 "--search_depth", str(max(1, exhaustiveness)),
             ]
             log.info("Running: %s", " ".join(cmd))
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=600, cwd=tmpdir)
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=600,
+                cwd=OPENCL_BINARY_PATH,
+            )
             if result.returncode != 0:
                 return jsonify({
                     "error": f"Vina-GPU exited with code {result.returncode}",
