@@ -3,7 +3,7 @@
 #
 # API: POST /dock, GET /health, GET /readyz
 
-FROM nvcr.io/hpc/autodock:v1.5.1 AS base
+FROM nvcr.io/hpc/autodock:2020.06-x86_64 AS base
 
 # The NVIDIA AutoDock image has CUDA + AutoDock-GPU pre-installed.
 # Add Python + Flask for the REST API wrapper.
