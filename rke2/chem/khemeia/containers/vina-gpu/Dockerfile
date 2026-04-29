@@ -39,7 +39,7 @@ RUN wget -q -O vina-gpu.tar.gz https://github.com/DeltaGroupNJUPT/Vina-GPU-2.1/a
 WORKDIR /src-vina-gpu/${VINA_GPU_METHOD}
 
 RUN g++ -std=c++17 -O3 -DNDEBUG \
-    -DOPENCL_3_0 -DNVIDIA_PLATFORM -DLARGE_BOX -DBOOST_TIMER_ENABLE_DEPRECATED \
+    -DOPENCL_3_0 -DNVIDIA_PLATFORM -DLARGE_BOX -DBOOST_TIMER_ENABLE_DEPRECATED -DBUILD_KERNEL_FROM_SOURCE \
     -I/tmp/boost_${BOOST_VERSION_UNDERSCORE} \
     -I/tmp/boost_${BOOST_VERSION_UNDERSCORE}/boost \
     -I./lib -I./OpenCL/inc -I/usr/include \
@@ -69,8 +69,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 RUN mkdir -p /opt/vina-gpu/bin /opt/boost
 COPY --from=builder /opt/AutoDock-Vina-GPU-2-1 /opt/vina-gpu/bin/AutoDock-Vina-GPU-2-1
-COPY --from=builder /src-vina-gpu/${VINA_GPU_METHOD}/Kernel1_Opt.bin /opt/vina-gpu/bin/Kernel1_Opt.bin
-COPY --from=builder /src-vina-gpu/${VINA_GPU_METHOD}/Kernel2_Opt.bin /opt/vina-gpu/bin/Kernel2_Opt.bin
 COPY --from=builder /tmp/boost_${BOOST_VERSION_UNDERSCORE}/stage/lib /opt/boost/lib
 RUN ln -sf /opt/vina-gpu/bin/AutoDock-Vina-GPU-2-1 /usr/local/bin/vina-gpu
 
