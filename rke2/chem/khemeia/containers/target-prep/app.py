@@ -191,21 +191,29 @@ def binding_site_from_native_ligand(
     try:
         structure = parser.get_structure("receptor", tmp_path)
 
-        coords: list[np.ndarray] = []
+        residues: list[tuple[tuple[int, str, tuple[Any, int, str]], np.ndarray]] = []
         for model in structure:
             for chain in model:
                 for residue in chain:
                     if residue.get_resname().strip() == ligand_id:
-                        for atom in residue.get_atoms():
-                            coords.append(atom.get_vector().get_array())
+                        coords = np.array(
+                            [atom.get_vector().get_array() for atom in residue.get_atoms()],
+                        )
+                        if len(coords) == 0:
+                            continue
+                        residue_key = (model.id, chain.id, residue.id)
+                        residues.append((residue_key, coords))
 
-        if not coords:
+        if not residues:
             raise ValueError(
                 f"Ligand '{ligand_id}' not found in PDB structure. "
                 f"Check the residue name (case-sensitive, 3-letter code)."
             )
 
-        coords_arr = np.array(coords)
+        # Multiple instances of the same ligand residue can exist in symmetric
+        # assemblies. Native-ligand mode should choose one binding site, not the
+        # union of every copy across the structure.
+        _, coords_arr = residues[0]
         centroid = coords_arr.mean(axis=0).tolist()
 
         # Box size: range of ligand coordinates + padding on each side.

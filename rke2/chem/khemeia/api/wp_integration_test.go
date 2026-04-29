@@ -873,18 +873,21 @@ func TestWP3_FlagDisagreements_NoFlagForClose(t *testing.T) {
 
 // TestWP3_EngineContainerImages verifies all engine images are defined.
 func TestWP3_EngineContainerImages(t *testing.T) {
-	expectedEngines := []string{"vina-1.2", "vina-gpu", "vina-gpu-batch", "gnina", "diffdock"}
-	for _, engine := range expectedEngines {
+	expectedImages := map[string]string{
+		"vina-1.2":       "zot.hwcopeland.net/chem/vina:1.2",
+		"vina-gpu":       "zot.hwcopeland.net/chem/vina-gpu:latest",
+		"vina-gpu-batch": "zot.hwcopeland.net/chem/vina-gpu:latest",
+		"gnina":          "zot.hwcopeland.net/chem/gnina:latest",
+		"diffdock":       "zot.hwcopeland.net/chem/diffdock:latest",
+	}
+	for engine, expectedImage := range expectedImages {
 		image, ok := engineContainerImages[engine]
 		if !ok {
 			t.Errorf("missing container image for engine %q", engine)
 			continue
 		}
-		if image == "" {
-			t.Errorf("empty container image for engine %q", engine)
-		}
-		if !strings.HasPrefix(image, "zot.hwcopeland.net/chem/") {
-			t.Errorf("engine %q image should be from zot registry, got %q", engine, image)
+		if image != expectedImage {
+			t.Errorf("engine %q image = %q, want %q", engine, image, expectedImage)
 		}
 	}
 }

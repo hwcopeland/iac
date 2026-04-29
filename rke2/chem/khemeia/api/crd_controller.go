@@ -19,6 +19,7 @@ import (
 	"sync"
 	"time"
 
+	"gopkg.in/yaml.v3"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -30,7 +31,6 @@ import (
 	"k8s.io/client-go/kubernetes"
 	typed "k8s.io/client-go/kubernetes/typed/batch/v1"
 	"k8s.io/client-go/tools/cache"
-	"gopkg.in/yaml.v3"
 )
 
 // crdResyncPeriod is the informer resync interval for CRD watches.
@@ -55,18 +55,18 @@ var registeredCRDs = map[string]schema.GroupVersionResource{
 // defaultComputeClassForKind maps CRD kinds to their default compute class.
 // Overridable in the CRD spec via the computeClass field.
 var defaultComputeClassForKind = map[string]string{
-	"TargetPrep":          "cpu",
-	"LibraryPrep":         "cpu",
-	"DockJob":             "gpu",
-	"RefineJob":           "gpu",
-	"ADMETJob":            "cpu",
-	"GenerateJob":         "gpu",
-	"LinkJob":             "gpu",
-	"SelectivityJob":      "cpu-high-mem",
-	"RBFEJob":             "gpu",
-	"ABFEJob":             "gpu",
-	"IngestStructureJob":  "cpu",
-	"ReportJob":           "cpu",
+	"TargetPrep":         "cpu",
+	"LibraryPrep":        "cpu",
+	"DockJob":            "gpu",
+	"RefineJob":          "gpu",
+	"ADMETJob":           "cpu",
+	"GenerateJob":        "gpu",
+	"LinkJob":            "gpu",
+	"SelectivityJob":     "cpu-high-mem",
+	"RBFEJob":            "gpu",
+	"ABFEJob":            "gpu",
+	"IngestStructureJob": "cpu",
+	"ReportJob":          "cpu",
 }
 
 // crdImageMapping maps CRD kinds to their container image.
@@ -81,13 +81,99 @@ var crdImageMapping = map[string]string{
 // ComputeClass defines the scheduling and resource configuration for a job.
 // Loaded from the khemeia-compute-classes ConfigMap.
 type ComputeClass struct {
-	Description  string                `yaml:"description"`
-	Resources    map[string]string     `yaml:"resources"`
-	NodeSelector map[string]string     `yaml:"nodeSelector"`
-	Tolerations  []corev1.Toleration   `yaml:"tolerations"`
-	Volumes      []corev1.Volume       `yaml:"volumes"`
-	VolumeMounts []corev1.VolumeMount  `yaml:"volumeMounts"`
-	Env          []corev1.EnvVar       `yaml:"env"`
+	Description  string               `yaml:"description"`
+	Resources    map[string]string    `yaml:"resources"`
+	NodeSelector map[string]string    `yaml:"nodeSelector"`
+	Tolerations  []corev1.Toleration  `yaml:"tolerations"`
+	Volumes      []computeClassVolume `yaml:"volumes"`
+	VolumeMounts []computeClassMount  `yaml:"volumeMounts"`
+	Env          []corev1.EnvVar      `yaml:"env"`
+}
+
+type computeClassHostPath struct {
+	Path string               `yaml:"path"`
+	Type *corev1.HostPathType `yaml:"type"`
+}
+
+type computeClassVolume struct {
+	Name        string                       `yaml:"name"`
+	HostPath    *computeClassHostPath        `yaml:"hostPath"`
+	HostPathAlt *computeClassHostPath        `yaml:"hostpath"`
+	EmptyDir    *corev1.EmptyDirVolumeSource `yaml:"emptyDir"`
+	EmptyDirAlt *corev1.EmptyDirVolumeSource `yaml:"emptydir"`
+}
+
+func (v computeClassVolume) toK8s() corev1.Volume {
+	out := corev1.Volume{Name: v.Name}
+	if hp := firstHostPath(v.HostPath, v.HostPathAlt); hp != nil {
+		out.VolumeSource = corev1.VolumeSource{
+			HostPath: &corev1.HostPathVolumeSource{
+				Path: hp.Path,
+				Type: hp.Type,
+			},
+		}
+		return out
+	}
+	if ed := firstEmptyDir(v.EmptyDir, v.EmptyDirAlt); ed != nil {
+		out.VolumeSource = corev1.VolumeSource{EmptyDir: ed}
+		return out
+	}
+	return out
+}
+
+type computeClassMount struct {
+	Name         string `yaml:"name"`
+	MountPath    string `yaml:"mountPath"`
+	MountPathAlt string `yaml:"mountpath"`
+	ReadOnly     *bool  `yaml:"readOnly"`
+	ReadOnlyAlt  *bool  `yaml:"readonly"`
+	SubPath      string `yaml:"subPath"`
+	SubPathAlt   string `yaml:"subpath"`
+}
+
+func (m computeClassMount) toK8s() corev1.VolumeMount {
+	return corev1.VolumeMount{
+		Name:      m.Name,
+		MountPath: firstNonEmpty(m.MountPath, m.MountPathAlt),
+		ReadOnly:  firstBool(m.ReadOnly, m.ReadOnlyAlt),
+		SubPath:   firstNonEmpty(m.SubPath, m.SubPathAlt),
+	}
+}
+
+func firstHostPath(values ...*computeClassHostPath) *computeClassHostPath {
+	for _, value := range values {
+		if value != nil && value.Path != "" {
+			return value
+		}
+	}
+	return nil
+}
+
+func firstEmptyDir(values ...*corev1.EmptyDirVolumeSource) *corev1.EmptyDirVolumeSource {
+	for _, value := range values {
+		if value != nil {
+			return value
+		}
+	}
+	return nil
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func firstBool(values ...*bool) bool {
+	for _, value := range values {
+		if value != nil {
+			return *value
+		}
+	}
+	return false
 }
 
 // CRDController watches Khemeia CRD instances and drives their lifecycle.
@@ -467,8 +553,12 @@ func (c *CRDController) applyComputeClass(podSpec *corev1.PodSpec, cc ComputeCla
 	podSpec.Tolerations = append(podSpec.Tolerations, cc.Tolerations...)
 
 	// Volumes and mounts (GPU host paths, etc.).
-	podSpec.Volumes = append(podSpec.Volumes, cc.Volumes...)
-	container.VolumeMounts = append(container.VolumeMounts, cc.VolumeMounts...)
+	for _, volume := range cc.Volumes {
+		podSpec.Volumes = append(podSpec.Volumes, volume.toK8s())
+	}
+	for _, mount := range cc.VolumeMounts {
+		container.VolumeMounts = append(container.VolumeMounts, mount.toK8s())
+	}
 
 	// Environment (LD_LIBRARY_PATH for GPU, etc.).
 	container.Env = append(container.Env, cc.Env...)
