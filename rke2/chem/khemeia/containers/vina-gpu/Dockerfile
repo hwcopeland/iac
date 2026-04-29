@@ -1,15 +1,21 @@
-# GPU-accelerated docking using NVIDIA's official AutoDock container
-# https://catalog.ngc.nvidia.com/orgs/hpc/containers/autodock
+# AutoDock-GPU v1.6 docking engine sidecar
+# Pre-built CUDA 12 binary from ccsb-scripps/AutoDock-GPU
+# GPU-accelerated molecular docking with AutoDock4 scoring function
 #
 # API: POST /dock, GET /health, GET /readyz
 
-FROM nvcr.io/hpc/autodock:2020.06-x86_64 AS base
+FROM nvidia/cuda:12.2.0-runtime-ubuntu22.04
 
-# The NVIDIA AutoDock image has CUDA + AutoDock-GPU pre-installed.
-# Add Python + Flask for the REST API wrapper.
+ENV DEBIAN_FRONTEND=noninteractive
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3 python3-pip ca-certificates \
+    ca-certificates wget python3 python3-pip \
     && rm -rf /var/lib/apt/lists/*
+
+# Download pre-built AutoDock-GPU v1.6 (CUDA 12, 128 work items)
+RUN wget -q -O /usr/local/bin/autodock_gpu \
+    "https://github.com/ccsb-scripps/AutoDock-GPU/releases/download/v1.6/adgpu-v1.6_linux_x64_cuda12_128wi" \
+    && chmod +x /usr/local/bin/autodock_gpu
 
 WORKDIR /app
 
@@ -20,5 +26,4 @@ COPY app.py ./
 
 EXPOSE 8000
 
-# Single worker — GPU-bound
 CMD ["gunicorn", "-w", "1", "-b", "0.0.0.0:8000", "--timeout", "600", "app:app"]
