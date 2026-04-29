@@ -32,6 +32,8 @@ KERNEL_BINARIES = (
     Path(OPENCL_BINARY_PATH) / "Kernel1_Opt.bin",
     Path(OPENCL_BINARY_PATH) / "Kernel2_Opt.bin",
 )
+_kernel_cache_env = os.environ.get("VINA_GPU_KERNEL_CACHE_DIR", "")
+KERNEL_CACHE_DIR = Path(_kernel_cache_env) if _kernel_cache_env else None
 DATA_DIR = "/data"
 RECEPTOR_PATH = os.path.join(DATA_DIR, "receptor.pdbqt")
 BUCKET_RECEPTORS = "khemeia-receptors"
@@ -215,8 +217,35 @@ def _kernels_ready():
     return all(path.exists() and path.stat().st_size > 0 for path in KERNEL_BINARIES)
 
 
+def _restore_kernel_cache():
+    """Copy .bin files from the PVC cache into OPENCL_BINARY_PATH. Returns True if restored."""
+    if KERNEL_CACHE_DIR is None or not KERNEL_CACHE_DIR.is_dir():
+        return False
+    cached = [KERNEL_CACHE_DIR / p.name for p in KERNEL_BINARIES]
+    if not all(p.exists() and p.stat().st_size > 0 for p in cached):
+        return False
+    for src in cached:
+        dst = Path(OPENCL_BINARY_PATH) / src.name
+        dst.write_bytes(src.read_bytes())
+    print(f"Restored OpenCL kernel cache from {KERNEL_CACHE_DIR}", flush=True)
+    return True
+
+
+def _save_kernel_cache():
+    """Copy compiled .bin files to the PVC cache for reuse by future pods."""
+    if KERNEL_CACHE_DIR is None or not KERNEL_CACHE_DIR.is_dir():
+        return
+    for src in KERNEL_BINARIES:
+        if src.exists() and src.stat().st_size > 0:
+            (KERNEL_CACHE_DIR / src.name).write_bytes(src.read_bytes())
+    print(f"Saved OpenCL kernel cache to {KERNEL_CACHE_DIR}", flush=True)
+
+
 def ensure_opencl_kernels(receptor_path, ligand_path, center, size, output_path):
     if _kernels_ready():
+        return
+
+    if _restore_kernel_cache() and _kernels_ready():
         return
 
     cmd = [
@@ -245,6 +274,7 @@ def ensure_opencl_kernels(receptor_path, ligand_path, center, size, output_path)
         preexec_fn=_set_stack_limit,
     )
     if _kernels_ready():
+        _save_kernel_cache()
         if result.returncode != 0:
             print(
                 f"WARNING: kernel warmup exited with code {result.returncode} after generating binaries",

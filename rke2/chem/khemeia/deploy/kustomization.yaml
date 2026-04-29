@@ -5,6 +5,7 @@ resources:
   - rbac.yaml
   - rbac-crds.yaml
   - compute-classes.yaml
+  - vina-gpu-kernel-cache-pvc.yaml
   - plugins-configmap.yaml
   - api-deployment.yaml
   - web-deployment.yaml
