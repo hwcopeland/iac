@@ -63,6 +63,9 @@ data:
           - name: dri
             hostPath:
               path: /dev/dri
+          - name: vina-gpu-kernel-cache
+            persistentVolumeClaim:
+              claimName: vina-gpu-kernel-cache
         volumeMounts:
           - name: nvidia-driver
             mountPath: /run/opengl-driver
@@ -72,8 +75,12 @@ data:
             readOnly: true
           - name: dri
             mountPath: /dev/dri
+          - name: vina-gpu-kernel-cache
+            mountPath: /opt/vina-gpu/kernels
         env:
           - name: LD_LIBRARY_PATH
             value: /run/opengl-driver/lib:/opt/boost/lib:/usr/lib/x86_64-linux-gnu
           - name: OCL_ICD_VENDORS
             value: /run/opengl-driver/etc/OpenCL/vendors
+          - name: VINA_GPU_KERNEL_CACHE_DIR
+            value: /opt/vina-gpu/kernels

@@ -1,0 +1,22 @@
+---
+# PVC for Vina-GPU OpenCL kernel cache.
+# Stores Kernel1_Opt.bin and Kernel2_Opt.bin across pod restarts so the
+# ~7-minute JIT warmup only runs once rather than on every job pod cold start.
+# Mounted read-write into gpu-class pods at /opt/vina-gpu/kernels via the
+# gpu compute class. dock_batch.py restores from this cache before warmup
+# and saves to it after a successful compile.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: vina-gpu-kernel-cache
+  namespace: chem
+  labels:
+    app.kubernetes.io/name: khemeia
+    app.kubernetes.io/component: vina-gpu
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: longhorn
+  resources:
+    requests:
+      storage: 100Mi
