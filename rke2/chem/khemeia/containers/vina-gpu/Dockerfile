@@ -9,6 +9,8 @@ ARG VINA_GPU_REPO_COMMIT=180272b8a5265d6ed9664178345933cebe2cd349
 ARG VINA_GPU_METHOD=AutoDock-Vina-GPU-2.1
 ARG VINA_GPU_BINARY=AutoDock-Vina-GPU-2-1
 ARG VINA_GPU_WARMUP_BINARY=AutoDock-Vina-GPU-2-1-source
+ARG VINA_GPU_RUNTIME_ARTIFACT=/tmp/khemeia-vina-gpu-runtime.bin
+ARG VINA_GPU_WARMUP_ARTIFACT=/tmp/khemeia-vina-gpu-warmup.bin
 ARG BOOST_VERSION=1.84.0
 ARG BOOST_VERSION_UNDERSCORE=1_84_0
 
@@ -113,7 +115,7 @@ RUN g++ -std=c++17 -O3 -DNDEBUG \
     /tmp/boost_${BOOST_VERSION_UNDERSCORE}/libs/thread/src/pthread/once.cpp \
     -L/tmp/boost_${BOOST_VERSION_UNDERSCORE}/stage/lib -L/usr/lib/x86_64-linux-gnu \
     -lboost_program_options -lboost_system -lboost_filesystem -lOpenCL -lm -lpthread -lstdc++fs \
-    -o /tmp/${VINA_GPU_WARMUP_BINARY}
+    -o ${VINA_GPU_WARMUP_ARTIFACT}
 
 RUN g++ -std=c++17 -O3 -DNDEBUG \
     -DOPENCL_3_0 -DNVIDIA_PLATFORM -DSMALL_BOX -DBOOST_TIMER_ENABLE_DEPRECATED \
@@ -125,7 +127,11 @@ RUN g++ -std=c++17 -O3 -DNDEBUG \
     /tmp/boost_${BOOST_VERSION_UNDERSCORE}/libs/thread/src/pthread/once.cpp \
     -L/tmp/boost_${BOOST_VERSION_UNDERSCORE}/stage/lib -L/usr/lib/x86_64-linux-gnu \
     -lboost_program_options -lboost_system -lboost_filesystem -lOpenCL -lm -lpthread -lstdc++fs \
-    -o /tmp/${VINA_GPU_BINARY}
+    -o ${VINA_GPU_RUNTIME_ARTIFACT}
+
+RUN test -f ${VINA_GPU_RUNTIME_ARTIFACT} \
+    && test -f ${VINA_GPU_WARMUP_ARTIFACT} \
+    && chmod 0755 ${VINA_GPU_RUNTIME_ARTIFACT} ${VINA_GPU_WARMUP_ARTIFACT}
 
 FROM ubuntu:22.04
 
@@ -146,8 +152,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 RUN mkdir -p /opt/vina-gpu/bin /opt/boost
-COPY --from=builder /tmp/${VINA_GPU_BINARY} /opt/vina-gpu/bin/AutoDock-Vina-GPU-2-1
-COPY --from=builder /tmp/${VINA_GPU_WARMUP_BINARY} /opt/vina-gpu/bin/AutoDock-Vina-GPU-2-1-source
+COPY --from=builder ${VINA_GPU_RUNTIME_ARTIFACT} /opt/vina-gpu/bin/AutoDock-Vina-GPU-2-1
+COPY --from=builder ${VINA_GPU_WARMUP_ARTIFACT} /opt/vina-gpu/bin/AutoDock-Vina-GPU-2-1-source
 COPY --from=builder /src-vina-gpu/${VINA_GPU_METHOD}/OpenCL /opt/vina-gpu/bin/OpenCL
 COPY --from=builder /tmp/boost_${BOOST_VERSION_UNDERSCORE}/stage/lib /opt/boost/lib
 RUN chmod 0755 /opt/vina-gpu/bin/AutoDock-Vina-GPU-2-1 /opt/vina-gpu/bin/AutoDock-Vina-GPU-2-1-source \
