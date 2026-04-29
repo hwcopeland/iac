@@ -113,7 +113,7 @@ RUN g++ -std=c++17 -O3 -DNDEBUG \
     /tmp/boost_${BOOST_VERSION_UNDERSCORE}/libs/thread/src/pthread/once.cpp \
     -L/tmp/boost_${BOOST_VERSION_UNDERSCORE}/stage/lib -L/usr/lib/x86_64-linux-gnu \
     -lboost_program_options -lboost_system -lboost_filesystem -lOpenCL -lm -lpthread -lstdc++fs \
-    -o /opt/${VINA_GPU_WARMUP_BINARY}
+    -o /tmp/${VINA_GPU_WARMUP_BINARY}
 
 RUN g++ -std=c++17 -O3 -DNDEBUG \
     -DOPENCL_3_0 -DNVIDIA_PLATFORM -DSMALL_BOX -DBOOST_TIMER_ENABLE_DEPRECATED \
@@ -125,7 +125,7 @@ RUN g++ -std=c++17 -O3 -DNDEBUG \
     /tmp/boost_${BOOST_VERSION_UNDERSCORE}/libs/thread/src/pthread/once.cpp \
     -L/tmp/boost_${BOOST_VERSION_UNDERSCORE}/stage/lib -L/usr/lib/x86_64-linux-gnu \
     -lboost_program_options -lboost_system -lboost_filesystem -lOpenCL -lm -lpthread -lstdc++fs \
-    -o /opt/${VINA_GPU_BINARY}
+    -o /tmp/${VINA_GPU_BINARY}
 
 FROM ubuntu:22.04
 
@@ -146,11 +146,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 RUN mkdir -p /opt/vina-gpu/bin /opt/boost
-COPY --from=builder /opt/${VINA_GPU_BINARY} /opt/vina-gpu/bin/AutoDock-Vina-GPU-2-1
-COPY --from=builder /opt/${VINA_GPU_WARMUP_BINARY} /opt/vina-gpu/bin/AutoDock-Vina-GPU-2-1-source
+COPY --from=builder /tmp/${VINA_GPU_BINARY} /opt/vina-gpu/bin/AutoDock-Vina-GPU-2-1
+COPY --from=builder /tmp/${VINA_GPU_WARMUP_BINARY} /opt/vina-gpu/bin/AutoDock-Vina-GPU-2-1-source
 COPY --from=builder /src-vina-gpu/${VINA_GPU_METHOD}/OpenCL /opt/vina-gpu/bin/OpenCL
 COPY --from=builder /tmp/boost_${BOOST_VERSION_UNDERSCORE}/stage/lib /opt/boost/lib
-RUN ln -sf /opt/vina-gpu/bin/AutoDock-Vina-GPU-2-1 /usr/local/bin/vina-gpu
+RUN chmod 0755 /opt/vina-gpu/bin/AutoDock-Vina-GPU-2-1 /opt/vina-gpu/bin/AutoDock-Vina-GPU-2-1-source \
+    && ln -sf /opt/vina-gpu/bin/AutoDock-Vina-GPU-2-1 /usr/local/bin/vina-gpu
 
 COPY requirements.txt ./
 RUN pip3 install --no-cache-dir -r requirements.txt
