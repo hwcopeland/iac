@@ -19,6 +19,7 @@ const REFRESH_KEY = 'khemeia_refresh_token';
 // In-memory state
 let accessToken: string | null = null;
 let user: UserInfo | null = null;
+let refreshTimerId: ReturnType<typeof setTimeout> | null = null;
 
 export interface UserInfo {
   sub: string;
@@ -53,6 +54,69 @@ function base64UrlEncode(buffer: ArrayBuffer): string {
 async function createCodeChallenge(verifier: string): Promise<string> {
   const hash = await sha256(verifier);
   return base64UrlEncode(hash);
+}
+
+// --- Token Refresh ---
+
+/**
+ * Schedule a token refresh to run 5 minutes before the access token expires.
+ * If expires_in is not available or too short, defaults to refreshing in 55 minutes.
+ */
+function scheduleTokenRefresh(expiresIn?: number): void {
+  // Clear any existing timer
+  if (refreshTimerId !== null) {
+    clearTimeout(refreshTimerId);
+    refreshTimerId = null;
+  }
+
+  // Default to 3600s (1 hour) if not provided
+  const ttl = expiresIn ?? 3600;
+  // Refresh 5 minutes (300s) before expiry, minimum 30s from now
+  const delaySeconds = Math.max(30, ttl - 300);
+
+  refreshTimerId = setTimeout(refreshToken, delaySeconds * 1000);
+}
+
+/**
+ * Silently refresh the access token using the stored refresh_token.
+ * On success, schedules the next refresh. On failure, clears auth state.
+ */
+export async function refreshToken(): Promise<boolean> {
+  const storedRefresh = sessionStorage.getItem(REFRESH_KEY);
+  if (!storedRefresh) return false;
+
+  try {
+    const body = new URLSearchParams({
+      grant_type: 'refresh_token',
+      client_id: CLIENT_ID,
+      refresh_token: storedRefresh,
+    });
+
+    const res = await fetch(TOKEN_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body,
+    });
+
+    if (!res.ok) {
+      logout();
+      return false;
+    }
+
+    const data = await res.json();
+    accessToken = data.access_token;
+    if (data.refresh_token) {
+      sessionStorage.setItem(REFRESH_KEY, data.refresh_token);
+    }
+
+    setToken(accessToken!);
+    scheduleTokenRefresh(data.expires_in);
+    await fetchUserInfo();
+    return true;
+  } catch {
+    logout();
+    return false;
+  }
 }
 
 // --- Public API ---
@@ -125,6 +189,9 @@ export async function handleCallback(code: string): Promise<void> {
   // Wire token to the API client
   setToken(accessToken!);
 
+  // Schedule proactive refresh before expiry
+  scheduleTokenRefresh(data.expires_in);
+
   // Fetch user info
   await fetchUserInfo();
 }
@@ -150,6 +217,10 @@ async function fetchUserInfo(): Promise<void> {
 export function logout(): void {
   accessToken = null;
   user = null;
+  if (refreshTimerId !== null) {
+    clearTimeout(refreshTimerId);
+    refreshTimerId = null;
+  }
   sessionStorage.removeItem(REFRESH_KEY);
   sessionStorage.removeItem(VERIFIER_KEY);
   setToken('');
@@ -206,6 +277,7 @@ export async function restoreSession(): Promise<void> {
     }
 
     setToken(accessToken!);
+    scheduleTokenRefresh(data.expires_in);
     await fetchUserInfo();
   } catch {
     // Network error or other failure -- clear state

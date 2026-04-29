@@ -37,7 +37,6 @@ var engineServiceURLs = map[string]string{
 	"vina-1.2":       getEngineURL("VINA_1_2_SERVICE_URL", "http://vina-1-2.chem.svc.cluster.local"),
 	"vina-gpu":       getEngineURL("VINA_GPU_SERVICE_URL", "http://vina-gpu.chem.svc.cluster.local"),
 	"vina-gpu-batch": getEngineURL("VINA_GPU_BATCH_SERVICE_URL", "http://vina-gpu.chem.svc.cluster.local"),
-	"smina":          getEngineURL("SMINA_SERVICE_URL", "http://smina.chem.svc.cluster.local"),
 	"gnina":          getEngineURL("GNINA_SERVICE_URL", "http://gnina.chem.svc.cluster.local"),
 	"diffdock":       getEngineURL("DIFFDOCK_SERVICE_URL", "http://diffdock.chem.svc.cluster.local"),
 }
@@ -48,7 +47,6 @@ var engineContainerImages = map[string]string{
 	"vina-1.2":       "zot.hwcopeland.net/chem/vina:1.2",
 	"vina-gpu":       "zot.hwcopeland.net/chem/vina-gpu:2.1",
 	"vina-gpu-batch": "zot.hwcopeland.net/chem/vina-gpu:2.1",
-	"smina":          "zot.hwcopeland.net/chem/smina:latest",
 	"gnina":          "zot.hwcopeland.net/chem/gnina:latest",
 	"diffdock":       "zot.hwcopeland.net/chem/diffdock:latest",
 }

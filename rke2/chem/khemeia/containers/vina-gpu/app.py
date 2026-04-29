@@ -1,11 +1,13 @@
-"""Smina docking engine sidecar.
+"""Vina-GPU 2.1 docking engine sidecar.
 
-Exposes a Flask API with a POST /dock endpoint that runs Smina (Vina fork
-with custom scoring terms and flexible residue support).  The request/response
-contract is identical across all WP-3 docking engines so the Go API can call
-any engine interchangeably.
+Exposes a Flask API with a POST /dock endpoint that runs AutoDock Vina-GPU 2.1
+(GPU-accelerated via OpenCL).  The request/response contract is identical across
+all WP-3 docking engines so the Go API can call any engine interchangeably.
 
-Smina-specific: supports custom scoring_terms parameter.
+Vina-GPU 2.1 specific:
+  - Uses OpenCL for massively parallel docking on NVIDIA GPUs.
+  - Supports --thread (GPU parallelism lanes) and --search_depth parameters.
+  - Kernel binaries are compiled on first invocation (BUILD_KERNEL_FROM_SOURCE).
 """
 
 import logging
@@ -21,9 +23,10 @@ app = Flask(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
-SMINA_BIN = "/usr/local/bin/smina"
+VINA_GPU_BIN = "/usr/local/bin/vina-gpu"
+OPENCL_BINARY_PATH = "/opt/vina-gpu"
 
-# Matches result lines in Smina output:
+# Matches result lines in Vina log output:
 #   "   1       -7.1      0.000      0.000"
 _MODE_RE = re.compile(r"^\s+(\d+)\s+([-\d.]+)\s+([-\d.]+)\s+([-\d.]+)")
 
@@ -39,10 +42,23 @@ def health():
 
 @app.route("/readyz", methods=["GET"])
 def readyz():
-    """Readiness probe -- verify smina binary is available."""
-    if os.path.isfile(SMINA_BIN) and os.access(SMINA_BIN, os.X_OK):
-        return jsonify({"status": "ready"})
-    return jsonify({"status": "not_ready", "error": "smina binary not found"}), 503
+    """Readiness probe -- verify vina-gpu binary is available."""
+    if not (os.path.isfile(VINA_GPU_BIN) and os.access(VINA_GPU_BIN, os.X_OK)):
+        return jsonify({
+            "status": "not_ready",
+            "error": "vina-gpu binary not found",
+        }), 503
+
+    # Quick check that the binary can at least print version info
+    try:
+        result = subprocess.run(
+            [VINA_GPU_BIN, "--version"],
+            capture_output=True, text=True, timeout=10,
+        )
+        version_info = (result.stdout + result.stderr).strip()
+        return jsonify({"status": "ready", "version": version_info})
+    except Exception as exc:
+        return jsonify({"status": "not_ready", "error": str(exc)}), 503
 
 
 # ---------------------------------------------------------------------------
@@ -51,22 +67,23 @@ def readyz():
 
 @app.route("/dock", methods=["POST"])
 def dock():
-    """Run Smina docking via CLI.
+    """Run Vina-GPU 2.1 docking via CLI.
 
     Request JSON:
-        receptor_pdbqt (str):       Receptor in PDBQT format.
-        ligand_pdbqt (str):         Ligand in PDBQT format.
-        center (list[float]):       Binding-site center [x, y, z].
-        size (list[float]):         Box dimensions [sx, sy, sz].
-        exhaustiveness (int):       Search exhaustiveness (default 32).
-        scoring (str):              Scoring function (default "vina"; Smina also
-                                    supports "vinardo").
-        scoring_terms (list[str]):  Smina-specific custom scoring terms.
-        n_poses (int):              Number of poses to return (default 9).
+        receptor_pdbqt (str):   Receptor in PDBQT format.
+        ligand_pdbqt (str):     Ligand in PDBQT format.
+        center (list[float]):   Binding-site center [x, y, z].
+        size (list[float]):     Box dimensions [sx, sy, sz].
+        exhaustiveness (int):   Search exhaustiveness (default 32).
+        scoring (str):          Scoring function (default "vina"; ignored by
+                                Vina-GPU but accepted for API compatibility).
+        n_poses (int):          Number of poses to return (default 9).
+        thread (int):           GPU parallelism lanes (default 8000).
+        search_depth (int):     Monte Carlo search depth (default 0 = heuristic).
 
     Response JSON:
         poses (list[dict]):   Each pose has: pdbqt, affinity, rmsd_lb, rmsd_ub.
-        engine (str):         "smina"
+        engine (str):         "vina-gpu-2.1"
         scoring (str):        Scoring function used.
     """
     data = request.get_json(force=True)
@@ -88,17 +105,18 @@ def dock():
 
     exhaustiveness = int(data.get("exhaustiveness", 32))
     scoring = data.get("scoring", "vina")
-    scoring_terms = data.get("scoring_terms", [])
     n_poses = int(data.get("n_poses", 9))
+    thread = int(data.get("thread", 8000))
+    search_depth = int(data.get("search_depth", 0))
 
     try:
-        poses = _run_smina(
+        poses = _run_vina_gpu(
             receptor_pdbqt, ligand_pdbqt, center, size,
-            exhaustiveness, scoring, scoring_terms, n_poses,
+            exhaustiveness, n_poses, thread, search_depth,
         )
         return jsonify({
             "poses": poses,
-            "engine": "smina",
+            "engine": "vina-gpu-2.1",
             "scoring": scoring,
         })
     except Exception as exc:
@@ -107,13 +125,13 @@ def dock():
 
 
 # ---------------------------------------------------------------------------
-# Smina execution
+# Vina-GPU execution
 # ---------------------------------------------------------------------------
 
-def _run_smina(receptor_pdbqt, ligand_pdbqt, center, size,
-               exhaustiveness, scoring, scoring_terms, n_poses):
-    """Execute Smina docking and return parsed pose list."""
-    tmpdir = tempfile.mkdtemp(prefix="smina_")
+def _run_vina_gpu(receptor_pdbqt, ligand_pdbqt, center, size,
+                  exhaustiveness, n_poses, thread, search_depth):
+    """Execute Vina-GPU 2.1 docking and return parsed pose list."""
+    tmpdir = tempfile.mkdtemp(prefix="vina_gpu_")
     rec_path = os.path.join(tmpdir, "receptor.pdbqt")
     lig_path = os.path.join(tmpdir, "ligand.pdbqt")
     out_path = os.path.join(tmpdir, "docked.pdbqt")
@@ -126,7 +144,7 @@ def _run_smina(receptor_pdbqt, ligand_pdbqt, center, size,
             f.write(ligand_pdbqt)
 
         cmd = [
-            SMINA_BIN,
+            VINA_GPU_BIN,
             "--receptor", rec_path,
             "--ligand", lig_path,
             "--center_x", str(float(center[0])),
@@ -137,28 +155,36 @@ def _run_smina(receptor_pdbqt, ligand_pdbqt, center, size,
             "--size_z", str(float(size[2])),
             "--exhaustiveness", str(exhaustiveness),
             "--num_modes", str(n_poses),
+            "--thread", str(thread),
+            "--opencl_binary_path", OPENCL_BINARY_PATH,
             "--out", out_path,
             "--log", log_path,
         ]
 
-        # Smina scoring function override
-        if scoring and scoring != "vina":
-            cmd.extend(["--scoring", scoring])
+        # Optional search_depth (0 = heuristic, Vina-GPU decides automatically)
+        if search_depth > 0:
+            cmd.extend(["--search_depth", str(search_depth)])
 
-        # Smina-specific custom scoring terms
-        for term in scoring_terms:
-            cmd.extend(["--custom_scoring", term])
+        logger.info(
+            "Running Vina-GPU: center=[%.1f,%.1f,%.1f] size=[%.1f,%.1f,%.1f] "
+            "exhaustiveness=%d thread=%d",
+            float(center[0]), float(center[1]), float(center[2]),
+            float(size[0]), float(size[1]), float(size[2]),
+            exhaustiveness, thread,
+        )
 
         result = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=300,
+            cmd, capture_output=True, text=True, timeout=600,
         )
         if result.returncode != 0:
             raise RuntimeError(
-                f"Smina exited with code {result.returncode}: {result.stderr}"
+                f"Vina-GPU exited with code {result.returncode}: "
+                f"{result.stderr}"
             )
 
-        # Parse results
+        # Parse results from log
         energies = _parse_log(log_path)
+
         poses_pdbqt = ""
         if os.path.exists(out_path):
             with open(out_path) as f:
@@ -192,13 +218,20 @@ def _run_smina(receptor_pdbqt, ligand_pdbqt, center, size,
 
 
 def _parse_log(log_path):
-    """Parse Smina log file for pose energies.
+    """Parse Vina-GPU log file for pose energies.
+
+    Vina-GPU log format (after the header):
+        mode | affinity | dist from best mode
+                         rmsd l.b.| rmsd u.b.
+          1       -7.1      0.000      0.000
+          2       -6.8      1.234      2.345
 
     Returns list of (affinity, rmsd_lb, rmsd_ub) tuples.
     """
     energies = []
     if not os.path.exists(log_path):
         return energies
+
     with open(log_path) as f:
         for line in f:
             m = _MODE_RE.match(line)
@@ -208,6 +241,7 @@ def _parse_log(log_path):
                     float(m.group(3)),
                     float(m.group(4)),
                 ))
+
     return energies
 
 

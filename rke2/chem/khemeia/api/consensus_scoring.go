@@ -164,7 +164,6 @@ func ValidateEngineSelection(engines []string) error {
 		"vina-1.2":       true,
 		"vina-gpu":       true,
 		"vina-gpu-batch": true,
-		"smina":          true,
 		"gnina":          true,
 		"diffdock":       true,
 	}
