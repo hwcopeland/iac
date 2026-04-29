@@ -12,7 +12,7 @@ ARG BOOST_VERSION=1.84.0
 ARG BOOST_VERSION_UNDERSCORE=1_84_0
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential ca-certificates wget \
+    build-essential ca-certificates wget python3-minimal \
     ocl-icd-opencl-dev opencl-headers \
     && rm -rf /var/lib/apt/lists/*
 
