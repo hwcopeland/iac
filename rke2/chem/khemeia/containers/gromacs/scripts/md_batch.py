@@ -199,6 +199,19 @@ def run_gmx(args, cwd, description):
 
 import re as _re
 
+# GRO coordinates always use 3 decimal places (%8.3f).  When a value overflows
+# the 8-char field the subsequent fields are shifted, so fixed-position slicing
+# breaks.  Match exactly-3-decimal floats to parse robustly in all cases.
+_GRO_COORD_RE = _re.compile(r'[-+]?\d+\.\d{3}')
+
+
+def _parse_gro_coords(line):
+    """Return (x, y, z) from a GRO atom line, robust to overflowed fields."""
+    nums = _GRO_COORD_RE.findall(line[20:])
+    if len(nums) < 3:
+        raise ValueError(f"cannot parse coords from: {line!r}")
+    return float(nums[0]), float(nums[1]), float(nums[2])
+
 
 def _gro_has_bad_coords(gro_path, max_nm=500.0):
     """Return True if any atom coordinate magnitude exceeds max_nm."""
@@ -206,10 +219,10 @@ def _gro_has_bad_coords(gro_path, max_nm=500.0):
         if not line.strip():
             continue
         try:
-            x, y, z = float(line[20:28]), float(line[28:36]), float(line[36:44])
+            x, y, z = _parse_gro_coords(line)
             if abs(x) > max_nm or abs(y) > max_nm or abs(z) > max_nm:
                 return True
-        except (ValueError, IndexError):
+        except ValueError:
             continue
     return False
 
@@ -245,10 +258,9 @@ def _patch_ligand_gro_to_pose(gro_path, sdf_path):
     sdf_cy = sum(c[1] for c in sdf_heavy) / len(sdf_heavy)
     sdf_cz = sum(c[2] for c in sdf_heavy) / len(sdf_heavy)
 
-    # Parse GRO atom lines; use regex to handle overflowed fields
+    # Parse GRO atom lines using the 3-decimal regex to handle overflowed fields
     gro_lines = Path(gro_path).read_text().splitlines(keepends=True)
     atom_lines = gro_lines[2:-1]
-    _float_re = _re.compile(r'[-+]?\d+\.\d+')
 
     gro_heavy = []
     for ln in atom_lines:
@@ -256,9 +268,11 @@ def _patch_ligand_gro_to_pose(gro_path, sdf_path):
             continue
         atom_name = ln[10:15].strip().lower()
         if not atom_name.startswith("h"):
-            nums = _float_re.findall(ln[20:])
-            if len(nums) >= 3:
-                gro_heavy.append((float(nums[0]), float(nums[1]), float(nums[2])))
+            try:
+                x, y, z = _parse_gro_coords(ln)
+                gro_heavy.append((x, y, z))
+            except ValueError:
+                pass
 
     if not gro_heavy:
         return
@@ -273,13 +287,10 @@ def _patch_ligand_gro_to_pose(gro_path, sdf_path):
         if not ln.strip():
             new_lines.append(ln)
             continue
-        nums = _float_re.findall(ln[20:])
-        if len(nums) >= 3:
-            x = float(nums[0]) + dx
-            y = float(nums[1]) + dy
-            z = float(nums[2]) + dz
-            new_lines.append(f"{ln[:20]}{x:8.3f}{y:8.3f}{z:8.3f}\n")
-        else:
+        try:
+            x, y, z = _parse_gro_coords(ln)
+            new_lines.append(f"{ln[:20]}{x + dx:8.3f}{y + dy:8.3f}{z + dz:8.3f}\n")
+        except ValueError:
             new_lines.append(ln)
     new_lines.append(gro_lines[-1])
     Path(gro_path).write_text("".join(new_lines))
@@ -311,20 +322,7 @@ def prepare_ligand_topology(smiles, pose_sdf_path, workdir):
         lig_input = lig_sdf
         print("[acpype] Generated RDKit conformer from SMILES", flush=True)
 
-    # Add explicit H atoms before ACPYPE so tleap sees a complete molecule
-    # and preserves the input coordinates.  Vina GPU PDBQT→SDF typically has
-    # heavy atoms only; when tleap needs to add Hs it regenerates ALL coords
-    # from scratch and places the ligand at an arbitrary position.
-    lig_h_sdf = str(workdir / "pose_H.sdf")
-    h_result = subprocess.run(
-        ["obabel", "-isdf", lig_input, "-osdf", "-O", lig_h_sdf, "-h"],
-        capture_output=True, text=True,
-    )
-    if h_result.returncode == 0 and Path(lig_h_sdf).exists() and Path(lig_h_sdf).stat().st_size > 0:
-        lig_input = lig_h_sdf
-        print("[pose] Added explicit H atoms to SDF before ACPYPE", flush=True)
-
-    # ACPYPE: GAFF2 atom types, Gasteiger charges (no AmberTools required)
+    # ACPYPE: GAFF2 atom types, Gasteiger charges
     result = subprocess.run(
         ["acpype", "-i", lig_input, "-b", "LIG", "-c", "gas", "-a", "gaff2"],
         cwd=str(workdir),
@@ -342,10 +340,10 @@ def prepare_ligand_topology(smiles, pose_sdf_path, workdir):
     itp = acpype_dir / "LIG_GMX.itp"
     print(f"[acpype] Topology written to {acpype_dir}", flush=True)
 
-    # Safety net: if tleap still produced bad coordinates, translate the entire
-    # ligand so its heavy-atom centroid matches the docked pose SDF centroid.
-    if _gro_has_bad_coords(gro) and pose_sdf_path and Path(pose_sdf_path).exists():
-        print("[acpype] WARNING: bad coords after H-add, applying centroid translation", flush=True)
+    # tleap regenerates molecular coordinates from scratch regardless of input,
+    # placing the ligand at an arbitrary position in space.  Correct this by
+    # translating all atoms so the heavy-atom centroid matches the docked pose.
+    if pose_sdf_path and Path(pose_sdf_path).exists():
         _patch_ligand_gro_to_pose(gro, pose_sdf_path)
 
     return gro, itp
