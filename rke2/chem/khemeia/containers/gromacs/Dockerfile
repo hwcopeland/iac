@@ -11,16 +11,17 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-pip \
     openbabel \
-    libhdf4-0-alt \
-    && ln -sf /lib/libmfhdfalt.so.0 /lib/libmfhdf.so.0 \
-    && ln -sf /lib/libdfalt.so.0 /lib/libdf.so.0 \
-    && ldconfig \
     && rm -rf /var/lib/apt/lists/* \
     && pip3 install --no-cache-dir --upgrade pip
 
 WORKDIR /scripts
 COPY requirements.txt ./
-RUN pip3 install --no-cache-dir -r requirements.txt
+# Install Python deps, then register ACPYPE's bundled AmberTools libs with ldconfig
+# so teLeap can find libhdf5_hl.so.310 etc. without needing LD_LIBRARY_PATH.
+RUN pip3 install --no-cache-dir -r requirements.txt \
+    && echo '/usr/local/lib/python3.10/dist-packages/acpype/amber_linux/lib' \
+       > /etc/ld.so.conf.d/acpype-amber.conf \
+    && ldconfig
 
 COPY scripts/ /scripts/
 COPY mdp/ /mdp/
