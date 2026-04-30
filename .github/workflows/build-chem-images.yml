@@ -296,5 +296,3 @@ jobs:
           tags: |
             ${{ matrix.image }}:${{ steps.tags.outputs.build_tag }}
             ${{ matrix.image }}:latest
-          cache-from: type=registry,ref=${{ matrix.image }}:cache
-          cache-to: type=registry,ref=${{ matrix.image }}:cache,mode=min
