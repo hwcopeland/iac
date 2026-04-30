@@ -184,58 +184,50 @@ def run_gmx(args, cwd, description):
 
 
 def prepare_ligand_topology(smiles, pose_sdf_path, workdir):
-    """Generate GROMACS topology for the ligand using OpenFF GAFF-2.11.
+    """Generate GROMACS topology for the ligand using ACPYPE + GAFF2.
 
     Uses the 3D coordinates from the docked pose (pose_sdf_path) so the
-    starting conformation is the docked geometry, not a freshly generated
-    conformer. Returns paths to ligand.gro and ligand.itp.
-    """
-    from openff.toolkit import Molecule, ForceField
-    from openff.interchange import Interchange
-    import numpy as np
+    starting conformation is the docked geometry. Falls back to an RDKit
+    conformer if no pose file is available.
 
+    Returns paths to (LIG_GMX.gro, LIG_GMX.itp) in the ACPYPE output dir.
+    """
     workdir = Path(workdir)
 
-    # Load molecule — from docked SDF to get 3D pose coords; fall back to SMILES.
     if pose_sdf_path and Path(pose_sdf_path).exists():
-        mol = Molecule.from_file(str(pose_sdf_path), allow_undefined_stereo=True)
-        print("[openff] Loaded ligand from docked SDF pose", flush=True)
+        lig_input = str(pose_sdf_path)
+        print("[acpype] Using docked pose SDF as ligand input", flush=True)
     else:
-        mol = Molecule.from_smiles(smiles, allow_undefined_stereo=True)
-        mol.generate_conformers(n_conformers=1)
-        print("[openff] Generated ligand conformer from SMILES", flush=True)
+        from rdkit import Chem
+        from rdkit.Chem import AllChem
+        mol = Chem.MolFromSmiles(smiles)
+        mol = Chem.AddHs(mol)
+        AllChem.EmbedMolecule(mol, AllChem.ETKDGv3())
+        lig_sdf = str(workdir / "ligand_3d.sdf")
+        with Chem.SDWriter(lig_sdf) as w:
+            w.write(mol)
+        lig_input = lig_sdf
+        print("[acpype] Generated RDKit conformer from SMILES", flush=True)
 
-    ff = ForceField("gaff-2.11.offxml")
-    interchange = Interchange.from_smirnoff(ff, mol.to_topology())
+    # ACPYPE: GAFF2 atom types, Gasteiger charges (no AmberTools required)
+    result = subprocess.run(
+        ["acpype", "-i", lig_input, "-b", "LIG", "-c", "gas", "-a", "gaff2"],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+    )
+    for line in result.stdout.splitlines():
+        print(f"[acpype] {line}", flush=True)
+    if result.returncode != 0:
+        print(f"[acpype stderr] {result.stderr}", flush=True)
+        raise RuntimeError(f"ACPYPE failed (exit {result.returncode})")
 
-    if mol.conformers:
-        interchange.positions = mol.conformers[0]
+    acpype_dir = workdir / "LIG.acpype"
+    gro = acpype_dir / "LIG_GMX.gro"
+    itp = acpype_dir / "LIG_GMX.itp"
+    print(f"[acpype] Topology written to {acpype_dir}", flush=True)
+    return gro, itp
 
-    interchange.to_gromacs(str(workdir / "ligand"), decimal=6)
-    print("[openff] Ligand topology written (ligand.gro + ligand.top)", flush=True)
-
-    # openff-interchange writes ligand.top; we want ligand.itp (no [ system ] / [ molecules ])
-    top_path = workdir / "ligand.top"
-    itp_path = workdir / "ligand.itp"
-    _top_to_itp(top_path, itp_path)
-
-    return workdir / "ligand.gro", itp_path
-
-
-def _top_to_itp(top_path, itp_path):
-    """Strip [ system ] and [ molecules ] from a .top so it can be #included as .itp."""
-    lines = Path(top_path).read_text().splitlines(keepends=True)
-    out = []
-    skip = False
-    for line in lines:
-        stripped = line.strip()
-        if stripped in ("[ system ]", "[ molecules ]"):
-            skip = True
-        elif stripped.startswith("[") and stripped.endswith("]"):
-            skip = False
-        if not skip:
-            out.append(line)
-    itp_path.write_text("".join(out))
 
 
 def prepare_protein_topology(receptor_pdb_path, workdir):

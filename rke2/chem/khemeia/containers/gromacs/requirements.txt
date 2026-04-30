@@ -1,8 +1,4 @@
 mysql-connector-python
 boto3
-# openff-toolkit 0.15.x is the last series supporting Python 3.10
-# (NGC GROMACS 2023.2 ships Python 3.10)
-openff-toolkit>=0.14.0,<0.16.0
-openff-interchange>=0.3.0,<0.4.0
-openff-forcefields>=2023.0.0,<2024.0.0
+acpype
 rdkit
