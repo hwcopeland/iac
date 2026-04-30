@@ -243,29 +243,14 @@ def mol_to_pdbqt(mol: Chem.Mol) -> str | None:
     if not _HAS_MEEKO:
         return None
     try:
+        from meeko import PDBQTWriterLegacy
         preparator = MoleculePreparation()
         mol_setup_list = preparator.prepare(mol)
-
-        # Meeko >= 0.5: prepare() returns a list of MoleculeSetup objects
-        if mol_setup_list and hasattr(mol_setup_list[0], "write_pdbqt_string"):
-            result = mol_setup_list[0].write_pdbqt_string()
-            # write_pdbqt_string returns (str, bool, str) or just str
-            if isinstance(result, tuple):
-                pdbqt_string, is_ok = result[0], result[1]
-                if is_ok:
-                    return pdbqt_string
-                return None
-            return result if isinstance(result, str) else None
-
-        # Meeko < 0.5 fallback: use PDBQTWriterLegacy
-        try:
-            from meeko import PDBQTWriterLegacy
-            pdbqt_string, _, _ = PDBQTWriterLegacy.write_string(
-                preparator.setup
-            )
-            return pdbqt_string if pdbqt_string else None
-        except (ImportError, AttributeError):
+        if not mol_setup_list:
             return None
+        # Meeko >= 0.5: PDBQTWriterLegacy.write_string takes the MoleculeSetup object
+        pdbqt_string, is_ok, _ = PDBQTWriterLegacy.write_string(mol_setup_list[0])
+        return pdbqt_string if is_ok and pdbqt_string else None
     except Exception:
         return None
 
