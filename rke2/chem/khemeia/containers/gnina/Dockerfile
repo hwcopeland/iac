@@ -5,13 +5,11 @@
 # Primary mode: batch worker (dock_batch.py) invoked as a K8s Job.
 # The Flask app (app.py) is retained for health checks only.
 
-FROM nvidia/cuda:12.2.0-runtime-ubuntu22.04
+FROM nvidia/cuda:12.8.1-cudnn-runtime-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV TZ=Etc/UTC
 
-# Install cuDNN 9 runtime (required by gnina 1.3.2 binary — links libcudnn.so.9).
-# The NVIDIA machine learning repo provides cudnn packages for Ubuntu 22.04.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     wget \
     ca-certificates \
@@ -19,17 +17,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-pip \
     libopenbabel-dev \
     libboost-all-dev \
-    && wget -q -O /tmp/cuda-keyring.deb \
-       https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb \
-    && dpkg -i /tmp/cuda-keyring.deb \
-    && rm /tmp/cuda-keyring.deb \
-    && apt-get update \
-    && apt-get install -y --no-install-recommends libcudnn9-cuda-12 \
     && rm -rf /var/lib/apt/lists/*
 
-# Install gnina from GitHub releases (static build, pinned to v1.3.2)
+# gnina 1.3.2 CUDA 12.8 variant — built against cuDNN 9 + CUDA 12.8.
+# Required for driver 580 (default binary targets CUDA 12.2 which deadlocks
+# with cuDNN 9 on driver 580 due to cuDNN 9 requiring CUDA >= 12.3).
 RUN wget -q -O /usr/local/bin/gnina \
-    "https://github.com/gnina/gnina/releases/download/v1.3.2/gnina.1.3.2" \
+    "https://github.com/gnina/gnina/releases/download/v1.3.2/gnina.1.3.2.cuda12.8" \
     && chmod +x /usr/local/bin/gnina
 
 WORKDIR /app
