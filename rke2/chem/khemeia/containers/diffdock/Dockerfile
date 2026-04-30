@@ -49,10 +49,15 @@ RUN pip3 install --no-cache-dir \
 RUN git clone --depth=1 https://github.com/gcorso/DiffDock /opt/diffdock
 
 # Download and extract model weights from GitHub release v1.1.
-# The zip extracts to workdir/v1.1/{score_model,confidence_model}/ inside /opt/diffdock/.
-RUN wget -q -O /tmp/diffdock_models.zip \
-    https://github.com/gcorso/DiffDock/releases/download/v1.1/diffdock_models.zip \
-    && unzip -q /tmp/diffdock_models.zip -d /opt/diffdock \
+# The zip contains score_model/ and confidence_model/ at its root.
+# DiffDock inference.py looks for models at ./workdir/v1.1/{score_model,confidence_model}/
+# so extract into that directory.
+RUN mkdir -p /opt/diffdock/workdir/v1.1 \
+    && wget -O /tmp/diffdock_models.zip \
+       https://github.com/gcorso/DiffDock/releases/download/v1.1/diffdock_models.zip \
+    && echo "Downloaded $(wc -c < /tmp/diffdock_models.zip) bytes" \
+    && unzip -q /tmp/diffdock_models.zip -d /opt/diffdock/workdir/v1.1 \
+    && ls -la /opt/diffdock/workdir/v1.1/ \
     && rm /tmp/diffdock_models.zip
 
 # Verify model weights were extracted successfully.
