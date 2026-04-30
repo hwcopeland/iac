@@ -197,6 +197,20 @@ def run_gmx(args, cwd, description):
         sys.exit(result.returncode)
 
 
+def _gro_has_bad_coords(gro_path, max_nm=500.0):
+    """Return True if any atom coordinate magnitude exceeds max_nm."""
+    for line in Path(gro_path).read_text().splitlines()[2:-1]:
+        if not line.strip():
+            continue
+        try:
+            x, y, z = float(line[20:28]), float(line[28:36]), float(line[36:44])
+            if abs(x) > max_nm or abs(y) > max_nm or abs(z) > max_nm:
+                return True
+        except (ValueError, IndexError):
+            continue
+    return False
+
+
 def prepare_ligand_topology(smiles, pose_sdf_path, workdir):
     """Generate GROMACS topology for the ligand using ACPYPE + GAFF2.
 
@@ -240,6 +254,25 @@ def prepare_ligand_topology(smiles, pose_sdf_path, workdir):
     gro = acpype_dir / "LIG_GMX.gro"
     itp = acpype_dir / "LIG_GMX.itp"
     print(f"[acpype] Topology written to {acpype_dir}", flush=True)
+
+    # tleap sometimes generates astronomical coordinates for flexible ligands.
+    # Fall back to LIG_NEW.pdb (written by obabel from antechamber's .ac file,
+    # which preserves the input SDF coordinates) and regenerate the GRO from it.
+    if _gro_has_bad_coords(gro):
+        print("[acpype] WARNING: LIG_GMX.gro has suspect coordinates, regenerating from LIG_NEW.pdb", flush=True)
+        lig_pdb = acpype_dir / "LIG_NEW.pdb"
+        fixed_gro = acpype_dir / "LIG_fixed.gro"
+        run_gmx(
+            ["editconf", "-f", str(lig_pdb), "-o", str(fixed_gro)],
+            cwd=str(workdir),
+            description="editconf — regenerate ligand GRO from LIG_NEW.pdb",
+        )
+        if fixed_gro.exists() and not _gro_has_bad_coords(fixed_gro):
+            print("[acpype] Using coordinate-corrected LIG_fixed.gro", flush=True)
+            gro = fixed_gro
+        else:
+            raise RuntimeError("LIG_NEW.pdb also has bad coordinates; cannot recover ligand GRO")
+
     return gro, itp
 
 
@@ -331,12 +364,22 @@ def assemble_complex(protein_gro, ligand_gro, protein_top, ligand_itp, workdir):
 
     top_text = Path(protein_top).read_text()
 
-    # Insert ligand atomtypes include before the first [ moleculetype ] in topol.top
-    at_include = f'\n; Ligand atom types\n#include "{lig_atomtypes_itp}"\n'
-    if "[ moleculetype ]" in top_text:
-        top_text = top_text.replace("[ moleculetype ]", at_include + "[ moleculetype ]", 1)
+    # Insert ligand atomtypes after the force field #include (which defines [ defaults ]).
+    # GROMACS requires [ atomtypes ] to follow [ defaults ], so we can't prepend before FF.
+    # pdb2gmx may inline [ moleculetype ] or only #include chain .itp files — handle both.
+    at_include = f'; Ligand atom types\n#include "{lig_atomtypes_itp}"\n'
+    lines = top_text.splitlines(keepends=True)
+    ff_idx = next(
+        (i for i, ln in enumerate(lines) if ln.strip().startswith("#include") and ".ff/" in ln),
+        None,
+    )
+    if ff_idx is not None:
+        lines.insert(ff_idx + 1, "\n" + at_include)
+        top_text = "".join(lines)
+    elif "[ moleculetype ]" in top_text:
+        top_text = top_text.replace("[ moleculetype ]", "\n" + at_include + "[ moleculetype ]", 1)
     else:
-        top_text = at_include + top_text
+        top_text = "\n" + at_include + top_text
 
     # Insert ligand molecule include before [ system ]
     mol_include = f'\n; Ligand molecule topology\n#include "{lig_mol_itp}"\n'
