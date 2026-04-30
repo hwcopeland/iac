@@ -470,6 +470,43 @@ def _detect_mol_name(itp_path):
     return "LIG"
 
 
+def _make_protein_lig_index(gro_path, ndx_out):
+    """Create index.ndx with a Protein_LIG group = Protein | <ligand>.
+
+    GROMACS MDP tc-grps requires all groups to exist in the index file.
+    Protein_LIG is not auto-generated, so we build it here.
+    """
+    # First pass: dump default groups to discover numbers for Protein and ligand
+    result = subprocess.run(
+        ["gmx", "-quiet", "make_ndx", "-f", str(gro_path), "-o", str(ndx_out)],
+        capture_output=True, text=True, input="q\n",
+    )
+    output = result.stdout + result.stderr
+    protein_idx, lig_idx, max_idx = None, None, 0
+    for line in output.splitlines():
+        m = _re.match(r"\s*(\d+)\s+(\S+)", line)
+        if m:
+            idx = int(m.group(1))
+            name = m.group(2)
+            max_idx = max(max_idx, idx)
+            if name == "Protein":
+                protein_idx = idx
+            elif name in ("MOL", "Other") and lig_idx is None:
+                lig_idx = idx
+    if protein_idx is None or lig_idx is None:
+        print(f"[make_ndx] WARNING: could not find Protein/MOL groups; index unchanged\n{output}", flush=True)
+        return
+    new_idx = max_idx + 1
+    ndx_input = f"{protein_idx} | {lig_idx}\nname {new_idx} Protein_LIG\nq\n"
+    result2 = subprocess.run(
+        ["gmx", "-quiet", "make_ndx", "-f", str(gro_path), "-o", str(ndx_out)],
+        capture_output=True, text=True, input=ndx_input,
+    )
+    if result2.returncode != 0:
+        raise RuntimeError(f"make_ndx failed:\n{result2.stdout}{result2.stderr}")
+    print(f"[make_ndx] Protein_LIG group created (groups {protein_idx}|{lig_idx} → {new_idx})", flush=True)
+
+
 def solvate_and_ions(complex_gro, topol_top, box_padding, workdir):
     """Add TIP3P water box and NaCl ions at 0.15 M."""
     workdir = Path(workdir)
@@ -506,10 +543,12 @@ def solvate_and_ions(complex_gro, topol_top, box_padding, workdir):
         stdin_input="SOL\n",
     )
 
-    return workdir / "ionised.gro"
+    index_ndx = workdir / "index.ndx"
+    _make_protein_lig_index(workdir / "ionised.gro", index_ndx)
+    return workdir / "ionised.gro", index_ndx
 
 
-def run_md_step(name, mdp, input_gro, topol_top, workdir, prev_cpt=None, gpu=True):
+def run_md_step(name, mdp, input_gro, topol_top, workdir, prev_cpt=None, gpu=True, index_ndx=None):
     """grompp + mdrun for one MD step. Returns output .gro path."""
     workdir = Path(workdir)
     tpr = workdir / f"{name}.tpr"
@@ -519,6 +558,8 @@ def run_md_step(name, mdp, input_gro, topol_top, workdir, prev_cpt=None, gpu=Tru
     ]
     if prev_cpt:
         grompp_args += ["-t", str(prev_cpt)]
+    if index_ndx:
+        grompp_args += ["-n", str(index_ndx)]
     run_gmx(grompp_args, cwd=str(workdir), description=f"grompp — {name}")
 
     mdrun_args = [
@@ -618,25 +659,25 @@ def main():
 
         # --- Solvation ---
         print("Solvating system...", flush=True)
-        ionised_gro = solvate_and_ions(complex_gro, topol_top, cfg["box_padding"], wd)
+        ionised_gro, index_ndx = solvate_and_ions(complex_gro, topol_top, cfg["box_padding"], wd)
 
         t0 = _time.time()
 
         # --- MD pipeline ---
         print("Step 1/4: Energy minimisation...", flush=True)
-        em_gro, _ = run_md_step("em", MDP_DIR / "em.mdp", ionised_gro, topol_top, wd, gpu=False)
+        em_gro, _ = run_md_step("em", MDP_DIR / "em.mdp", ionised_gro, topol_top, wd, gpu=False, index_ndx=index_ndx)
 
         print("Step 2/4: NVT equilibration (100 ps)...", flush=True)
-        nvt_gro, nvt_cpt = run_md_step("nvt", MDP_DIR / "nvt.mdp", em_gro, topol_top, wd)
+        nvt_gro, nvt_cpt = run_md_step("nvt", MDP_DIR / "nvt.mdp", em_gro, topol_top, wd, index_ndx=index_ndx)
 
         print("Step 3/4: NPT equilibration (100 ps)...", flush=True)
         npt_gro, npt_cpt = run_md_step(
-            "npt", MDP_DIR / "npt.mdp", nvt_gro, topol_top, wd, prev_cpt=nvt_cpt,
+            "npt", MDP_DIR / "npt.mdp", nvt_gro, topol_top, wd, prev_cpt=nvt_cpt, index_ndx=index_ndx,
         )
 
         print(f"Step 4/4: Production MD ({cfg['nsteps']} steps)...", flush=True)
         _, _ = run_md_step(
-            "md", md_mdp, npt_gro, topol_top, wd, prev_cpt=npt_cpt,
+            "md", md_mdp, npt_gro, topol_top, wd, prev_cpt=npt_cpt, index_ndx=index_ndx,
         )
 
         duration = _time.time() - t0
