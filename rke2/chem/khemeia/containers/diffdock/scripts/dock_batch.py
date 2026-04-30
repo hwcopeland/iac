@@ -60,7 +60,7 @@ RECEPTOR_PATH = os.path.join(DATA_DIR, "receptor.pdb")
 BUCKET_RECEPTORS = "khemeia-receptors"
 
 _SAFE_NAME_RE = re.compile(r"[^A-Za-z0-9._-]+")
-_CONFIDENCE_RE = re.compile(r"confidence(-?[\d.]+)")
+_CONFIDENCE_RE = re.compile(r"confidence(-?\d+(?:\.\d+)?)")
 # PDBQT-specific record types that have no PDB equivalent
 _PDBQT_ONLY = frozenset({"ROOT", "ENDROOT", "BRANCH", "ENDBRANCH", "TORSDOF"})
 
