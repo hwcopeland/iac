@@ -443,7 +443,8 @@ def assemble_complex(protein_gro, ligand_gro, protein_top, ligand_itp, workdir):
             fh.write(ln + "\n")
         fh.write(box + "\n")
 
-    print(f"[assemble] Complex: {len(p_atoms)} protein + {len(l_atoms)} ligand atoms", flush=True)
+    print(f"[assemble] Complex: {len(p_atoms)} protein + {len(l_atoms)} ligand atoms "
+          f"(p_lines={len(p_lines)}, l_lines={len(l_lines)})", flush=True)
     if _gro_has_bad_coords(complex_gro, max_nm=500.0):
         print("[assemble] WARNING: complex.gro has atoms with |coord| > 500 nm — dumping:", flush=True)
         for i, ln in enumerate(Path(complex_gro).read_text().splitlines()[2:-1]):
@@ -452,8 +453,10 @@ def assemble_complex(protein_gro, ligand_gro, protein_top, ligand_itp, workdir):
                 x, y, z = _parse_gro_coords(ln)
                 if abs(x) > 500 or abs(y) > 500 or abs(z) > 500:
                     print(f"[assemble]   line {i+2}: atom={ln[10:15].strip()} ({x:.3f},{y:.3f},{z:.3f}) nm", flush=True)
-            except Exception:
-                pass
+                    print(f"[assemble]   raw={repr(ln[:80])}", flush=True)
+            except Exception as exc:
+                print(f"[assemble]   line {i+2}: parse error {exc} raw={repr(ln[:80])}", flush=True)
+                break
 
     # Split ligand ITP: [ atomtypes ] must go before any [ moleculetype ]
     atomtypes_text, mol_text = _split_itp_atomtypes(ligand_itp)
