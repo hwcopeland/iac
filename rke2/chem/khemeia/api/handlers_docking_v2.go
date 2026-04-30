@@ -41,7 +41,7 @@ import (
 // runs dock_batch.py which pulls ligands from MySQL, docks via CLI,
 // and writes results to docking_v2_results, then exits.
 var engineContainerImages = map[string]string{
-	"vina-1.2":       "zot.hwcopeland.net/chem/vina:1.2",
+	"vina-1.2":       "zot.hwcopeland.net/chem/vina:latest",
 	"vina-gpu":       "zot.hwcopeland.net/chem/vina-gpu:latest",
 	"vina-gpu-batch": "zot.hwcopeland.net/chem/vina-gpu:latest",
 	"gnina":          "zot.hwcopeland.net/chem/gnina:latest",

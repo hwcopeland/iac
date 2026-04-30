@@ -782,7 +782,8 @@ type libraryPrepSidecarCompound struct {
 	BrenkPass       *bool    `json:"brenk_pass,omitempty"`
 	REOSPass        *bool    `json:"reos_pass,omitempty"`
 	Filtered        bool     `json:"filtered"`
-	ConformerS3Key  string   `json:"conformer_s3_key,omitempty"`
+	ConformerS3Key  string   `json:"conformer_s3_key,omitempty"` // set by handler after S3 upload
+	PDBQTData       string   `json:"pdbqt_data,omitempty"`       // raw PDBQT from sidecar (pre-upload)
 	Error           string   `json:"error,omitempty"`
 }
 
@@ -839,6 +840,9 @@ func (h *APIHandler) callLibraryPrepSidecar(ctx context.Context, req libraryPrep
 
 // insertLibraryCompounds inserts processed compounds into the library_compounds
 // table and returns (total_count, filtered_count).
+// For each compound that has PDBQTData, it uploads the PDBQT to S3 and stores
+// the resulting key in s3_conformer_key. The sidecar returns raw PDBQT bytes;
+// the handler is responsible for the S3 upload.
 func (h *APIHandler) insertLibraryCompounds(ctx context.Context, db *sql.DB, libraryID int, jobName string, resp *libraryPrepSidecarResponse) (int, int, error) {
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
@@ -870,8 +874,18 @@ func (h *APIHandler) insertLibraryCompounds(ctx context.Context, db *sql.DB, lib
 		// Generate stable compound ID: KHM-{first 8 chars of InChIKey}.
 		compoundID := generateStableCompoundID(c.InChIKey)
 
+		// Upload PDBQT conformer to S3 if the sidecar returned one.
+		// The sidecar returns raw PDBQT bytes in PDBQTData; we upload and store the key.
 		var conformerKey sql.NullString
-		if c.ConformerS3Key != "" {
+		if c.PDBQTData != "" && h.s3Client != nil {
+			s3Key := fmt.Sprintf("LibraryPrep/%s/%s.pdbqt", jobName, compoundID)
+			if err := h.s3Client.PutArtifact(ctx, BucketLibraries, s3Key,
+				strings.NewReader(c.PDBQTData), "chemical/x-pdbqt"); err != nil {
+				log.Printf("[library-prep] %s: warning: failed to upload conformer for %s: %v", jobName, compoundID, err)
+			} else {
+				conformerKey = sql.NullString{String: s3Key, Valid: true}
+			}
+		} else if c.ConformerS3Key != "" {
 			conformerKey = sql.NullString{String: c.ConformerS3Key, Valid: true}
 		}
 
