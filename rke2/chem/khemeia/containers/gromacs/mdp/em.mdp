@@ -1,0 +1,25 @@
+; Energy minimisation — steepest descent, 50k steps max
+integrator  = steep
+nsteps      = 50000
+emtol       = 1000.0
+emstep      = 0.01
+
+; Neighbour searching
+cutoff-scheme   = Verlet
+nstlist         = 1
+ns_type         = grid
+rlist           = 1.2
+
+; Electrostatics
+coulombtype     = PME
+rcoulomb        = 1.2
+
+; Van der Waals
+vdwtype         = Cut-off
+vdw-modifier    = Force-switch
+rvdw-switch     = 1.0
+rvdw            = 1.2
+
+; Output
+nstxout-compressed  = 0
+nstlog              = 500

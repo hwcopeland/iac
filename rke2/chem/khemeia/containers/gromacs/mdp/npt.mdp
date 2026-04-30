@@ -1,0 +1,50 @@
+; NPT equilibration — 100 ps, Parrinello-Rahman barostat
+integrator  = md
+nsteps      = 50000
+dt          = 0.002
+
+; Output
+nstxout-compressed  = 500
+nstvout             = 0
+nstfout             = 0
+nstlog              = 500
+nstenergy           = 500
+
+; Neighbour searching
+cutoff-scheme   = Verlet
+nstlist         = 10
+ns_type         = grid
+rlist           = 1.2
+
+; Electrostatics
+coulombtype     = PME
+rcoulomb        = 1.2
+
+; Van der Waals
+vdwtype         = Cut-off
+vdw-modifier    = Force-switch
+rvdw-switch     = 1.0
+rvdw            = 1.2
+
+; Temperature coupling
+tcoupl      = V-rescale
+tc-grps     = Protein_LIG  Water_and_ions
+tau-t       = 0.1          0.1
+ref-t       = 300          300
+
+; Pressure coupling — Parrinello-Rahman for NPT
+pcoupl          = Parrinello-Rahman
+pcoupltype      = isotropic
+tau-p           = 2.0
+ref-p           = 1.0
+compressibility = 4.5e-5
+
+; Periodic boundary conditions
+pbc         = xyz
+
+; Constraints
+constraints         = h-bonds
+constraint-algorithm = LINCS
+
+; Velocity generation — off; continue from NVT
+gen-vel     = no
