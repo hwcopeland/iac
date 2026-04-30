@@ -103,11 +103,11 @@ spec:
               mountPath: /certs
           resources:
             requests:
-              cpu: 200m
-              memory: 256Mi
+              cpu: 500m
+              memory: 1Gi
             limits:
-              cpu: 2000m
-              memory: 2Gi
+              cpu: 4000m
+              memory: 6Gi
 
       volumes:
         - name: work
