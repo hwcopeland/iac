@@ -4,7 +4,7 @@
 #
 # Target: RTX 3070 (Ampere, SM 8.6) on nixos-gpu.
 
-FROM nvcr.io/hpc/gromacs:2024.2
+FROM nvcr.io/hpc/gromacs:2023.2
 
 ENV DEBIAN_FRONTEND=noninteractive
 
