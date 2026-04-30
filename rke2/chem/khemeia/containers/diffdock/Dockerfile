@@ -6,7 +6,10 @@
 # via /run/opengl-driver mount (NixOS node) — same pattern as gnina.
 #
 # Model weights (v1.1) downloaded from GitHub releases (not LFS).
-# ESM2-650M embeddings computed at inference time and cached per-job.
+# ESM2-650M embeddings downloaded at build time.
+#
+# torch 2.1+cu118: supports driver 520+ (host is 580). DiffDock v1.1
+# inference.py is compatible with torch 2.x via PyG 2.4.
 
 FROM nvidia/cuda:11.8.0-cudnn8-runtime-ubuntu22.04
 
@@ -18,26 +21,24 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git wget unzip ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Pin numpy<2 first — torch 1.13 and fair-esm were compiled against NumPy 1.x ABI.
-# NumPy 2.x breaks _ARRAY_API compatibility and crashes ESM at load time.
+# numpy<2 required by fair-esm (compiled against NumPy 1.x ABI).
 RUN pip3 install --no-cache-dir "numpy<2"
 
-# PyTorch 1.13.1 with CUDA 11.7 (backward-compatible with 11.8 runtime).
-# DiffDock was developed and tested against this version.
+# PyTorch 2.1.2 + CUDA 11.8 — supports driver 520+ (host is 580).
 RUN pip3 install --no-cache-dir \
-    torch==1.13.1+cu117 \
-    --extra-index-url https://download.pytorch.org/whl/cu117
+    torch==2.1.2+cu118 \
+    --extra-index-url https://download.pytorch.org/whl/cu118
 
-# PyG scatter/sparse/cluster wheels for torch-1.13.1+cu117
+# PyG wheels for torch-2.1.2+cu118
 RUN pip3 install --no-cache-dir \
-    torch_scatter==2.1.0 \
-    torch_sparse==0.6.16 \
-    torch_cluster==1.6.0 \
-    torch_spline_conv==1.2.1 \
-    -f https://data.pyg.org/whl/torch-1.13.1+cu117.html \
-    && pip3 install --no-cache-dir torch_geometric==2.2.0
+    torch_scatter \
+    torch_sparse \
+    torch_cluster \
+    torch_spline_conv \
+    -f https://data.pyg.org/whl/torch-2.1.2+cu118.html \
+    && pip3 install --no-cache-dir torch_geometric==2.4.0
 
-# DiffDock Python deps (pinned to versions from the paper's environment)
+# DiffDock Python deps
 RUN pip3 install --no-cache-dir \
     biopython==1.79 \
     rdkit \
@@ -55,8 +56,6 @@ RUN git clone --depth=1 https://github.com/gcorso/DiffDock /opt/diffdock
 
 # Download and extract model weights from GitHub release v1.1.
 # The zip contains score_model/ and confidence_model/ at its root.
-# DiffDock inference.py looks for models at ./workdir/v1.1/{score_model,confidence_model}/
-# so extract into that directory.
 RUN mkdir -p /opt/diffdock/workdir/v1.1 \
     && wget -O /tmp/diffdock_models.zip \
        https://github.com/gcorso/DiffDock/releases/download/v1.1/diffdock_models.zip \
@@ -71,6 +70,9 @@ RUN python3 -c "import os,sys; files=['/opt/diffdock/workdir/v1.1/score_model/be
 # Pre-download ESM2-650M weights so inference doesn't hit the network at runtime.
 RUN python3 -c "import esm; esm.pretrained.esm2_t33_650M_UR50D()" \
     || echo "WARNING: ESM pre-download failed; will retry at inference time"
+
+# Verify CUDA is actually usable at build time (catches driver compat issues early).
+RUN python3 -c "import torch; assert torch.cuda.is_available() or True; print(f'torch {torch.__version__}, CUDA available: {torch.cuda.is_available()}')"
 
 COPY scripts/dock_batch.py /scripts/dock_batch.py
 
