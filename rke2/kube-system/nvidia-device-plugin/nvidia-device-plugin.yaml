@@ -53,7 +53,7 @@ spec:
             - |
               echo /run/opengl-driver/lib > /etc/ld.so.conf.d/nvidia-nixos.conf
               ldconfig
-              exec /usr/bin/nvidia-device-plugin --device-discovery-strategy=nvml
+              exec /usr/bin/nvidia-device-plugin --device-discovery-strategy=nvml --config /config/config.yaml
           env:
             - name: FAIL_ON_INIT_ERROR
               value: "true"
@@ -90,6 +90,9 @@ spec:
               readOnly: true
             - name: dev
               mountPath: /dev
+            - name: plugin-config
+              mountPath: /config
+              readOnly: true
       volumes:
         - name: device-plugin
           hostPath:
@@ -106,3 +109,6 @@ spec:
         - name: dev
           hostPath:
             path: /dev
+        - name: plugin-config
+          configMap:
+            name: nvidia-device-plugin-config

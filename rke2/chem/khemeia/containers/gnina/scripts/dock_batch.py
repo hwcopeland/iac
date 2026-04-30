@@ -52,10 +52,12 @@ RECEPTOR_PATH = os.path.join(DATA_DIR, "receptor.pdbqt")
 BUCKET_RECEPTORS = "khemeia-receptors"
 BUCKET_LIBRARIES = "khemeia-libraries"
 
-# Gnina log output parsers (mode lines with CNN scores)
+# Gnina log output parsers.
+# gnina v1.3.2 mode table columns: mode | affinity | intramol | cnn_pose_score | cnn_affinity
 _MODE_RE = re.compile(
-    r"^\s+(\d+)\s+([-\d.]+)\s+([-\d.]+)\s+([-\d.]+)\s+([-\d.]+)\s+([-\d.]+)"
+    r"^\s+(\d+)\s+([-\d.]+)\s+([-\d.]+)\s+([-\d.]+)\s+([-\d.]+)"
 )
+# Fallback for Vina-format logs (no CNN columns): mode | affinity | rmsd_lb | rmsd_ub
 _MODE_VINA_RE = re.compile(
     r"^\s+(\d+)\s+([-\d.]+)\s+([-\d.]+)\s+([-\d.]+)"
 )
@@ -245,8 +247,8 @@ def parse_gnina_log(log_path):
             if m and m.group(1) == "1":
                 return {
                     "affinity": float(m.group(2)),
-                    "cnn_score": float(m.group(5)),
-                    "cnn_affinity": float(m.group(6)),
+                    "cnn_score": float(m.group(4)),
+                    "cnn_affinity": float(m.group(5)),
                 }
             m = _MODE_VINA_RE.match(line)
             if m and m.group(1) == "1":
@@ -289,6 +291,7 @@ def run_gnina(receptor_path, ligand_pdbqt, center, size, exhaustiveness, n_poses
             "--num_modes", str(n_poses),
             "--out", out_path,
             "--log", log_path,
+            "--cnn_scoring", "rescore",
         ]
 
         proc = subprocess.Popen(
