@@ -246,6 +246,9 @@ def _parse_sdf_coords_nm(sdf_path):
                 if not (_math.isfinite(x) and _math.isfinite(y) and _math.isfinite(z)):
                     print(f"[acpype] non-finite coord in SDF: ({x}, {y}, {z})", flush=True)
                     return []
+                if abs(x) > 500 or abs(y) > 500 or abs(z) > 500:
+                    print(f"[acpype] unreasonable coord in SDF (>{500} nm): ({x:.1f}, {y:.1f}, {z:.1f})", flush=True)
+                    return []
                 coords.append((x, y, z))
             except ValueError:
                 pass
