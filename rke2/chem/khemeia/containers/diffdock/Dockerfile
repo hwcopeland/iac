@@ -47,11 +47,12 @@ RUN pip3 install --no-cache-dir \
     mysql-connector-python \
     boto3
 
-# Clone DiffDock source + model weights via Git LFS.
-# The workdir/ directory contains LFS-tracked model weight files (~150MB each).
-# GIT_LFS_SKIP_SMUDGE=0 forces LFS objects to be downloaded (the default, made explicit).
-RUN GIT_LFS_SKIP_SMUDGE=0 git clone --depth=1 \
-    https://github.com/gcorso/DiffDock /opt/diffdock
+# Clone DiffDock source + pull model weights via Git LFS.
+# GIT_LFS_SKIP_SMUDGE=1 skips LFS during clone (avoids bandwidth waste on clone phase),
+# then git lfs pull fetches all LFS objects explicitly after the shallow clone completes.
+RUN GIT_LFS_SKIP_SMUDGE=1 git clone --depth=1 \
+    https://github.com/gcorso/DiffDock /opt/diffdock \
+    && cd /opt/diffdock && git lfs pull
 
 # Verify model weights were downloaded (LFS pointers are ~130 bytes; real files are >50MB).
 # Fails the build early if git-lfs was not available on the runner.
