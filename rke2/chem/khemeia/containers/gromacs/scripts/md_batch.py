@@ -242,7 +242,7 @@ def prepare_protein_topology(receptor_pdb_path, workdir):
             "-f", str(receptor_pdb_path),
             "-o", "protein.gro",
             "-p", "topol.top",
-            "-ff", "charmm36m-jul2022",
+            "-ff", "amber99sb-ildn",
             "-water", "tip3p",
             "-ignh",
         ],
