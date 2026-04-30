@@ -115,6 +115,20 @@ def pdbqt_to_pdb(pdbqt_bytes):
     return "".join(lines).encode("utf-8")
 
 
+def strip_hetatm(pdb_bytes):
+    """Remove HETATM records (ions, cofactors, crystallographic waters).
+
+    pdb2gmx requires a clean protein-only PDB; HETATM residues mixed into a
+    protein chain cause a fatal 'inconsistent type' error.
+    """
+    lines = []
+    for line in pdb_bytes.decode("utf-8", errors="replace").splitlines():
+        record = line[:6].strip().upper()
+        if record not in ("HETATM",):
+            lines.append(line + "\n")
+    return "".join(lines).encode("utf-8")
+
+
 def fetch_receptor_pdb(cursor, s3, receptor_ref):
     cursor.execute(
         "SELECT receptor_s3_key FROM target_prep_results WHERE name = %s",
@@ -417,9 +431,9 @@ def main():
     with tempfile.TemporaryDirectory(prefix="md_") as tmpdir:
         wd = Path(tmpdir)
 
-        # Write receptor PDB
+        # Write receptor PDB — strip HETATM (ions/cofactors) before pdb2gmx
         receptor_path = wd / "receptor.pdb"
-        receptor_path.write_bytes(receptor_pdb)
+        receptor_path.write_bytes(strip_hetatm(receptor_pdb))
 
         # Write docked pose and normalise to SDF for ACPYPE.
         # Vina PDBQT is multi-model; ACPYPE's internal obabel call chokes on it.
