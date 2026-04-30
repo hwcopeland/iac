@@ -26,7 +26,7 @@ mountConfig: true
 configFiles:
   config.json: |-
     {
-      "storage": { "rootDirectory": "/var/lib/registry" },
+      "storage": { "rootDirectory": "/var/lib/registry", "dedupe": true, "commit": true },
       "http": {
         "address": "0.0.0.0",
         "port": "5000",
