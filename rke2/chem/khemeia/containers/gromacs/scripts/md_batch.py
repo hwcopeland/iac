@@ -197,6 +197,9 @@ def run_gmx(args, cwd, description):
         sys.exit(result.returncode)
 
 
+import re as _re
+
+
 def _gro_has_bad_coords(gro_path, max_nm=500.0):
     """Return True if any atom coordinate magnitude exceeds max_nm."""
     for line in Path(gro_path).read_text().splitlines()[2:-1]:
@@ -209,6 +212,77 @@ def _gro_has_bad_coords(gro_path, max_nm=500.0):
         except (ValueError, IndexError):
             continue
     return False
+
+
+def _patch_ligand_gro_to_pose(gro_path, sdf_path):
+    """Translate all ligand GRO atoms so the heavy-atom centroid matches the SDF pose.
+
+    tleap regenerates coordinates from scratch when it adds missing Hs, placing
+    the ligand at an arbitrary position.  This translates the ACPYPE geometry
+    (which has correct internal bond lengths/angles) to the docked pose location.
+    Uses regex to parse GRO coordinates robustly even when they overflow the
+    fixed-width field.
+    """
+    # Parse SDF (molfile) heavy atom coordinates (Å → nm)
+    sdf_lines = Path(sdf_path).read_text().splitlines()
+    # The counts line is line 3 (0-indexed); format: aaabbblll...
+    try:
+        natoms = int(sdf_lines[3][:3])
+    except (IndexError, ValueError):
+        print("[acpype] Cannot parse SDF for centroid patch, skipping", flush=True)
+        return
+    sdf_heavy = []
+    for line in sdf_lines[4:4 + natoms]:
+        parts = line.split()
+        if len(parts) >= 4 and parts[3].upper() not in ("H",):
+            try:
+                sdf_heavy.append((float(parts[0]) / 10, float(parts[1]) / 10, float(parts[2]) / 10))
+            except ValueError:
+                pass
+    if not sdf_heavy:
+        return
+    sdf_cx = sum(c[0] for c in sdf_heavy) / len(sdf_heavy)
+    sdf_cy = sum(c[1] for c in sdf_heavy) / len(sdf_heavy)
+    sdf_cz = sum(c[2] for c in sdf_heavy) / len(sdf_heavy)
+
+    # Parse GRO atom lines; use regex to handle overflowed fields
+    gro_lines = Path(gro_path).read_text().splitlines(keepends=True)
+    atom_lines = gro_lines[2:-1]
+    _float_re = _re.compile(r'[-+]?\d+\.\d+')
+
+    gro_heavy = []
+    for ln in atom_lines:
+        if not ln.strip():
+            continue
+        atom_name = ln[10:15].strip().lower()
+        if not atom_name.startswith("h"):
+            nums = _float_re.findall(ln[20:])
+            if len(nums) >= 3:
+                gro_heavy.append((float(nums[0]), float(nums[1]), float(nums[2])))
+
+    if not gro_heavy:
+        return
+    gro_cx = sum(c[0] for c in gro_heavy) / len(gro_heavy)
+    gro_cy = sum(c[1] for c in gro_heavy) / len(gro_heavy)
+    gro_cz = sum(c[2] for c in gro_heavy) / len(gro_heavy)
+    dx, dy, dz = sdf_cx - gro_cx, sdf_cy - gro_cy, sdf_cz - gro_cz
+    print(f"[acpype] Centroid patch: translate ({dx:.3f}, {dy:.3f}, {dz:.3f}) nm", flush=True)
+
+    new_lines = list(gro_lines[:2])
+    for ln in atom_lines:
+        if not ln.strip():
+            new_lines.append(ln)
+            continue
+        nums = _float_re.findall(ln[20:])
+        if len(nums) >= 3:
+            x = float(nums[0]) + dx
+            y = float(nums[1]) + dy
+            z = float(nums[2]) + dz
+            new_lines.append(f"{ln[:20]}{x:8.3f}{y:8.3f}{z:8.3f}\n")
+        else:
+            new_lines.append(ln)
+    new_lines.append(gro_lines[-1])
+    Path(gro_path).write_text("".join(new_lines))
 
 
 def prepare_ligand_topology(smiles, pose_sdf_path, workdir):
@@ -237,6 +311,19 @@ def prepare_ligand_topology(smiles, pose_sdf_path, workdir):
         lig_input = lig_sdf
         print("[acpype] Generated RDKit conformer from SMILES", flush=True)
 
+    # Add explicit H atoms before ACPYPE so tleap sees a complete molecule
+    # and preserves the input coordinates.  Vina GPU PDBQT→SDF typically has
+    # heavy atoms only; when tleap needs to add Hs it regenerates ALL coords
+    # from scratch and places the ligand at an arbitrary position.
+    lig_h_sdf = str(workdir / "pose_H.sdf")
+    h_result = subprocess.run(
+        ["obabel", "-isdf", lig_input, "-osdf", "-O", lig_h_sdf, "-h"],
+        capture_output=True, text=True,
+    )
+    if h_result.returncode == 0 and Path(lig_h_sdf).exists() and Path(lig_h_sdf).stat().st_size > 0:
+        lig_input = lig_h_sdf
+        print("[pose] Added explicit H atoms to SDF before ACPYPE", flush=True)
+
     # ACPYPE: GAFF2 atom types, Gasteiger charges (no AmberTools required)
     result = subprocess.run(
         ["acpype", "-i", lig_input, "-b", "LIG", "-c", "gas", "-a", "gaff2"],
@@ -255,23 +342,11 @@ def prepare_ligand_topology(smiles, pose_sdf_path, workdir):
     itp = acpype_dir / "LIG_GMX.itp"
     print(f"[acpype] Topology written to {acpype_dir}", flush=True)
 
-    # tleap sometimes generates astronomical coordinates for flexible ligands.
-    # Fall back to LIG_NEW.pdb (written by obabel from antechamber's .ac file,
-    # which preserves the input SDF coordinates) and regenerate the GRO from it.
-    if _gro_has_bad_coords(gro):
-        print("[acpype] WARNING: LIG_GMX.gro has suspect coordinates, regenerating from LIG_NEW.pdb", flush=True)
-        lig_pdb = acpype_dir / "LIG_NEW.pdb"
-        fixed_gro = acpype_dir / "LIG_fixed.gro"
-        run_gmx(
-            ["editconf", "-f", str(lig_pdb), "-o", str(fixed_gro)],
-            cwd=str(workdir),
-            description="editconf — regenerate ligand GRO from LIG_NEW.pdb",
-        )
-        if fixed_gro.exists() and not _gro_has_bad_coords(fixed_gro):
-            print("[acpype] Using coordinate-corrected LIG_fixed.gro", flush=True)
-            gro = fixed_gro
-        else:
-            raise RuntimeError("LIG_NEW.pdb also has bad coordinates; cannot recover ligand GRO")
+    # Safety net: if tleap still produced bad coordinates, translate the entire
+    # ligand so its heavy-atom centroid matches the docked pose SDF centroid.
+    if _gro_has_bad_coords(gro) and pose_sdf_path and Path(pose_sdf_path).exists():
+        print("[acpype] WARNING: bad coords after H-add, applying centroid translation", flush=True)
+        _patch_ligand_gro_to_pose(gro, pose_sdf_path)
 
     return gro, itp
 
