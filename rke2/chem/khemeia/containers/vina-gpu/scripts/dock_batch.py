@@ -527,7 +527,7 @@ def main():
         if best_affinity is None or affinity < best_affinity:
             best_affinity = affinity
         elapsed = _time.time() - t0
-        print(f"Progress: processed={docked + failed}/{total} (docked={docked}, failed={failed})", flush=True)
+        print(f"[{docked + failed}/{total}] {compound_id} affinity={affinity:.2f} elapsed={elapsed:.1f}s", flush=True)
         _jlog("progress", job=cfg["job_name"], engine=cfg["engine"],
               worker=cfg["worker_name"], processed=docked + failed, total=total,
               docked=docked, failed=failed, elapsed_s=round(elapsed, 1),

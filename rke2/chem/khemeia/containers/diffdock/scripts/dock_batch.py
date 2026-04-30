@@ -241,23 +241,27 @@ def run_diffdock(receptor_path, ligands, inference_steps, samples, batch_size):
             f"{samples} samples/ligand, batch_size={batch_size}",
             flush=True,
         )
-        result = subprocess.run(
+        proc = subprocess.Popen(
             cmd,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
             text=True,
-            timeout=7200,
             cwd=DIFFDOCK_DIR,
         )
+        try:
+            for line in proc.stdout:
+                print(f"[diffdock] {line}", end="", flush=True)
+            proc.wait(timeout=7200)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+            print("WARNING: DiffDock timed out (7200s)", flush=True)
 
-        if result.returncode != 0:
+        if proc.returncode != 0:
             print(
-                f"WARNING: DiffDock exited with code {result.returncode}, attempting partial recovery",
+                f"WARNING: DiffDock exited with code {proc.returncode}, attempting partial recovery",
                 flush=True,
             )
-        if result.stdout:
-            print(result.stdout[-4000:], flush=True)
-        if result.stderr:
-            print(result.stderr[-2000:], flush=True)
 
         # Collect results — scan output dir regardless of exit code (partial recovery)
         parsed = {}
@@ -285,7 +289,7 @@ def run_diffdock(receptor_path, ligands, inference_steps, samples, batch_size):
             affinity_score = -confidence
             parsed[compound_id] = (ligand_db_id, affinity_score, rank1.read_bytes())
 
-        if result.returncode != 0:
+        if proc.returncode != 0:
             print(f"Partial recovery: {len(parsed)}/{len(manifest)} ligands recovered", flush=True)
 
         return parsed

@@ -360,7 +360,7 @@ def main():
                 best_affinity = affinity
 
             elapsed = _time.time() - t0
-            print(f"Progress: {i}/{total} (docked={docked}, failed={failed})", flush=True)
+            print(f"[{i}/{total}] {compound_id} affinity={affinity:.2f} elapsed={elapsed:.1f}s", flush=True)
             _jlog("progress", job=cfg["job_name"], engine=cfg["engine"],
                   worker=cfg["worker_name"], processed=i, total=total,
                   docked=docked, failed=failed, elapsed_s=round(elapsed, 1),
