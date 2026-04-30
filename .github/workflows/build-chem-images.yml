@@ -17,6 +17,11 @@ on:
       - 'rke2/chem/khemeia/plugins/**'
       - '.github/workflows/build-chem-images.yml'
   workflow_dispatch:
+    inputs:
+      build_all:
+        description: 'Build all images regardless of changes'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -40,6 +45,7 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           PUSH_BEFORE: ${{ github.event.before }}
           PUSH_SHA: ${{ github.sha }}
+          BUILD_ALL: ${{ github.event.inputs.build_all }}
         run: |
           python3 - <<'PY'
           import json
@@ -193,33 +199,40 @@ jobs:
               return subprocess.check_output(cmd, text=True).strip()
 
           event_name = os.environ["EVENT_NAME"]
+          build_all = os.environ.get("BUILD_ALL", "").lower() == "true"
           changed = []
-
-          if event_name == "push":
-              before = os.environ.get("PUSH_BEFORE", "")
-              after = os.environ.get("PUSH_SHA", "HEAD")
-              if before and before != "0000000000000000000000000000000000000000":
-                  diff_cmd = ["git", "diff", "--name-only", before, after]
-              else:
-                  diff_cmd = ["git", "diff-tree", "--no-commit-id", "--name-only", "-r", after]
-          else:
-              run(["git", "fetch", "--no-tags", "origin", "main"])
-              base = run(["git", "merge-base", "origin/main", "HEAD"])
-              diff_cmd = ["git", "diff", "--name-only", f"{base}...HEAD"]
-
-          output = run(diff_cmd)
-          if output:
-              changed = [line for line in output.splitlines() if line]
-
           selected = []
-          for image in images:
-              if any(path.startswith(prefix) for path in changed for prefix in image["prefixes"]):
-                  selected.append({
-                      "name": image["name"],
-                      "image": image["image"],
-                      "dockerfile": image["dockerfile"],
-                      "context": image["context"],
-                  })
+
+          if build_all:
+              selected = [
+                  {"name": i["name"], "image": i["image"], "dockerfile": i["dockerfile"], "context": i["context"]}
+                  for i in images
+              ]
+          else:
+              if event_name == "push":
+                  before = os.environ.get("PUSH_BEFORE", "")
+                  after = os.environ.get("PUSH_SHA", "HEAD")
+                  if before and before != "0000000000000000000000000000000000000000":
+                      diff_cmd = ["git", "diff", "--name-only", before, after]
+                  else:
+                      diff_cmd = ["git", "diff-tree", "--no-commit-id", "--name-only", "-r", after]
+              else:
+                  run(["git", "fetch", "--no-tags", "origin", "main"])
+                  base = run(["git", "merge-base", "origin/main", "HEAD"])
+                  diff_cmd = ["git", "diff", "--name-only", f"{base}...HEAD"]
+
+              output = run(diff_cmd)
+              if output:
+                  changed = [line for line in output.splitlines() if line]
+
+              for image in images:
+                  if any(path.startswith(prefix) for path in changed for prefix in image["prefixes"]):
+                      selected.append({
+                          "name": image["name"],
+                          "image": image["image"],
+                          "dockerfile": image["dockerfile"],
+                          "context": image["context"],
+                      })
 
           github_output = os.environ["GITHUB_OUTPUT"]
           with open(github_output, "a", encoding="utf-8") as fh:
