@@ -321,15 +321,19 @@ def prepare_ligand_topology(smiles, pose_sdf_path, workdir):
             ["obabel", "-isdf", str(pose_sdf_path), "-osdf", "-O", str(pose_h_sdf), "-h"],
             capture_output=True, text=True,
         )
-        src = (
-            pose_h_sdf
-            if (h_result.returncode == 0 and pose_h_sdf.exists() and pose_h_sdf.stat().st_size > 0)
-            else pose_sdf_path
-        )
+        obabel_ok = h_result.returncode == 0 and pose_h_sdf.exists() and pose_h_sdf.stat().st_size > 0
+        print(f"[acpype] obabel -h: rc={h_result.returncode} ok={obabel_ok}", flush=True)
+        if h_result.stderr:
+            print(f"[acpype] obabel stderr: {h_result.stderr.strip()}", flush=True)
+        src = pose_h_sdf if obabel_ok else pose_sdf_path
         coords = _parse_sdf_coords_nm(src)
+        print(f"[acpype] coord injection: src={src.name if hasattr(src,'name') else src} natoms={len(coords)}", flush=True)
         if coords:
-            if not _overwrite_gro_coords(gro, coords):
+            ok = _overwrite_gro_coords(gro, coords)
+            if not ok:
                 print("[acpype] WARNING: atom count mismatch; GRO coords unchanged", flush=True)
+            else:
+                print("[acpype] GRO coordinates overwritten from docked pose", flush=True)
 
     return gro, itp
 
