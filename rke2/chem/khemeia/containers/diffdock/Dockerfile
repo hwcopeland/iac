@@ -47,6 +47,7 @@ RUN pip3 install --no-cache-dir \
     pandas \
     tqdm \
     pyyaml \
+    prody \
     "fair-esm>=2.0.0" \
     mysql-connector-python \
     boto3
@@ -63,6 +64,13 @@ RUN mkdir -p /opt/diffdock/workdir/v1.1 \
     && unzip -q /tmp/diffdock_models.zip -d /opt/diffdock/workdir/v1.1 \
     && ls -la /opt/diffdock/workdir/v1.1/ \
     && rm /tmp/diffdock_models.zip
+
+# Verify all inference.py imports resolve — fails the build if any dep is missing.
+RUN cd /opt/diffdock && python3 -c "
+import yaml, numpy, pandas, torch, torch_geometric, e3nn, spyrmsd, Bio, esm, prody
+import utils.utils
+print('All DiffDock imports OK')
+"
 
 # Verify model weights were extracted successfully.
 RUN python3 -c "import os,sys; files=['/opt/diffdock/workdir/v1.1/score_model/best_ema_inference_epoch_model.pt','/opt/diffdock/workdir/v1.1/confidence_model/best_model_epoch75.pt']; sizes=[(f,os.path.getsize(f) if os.path.exists(f) else 0) for f in files]; [print(f,s) for f,s in sizes]; sys.exit(1) if any(s<1000000 for _,s in sizes) else print('Model weights OK')"
