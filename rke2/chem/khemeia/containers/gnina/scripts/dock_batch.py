@@ -301,8 +301,8 @@ def run_gnina(receptor_path, ligand_pdbqt, center, size, exhaustiveness, n_poses
             proc.communicate()
             print("WARNING: gnina timed out (600s)", flush=True)
             return None, None, None, None
-        with open(log_path, "w") as log_fh:
-            log_fh.write(stdout_out)
+        # gnina writes the mode/score table to --log log_path itself.
+        # Print stdout (banner + progress) to container logs without overwriting it.
         for line in stdout_out.splitlines():
             print(f"[gnina] {line}", flush=True)
         if stderr_out:
