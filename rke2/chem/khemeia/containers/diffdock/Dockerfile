@@ -53,20 +53,9 @@ RUN pip3 install --no-cache-dir \
 RUN GIT_LFS_SKIP_SMUDGE=0 git clone --depth=1 \
     https://github.com/gcorso/DiffDock /opt/diffdock
 
-# Verify model weights were downloaded (LFS pointers would be ~130 bytes; real files are >50MB)
-RUN python3 -c "
-import os, sys
-for f in [
-    '/opt/diffdock/workdir/paper_score_model/best_model_epoch75.pt',
-    '/opt/diffdock/workdir/paper_confidence_model/best_model.pt',
-]:
-    size = os.path.getsize(f) if os.path.exists(f) else 0
-    print(f'{f}: {size} bytes')
-    if size < 1_000_000:
-        print('ERROR: file too small — LFS download may have failed')
-        sys.exit(1)
-print('Model weights OK')
-"
+# Verify model weights were downloaded (LFS pointers are ~130 bytes; real files are >50MB).
+# Fails the build early if git-lfs was not available on the runner.
+RUN python3 -c "import os,sys; sizes=[(f,os.path.getsize(f) if os.path.exists(f) else 0) for f in ['/opt/diffdock/workdir/paper_score_model/best_model_epoch75.pt','/opt/diffdock/workdir/paper_confidence_model/best_model.pt']]; [print(f,s) for f,s in sizes]; sys.exit(1) if any(s<1000000 for _,s in sizes) else print('Model weights OK')"
 
 # Pre-download ESM2-650M weights so inference doesn't hit the network at runtime.
 # The model is stored in the torch hub cache and loaded by fair-esm automatically.
