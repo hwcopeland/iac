@@ -36,6 +36,40 @@ data:
         volumeMounts: []
         env: []
 
+      gpu-shared:
+        description: "GPU-adjacent workloads that use CUDA but don't need exclusive GPU allocation (gnina CNN rescoring)"
+        resources:
+          cpu: "4"
+          memory: "16Gi"
+        nodeSelector:
+          gpu: "rtx3070"
+        tolerations:
+          - key: "gpu"
+            value: "true"
+            effect: "NoSchedule"
+        volumes:
+          - name: nvidia-driver
+            hostPath:
+              path: /run/opengl-driver
+          - name: nix-store
+            hostPath:
+              path: /nix/store
+          - name: dri
+            hostPath:
+              path: /dev/dri
+        volumeMounts:
+          - name: nvidia-driver
+            mountPath: /run/opengl-driver
+            readOnly: true
+          - name: nix-store
+            mountPath: /nix/store
+            readOnly: true
+          - name: dri
+            mountPath: /dev/dri
+        env:
+          - name: LD_LIBRARY_PATH
+            value: /run/opengl-driver/lib:/opt/boost/lib:/usr/lib/x86_64-linux-gnu
+
       gpu:
         description: "GPU workloads on NixOS node (nixos-gpu, RTX 3070)"
         resources:

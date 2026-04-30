@@ -191,24 +191,32 @@ func ValidateEngineSelection(engines []string) error {
 }
 
 // EngineComputeClass returns the compute class for a given engine.
-// GPU engines use the "gpu" class; CPU engines use "cpu".
+// "gpu" engines get exclusive GPU resource (nvidia.com/gpu: "1"); "gpu-shared"
+// engines get GPU node access and driver mounts but no resource lock (gnina uses
+// CUDA only for CNN rescoring — MC search runs on CPU and can run many pods at
+// once); "cpu" engines run on any node.
 func EngineComputeClass(engine string) string {
 	switch engine {
-	case "vina-gpu", "vina-gpu-batch", "gnina", "diffdock":
+	case "vina-gpu", "vina-gpu-batch", "diffdock":
 		return "gpu"
+	case "gnina":
+		return "gpu-shared"
 	default:
 		return "cpu"
 	}
 }
 
-// IsGPUEngine returns true if the engine requires GPU scheduling.
+// IsGPUEngine returns true if the engine requires exclusive GPU scheduling
+// (i.e. compute class "gpu"). gpu-shared engines (gnina) do not hold an
+// exclusive GPU resource and are treated as parallel/cpu for scheduling.
 func IsGPUEngine(engine string) bool {
 	return EngineComputeClass(engine) == "gpu"
 }
 
 // SortEnginesForScheduling orders engines with CPU engines first and GPU engines
-// second. This enables the orchestrator to launch CPU docking pods in parallel
-// while queuing GPU pods serially (single-GPU constraint on nixos-gpu).
+// second. CPU engines (including gpu-shared gnina) are launched in parallel;
+// GPU engines (diffdock) are queued serially due to the single-GPU constraint
+// on nixos-gpu.
 func SortEnginesForScheduling(engines []string) (cpuEngines, gpuEngines []string) {
 	for _, e := range engines {
 		if IsGPUEngine(e) {
