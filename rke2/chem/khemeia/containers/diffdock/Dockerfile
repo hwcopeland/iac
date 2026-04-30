@@ -5,7 +5,7 @@
 # Runtime: GPU (CUDA 11.8 compatible). Uses NVIDIA drivers from host
 # via /run/opengl-driver mount (NixOS node) — same pattern as gnina.
 #
-# Model weights baked in at build time from HuggingFace (gcorso/DiffDock).
+# Source + model weights cloned from gcorso/DiffDock on GitHub via Git LFS.
 # ESM2-650M embeddings computed at inference time and cached per-job.
 
 FROM nvidia/cuda:11.8.0-cudnn8-runtime-ubuntu22.04
@@ -13,9 +13,11 @@ FROM nvidia/cuda:11.8.0-cudnn8-runtime-ubuntu22.04
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
 
+# git-lfs is required to pull model weight files from GitHub (stored as LFS objects)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 python3-pip python3-dev \
-    git wget ca-certificates \
+    git git-lfs ca-certificates \
+    && git lfs install \
     && rm -rf /var/lib/apt/lists/*
 
 # PyTorch 1.13.1 with CUDA 11.7 (backward-compatible with 11.8 runtime).
@@ -45,31 +47,26 @@ RUN pip3 install --no-cache-dir \
     mysql-connector-python \
     boto3
 
-# Clone DiffDock source at a pinned commit.
-# inference.py requires running from the repo root (relative imports).
-ARG DIFFDOCK_COMMIT=2ac53fd3a4d7c6b3a6ef28da8c5e55c3060ed0f3
-RUN git clone https://github.com/gcorso/DiffDock /opt/diffdock \
-    && cd /opt/diffdock \
-    && git checkout ${DIFFDOCK_COMMIT} 2>/dev/null || true
+# Clone DiffDock source + model weights via Git LFS.
+# The workdir/ directory contains LFS-tracked model weight files (~150MB each).
+# GIT_LFS_SKIP_SMUDGE=0 forces LFS objects to be downloaded (the default, made explicit).
+RUN GIT_LFS_SKIP_SMUDGE=0 git clone --depth=1 \
+    https://github.com/gcorso/DiffDock /opt/diffdock
 
-# Download pretrained score and confidence model weights from HuggingFace.
-# gcorso/DiffDock is a public HuggingFace model repository.
-RUN mkdir -p \
-    /opt/diffdock/workdir/paper_score_model \
-    /opt/diffdock/workdir/paper_confidence_model
-
-RUN wget -q --show-progress \
-    -O /opt/diffdock/workdir/paper_score_model/best_model_epoch75.pt \
-    "https://huggingface.co/gcorso/DiffDock/resolve/main/workdir/paper_score_model/best_model_epoch75.pt" \
-    && wget -q \
-    -O /opt/diffdock/workdir/paper_score_model/model_parameters.yml \
-    "https://huggingface.co/gcorso/DiffDock/resolve/main/workdir/paper_score_model/model_parameters.yml" \
-    && wget -q --show-progress \
-    -O /opt/diffdock/workdir/paper_confidence_model/best_model.pt \
-    "https://huggingface.co/gcorso/DiffDock/resolve/main/workdir/paper_confidence_model/best_model.pt" \
-    && wget -q \
-    -O /opt/diffdock/workdir/paper_confidence_model/model_parameters.yml \
-    "https://huggingface.co/gcorso/DiffDock/resolve/main/workdir/paper_confidence_model/model_parameters.yml"
+# Verify model weights were downloaded (LFS pointers would be ~130 bytes; real files are >50MB)
+RUN python3 -c "
+import os, sys
+for f in [
+    '/opt/diffdock/workdir/paper_score_model/best_model_epoch75.pt',
+    '/opt/diffdock/workdir/paper_confidence_model/best_model.pt',
+]:
+    size = os.path.getsize(f) if os.path.exists(f) else 0
+    print(f'{f}: {size} bytes')
+    if size < 1_000_000:
+        print('ERROR: file too small — LFS download may have failed')
+        sys.exit(1)
+print('Model weights OK')
+"
 
 # Pre-download ESM2-650M weights so inference doesn't hit the network at runtime.
 # The model is stored in the torch hub cache and loaded by fair-esm automatically.
