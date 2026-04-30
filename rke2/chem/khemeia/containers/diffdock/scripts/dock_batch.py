@@ -369,12 +369,12 @@ def main():
         docked += 1
         if best_affinity is None or affinity_score < best_affinity:
             best_affinity = affinity_score
-        if docked % 10 == 0 or docked + failed == total:
-            elapsed = _time.time() - t0
-            print(f"Progress: {docked + failed}/{total} (docked={docked}, failed={failed})", flush=True)
-            _jlog("progress", job=cfg["job_name"], engine=cfg["engine"],
-                  worker=cfg["worker_name"], processed=docked + failed, total=total,
-                  docked=docked, failed=failed, elapsed_s=round(elapsed, 1))
+        elapsed = _time.time() - t0
+        print(f"Progress: {docked + failed}/{total} (docked={docked}, failed={failed})", flush=True)
+        _jlog("progress", job=cfg["job_name"], engine=cfg["engine"],
+              worker=cfg["worker_name"], processed=docked + failed, total=total,
+              docked=docked, failed=failed, elapsed_s=round(elapsed, 1),
+              compound_id=compound_id, affinity=affinity_score)
 
     cursor.close()
     conn.close()

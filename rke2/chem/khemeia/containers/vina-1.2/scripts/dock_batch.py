@@ -359,12 +359,12 @@ def main():
             if best_affinity is None or affinity < best_affinity:
                 best_affinity = affinity
 
-            if i % 50 == 0 or i == total:
-                elapsed = _time.time() - t0
-                print(f"Progress: {i}/{total} (docked={docked}, failed={failed})", flush=True)
-                _jlog("progress", job=cfg["job_name"], engine=cfg["engine"],
-                      worker=cfg["worker_name"], processed=i, total=total,
-                      docked=docked, failed=failed, elapsed_s=round(elapsed, 1))
+            elapsed = _time.time() - t0
+            print(f"Progress: {i}/{total} (docked={docked}, failed={failed})", flush=True)
+            _jlog("progress", job=cfg["job_name"], engine=cfg["engine"],
+                  worker=cfg["worker_name"], processed=i, total=total,
+                  docked=docked, failed=failed, elapsed_s=round(elapsed, 1),
+                  compound_id=compound_id, affinity=affinity)
 
         except Exception as exc:
             print(f"WARNING: docking failed for {compound_id}: {exc}", flush=True)
