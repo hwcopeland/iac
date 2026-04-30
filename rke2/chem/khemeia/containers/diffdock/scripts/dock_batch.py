@@ -39,6 +39,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import threading
 import time as _time
 from pathlib import Path
 
@@ -201,12 +202,38 @@ def _safe_stem(compound_id, index):
     return f"{index:05d}_{_SAFE_NAME_RE.sub('_', compound_id)}"
 
 
-def run_diffdock(receptor_path, ligands, inference_steps, samples, batch_size):
+def _parse_result(complex_dir):
+    """Parse the rank1 SDF from a finished complex directory.
+
+    Returns (affinity_score, sdf_bytes) or None if no result is ready yet.
+    rank1 is the highest-confidence pose; confidence is negated so lower = better.
+    """
+    def _rank_key(p):
+        m = re.search(r"rank(\d+)", p.name)
+        return int(m.group(1)) if m else 999
+
+    rank_files = sorted(complex_dir.glob("rank*.sdf"), key=_rank_key)
+    if not rank_files:
+        return None
+    rank1 = rank_files[0]
+    m = _CONFIDENCE_RE.search(rank1.name)
+    if m is None:
+        return None
+    confidence = float(m.group(1))
+    return -confidence, rank1.read_bytes()
+
+
+def run_diffdock(receptor_path, ligands, inference_steps, samples, batch_size, on_result=None):
     """Run DiffDock inference for all ligands in a single subprocess call.
 
-    Returns dict: compound_id → (ligand_db_id, affinity_score, sdf_bytes).
-    affinity_score = -confidence so "lower is better" ranking convention holds.
-    Partial results are recovered if the process crashes mid-batch.
+    DiffDock writes per-ligand result directories to disk as it finishes each
+    ligand. We poll those directories every 10 s and call on_result(compound_id,
+    ligand_db_id, affinity_score, sdf_bytes) for each as it lands, so the caller
+    can write to the DB incrementally rather than waiting for the full batch.
+
+    Returns dict: compound_id → (ligand_db_id, affinity_score, sdf_bytes) for
+    any ligands not already dispatched via on_result (e.g. partial recovery after
+    a non-zero exit).
     """
     with tempfile.TemporaryDirectory(prefix="diffdock_") as tmpdir:
         root = Path(tmpdir)
@@ -215,14 +242,15 @@ def run_diffdock(receptor_path, ligands, inference_steps, samples, batch_size):
         csv_path = root / "input.csv"
 
         manifest = []  # (ligand_db_id, compound_id, stem)
+        stem_to_ligand = {}  # stem → (ligand_db_id, compound_id)
         with csv_path.open("w") as fh:
             fh.write("complex_name,protein_path,ligand_description,protein_sequence\n")
             for index, (ligand_db_id, compound_id, smiles) in enumerate(ligands, start=1):
                 stem = _safe_stem(compound_id, index)
-                # Escape SMILES: commas in SMILES are rare but possible; quote the field
                 smiles_clean = smiles.replace('"', "")
                 fh.write(f'{stem},{receptor_path},"{smiles_clean}",\n')
                 manifest.append((ligand_db_id, compound_id, stem))
+                stem_to_ligand[stem] = (ligand_db_id, compound_id)
 
         cmd = [
             "python3", DIFFDOCK_INFERENCE,
@@ -248,51 +276,59 @@ def run_diffdock(receptor_path, ligands, inference_steps, samples, batch_size):
             text=True,
             cwd=DIFFDOCK_DIR,
         )
-        try:
+
+        # Stream subprocess stdout in a background thread so we can poll for
+        # result files on the main thread without blocking on stdout reads.
+        def _stream_stdout():
             for line in proc.stdout:
                 print(f"[diffdock] {line}", end="", flush=True)
-            proc.wait(timeout=7200)
-        except subprocess.TimeoutExpired:
+
+        stdout_thread = threading.Thread(target=_stream_stdout, daemon=True)
+        stdout_thread.start()
+
+        # Poll output directory for finished ligands while inference runs.
+        dispatched = set()  # stems already sent to on_result
+        remaining = {}      # compound_id → (ligand_db_id, affinity, sdf) — fallback return value
+
+        def _poll_results():
+            for stem, (ligand_db_id, compound_id) in stem_to_ligand.items():
+                if stem in dispatched:
+                    continue
+                complex_dir = out_dir / stem
+                if not complex_dir.is_dir():
+                    continue
+                parsed = _parse_result(complex_dir)
+                if parsed is None:
+                    continue
+                affinity_score, sdf_bytes = parsed
+                dispatched.add(stem)
+                if on_result is not None:
+                    on_result(compound_id, ligand_db_id, affinity_score, sdf_bytes)
+                else:
+                    remaining[compound_id] = (ligand_db_id, affinity_score, sdf_bytes)
+
+        try:
+            while proc.poll() is None:
+                _poll_results()
+                _time.sleep(10)
+        except Exception:
             proc.kill()
             proc.wait()
-            print("WARNING: DiffDock timed out (7200s)", flush=True)
+            raise
 
-        if proc.returncode != 0:
+        # One final sweep to catch anything written just before exit.
+        _poll_results()
+        stdout_thread.join(timeout=10)
+
+        if proc.returncode not in (0, None):
+            recovered = len(dispatched) + len(remaining)
             print(
-                f"WARNING: DiffDock exited with code {proc.returncode}, attempting partial recovery",
+                f"WARNING: DiffDock exited with code {proc.returncode}. "
+                f"Partial recovery: {recovered}/{len(manifest)} ligands",
                 flush=True,
             )
 
-        # Collect results — scan output dir regardless of exit code (partial recovery)
-        parsed = {}
-        for ligand_db_id, compound_id, stem in manifest:
-            complex_dir = out_dir / stem
-            if not complex_dir.is_dir():
-                continue
-
-            # Sort by rank number; rank1 is highest-confidence pose
-            def _rank_key(p):
-                m = re.search(r"rank(\d+)", p.name)
-                return int(m.group(1)) if m else 999
-
-            rank_files = sorted(complex_dir.glob("rank*.sdf"), key=_rank_key)
-            if not rank_files:
-                continue
-
-            rank1 = rank_files[0]
-            m = _CONFIDENCE_RE.search(rank1.name)
-            if m is None:
-                continue
-
-            confidence = float(m.group(1))
-            # Negate: confidence 0.8 (great) → -0.8 (lower = better), -3.0 → 3.0 (higher = worse)
-            affinity_score = -confidence
-            parsed[compound_id] = (ligand_db_id, affinity_score, rank1.read_bytes())
-
-        if proc.returncode != 0:
-            print(f"Partial recovery: {len(parsed)}/{len(manifest)} ligands recovered", flush=True)
-
-        return parsed
+        return remaining
 
 
 def main():
@@ -344,25 +380,12 @@ def main():
     _jlog("worker_start", job=cfg["job_name"], engine=cfg["engine"],
           worker=cfg["worker_name"], total=total, offset=cfg["batch_offset"])
 
-    parsed_results = run_diffdock(
-        RECEPTOR_PATH,
-        ligands,
-        inference_steps=cfg["inference_steps"],
-        samples=cfg["samples"],
-        batch_size=cfg["batch_size"],
-    )
-
     docked = 0
     failed = 0
     best_affinity = None
-    for ligand_db_id, compound_id, _ in ligands:
-        result = parsed_results.get(compound_id)
-        if result is None:
-            print(f"WARNING: no result for {compound_id}", flush=True)
-            failed += 1
-            continue
 
-        _, affinity_score, sdf_bytes = result
+    def _write_result(compound_id, ligand_db_id, affinity_score, sdf_bytes):
+        nonlocal docked, best_affinity
         cursor.execute(
             "INSERT INTO docking_v2_results "
             "(job_name, engine, compound_id, ligand_id, affinity_kcal_mol, docked_pdbqt) "
@@ -374,11 +397,28 @@ def main():
         if best_affinity is None or affinity_score < best_affinity:
             best_affinity = affinity_score
         elapsed = _time.time() - t0
-        print(f"Progress: {docked + failed}/{total} (docked={docked}, failed={failed})", flush=True)
+        print(f"Progress: {docked}/{total} docked (affinity={affinity_score:.3f})", flush=True)
         _jlog("progress", job=cfg["job_name"], engine=cfg["engine"],
-              worker=cfg["worker_name"], processed=docked + failed, total=total,
-              docked=docked, failed=failed, elapsed_s=round(elapsed, 1),
+              worker=cfg["worker_name"], processed=docked, total=total,
+              docked=docked, elapsed_s=round(elapsed, 1),
               compound_id=compound_id, affinity=affinity_score)
+
+    # on_result is called incrementally as DiffDock finishes each ligand.
+    # Any stragglers (e.g. written just before a non-zero exit) come back in remaining.
+    remaining = run_diffdock(
+        RECEPTOR_PATH,
+        ligands,
+        inference_steps=cfg["inference_steps"],
+        samples=cfg["samples"],
+        batch_size=cfg["batch_size"],
+        on_result=_write_result,
+    )
+
+    # Flush any results returned directly (non-zero exit partial recovery path).
+    for compound_id, (ligand_db_id, affinity_score, sdf_bytes) in remaining.items():
+        _write_result(compound_id, ligand_db_id, affinity_score, sdf_bytes)
+
+    failed = total - docked
 
     cursor.close()
     conn.close()
