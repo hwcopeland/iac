@@ -12,6 +12,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-pip \
     openbabel \
     libhdf4-0-alt \
+    && ln -s /lib/libmfhdfalt.so.0 /lib/libmfhdf.so.0 \
     && rm -rf /var/lib/apt/lists/* \
     && pip3 install --no-cache-dir --upgrade pip
 
