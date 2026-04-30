@@ -291,20 +291,23 @@ def run_gnina(receptor_path, ligand_pdbqt, center, size, exhaustiveness, n_poses
             "--log", log_path,
         ]
 
+        proc = subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+        try:
+            stdout_out, stderr_out = proc.communicate(timeout=600)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.communicate()
+            print("WARNING: gnina timed out (600s)", flush=True)
+            return None, None, None, None
         with open(log_path, "w") as log_fh:
-            proc = subprocess.Popen(
-                cmd, stdout=log_fh, stderr=subprocess.PIPE, text=True,
-            )
-            try:
-                _, stderr_out = proc.communicate(timeout=600)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                proc.communicate()
-                print("WARNING: gnina timed out (600s)", flush=True)
-                return None, None, None, None
-            if stderr_out:
-                for line in stderr_out.splitlines():
-                    print(f"[gnina] {line}", flush=True)
+            log_fh.write(stdout_out)
+        for line in stdout_out.splitlines():
+            print(f"[gnina] {line}", flush=True)
+        if stderr_out:
+            for line in stderr_out.splitlines():
+                print(f"[gnina stderr] {line}", flush=True)
         result_returncode = proc.returncode
         if result_returncode != 0:
             print(f"WARNING: gnina exited with code {result_returncode}", flush=True)
