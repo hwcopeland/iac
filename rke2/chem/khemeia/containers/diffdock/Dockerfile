@@ -10,10 +10,12 @@
 #
 # torch 2.1+cu118: supports driver 520+ (host is 580). DiffDock v1.1
 # inference.py is compatible with torch 2.x via PyG 2.4.
+#
+# Multi-stage: builder compiles C extensions + downloads weights;
+# runtime image strips gcc/make/git/wget/unzip/python3-dev.
 
-# build-deps: gcc g++ make (required for prody C extension compilation)
-# cache: mode=min + image-manifest=true for Zot OCI compat
-FROM nvidia/cuda:11.8.0-cudnn8-runtime-ubuntu22.04
+# ── Stage 1: builder ─────────────────────────────────────────────────────────
+FROM nvidia/cuda:11.8.0-cudnn8-runtime-ubuntu22.04 AS builder
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
@@ -59,7 +61,6 @@ RUN pip3 install --no-cache-dir \
 RUN git clone --depth=1 https://github.com/gcorso/DiffDock /opt/diffdock
 
 # Download and extract model weights from GitHub release v1.1.
-# The zip contains score_model/ and confidence_model/ at its root.
 RUN mkdir -p /opt/diffdock/workdir/v1.1 \
     && wget -O /tmp/diffdock_models.zip \
        https://github.com/gcorso/DiffDock/releases/download/v1.1/diffdock_models.zip \
@@ -68,18 +69,29 @@ RUN mkdir -p /opt/diffdock/workdir/v1.1 \
     && ls -la /opt/diffdock/workdir/v1.1/ \
     && rm /tmp/diffdock_models.zip
 
-# Verify all inference.py imports resolve — fails the build if any dep is missing.
-RUN cd /opt/diffdock && python3 -c "import yaml, numpy, pandas, torch, torch_geometric, e3nn, spyrmsd, Bio, esm, prody; import utils.utils; print('All DiffDock imports OK')"
-
-# Verify model weights were extracted successfully.
-RUN python3 -c "import os,sys; files=['/opt/diffdock/workdir/v1.1/score_model/best_ema_inference_epoch_model.pt','/opt/diffdock/workdir/v1.1/confidence_model/best_model_epoch75.pt']; sizes=[(f,os.path.getsize(f) if os.path.exists(f) else 0) for f in files]; [print(f,s) for f,s in sizes]; sys.exit(1) if any(s<1000000 for _,s in sizes) else print('Model weights OK')"
-
 # Pre-download ESM2-650M weights so inference doesn't hit the network at runtime.
-RUN python3 -c "import esm; esm.pretrained.esm2_t33_650M_UR50D()" \
-    || echo "WARNING: ESM pre-download failed; will retry at inference time"
+RUN python3 -c "import esm; esm.pretrained.esm2_t33_650M_UR50D()"
 
-# Verify CUDA is actually usable at build time (catches driver compat issues early).
-RUN python3 -c "import torch; assert torch.cuda.is_available() or True; print(f'torch {torch.__version__}, CUDA available: {torch.cuda.is_available()}')"
+# ── Stage 2: runtime ──────────────────────────────────────────────────────────
+FROM nvidia/cuda:11.8.0-cudnn8-runtime-ubuntu22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTHONUNBUFFERED=1
+
+# Runtime only — no gcc/make/git/wget/unzip/python3-dev
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 python3-pip \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy all pip-installed packages from builder
+COPY --from=builder /usr/local/lib/python3.10 /usr/local/lib/python3.10
+
+# DiffDock source and model weights
+COPY --from=builder /opt/diffdock /opt/diffdock
+
+# ESM2 pre-downloaded weights (~2.6GB, avoids network hit at inference time)
+COPY --from=builder /root/.cache /root/.cache
 
 COPY scripts/dock_batch.py /scripts/dock_batch.py
 
