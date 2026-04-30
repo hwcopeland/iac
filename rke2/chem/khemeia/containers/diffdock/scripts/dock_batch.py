@@ -50,8 +50,8 @@ except ImportError:
 
 DIFFDOCK_DIR = "/opt/diffdock"
 DIFFDOCK_INFERENCE = os.path.join(DIFFDOCK_DIR, "inference.py")
-DIFFDOCK_SCORE_MODEL = os.path.join(DIFFDOCK_DIR, "workdir/paper_score_model")
-DIFFDOCK_CONF_MODEL = os.path.join(DIFFDOCK_DIR, "workdir/paper_confidence_model")
+DIFFDOCK_SCORE_MODEL = os.path.join(DIFFDOCK_DIR, "workdir/v1.1/score_model")
+DIFFDOCK_CONF_MODEL = os.path.join(DIFFDOCK_DIR, "workdir/v1.1/confidence_model")
 DATA_DIR = "/data"
 RECEPTOR_PATH = os.path.join(DATA_DIR, "receptor.pdb")
 
