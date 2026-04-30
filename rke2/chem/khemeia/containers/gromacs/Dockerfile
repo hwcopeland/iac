@@ -9,16 +9,21 @@ FROM nvcr.io/hpc/gromacs:2023.2
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3-pip \
+    software-properties-common \
+    && add-apt-repository -y ppa:deadsnakes/ppa \
+    && apt-get update && apt-get install -y --no-install-recommends \
+    python3.11 \
+    python3.11-dev \
+    python3.11-distutils \
     openbabel \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && python3.11 -m ensurepip --upgrade
 
 WORKDIR /scripts
 COPY requirements.txt ./
-RUN pip3 install --no-cache-dir --upgrade pip && \
-    pip3 install --no-cache-dir -r requirements.txt
+RUN python3.11 -m pip install --no-cache-dir -r requirements.txt
 
 COPY scripts/ /scripts/
 COPY mdp/ /mdp/
 
-CMD ["python3", "/scripts/md_batch.py"]
+CMD ["python3.11", "/scripts/md_batch.py"]
