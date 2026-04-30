@@ -181,11 +181,11 @@ def fetch_smiles(cursor, compound_id):
     return row[0]
 
 
-def run_gmx(args, cwd, description):
+def run_gmx(args, cwd, description, stdin_input=None):
     """Run a gmx subcommand, streaming output. Exits on non-zero return."""
     cmd = ["gmx", "-quiet"] + args
     print(f"[gmx] {description}", flush=True)
-    result = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
+    result = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, input=stdin_input)
     if result.stdout:
         for line in result.stdout.splitlines():
             print(f"[gmx] {line}", flush=True)
@@ -503,6 +503,7 @@ def solvate_and_ions(complex_gro, topol_top, box_padding, workdir):
          "-neutral", "-conc", "0.15"],
         cwd=str(workdir),
         description="genion — NaCl 0.15 M + neutralise",
+        stdin_input="SOL\n",
     )
 
     return workdir / "ionised.gro"
