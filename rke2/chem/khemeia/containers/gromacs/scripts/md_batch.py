@@ -267,10 +267,36 @@ def prepare_protein_topology(receptor_pdb_path, workdir):
     return workdir / "protein.gro", workdir / "topol.top"
 
 
+def _split_itp_atomtypes(itp_path):
+    """Return (atomtypes_text, rest_text) from an ACPYPE-generated .itp file.
+
+    GROMACS requires [ atomtypes ] to appear before any [ moleculetype ].
+    ACPYPE puts both in one file, so we must split and include them separately.
+    """
+    lines = Path(itp_path).read_text().splitlines(keepends=True)
+    atomtype_lines, other_lines = [], []
+    in_atomtypes = False
+    for line in lines:
+        stripped = line.strip()
+        if stripped == "[ atomtypes ]":
+            in_atomtypes = True
+            atomtype_lines.append(line)
+        elif in_atomtypes and stripped.startswith("["):
+            in_atomtypes = False
+            other_lines.append(line)
+        elif in_atomtypes:
+            atomtype_lines.append(line)
+        else:
+            other_lines.append(line)
+    return "".join(atomtype_lines), "".join(other_lines)
+
+
 def assemble_complex(protein_gro, ligand_gro, protein_top, ligand_itp, workdir):
     """Combine protein.gro + ligand.gro → complex.gro and patch topology.
 
-    Appends the ligand .itp include and molecule entry to topol.top.
+    GROMACS requires [ atomtypes ] before any [ moleculetype ], so the ligand
+    atomtypes are split out and inserted before the protein moleculetype block.
+    The ligand molecule topology is included before [ system ].
     Returns complex.gro path.
     """
     workdir = Path(workdir)
@@ -282,7 +308,7 @@ def assemble_complex(protein_gro, ligand_gro, protein_top, ligand_itp, workdir):
     # GRO format: line 0 = title, line 1 = atom count, lines 2..N-1 = atoms, last = box
     p_atoms = [ln for ln in p_lines[2:-1] if ln.strip()]
     l_atoms = [ln for ln in l_lines[2:-1] if ln.strip()]
-    box = p_lines[-1]  # keep protein box dimensions
+    box = p_lines[-1]
     total = len(p_atoms) + len(l_atoms)
 
     with complex_gro.open("w") as fh:
@@ -296,17 +322,30 @@ def assemble_complex(protein_gro, ligand_gro, protein_top, ligand_itp, workdir):
 
     print(f"[assemble] Complex: {len(p_atoms)} protein + {len(l_atoms)} ligand atoms", flush=True)
 
-    # Patch topol.top: add ligand itp include before [ system ], add molecule entry at end.
+    # Split ligand ITP: [ atomtypes ] must go before any [ moleculetype ]
+    atomtypes_text, mol_text = _split_itp_atomtypes(ligand_itp)
+    lig_atomtypes_itp = workdir / "LIG_atomtypes.itp"
+    lig_mol_itp = workdir / "LIG_mol.itp"
+    lig_atomtypes_itp.write_text(atomtypes_text)
+    lig_mol_itp.write_text(mol_text)
+
     top_text = Path(protein_top).read_text()
-    itp_include = f'\n; Ligand topology\n#include "{ligand_itp}"\n'
 
-    # Insert before first [ system ] section
-    if "[ system ]" in top_text:
-        top_text = top_text.replace("[ system ]", itp_include + "[ system ]", 1)
+    # Insert ligand atomtypes include before the first [ moleculetype ] in topol.top
+    at_include = f'\n; Ligand atom types\n#include "{lig_atomtypes_itp}"\n'
+    if "[ moleculetype ]" in top_text:
+        top_text = top_text.replace("[ moleculetype ]", at_include + "[ moleculetype ]", 1)
     else:
-        top_text += itp_include
+        top_text = at_include + top_text
 
-    # Append ligand to [ molecules ] — detect molecule name from itp
+    # Insert ligand molecule include before [ system ]
+    mol_include = f'\n; Ligand molecule topology\n#include "{lig_mol_itp}"\n'
+    if "[ system ]" in top_text:
+        top_text = top_text.replace("[ system ]", mol_include + "[ system ]", 1)
+    else:
+        top_text += mol_include
+
+    # Append ligand to [ molecules ]
     lig_mol_name = _detect_mol_name(ligand_itp)
     if "[ molecules ]" in top_text:
         top_text = top_text.rstrip() + f"\n{lig_mol_name}   1\n"
