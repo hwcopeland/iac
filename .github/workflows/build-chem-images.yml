@@ -290,9 +290,10 @@ jobs:
           context: ${{ matrix.context }}
           file: ${{ matrix.dockerfile }}
           platforms: linux/amd64
-          push: true
+          push: false
           provenance: false
           sbom: false
+          outputs: type=image,push=true,oci-mediatypes=true
           tags: |
             ${{ matrix.image }}:${{ steps.tags.outputs.build_tag }}
             ${{ matrix.image }}:latest
