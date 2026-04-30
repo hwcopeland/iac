@@ -12,6 +12,7 @@
 # inference.py is compatible with torch 2.x via PyG 2.4.
 
 # build-deps: gcc g++ make (required for prody C extension compilation)
+# cache: mode=min + image-manifest=true for Zot OCI compat
 FROM nvidia/cuda:11.8.0-cudnn8-runtime-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
