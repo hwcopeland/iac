@@ -10,6 +10,8 @@ FROM nvidia/cuda:12.2.0-runtime-ubuntu22.04
 ENV DEBIAN_FRONTEND=noninteractive
 ENV TZ=Etc/UTC
 
+# Install cuDNN 9 runtime (required by gnina 1.3.2 binary — links libcudnn.so.9).
+# The NVIDIA machine learning repo provides cudnn packages for Ubuntu 22.04.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     wget \
     ca-certificates \
@@ -17,6 +19,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-pip \
     libopenbabel-dev \
     libboost-all-dev \
+    && wget -q -O /tmp/cuda-keyring.deb \
+       https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb \
+    && dpkg -i /tmp/cuda-keyring.deb \
+    && rm /tmp/cuda-keyring.deb \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends libcudnn9-cuda-12 \
     && rm -rf /var/lib/apt/lists/*
 
 # Install gnina from GitHub releases (static build, pinned to v1.3.2)
