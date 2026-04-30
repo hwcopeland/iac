@@ -1,0 +1,27 @@
+---
+# NVIDIA device plugin time-slicing configuration.
+#
+# Exposes the RTX 3070 as 10 virtual nvidia.com/gpu resources so multiple
+# pods can hold nvidia.com/gpu allocations simultaneously (GPU is shared
+# via CUDA context time-slicing, not partitioned like MIG).
+#
+# Usage with compute classes:
+#   gpu-parallel (gnina):  requests nvidia.com/gpu: "1"  → up to 10 pods run in parallel
+#   gpu-exclusive (diffdock): requests nvidia.com/gpu: "10" → holds all virtual GPUs = exclusive physical GPU
+#
+# Apply with: kubectl apply -f nvidia-device-plugin-config.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nvidia-device-plugin-config
+  namespace: kube-system
+data:
+  config.yaml: |
+    version: v1
+    sharing:
+      timeSlicing:
+        renameByDefault: false
+        failRequestsGreaterThanOne: false
+        resources:
+          - name: nvidia.com/gpu
+            replicas: 10

@@ -191,32 +191,39 @@ func ValidateEngineSelection(engines []string) error {
 }
 
 // EngineComputeClass returns the compute class for a given engine.
-// "gpu" engines get exclusive GPU resource (nvidia.com/gpu: "1"); "gpu-shared"
-// engines get GPU node access and driver mounts but no resource lock (gnina uses
-// CUDA only for CNN rescoring — MC search runs on CPU and can run many pods at
-// once); "cpu" engines run on any node.
+//   - "gpu": exclusive GPU (nvidia.com/gpu: "1") for vina-gpu batch engines
+//   - "gpu-parallel": one time-slice virtual GPU (nvidia.com/gpu: "1") for gnina;
+//     with device plugin replicas=10, up to 10 gnina pods run simultaneously via
+//     CUDA time-slicing — CNN rescoring is brief so sharing is efficient
+//   - "gpu-exclusive": holds all 10 virtual GPUs (nvidia.com/gpu: "10") for diffdock;
+//     effectively exclusive physical GPU access, one pod at a time
+//   - "cpu": standard CPU workload, any node
 func EngineComputeClass(engine string) string {
 	switch engine {
-	case "vina-gpu", "vina-gpu-batch", "diffdock":
+	case "vina-gpu", "vina-gpu-batch":
 		return "gpu"
 	case "gnina":
-		return "gpu-shared"
+		return "gpu-parallel"
+	case "diffdock":
+		return "gpu-exclusive"
 	default:
 		return "cpu"
 	}
 }
 
-// IsGPUEngine returns true if the engine requires exclusive GPU scheduling
-// (i.e. compute class "gpu"). gpu-shared engines (gnina) do not hold an
-// exclusive GPU resource and are treated as parallel/cpu for scheduling.
+// IsGPUEngine returns true if the engine must be scheduled serially (exclusive
+// GPU or gpu-exclusive class). gpu-parallel engines (gnina) are treated as
+// parallel/cpu for scheduling — K8s resource constraints handle concurrency.
 func IsGPUEngine(engine string) bool {
-	return EngineComputeClass(engine) == "gpu"
+	cc := EngineComputeClass(engine)
+	return cc == "gpu" || cc == "gpu-exclusive"
 }
 
-// SortEnginesForScheduling orders engines with CPU engines first and GPU engines
-// second. CPU engines (including gpu-shared gnina) are launched in parallel;
-// GPU engines (diffdock) are queued serially due to the single-GPU constraint
-// on nixos-gpu.
+// SortEnginesForScheduling orders engines for scheduling.
+// cpuEngines (including gpu-parallel gnina) are launched in parallel;
+// gpuEngines (diffdock, vina-gpu variants) are queued serially.
+// gnina pods all schedule simultaneously via nvidia.com/gpu time-slicing;
+// diffdock pods hold all virtual GPU slots so only 1 runs at a time.
 func SortEnginesForScheduling(engines []string) (cpuEngines, gpuEngines []string) {
 	for _, e := range engines {
 		if IsGPUEngine(e) {

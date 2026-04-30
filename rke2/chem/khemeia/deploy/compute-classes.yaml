@@ -36,11 +36,12 @@ data:
         volumeMounts: []
         env: []
 
-      gpu-shared:
-        description: "GPU-adjacent workloads that share the GPU without exclusive allocation (gnina uses CUDA for CNN scoring + MC search)"
+      gpu-parallel:
+        description: "GPU workloads that run in parallel via time-slicing (gnina: CNN rescoring only, brief GPU use)"
         resources:
           cpu: "2"
           memory: "2Gi"
+          nvidia.com/gpu: "1"
         nodeSelector:
           gpu: "rtx3070"
         tolerations:
@@ -57,21 +58,6 @@ data:
           - name: dri
             hostPath:
               path: /dev/dri
-          - name: nvidia0
-            hostPath:
-              path: /dev/nvidia0
-          - name: nvidiactl
-            hostPath:
-              path: /dev/nvidiactl
-          - name: nvidia-uvm
-            hostPath:
-              path: /dev/nvidia-uvm
-          - name: nvidia-uvm-tools
-            hostPath:
-              path: /dev/nvidia-uvm-tools
-          - name: nvidia-modeset
-            hostPath:
-              path: /dev/nvidia-modeset
         volumeMounts:
           - name: nvidia-driver
             mountPath: /run/opengl-driver
@@ -81,16 +67,6 @@ data:
             readOnly: true
           - name: dri
             mountPath: /dev/dri
-          - name: nvidia0
-            mountPath: /dev/nvidia0
-          - name: nvidiactl
-            mountPath: /dev/nvidiactl
-          - name: nvidia-uvm
-            mountPath: /dev/nvidia-uvm
-          - name: nvidia-uvm-tools
-            mountPath: /dev/nvidia-uvm-tools
-          - name: nvidia-modeset
-            mountPath: /dev/nvidia-modeset
         env:
           - name: LD_LIBRARY_PATH
             value: /run/opengl-driver/lib:/opt/boost/lib:/usr/lib/x86_64-linux-gnu
@@ -143,3 +119,38 @@ data:
             value: /run/opengl-driver/etc/OpenCL/vendors
           - name: VINA_GPU_KERNEL_CACHE_DIR
             value: /opt/vina-gpu/kernels
+
+      gpu-exclusive:
+        description: "Exclusive GPU workloads (diffdock): requests all 10 time-slice replicas so only 1 pod runs at a time with full GPU access"
+        resources:
+          cpu: "4"
+          memory: "16Gi"
+          nvidia.com/gpu: "10"
+        nodeSelector:
+          gpu: "rtx3070"
+        tolerations:
+          - key: "gpu"
+            value: "true"
+            effect: "NoSchedule"
+        volumes:
+          - name: nvidia-driver
+            hostPath:
+              path: /run/opengl-driver
+          - name: nix-store
+            hostPath:
+              path: /nix/store
+          - name: dri
+            hostPath:
+              path: /dev/dri
+        volumeMounts:
+          - name: nvidia-driver
+            mountPath: /run/opengl-driver
+            readOnly: true
+          - name: nix-store
+            mountPath: /nix/store
+            readOnly: true
+          - name: dri
+            mountPath: /dev/dri
+        env:
+          - name: LD_LIBRARY_PATH
+            value: /run/opengl-driver/lib:/usr/lib/x86_64-linux-gnu
