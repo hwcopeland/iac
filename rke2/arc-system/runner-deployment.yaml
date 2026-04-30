@@ -19,7 +19,7 @@ metadata:
   labels:
     app.kubernetes.io/name: arc-chem-runner
 spec:
-  replicas: 3
+  replicas: 1  # Managed by KEDA ScaledObject (arc-runner-scaler). KEDA overrides this at runtime.
   selector:
     matchLabels:
       app.kubernetes.io/name: arc-chem-runner

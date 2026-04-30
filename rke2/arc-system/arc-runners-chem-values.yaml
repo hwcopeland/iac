@@ -1,43 +1,27 @@
-# Helm values for the ARC runner scale-set targeting Khemiatic-Energistics/compute-infrastructure.
+# Helm values for the ARC runner scale-set targeting hwcopeland/iac.
 #
 # Chart: oci://ghcr.io/actions/actions-runner-controller-charts/gha-runner-scale-set
+# Controller chart: gha-runner-scale-set-controller (must be same version)
 # Namespace: arc-system
-# Scale-set name (= runner label in workflow): arc-chem
 #
-# This scale-set registers runners to the compute-infrastructure repository using
-# a GitHub App credential. Workflow jobs that specify:
+# Workflow jobs that specify:
 #   runs-on: [self-hosted, arc-chem]
-# will be routed to these runner pods.
-#
-# Runner pod design: host Docker socket mount (/var/run/docker.sock).
-# This is the simpler option for a lab environment. Pods share the node Docker daemon,
-# which is acceptable when all workloads on the cluster are trusted.
-# Alternative: DinD sidecar (requires privileged pod — more complex, better isolation).
-# Revisit if security posture requires stronger build isolation.
-#
-# See docs/tdd/arc-setup.md for the full installation runbook.
+# will be routed to these ephemeral runner pods.
 
-# The GitHub repository this scale-set registers to.
-# Format: https://github.com/<org>/<repo>
 githubConfigUrl: "https://github.com/hwcopeland/iac"
-
-# Reference to the Kubernetes Secret containing GitHub App credentials.
-# This secret is created by the ExternalSecret defined in arc-setup.md.
-# Secret must contain keys: github_app_id, github_app_installation_id, github_app_private_key
 githubConfigSecret: arc-github-app-secret
-
-# Scale-set name. This becomes the runner label used in workflow `runs-on:`.
-# Must match the label used in .github/workflows/build-and-push.yml: arc-chem
 runnerScaleSetName: "arc-chem"
 
-# Scaling: minimum 0 runners when idle (no cost), scale to max 4 for parallel matrix jobs.
-# The build-and-push.yml matrix has 4 parallel jobs (one per image).
+# 1 warm runner always ready; scales up to 6 for parallel matrix builds.
 minRunners: 1
-maxRunners: 4
+maxRunners: 6
 
-# Runner pod template.
-# Uses Docker-in-Docker (DinD) sidecar because RKE2 nodes use containerd
-# and do not expose /var/run/docker.sock.
+controllerServiceAccount:
+  namespace: arc-system
+  name: arc-gha-runner-scale-set-controller
+
+# Runner pod template — DinD sidecar without TLS (all traffic is pod-local localhost).
+# No TLS = no cert generation race condition; DinD ready immediately on start.
 template:
   spec:
     containers:
@@ -45,19 +29,11 @@ template:
         image: ghcr.io/actions/actions-runner:2.333.0
         imagePullPolicy: IfNotPresent
         env:
-          # Point Docker client to the DinD sidecar.
           - name: DOCKER_HOST
-            value: tcp://localhost:2376
-          - name: DOCKER_TLS_VERIFY
-            value: "1"
-          - name: DOCKER_CERT_PATH
-            value: /certs/client
+            value: tcp://localhost:2375
         volumeMounts:
           - name: work
             mountPath: /home/runner/_work
-          - name: dind-cert
-            mountPath: /certs/client
-            readOnly: true
         resources:
           requests:
             cpu: 500m
@@ -72,12 +48,12 @@ template:
           privileged: true
         env:
           - name: DOCKER_TLS_CERTDIR
-            value: /certs
+            value: ""
+        args:
+          - --host=tcp://0.0.0.0:2375
         volumeMounts:
           - name: work
             mountPath: /home/runner/_work
-          - name: dind-cert
-            mountPath: /certs
         resources:
           requests:
             cpu: 200m
@@ -89,12 +65,3 @@ template:
     volumes:
       - name: work
         emptyDir: {}
-      - name: dind-cert
-        emptyDir: {}
-
-# Controller deployment namespace.
-# The controller must be installed in the same namespace as the scale-set when
-# using the per-namespace controller mode (default in ARC v2).
-controllerServiceAccount:
-  namespace: arc-system
-  name: arc-gha-runner-scale-set-controller

@@ -1,0 +1,44 @@
+---
+# KEDA ScaledObject for arc-chem GitHub Actions runners.
+# Scales arc-chem-runner Deployment based on queued jobs with the "arc-chem" label.
+#
+# Requires KEDA 2.19+. Install: helm install keda kedacore/keda -n keda --create-namespace
+#
+# With minReplicaCount: 1, there is always 1 warm runner idle.
+# On job queue growth, scales up to 6 runners (one per queued job).
+# github-pat secret (key: token) must exist in arc-system namespace.
+
+apiVersion: keda.sh/v1alpha1
+kind: TriggerAuthentication
+metadata:
+  name: arc-runner-github-auth
+  namespace: arc-system
+spec:
+  secretTargetRef:
+    - parameter: personalAccessToken
+      name: github-pat
+      key: token
+
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: arc-runner-scaler
+  namespace: arc-system
+spec:
+  scaleTargetRef:
+    name: arc-chem-runner
+  minReplicaCount: 1
+  maxReplicaCount: 6
+  pollingInterval: 15
+  cooldownPeriod: 60
+  triggers:
+    - type: github-runner
+      metadata:
+        owner: hwcopeland
+        runnerScope: repo
+        repos: iac
+        labels: arc-chem
+        targetWorkflowQueueLength: "1"
+      authenticationRef:
+        name: arc-runner-github-auth
