@@ -1,0 +1,534 @@
+---
+# GROMACS GPU MD smoke test — top 5 docking hits, 2 ps each (MD_NSTEPS=1000)
+# Receptor: target-prep-7jrn-1777477937703996821
+# Dock job: dockv2-1777504662531913535 (vina-gpu, 802 compounds)
+# Scores: IFLV -9.4, YPBU -9.3, IMED -9.1, DSCS -9.1, RJJL -9.1 kcal/mol
+
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: gromacs-test-iflv
+  namespace: chem
+  labels:
+    app.kubernetes.io/name: gromacs
+    khemeia.io/job-type: md-test
+    khemeia.io/compound: KHM-IFLVGRRVGPXYON
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: gromacs
+        khemeia.io/job-type: md-test
+    spec:
+      restartPolicy: Never
+      imagePullSecrets:
+        - name: zot-pull-secret
+      nodeSelector:
+        gpu: "rtx3070"
+      tolerations:
+        - key: "gpu"
+          value: "true"
+          effect: NoSchedule
+      containers:
+        - name: gromacs
+          image: zot.hwcopeland.net/chem/gromacs:latest
+          imagePullPolicy: Always
+          resources:
+            requests:
+              cpu: "4"
+              memory: "16Gi"
+              nvidia.com/gpu: "1"
+            limits:
+              nvidia.com/gpu: "1"
+          env:
+            - name: JOB_NAME
+              value: "gromacs-test-001"
+            - name: WORKER_NAME
+              value: "gromacs-test-iflv-0"
+            - name: COMPOUND_ID
+              value: "KHM-IFLVGRRVGPXYON"
+            - name: RECEPTOR_REF
+              value: "target-prep-7jrn-1777477937703996821"
+            - name: DOCK_JOB_NAME
+              value: "dockv2-1777504662531913535"
+            - name: DOCK_ENGINE
+              value: "vina-gpu"
+            - name: MD_NSTEPS
+              value: "1000"
+            - name: MYSQL_HOST
+              value: "docking-mysql.chem.svc.cluster.local"
+            - name: MYSQL_PORT
+              value: "3306"
+            - name: MYSQL_USER
+              value: "root"
+            - name: MYSQL_DATABASE
+              value: "docking"
+            - name: MYSQL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: docking-mysql-secret
+                  key: root-password
+            - name: GARAGE_ENABLED
+              value: "true"
+            - name: GARAGE_ENDPOINT
+              value: "http://garage.chem.svc.cluster.local:3900"
+            - name: GARAGE_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: garage-secret
+                  key: access-key-id
+            - name: GARAGE_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: garage-secret
+                  key: secret-access-key
+            - name: GARAGE_REGION
+              value: "garage"
+            - name: LD_LIBRARY_PATH
+              value: "/run/opengl-driver/lib:/usr/local/cuda/lib64"
+          volumeMounts:
+            - name: nvidia-driver
+              mountPath: /run/opengl-driver
+              readOnly: true
+            - name: nix-store
+              mountPath: /nix/store
+              readOnly: true
+            - name: dri
+              mountPath: /dev/dri
+          workingDir: /tmp
+      volumes:
+        - name: nvidia-driver
+          hostPath:
+            path: /run/opengl-driver
+        - name: nix-store
+          hostPath:
+            path: /nix/store
+        - name: dri
+          hostPath:
+            path: /dev/dri
+
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: gromacs-test-ypbu
+  namespace: chem
+  labels:
+    app.kubernetes.io/name: gromacs
+    khemeia.io/job-type: md-test
+    khemeia.io/compound: KHM-YPBUEKBNJUMBCZ
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: gromacs
+        khemeia.io/job-type: md-test
+    spec:
+      restartPolicy: Never
+      imagePullSecrets:
+        - name: zot-pull-secret
+      nodeSelector:
+        gpu: "rtx3070"
+      tolerations:
+        - key: "gpu"
+          value: "true"
+          effect: NoSchedule
+      containers:
+        - name: gromacs
+          image: zot.hwcopeland.net/chem/gromacs:latest
+          imagePullPolicy: Always
+          resources:
+            requests:
+              cpu: "4"
+              memory: "16Gi"
+              nvidia.com/gpu: "1"
+            limits:
+              nvidia.com/gpu: "1"
+          env:
+            - name: JOB_NAME
+              value: "gromacs-test-001"
+            - name: WORKER_NAME
+              value: "gromacs-test-ypbu-0"
+            - name: COMPOUND_ID
+              value: "KHM-YPBUEKBNJUMBCZ"
+            - name: RECEPTOR_REF
+              value: "target-prep-7jrn-1777477937703996821"
+            - name: DOCK_JOB_NAME
+              value: "dockv2-1777504662531913535"
+            - name: DOCK_ENGINE
+              value: "vina-gpu"
+            - name: MD_NSTEPS
+              value: "1000"
+            - name: MYSQL_HOST
+              value: "docking-mysql.chem.svc.cluster.local"
+            - name: MYSQL_PORT
+              value: "3306"
+            - name: MYSQL_USER
+              value: "root"
+            - name: MYSQL_DATABASE
+              value: "docking"
+            - name: MYSQL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: docking-mysql-secret
+                  key: root-password
+            - name: GARAGE_ENABLED
+              value: "true"
+            - name: GARAGE_ENDPOINT
+              value: "http://garage.chem.svc.cluster.local:3900"
+            - name: GARAGE_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: garage-secret
+                  key: access-key-id
+            - name: GARAGE_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: garage-secret
+                  key: secret-access-key
+            - name: GARAGE_REGION
+              value: "garage"
+            - name: LD_LIBRARY_PATH
+              value: "/run/opengl-driver/lib:/usr/local/cuda/lib64"
+          volumeMounts:
+            - name: nvidia-driver
+              mountPath: /run/opengl-driver
+              readOnly: true
+            - name: nix-store
+              mountPath: /nix/store
+              readOnly: true
+            - name: dri
+              mountPath: /dev/dri
+          workingDir: /tmp
+      volumes:
+        - name: nvidia-driver
+          hostPath:
+            path: /run/opengl-driver
+        - name: nix-store
+          hostPath:
+            path: /nix/store
+        - name: dri
+          hostPath:
+            path: /dev/dri
+
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: gromacs-test-imed
+  namespace: chem
+  labels:
+    app.kubernetes.io/name: gromacs
+    khemeia.io/job-type: md-test
+    khemeia.io/compound: KHM-IMEDEXINTFAKNV
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: gromacs
+        khemeia.io/job-type: md-test
+    spec:
+      restartPolicy: Never
+      imagePullSecrets:
+        - name: zot-pull-secret
+      nodeSelector:
+        gpu: "rtx3070"
+      tolerations:
+        - key: "gpu"
+          value: "true"
+          effect: NoSchedule
+      containers:
+        - name: gromacs
+          image: zot.hwcopeland.net/chem/gromacs:latest
+          imagePullPolicy: Always
+          resources:
+            requests:
+              cpu: "4"
+              memory: "16Gi"
+              nvidia.com/gpu: "1"
+            limits:
+              nvidia.com/gpu: "1"
+          env:
+            - name: JOB_NAME
+              value: "gromacs-test-001"
+            - name: WORKER_NAME
+              value: "gromacs-test-imed-0"
+            - name: COMPOUND_ID
+              value: "KHM-IMEDEXINTFAKNV"
+            - name: RECEPTOR_REF
+              value: "target-prep-7jrn-1777477937703996821"
+            - name: DOCK_JOB_NAME
+              value: "dockv2-1777504662531913535"
+            - name: DOCK_ENGINE
+              value: "vina-gpu"
+            - name: MD_NSTEPS
+              value: "1000"
+            - name: MYSQL_HOST
+              value: "docking-mysql.chem.svc.cluster.local"
+            - name: MYSQL_PORT
+              value: "3306"
+            - name: MYSQL_USER
+              value: "root"
+            - name: MYSQL_DATABASE
+              value: "docking"
+            - name: MYSQL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: docking-mysql-secret
+                  key: root-password
+            - name: GARAGE_ENABLED
+              value: "true"
+            - name: GARAGE_ENDPOINT
+              value: "http://garage.chem.svc.cluster.local:3900"
+            - name: GARAGE_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: garage-secret
+                  key: access-key-id
+            - name: GARAGE_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: garage-secret
+                  key: secret-access-key
+            - name: GARAGE_REGION
+              value: "garage"
+            - name: LD_LIBRARY_PATH
+              value: "/run/opengl-driver/lib:/usr/local/cuda/lib64"
+          volumeMounts:
+            - name: nvidia-driver
+              mountPath: /run/opengl-driver
+              readOnly: true
+            - name: nix-store
+              mountPath: /nix/store
+              readOnly: true
+            - name: dri
+              mountPath: /dev/dri
+          workingDir: /tmp
+      volumes:
+        - name: nvidia-driver
+          hostPath:
+            path: /run/opengl-driver
+        - name: nix-store
+          hostPath:
+            path: /nix/store
+        - name: dri
+          hostPath:
+            path: /dev/dri
+
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: gromacs-test-dscs
+  namespace: chem
+  labels:
+    app.kubernetes.io/name: gromacs
+    khemeia.io/job-type: md-test
+    khemeia.io/compound: KHM-DSCSSQAANWCYAP
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: gromacs
+        khemeia.io/job-type: md-test
+    spec:
+      restartPolicy: Never
+      imagePullSecrets:
+        - name: zot-pull-secret
+      nodeSelector:
+        gpu: "rtx3070"
+      tolerations:
+        - key: "gpu"
+          value: "true"
+          effect: NoSchedule
+      containers:
+        - name: gromacs
+          image: zot.hwcopeland.net/chem/gromacs:latest
+          imagePullPolicy: Always
+          resources:
+            requests:
+              cpu: "4"
+              memory: "16Gi"
+              nvidia.com/gpu: "1"
+            limits:
+              nvidia.com/gpu: "1"
+          env:
+            - name: JOB_NAME
+              value: "gromacs-test-001"
+            - name: WORKER_NAME
+              value: "gromacs-test-dscs-0"
+            - name: COMPOUND_ID
+              value: "KHM-DSCSSQAANWCYAP"
+            - name: RECEPTOR_REF
+              value: "target-prep-7jrn-1777477937703996821"
+            - name: DOCK_JOB_NAME
+              value: "dockv2-1777504662531913535"
+            - name: DOCK_ENGINE
+              value: "vina-gpu"
+            - name: MD_NSTEPS
+              value: "1000"
+            - name: MYSQL_HOST
+              value: "docking-mysql.chem.svc.cluster.local"
+            - name: MYSQL_PORT
+              value: "3306"
+            - name: MYSQL_USER
+              value: "root"
+            - name: MYSQL_DATABASE
+              value: "docking"
+            - name: MYSQL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: docking-mysql-secret
+                  key: root-password
+            - name: GARAGE_ENABLED
+              value: "true"
+            - name: GARAGE_ENDPOINT
+              value: "http://garage.chem.svc.cluster.local:3900"
+            - name: GARAGE_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: garage-secret
+                  key: access-key-id
+            - name: GARAGE_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: garage-secret
+                  key: secret-access-key
+            - name: GARAGE_REGION
+              value: "garage"
+            - name: LD_LIBRARY_PATH
+              value: "/run/opengl-driver/lib:/usr/local/cuda/lib64"
+          volumeMounts:
+            - name: nvidia-driver
+              mountPath: /run/opengl-driver
+              readOnly: true
+            - name: nix-store
+              mountPath: /nix/store
+              readOnly: true
+            - name: dri
+              mountPath: /dev/dri
+          workingDir: /tmp
+      volumes:
+        - name: nvidia-driver
+          hostPath:
+            path: /run/opengl-driver
+        - name: nix-store
+          hostPath:
+            path: /nix/store
+        - name: dri
+          hostPath:
+            path: /dev/dri
+
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: gromacs-test-rjjl
+  namespace: chem
+  labels:
+    app.kubernetes.io/name: gromacs
+    khemeia.io/job-type: md-test
+    khemeia.io/compound: KHM-RJJLBNDNUALQTQ
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: gromacs
+        khemeia.io/job-type: md-test
+    spec:
+      restartPolicy: Never
+      imagePullSecrets:
+        - name: zot-pull-secret
+      nodeSelector:
+        gpu: "rtx3070"
+      tolerations:
+        - key: "gpu"
+          value: "true"
+          effect: NoSchedule
+      containers:
+        - name: gromacs
+          image: zot.hwcopeland.net/chem/gromacs:latest
+          imagePullPolicy: Always
+          resources:
+            requests:
+              cpu: "4"
+              memory: "16Gi"
+              nvidia.com/gpu: "1"
+            limits:
+              nvidia.com/gpu: "1"
+          env:
+            - name: JOB_NAME
+              value: "gromacs-test-001"
+            - name: WORKER_NAME
+              value: "gromacs-test-rjjl-0"
+            - name: COMPOUND_ID
+              value: "KHM-RJJLBNDNUALQTQ"
+            - name: RECEPTOR_REF
+              value: "target-prep-7jrn-1777477937703996821"
+            - name: DOCK_JOB_NAME
+              value: "dockv2-1777504662531913535"
+            - name: DOCK_ENGINE
+              value: "vina-gpu"
+            - name: MD_NSTEPS
+              value: "1000"
+            - name: MYSQL_HOST
+              value: "docking-mysql.chem.svc.cluster.local"
+            - name: MYSQL_PORT
+              value: "3306"
+            - name: MYSQL_USER
+              value: "root"
+            - name: MYSQL_DATABASE
+              value: "docking"
+            - name: MYSQL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: docking-mysql-secret
+                  key: root-password
+            - name: GARAGE_ENABLED
+              value: "true"
+            - name: GARAGE_ENDPOINT
+              value: "http://garage.chem.svc.cluster.local:3900"
+            - name: GARAGE_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: garage-secret
+                  key: access-key-id
+            - name: GARAGE_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: garage-secret
+                  key: secret-access-key
+            - name: GARAGE_REGION
+              value: "garage"
+            - name: LD_LIBRARY_PATH
+              value: "/run/opengl-driver/lib:/usr/local/cuda/lib64"
+          volumeMounts:
+            - name: nvidia-driver
+              mountPath: /run/opengl-driver
+              readOnly: true
+            - name: nix-store
+              mountPath: /nix/store
+              readOnly: true
+            - name: dri
+              mountPath: /dev/dri
+          workingDir: /tmp
+      volumes:
+        - name: nvidia-driver
+          hostPath:
+            path: /run/opengl-driver
+        - name: nix-store
+          hostPath:
+            path: /nix/store
+        - name: dri
+          hostPath:
+            path: /dev/dri
