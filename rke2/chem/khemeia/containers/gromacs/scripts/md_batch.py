@@ -43,7 +43,7 @@ except ImportError:
 
 MDP_DIR = Path("/mdp")
 BUCKET_RECEPTORS = "khemeia-receptors"
-BUCKET_MD = "khemeia-md"
+BUCKET_MD = "khemeia-trajectories"
 
 # PDBQT records with no PDB equivalent
 _PDBQT_ONLY = frozenset({"ROOT", "ENDROOT", "BRANCH", "ENDBRANCH", "TORSDOF"})
