@@ -421,14 +421,28 @@ def main():
         receptor_path = wd / "receptor.pdb"
         receptor_path.write_bytes(receptor_pdb)
 
-        # Write docked pose — detect format by content
+        # Write docked pose and normalise to SDF for ACPYPE.
+        # Vina PDBQT is multi-model; ACPYPE's internal obabel call chokes on it.
+        # We run our own obabel conversion first (first conformer only → SDF).
         pose_path = None
         if pose_bytes:
             if b"$$$$" in pose_bytes or b"\nM  END" in pose_bytes:
                 pose_path = wd / "pose.sdf"
+                pose_path.write_bytes(pose_bytes)
             else:
-                pose_path = wd / "pose.pdbqt"
-            pose_path.write_bytes(pose_bytes)
+                raw_pdbqt = wd / "pose_raw.pdbqt"
+                raw_pdbqt.write_bytes(pose_bytes)
+                sdf_out = wd / "pose.sdf"
+                conv = subprocess.run(
+                    ["obabel", "-ipdbqt", str(raw_pdbqt), "-osdf", "-O", str(sdf_out), "--firstonly"],
+                    capture_output=True, text=True,
+                )
+                if conv.returncode == 0 and sdf_out.exists() and sdf_out.stat().st_size > 0:
+                    pose_path = sdf_out
+                    print(f"[pose] Converted PDBQT→SDF ({sdf_out.stat().st_size} bytes)", flush=True)
+                else:
+                    print(f"[pose] obabel conversion failed (rc={conv.returncode}), using raw PDBQT", flush=True)
+                    pose_path = raw_pdbqt
 
         # --- Topology preparation ---
         print("Preparing ligand topology (OpenFF GAFF-2.11)...", flush=True)
