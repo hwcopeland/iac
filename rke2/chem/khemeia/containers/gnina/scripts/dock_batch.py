@@ -289,6 +289,7 @@ def run_gnina(receptor_path, ligand_pdbqt, center, size, exhaustiveness, n_poses
             "--num_modes", str(n_poses),
             "--out", out_path,
             "--log", log_path,
+            "--gpu",
         ]
 
         proc = subprocess.Popen(
