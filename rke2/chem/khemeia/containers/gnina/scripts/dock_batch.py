@@ -252,7 +252,7 @@ def parse_gnina_log(log_path):
 
 
 def run_gnina(receptor_path, ligand_pdbqt, center, size, exhaustiveness, n_poses=9):
-    """Run gnina CLI for a single ligand. Returns (affinity, docked_pdbqt) or (None, None)."""
+    """Run gnina CLI for a single ligand. Returns (affinity, cnn_score, cnn_affinity, docked_pdbqt) or (None, None, None, None)."""
     tmpdir = tempfile.mkdtemp(prefix="gnina_")
     lig_path = os.path.join(tmpdir, "ligand.pdbqt")
     out_path = os.path.join(tmpdir, "docked.pdbqt")
@@ -287,22 +287,22 @@ def run_gnina(receptor_path, ligand_pdbqt, center, size, exhaustiveness, n_poses
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
         if result.returncode != 0:
             print(f"WARNING: gnina failed: {result.stderr[:300]}", flush=True)
-            return None, None
+            return None, None, None, None
 
         parsed = parse_gnina_log(log_path)
         if parsed is None:
-            return None, None
+            return None, None, None, None
 
         docked_pdbqt = None
         if os.path.exists(out_path):
             with open(out_path) as f:
                 docked_pdbqt = f.read()
 
-        return parsed["affinity"], docked_pdbqt
+        return parsed["affinity"], parsed["cnn_score"], parsed["cnn_affinity"], docked_pdbqt
 
     except subprocess.TimeoutExpired:
         print("WARNING: gnina timed out (600s)", flush=True)
-        return None, None
+        return None, None, None, None
     finally:
         for f in [lig_path, out_path, log_path]:
             if os.path.exists(f):
@@ -367,7 +367,7 @@ def main():
 
     for i, (ligand_db_id, compound_id, pdbqt_bytes) in enumerate(ligands, start=1):
         try:
-            affinity, docked_pdbqt = run_gnina(
+            affinity, cnn_score, cnn_affinity, docked_pdbqt = run_gnina(
                 RECEPTOR_PATH, pdbqt_bytes,
                 center=(cx, cy, cz),
                 size=(sx, sy, sz),
@@ -385,9 +385,9 @@ def main():
 
             cursor.execute(
                 "INSERT INTO docking_v2_results "
-                "(job_name, engine, compound_id, ligand_id, affinity_kcal_mol, docked_pdbqt) "
-                "VALUES (%s, %s, %s, %s, %s, %s)",
-                (cfg["job_name"], cfg["engine"], compound_id, ligand_db_id, affinity, docked_blob),
+                "(job_name, engine, compound_id, ligand_id, affinity_kcal_mol, cnn_score, cnn_affinity, docked_pdbqt) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+                (cfg["job_name"], cfg["engine"], compound_id, ligand_db_id, affinity, cnn_score, cnn_affinity, docked_blob),
             )
             conn.commit()
             docked += 1

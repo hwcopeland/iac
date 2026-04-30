@@ -79,7 +79,7 @@ def parse_binding_site(binding_site_json):
 
 def get_config():
     engine = os.environ.get("ENGINE", "vina-gpu")
-    default_threads = 8000 if engine == "vina-gpu-batch" else 256
+    default_threads = 4000 if engine == "vina-gpu-batch" else 256
     return {
         "job_name": require_env("JOB_NAME"),
         "worker_name": require_env("WORKER_NAME"),
@@ -352,17 +352,21 @@ def _run_vina_gpu_batch_mode(receptor_path, ligands, center, size, exhaustivenes
             preexec_fn=_set_stack_limit,
         )
         if result.returncode != 0:
-            print(f"WARNING: Vina-GPU failed (code {result.returncode})", flush=True)
+            print(f"WARNING: Vina-GPU exited with code {result.returncode}, attempting partial recovery", flush=True)
             if result.stdout:
                 print(result.stdout[-2000:], flush=True)
             if result.stderr:
                 print(result.stderr[-2000:], flush=True)
-            return {}, result
 
+        # Collect results from any output files written, even on partial failure.
         parsed = {}
         for ligand_db_id, compound_id, stem in manifest:
             affinity, pose = parse_output_pose(output_dir / f"{stem}_out.pdbqt")
-            parsed[compound_id] = (ligand_db_id, affinity, pose)
+            if affinity is not None:
+                parsed[compound_id] = (ligand_db_id, affinity, pose)
+
+        if result.returncode != 0:
+            print(f"Partial recovery: recovered {len(parsed)}/{len(manifest)} ligands", flush=True)
         return parsed, result
 
 

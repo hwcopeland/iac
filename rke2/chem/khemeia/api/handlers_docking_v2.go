@@ -161,6 +161,7 @@ func EnsureDockingV2Schema(db *sql.DB) error {
 
 	// Per-engine docking results. Extends the v1 docking_results pattern with
 	// an engine column to support multi-engine aggregation.
+	// cnn_score / cnn_affinity are gnina-specific; NULL for other engines.
 	resultsDDL := `CREATE TABLE IF NOT EXISTS docking_v2_results (
 		id                INT AUTO_INCREMENT PRIMARY KEY,
 		job_name          VARCHAR(255) NOT NULL,
@@ -168,6 +169,8 @@ func EnsureDockingV2Schema(db *sql.DB) error {
 		compound_id       VARCHAR(255) NOT NULL,
 		ligand_id         INT          NOT NULL,
 		affinity_kcal_mol FLOAT        NOT NULL,
+		cnn_score         FLOAT        NULL,
+		cnn_affinity      FLOAT        NULL,
 		docked_pdbqt      MEDIUMBLOB   NULL,
 		created_at        TIMESTAMP    DEFAULT CURRENT_TIMESTAMP,
 		INDEX idx_job_name (job_name),
@@ -179,6 +182,21 @@ func EnsureDockingV2Schema(db *sql.DB) error {
 
 	if _, err := db.Exec(resultsDDL); err != nil {
 		return fmt.Errorf("creating docking_v2_results table: %w", err)
+	}
+
+	// Migration: add CNN score columns to tables created before this schema version.
+	// ALTER TABLE ... ADD COLUMN fails with error 1060 if the column already exists;
+	// we ignore that error so the migration is idempotent.
+	for _, alter := range []string{
+		"ALTER TABLE docking_v2_results ADD COLUMN cnn_score FLOAT NULL AFTER affinity_kcal_mol",
+		"ALTER TABLE docking_v2_results ADD COLUMN cnn_affinity FLOAT NULL AFTER cnn_score",
+	} {
+		if _, err := db.Exec(alter); err != nil {
+			// MySQL error 1060 = Duplicate column name — already migrated, skip.
+			if !strings.Contains(err.Error(), "Duplicate column name") {
+				return fmt.Errorf("migrating docking_v2_results: %w", err)
+			}
+		}
 	}
 
 	return nil
