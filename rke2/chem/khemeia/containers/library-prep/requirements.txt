@@ -1,6 +1,7 @@
 numpy<2
 rdkit-pypi
 chembl_structure_pipeline
+scipy
 meeko
 flask
 gunicorn
