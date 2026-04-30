@@ -41,6 +41,7 @@ RUN pip3 install --no-cache-dir \
     spyrmsd \
     pandas \
     tqdm \
+    pyyaml \
     "fair-esm>=2.0.0" \
     mysql-connector-python \
     boto3
