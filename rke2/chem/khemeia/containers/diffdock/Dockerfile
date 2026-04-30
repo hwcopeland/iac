@@ -18,6 +18,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git wget unzip ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
+# Pin numpy<2 first — torch 1.13 and fair-esm were compiled against NumPy 1.x ABI.
+# NumPy 2.x breaks _ARRAY_API compatibility and crashes ESM at load time.
+RUN pip3 install --no-cache-dir "numpy<2"
+
 # PyTorch 1.13.1 with CUDA 11.7 (backward-compatible with 11.8 runtime).
 # DiffDock was developed and tested against this version.
 RUN pip3 install --no-cache-dir \
