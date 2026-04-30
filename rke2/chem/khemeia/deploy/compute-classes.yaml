@@ -64,8 +64,8 @@ data:
             hostPath:
               path: /dev/dri
           - name: vina-gpu-kernel-cache
-            persistentVolumeClaim:
-              claimName: vina-gpu-kernel-cache
+            hostPath:
+              path: /var/cache/vina-gpu-kernels
         volumeMounts:
           - name: nvidia-driver
             mountPath: /run/opengl-driver

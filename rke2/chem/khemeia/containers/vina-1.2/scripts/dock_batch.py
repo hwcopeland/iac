@@ -30,6 +30,7 @@ import json
 import os
 import sys
 import tempfile
+import time as _time
 
 import mysql.connector
 
@@ -56,6 +57,12 @@ _VALID_SCORING = {"vina", "vinardo", "ad4"}
 # S3 bucket names matching the Go constants in s3.go
 BUCKET_RECEPTORS = "khemeia-receptors"
 BUCKET_LIBRARIES = "khemeia-libraries"
+
+
+def _jlog(event: str, **kwargs) -> None:
+    """Emit a structured JSON metric line for Promtail/Loki ingestion."""
+    payload = {"event": event, "ts": _time.time(), **kwargs}
+    print("metric: " + json.dumps(payload, separators=(",", ":")), flush=True)
 
 
 def require_env(name):
@@ -308,8 +315,12 @@ def main():
         return
 
     print(f"Docking {total} ligands (offset={cfg['batch_offset']})", flush=True)
+    t0 = _time.time()
+    _jlog("worker_start", job=cfg["job_name"], engine=cfg["engine"],
+          worker=cfg["worker_name"], total=total, offset=cfg["batch_offset"])
     docked = 0
     failed = 0
+    best_affinity = None
 
     for i, (ligand_db_id, compound_id, pdbqt_bytes) in enumerate(ligands, start=1):
         try:
@@ -345,9 +356,15 @@ def main():
             )
             conn.commit()
             docked += 1
+            if best_affinity is None or affinity < best_affinity:
+                best_affinity = affinity
 
             if i % 50 == 0 or i == total:
+                elapsed = _time.time() - t0
                 print(f"Progress: {i}/{total} (docked={docked}, failed={failed})", flush=True)
+                _jlog("progress", job=cfg["job_name"], engine=cfg["engine"],
+                      worker=cfg["worker_name"], processed=i, total=total,
+                      docked=docked, failed=failed, elapsed_s=round(elapsed, 1))
 
         except Exception as exc:
             print(f"WARNING: docking failed for {compound_id}: {exc}", flush=True)
@@ -356,10 +373,16 @@ def main():
 
     cursor.close()
     conn.close()
+    elapsed = _time.time() - t0
+    lig_per_sec = docked / elapsed if elapsed > 0 else 0.0
     print(
         f"Batch complete: {total} attempted, {docked} docked, {failed} failed",
         flush=True,
     )
+    _jlog("batch_complete", job=cfg["job_name"], engine=cfg["engine"],
+          worker=cfg["worker_name"], total=total, docked=docked, failed=failed,
+          elapsed_s=round(elapsed, 1), lig_per_sec=round(lig_per_sec, 3),
+          best_affinity=best_affinity)
 
 
 if __name__ == "__main__":
