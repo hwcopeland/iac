@@ -11,6 +11,7 @@
 # torch 2.1+cu118: supports driver 520+ (host is 580). DiffDock v1.1
 # inference.py is compatible with torch 2.x via PyG 2.4.
 
+# build-deps: gcc g++ make (required for prody C extension compilation)
 FROM nvidia/cuda:11.8.0-cudnn8-runtime-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
