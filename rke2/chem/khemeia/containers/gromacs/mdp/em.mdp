@@ -1,7 +1,7 @@
 ; Energy minimisation — steepest descent, 50k steps max
 integrator  = steep
 nsteps      = 50000
-emtol       = 1000.0
+emtol       = 100.0
 emstep      = 0.01
 
 ; Neighbour searching
