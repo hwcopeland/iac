@@ -1,0 +1,54 @@
+; Production MD — default 1 ns (500000 × 2 fs), GPU-accelerated
+; Override nsteps via MD_NSTEPS env var in the batch script.
+integrator  = md
+nsteps      = 500000
+dt          = 0.002
+
+; Output — trajectory every 10 ps, energies every 1 ps
+nstxout-compressed  = 5000
+nstxout             = 0
+nstvout             = 0
+nstfout             = 0
+nstlog              = 5000
+nstenergy           = 500
+
+; Neighbour searching
+cutoff-scheme   = Verlet
+nstlist         = 10
+ns_type         = grid
+rlist           = 1.2
+
+; Electrostatics
+coulombtype     = PME
+rcoulomb        = 1.2
+
+; Van der Waals
+vdwtype         = Cut-off
+vdw-modifier    = Force-switch
+rvdw-switch     = 1.0
+rvdw            = 1.2
+
+; Temperature coupling
+tcoupl      = V-rescale
+tc-grps     = Protein_LIG  Water_and_ions
+tau-t       = 0.1          0.1
+ref-t       = 300          300
+
+; Pressure coupling
+pcoupl          = Parrinello-Rahman
+pcoupltype      = isotropic
+tau-p           = 2.0
+ref-p           = 1.0
+compressibility = 4.5e-5
+
+; Periodic boundary conditions
+pbc         = xyz
+
+; Constraints
+constraints         = h-bonds
+constraint-algorithm = LINCS
+
+; Velocity generation — off; continue from NPT
+gen-vel     = no
+
+; GPU offload — GROMACS 2024 auto-selects nb+PME on GPU when CUDA device present

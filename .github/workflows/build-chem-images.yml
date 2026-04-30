@@ -193,6 +193,14 @@ jobs:
                   "context": "rke2/chem/khemeia/containers/diffdock/",
                   "prefixes": ["rke2/chem/khemeia/containers/diffdock/"],
               },
+              {
+                  "key": "gromacs",
+                  "name": "gromacs",
+                  "image": "zot.hwcopeland.net/chem/gromacs",
+                  "dockerfile": "rke2/chem/khemeia/containers/gromacs/Dockerfile",
+                  "context": "rke2/chem/khemeia/containers/gromacs/",
+                  "prefixes": ["rke2/chem/khemeia/containers/gromacs/"],
+              },
           ]
 
           def run(cmd):
