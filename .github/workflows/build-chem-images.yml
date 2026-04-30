@@ -179,6 +179,14 @@ jobs:
                   "context": "rke2/chem/khemeia/containers/vina-gpu/",
                   "prefixes": ["rke2/chem/khemeia/containers/vina-gpu/"],
               },
+              {
+                  "key": "diffdock",
+                  "name": "diffdock",
+                  "image": "zot.hwcopeland.net/chem/diffdock",
+                  "dockerfile": "rke2/chem/khemeia/containers/diffdock/Dockerfile",
+                  "context": "rke2/chem/khemeia/containers/diffdock/",
+                  "prefixes": ["rke2/chem/khemeia/containers/diffdock/"],
+              },
           ]
 
           def run(cmd):
