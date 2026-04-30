@@ -228,7 +228,10 @@ def _gro_has_bad_coords(gro_path, max_nm=500.0):
 
 
 def _parse_sdf_coords_nm(sdf_path):
-    """Return list of (x, y, z) in nm from the SDF/MOL atom block (first conformer)."""
+    """Return list of (x, y, z) in nm from the SDF/MOL atom block (first conformer).
+    Returns [] if any coordinate is non-finite (inf/nan).
+    """
+    import math as _math
     lines = Path(sdf_path).read_text().splitlines()
     try:
         natoms = int(lines[3][:3])
@@ -239,7 +242,11 @@ def _parse_sdf_coords_nm(sdf_path):
         parts = line.split()
         if len(parts) >= 3:
             try:
-                coords.append((float(parts[0]) / 10, float(parts[1]) / 10, float(parts[2]) / 10))
+                x, y, z = float(parts[0]) / 10, float(parts[1]) / 10, float(parts[2]) / 10
+                if not (_math.isfinite(x) and _math.isfinite(y) and _math.isfinite(z)):
+                    print(f"[acpype] non-finite coord in SDF: ({x}, {y}, {z})", flush=True)
+                    return []
+                coords.append((x, y, z))
             except ValueError:
                 pass
     return coords
@@ -322,12 +329,15 @@ def prepare_ligand_topology(smiles, pose_sdf_path, workdir):
             capture_output=True, text=True,
         )
         obabel_ok = h_result.returncode == 0 and pose_h_sdf.exists() and pose_h_sdf.stat().st_size > 0
-        print(f"[acpype] obabel -h: rc={h_result.returncode} ok={obabel_ok}", flush=True)
-        if h_result.stderr:
-            print(f"[acpype] obabel stderr: {h_result.stderr.strip()}", flush=True)
-        src = pose_h_sdf if obabel_ok else pose_sdf_path
-        coords = _parse_sdf_coords_nm(src)
-        print(f"[acpype] coord injection: src={src.name if hasattr(src,'name') else src} natoms={len(coords)}", flush=True)
+        # Try H-added SDF first; _parse_sdf_coords_nm returns [] if any coord is inf/nan
+        coords, src_label = [], "none"
+        if obabel_ok:
+            coords = _parse_sdf_coords_nm(pose_h_sdf)
+            src_label = "pose_H.sdf"
+        if not coords:
+            coords = _parse_sdf_coords_nm(pose_sdf_path)
+            src_label = "pose.sdf (fallback)"
+        print(f"[acpype] coord injection: src={src_label} natoms={len(coords)}", flush=True)
         if coords:
             ok = _overwrite_gro_coords(gro, coords)
             if not ok:
