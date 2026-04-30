@@ -12,7 +12,13 @@ spec:
   hostnames:
     - "zot.hwcopeland.net"
   rules:
-    - backendRefs:
+    - filters:
+        - type: RequestHeaderModifier
+          requestHeaderModifier:
+            add:
+              - name: X-Forwarded-Proto
+                value: https
+      backendRefs:
         - name: zot
           port: 5000
 ---
