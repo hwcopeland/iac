@@ -1,4 +1,4 @@
-# DiffDock blind docking engine. Zot v2.1.16+
+# DiffDock blind docking engine.
 # Deep learning diffusion model for blind protein-ligand docking.
 # Takes protein PDB + ligand SMILES (no binding site box required).
 #
