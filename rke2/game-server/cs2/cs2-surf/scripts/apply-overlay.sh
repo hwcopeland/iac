@@ -20,6 +20,24 @@ STAMP_FILE="${CS2_DIR}/game/csgo/.surf-overlay-version"
 
 log()  { echo "[apply-overlay] $(date '+%Y-%m-%d %H:%M:%S') $*"; }
 
+# Always patch gameinfo.gi — a CS2 game update can overwrite it and remove
+# the "Game sharp" entry without changing our overlay version stamp.
+patch_gameinfo() {
+    local GAMEINFO="${CS2_DIR}/game/csgo/gameinfo.gi"
+    [ -f "${GAMEINFO}" ] || return 0
+    sed -i "/csgo\/sharp/d" "${GAMEINFO}"
+    sed -i "/csgo\/addons\/metamod/d" "${GAMEINFO}"
+    if ! grep -q "Game[[:space:]]*sharp" "${GAMEINFO}"; then
+        sed -i '/Game_LowViolence.*csgo_lv/a\\t\t\tGame\tsharp' "${GAMEINFO}"
+        log "Patched gameinfo.gi: added Game sharp"
+    fi
+    if ! grep -q "Game[[:space:]]*csgo_addons/cs2quakesounds" "${GAMEINFO}"; then
+        sed -i '/Game\tsharp/a\\t\t\tGame\tcsgo_addons/cs2quakesounds' "${GAMEINFO}"
+        log "Patched gameinfo.gi: added Game csgo_addons/cs2quakesounds"
+    fi
+}
+patch_gameinfo
+
 # Read the image version
 if [ ! -f "${VERSION_FILE}" ]; then
     log "WARNING: No VERSION file found at ${VERSION_FILE}. Forcing overlay copy."
@@ -181,27 +199,6 @@ for dead in MapChooserSharpMS.Shared TnmsLocalizationPlatform.Shared \
         log "Removed stale shared ${dead}"
     fi
 done
-# Patch gameinfo.gi: add "Game sharp" before "Game csgo" per ModSharp docs
-# Also strip any leftover Metamod/CSS entries from kus
-GAMEINFO="${CS2_DIR}/game/csgo/gameinfo.gi"
-if [ -f "${GAMEINFO}" ]; then
-    # Remove old entries
-    sed -i "/csgo\/sharp/d" "${GAMEINFO}"
-    sed -i "/csgo\/addons\/metamod/d" "${GAMEINFO}"
-    # Add "Game sharp" if not present (before "Game csgo")
-    if ! grep -q "Game[[:space:]]*sharp" "${GAMEINFO}"; then
-        sed -i '/Game_LowViolence.*csgo_lv/a\\t\t\tGame\tsharp' "${GAMEINFO}"
-        log "Patched gameinfo.gi: added Game sharp"
-    fi
-    # Add "Game csgo_addons/cs2quakesounds" so the engine can resolve sound
-    # files referenced by the compiled Kandru .vsndevts_c manifests (which
-    # have SearchPath=csgo_addons/cs2quakesounds baked in at compile time).
-    if ! grep -q "Game[[:space:]]*csgo_addons/cs2quakesounds" "${GAMEINFO}"; then
-        sed -i '/Game\tsharp/a\\t\t\tGame\tcsgo_addons/cs2quakesounds' "${GAMEINFO}"
-        log "Patched gameinfo.gi: added Game csgo_addons/cs2quakesounds"
-    fi
-fi
-
 # Restore original libserver.so if previous runs messed with it
 ORIGINAL="${CS2_DIR}/game/csgo/bin/linuxsteamrt64/libserver.so"
 for backup in "${ORIGINAL}.valve_backup" "${ORIGINAL%/*}/libserver_original.so" "${ORIGINAL%/*}/libserver_valve.so"; do
