@@ -291,9 +291,23 @@ def run_gnina(receptor_path, ligand_pdbqt, center, size, exhaustiveness, n_poses
             "--log", log_path,
         ]
 
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
-        if result.returncode != 0:
-            print(f"WARNING: gnina failed: {result.stderr[:300]}", flush=True)
+        with open(log_path, "w") as log_fh:
+            proc = subprocess.Popen(
+                cmd, stdout=log_fh, stderr=subprocess.PIPE, text=True,
+            )
+            try:
+                _, stderr_out = proc.communicate(timeout=600)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.communicate()
+                print("WARNING: gnina timed out (600s)", flush=True)
+                return None, None, None, None
+            if stderr_out:
+                for line in stderr_out.splitlines():
+                    print(f"[gnina] {line}", flush=True)
+        result_returncode = proc.returncode
+        if result_returncode != 0:
+            print(f"WARNING: gnina exited with code {result_returncode}", flush=True)
             return None, None, None, None
 
         parsed = parse_gnina_log(log_path)
@@ -307,9 +321,6 @@ def run_gnina(receptor_path, ligand_pdbqt, center, size, exhaustiveness, n_poses
 
         return parsed["affinity"], parsed["cnn_score"], parsed["cnn_affinity"], docked_pdbqt
 
-    except subprocess.TimeoutExpired:
-        print("WARNING: gnina timed out (600s)", flush=True)
-        return None, None, None, None
     finally:
         for f in [lig_path, out_path, log_path]:
             if os.path.exists(f):
