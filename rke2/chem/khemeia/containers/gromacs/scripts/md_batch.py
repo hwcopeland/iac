@@ -259,6 +259,7 @@ def prepare_protein_topology(receptor_pdb_path, workdir):
             "-ff", "amber99sb-ildn",
             "-water", "tip3p",
             "-ignh",
+            "-missing",
         ],
         cwd=str(workdir),
         description="pdb2gmx — CHARMM36m protein topology",
