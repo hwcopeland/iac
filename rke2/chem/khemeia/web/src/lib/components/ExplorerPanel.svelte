@@ -1,8 +1,19 @@
 <script lang="ts">
   import Panel from './Panel.svelte';
+  import MDTrajectoryBrowser from './MDTrajectoryBrowser.svelte';
   import { loadPdb, loadFile, resetCamera, isReady } from '$lib/viewer';
 
-  let { onStructureLoad = () => {} }: { onStructureLoad?: () => void } = $props();
+  let {
+    onStructureLoad = () => {},
+    onMDView = undefined,
+  }: {
+    onStructureLoad?: () => void;
+    onMDView?: (
+      frames: string[],
+      energy: { time: number[]; potential: number[]; temperature: number[] } | null,
+      compoundId: string
+    ) => void;
+  } = $props();
 
   let pdbId = $state('');
   let loading = $state(false);
@@ -87,6 +98,10 @@
       <button class="btn btn-small" onclick={handleReset}>Reset View</button>
     </div>
   </Panel>
+
+  {#if onMDView}
+    <MDTrajectoryBrowser onView={onMDView} />
+  {/if}
 </div>
 
 <style>
