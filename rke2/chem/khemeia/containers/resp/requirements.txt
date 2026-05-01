@@ -1,0 +1,6 @@
+pyscf
+scipy
+rdkit
+boto3
+mysql-connector-python
+acpype
