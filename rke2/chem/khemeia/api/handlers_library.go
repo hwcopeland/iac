@@ -593,6 +593,9 @@ func (h *APIHandler) runLibraryPrepPipeline(jobName string, req LibraryPrepReque
 
 	log.Printf("[library-prep] %s: resolved %d input compound(s) from source=%s", jobName, len(smilesList), req.Source)
 
+	// Write resolved count immediately so the UI can display progress during the sidecar call.
+	db.ExecContext(ctx, `UPDATE library_prep_results SET compound_count = ? WHERE name = ?`, len(smilesList), jobName)
+
 	// Step 2: Call library-prep sidecar for standardization + filtering + conformers.
 	sidecarReq := libraryPrepSidecarRequest{
 		SMILES:  smilesList,
