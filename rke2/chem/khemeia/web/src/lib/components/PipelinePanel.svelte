@@ -1,7 +1,5 @@
 <script lang="ts">
   import Panel from './Panel.svelte';
-  import TrajectoryPlayer from './results/TrajectoryPlayer.svelte';
-  import PlotlyChart from './charts/PlotlyChart.svelte';
   import {
     submitTargetPrep, getTargetPrep, getTargetPockets, selectPocket,
     submitLibraryPrep, getLibraryPrep,
@@ -13,6 +11,14 @@
   } from '$lib/api';
   import { login } from '$lib/auth';
   import { loadFile, showPocketMarkers, clearPocketMarkers, focusPocketCenter } from '$lib/viewer';
+
+  let { onMDView = undefined }: {
+    onMDView?: (
+      frames: string[],
+      energy: { time: number[]; potential: number[]; temperature: number[] } | null,
+      compoundId: string
+    ) => void;
+  } = $props();
 
   type StageStatus = 'pending' | 'running' | 'succeeded' | 'failed';
 
@@ -95,12 +101,9 @@
     return dockingSummary.cutoff_counts[key] ?? null;
   });
 
-  // --- MD results viewer ---
+  // --- MD results ---
   let mdResults = $state<any[]>([]);
-  let mdSelectedCompound = $state<string | null>(null);
-  let mdTrajectoryFrames = $state<string[]>([]);
-  let mdEnergyData = $state<{ time: number[]; potential: number[]; temperature: number[] } | null>(null);
-  let mdViewerLoading = $state(false);
+  let mdViewerLoading = $state<string | null>(null); // compound_id being loaded, or null
 
   async function loadMDResults(name: string) {
     try {
@@ -110,49 +113,35 @@
   }
 
   async function viewMDCompound(compound: any) {
-    if (mdSelectedCompound === compound.compound_id) {
-      // toggle off
-      mdSelectedCompound = null;
-      mdTrajectoryFrames = [];
-      mdEnergyData = null;
-      return;
-    }
-    mdSelectedCompound = compound.compound_id;
-    mdTrajectoryFrames = [];
-    mdEnergyData = null;
-    if (!stages.md.jobName) return;
-    mdViewerLoading = true;
+    if (!stages.md.jobName || !onMDView) return;
+    mdViewerLoading = compound.compound_id;
     try {
-      const [traj, energy] = await Promise.allSettled([
-        compound.has_trajectory ? getMDTrajectory(stages.md.jobName, compound.compound_id) : Promise.reject('no frames'),
-        compound.has_energy ? getMDEnergy(stages.md.jobName, compound.compound_id) : Promise.reject('no energy'),
+      const [trajResult, energyResult] = await Promise.allSettled([
+        compound.has_trajectory
+          ? getMDTrajectory(stages.md.jobName, compound.compound_id)
+          : Promise.reject('no frames'),
+        compound.has_energy
+          ? getMDEnergy(stages.md.jobName, compound.compound_id)
+          : Promise.reject('no energy'),
       ]);
-      if (traj.status === 'fulfilled' && traj.value) {
-        // Split multi-model PDB into individual frame strings
-        const raw = traj.value as string;
-        const frames: string[] = [];
-        const modelRx = /^MODEL\s+\d+/m;
-        if (modelRx.test(raw)) {
-          // Has MODEL records — split on ENDMDL
-          const blocks = raw.split(/ENDMDL\s*/);
-          for (const b of blocks) {
-            const trimmed = b.trim();
-            if (trimmed) frames.push(trimmed + '\nENDMDL\n');
+
+      const frames: string[] = [];
+      if (trajResult.status === 'fulfilled' && trajResult.value) {
+        const raw = trajResult.value as string;
+        if (/^MODEL\s+\d+/m.test(raw)) {
+          for (const block of raw.split(/ENDMDL\s*/)) {
+            const t = block.trim();
+            if (t) frames.push(t + '\nENDMDL\n');
           }
         } else {
-          // Single model — treat as one frame
           frames.push(raw);
         }
-        mdTrajectoryFrames = frames;
-        if (frames.length > 0) {
-          await loadFile(frames[0], 'pdb');
-        }
       }
-      if (energy.status === 'fulfilled') {
-        mdEnergyData = energy.value as any;
-      }
+
+      const energy = energyResult.status === 'fulfilled' ? energyResult.value as any : null;
+      onMDView(frames, energy, compound.compound_id);
     } finally {
-      mdViewerLoading = false;
+      mdViewerLoading = null;
     }
   }
 
@@ -1115,65 +1104,23 @@
             </div>
             <div class="md-results-list">
               {#each mdResults as r}
-                {@const selected = mdSelectedCompound === r.compound_id}
-                <div class="md-result-row" class:selected>
-                  <button class="md-result-btn" onclick={() => viewMDCompound(r)} disabled={mdViewerLoading && !selected}>
-                    <span class="md-result-id">{r.compound_id}</span>
-                    <span class="md-result-aff">{r.dock_affinity_kcal_mol?.toFixed(2)}</span>
-                    <span class="md-result-dur">{r.duration_s ? Math.round(r.duration_s / 60) + 'm' : ''}</span>
-                    <span class="md-result-icons">
-                      {#if r.has_trajectory}🎞{/if}
-                      {#if r.has_energy}📊{/if}
-                    </span>
-                    <span class="md-result-view">{selected ? '▲' : '▶'}</span>
-                  </button>
-                  {#if selected}
-                    {#if mdViewerLoading}
-                      <div class="md-viewer-loading">Loading trajectory...</div>
+                {@const isLoading = mdViewerLoading === r.compound_id}
+                <div class="md-result-row">
+                  <span class="md-result-id">{r.compound_id}</span>
+                  <span class="md-result-aff">{r.dock_affinity_kcal_mol?.toFixed(2)}</span>
+                  <span class="md-result-dur">{r.duration_s ? Math.round(r.duration_s / 60) + 'm' : ''}</span>
+                  <button
+                    class="md-result-view-btn"
+                    onclick={() => viewMDCompound(r)}
+                    disabled={!!mdViewerLoading || (!r.has_trajectory && !r.has_energy)}
+                    title={!r.has_trajectory && !r.has_energy ? 'Post-processing pending' : 'View in 3D'}
+                  >
+                    {#if isLoading}
+                      <span class="md-loading-dot"></span>
                     {:else}
-                      {#if mdTrajectoryFrames.length > 0}
-                        <TrajectoryPlayer frames={mdTrajectoryFrames} format="pdb" />
-                      {/if}
-                      {#if mdEnergyData && mdEnergyData.time.length > 0}
-                        <div class="md-energy-chart">
-                          <PlotlyChart
-                            data={[
-                              {
-                                x: mdEnergyData.time,
-                                y: mdEnergyData.potential,
-                                type: 'scatter',
-                                mode: 'lines',
-                                name: 'Potential',
-                                line: { color: '#58a6ff', width: 1.5 },
-                                yaxis: 'y',
-                              },
-                              ...(mdEnergyData.temperature.length > 0 ? [{
-                                x: mdEnergyData.time,
-                                y: mdEnergyData.temperature,
-                                type: 'scatter',
-                                mode: 'lines',
-                                name: 'Temperature',
-                                line: { color: '#d29922', width: 1, dash: 'dot' },
-                                yaxis: 'y2',
-                              }] : []),
-                            ]}
-                            layout={{
-                              title: { text: 'MD Energy', font: { size: 11, color: '#e6edf3' } },
-                              xaxis: { title: { text: 'Time (ps)', font: { size: 10 } } },
-                              yaxis: { title: { text: 'Potential (kJ/mol)', font: { size: 10 } }, side: 'left' },
-                              yaxis2: { title: { text: 'Temp (K)', font: { size: 10 } }, side: 'right', overlaying: 'y' },
-                              legend: { font: { size: 10 } },
-                              height: 200,
-                              margin: { t: 30, b: 40, l: 60, r: 50 },
-                            }}
-                          />
-                        </div>
-                      {/if}
-                      {#if !r.has_trajectory && !r.has_energy}
-                        <div class="md-viewer-loading">Post-processing not yet available</div>
-                      {/if}
+                      View
                     {/if}
-                  {/if}
+                  </button>
                 </div>
               {/each}
             </div>
@@ -2150,40 +2097,19 @@
     display: flex;
     flex-direction: column;
     gap: 2px;
-    max-height: 400px;
+    max-height: 260px;
     overflow-y: auto;
   }
 
   .md-result-row {
     display: flex;
-    flex-direction: column;
-    gap: 4px;
-    border-radius: 4px;
-    padding: 2px;
-    transition: background 0.1s;
-  }
-
-  .md-result-row.selected {
-    background: rgba(88, 166, 255, 0.04);
-    border: 1px solid rgba(88, 166, 255, 0.15);
-  }
-
-  .md-result-btn {
-    display: flex;
     align-items: center;
     gap: 6px;
-    background: none;
-    border: none;
-    padding: 3px 6px;
+    padding: 3px 4px;
     border-radius: 3px;
-    cursor: pointer;
-    text-align: left;
-    width: 100%;
-    transition: background 0.1s;
   }
 
-  .md-result-btn:hover:not(:disabled) { background: rgba(88, 166, 255, 0.06); }
-  .md-result-btn:disabled { opacity: 0.5; cursor: default; }
+  .md-result-row:hover { background: rgba(88, 166, 255, 0.04); }
 
   .md-result-id {
     flex: 1;
@@ -2197,17 +2123,33 @@
 
   .md-result-aff { font-size: 11px; color: #3fb950; flex-shrink: 0; }
   .md-result-dur { font-size: 10px; color: var(--text-muted, #484f58); flex-shrink: 0; }
-  .md-result-icons { font-size: 10px; flex-shrink: 0; }
-  .md-result-view { font-size: 9px; color: var(--accent, #58a6ff); flex-shrink: 0; }
 
-  .md-viewer-loading {
-    font-size: 11px;
-    color: var(--text-muted, #484f58);
-    padding: 6px 8px;
-    font-style: italic;
+  .md-result-view-btn {
+    font-size: 10px;
+    font-weight: 600;
+    background: rgba(88, 166, 255, 0.1);
+    border: 1px solid rgba(88, 166, 255, 0.3);
+    color: var(--accent, #58a6ff);
+    padding: 2px 8px;
+    border-radius: 3px;
+    cursor: pointer;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 40px;
+    height: 20px;
+    transition: all 0.12s;
   }
 
-  .md-energy-chart {
-    margin-top: 4px;
+  .md-result-view-btn:hover:not(:disabled) { background: rgba(88, 166, 255, 0.2); }
+  .md-result-view-btn:disabled { opacity: 0.35; cursor: default; }
+
+  .md-loading-dot {
+    width: 5px;
+    height: 5px;
+    background: var(--accent, #58a6ff);
+    border-radius: 50%;
+    animation: pulse 0.8s ease-in-out infinite;
   }
 </style>
