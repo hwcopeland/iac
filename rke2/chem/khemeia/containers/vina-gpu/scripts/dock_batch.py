@@ -134,6 +134,33 @@ def get_s3_client():
     )
 
 
+def ensure_pdbqt(pdb_bytes: bytes, pdbqt_path: str) -> None:
+    """Write a PDBQT-format receptor to pdbqt_path.
+
+    The target-prep sidecar stores a cleaned PDB file.  Vina-GPU requires
+    PDBQT (AutoDock atom types + partial charges in extra columns). Convert
+    via Open Babel: '-xr' rigid receptor, '-xn' no hydrogens added.
+    """
+    import shutil
+    pdb_path = pdbqt_path + ".pdb"
+    try:
+        with open(pdb_path, "wb") as fh:
+            fh.write(pdb_bytes)
+        result = subprocess.run(
+            ["obabel", pdb_path, "-O", pdbqt_path, "-xr", "-xn"],
+            capture_output=True, text=True, timeout=120,
+        )
+        if result.returncode != 0 or not os.path.exists(pdbqt_path):
+            raise RuntimeError(f"obabel conversion failed (exit {result.returncode}): {result.stderr.strip()}")
+        size = os.path.getsize(pdbqt_path)
+        if size == 0:
+            raise RuntimeError("obabel produced an empty PDBQT file")
+        print(f"Receptor converted PDB→PDBQT via obabel ({size} bytes)", flush=True)
+    finally:
+        if os.path.exists(pdb_path):
+            os.unlink(pdb_path)
+
+
 def fetch_receptor(cursor, s3, receptor_ref):
     cursor.execute(
         "SELECT receptor_s3_key, binding_site FROM target_prep_results WHERE name = %s",
@@ -463,10 +490,11 @@ def main():
     cursor = conn.cursor()
     s3 = get_s3_client()
 
-    receptor_pdbqt, center, size = fetch_receptor(cursor, s3, cfg["receptor_ref"])
+    receptor_bytes, center, size = fetch_receptor(cursor, s3, cfg["receptor_ref"])
     os.makedirs(DATA_DIR, exist_ok=True)
-    with open(RECEPTOR_PATH, "wb") as fh:
-        fh.write(receptor_pdbqt if isinstance(receptor_pdbqt, bytes) else receptor_pdbqt.encode("utf-8"))
+    if not isinstance(receptor_bytes, bytes):
+        receptor_bytes = receptor_bytes.encode("utf-8")
+    ensure_pdbqt(receptor_bytes, RECEPTOR_PATH)
 
     print(f"Receptor loaded: center={center}, size={size}", flush=True)
 
