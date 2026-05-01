@@ -1,6 +1,10 @@
 const API_BASE = '';
 let token: string | null = null;
 
+export class AuthError extends Error {
+  constructor() { super('Session expired — please log in again.'); }
+}
+
 export function setToken(t: string) {
   token = t;
 }
@@ -36,6 +40,7 @@ export async function api<T>(path: string, options?: RequestInit): Promise<T> {
   }
 
   if (!res.ok) {
+    if (res.status === 401) throw new AuthError();
     const body = await res.json().catch(() => ({}));
     throw new Error(body.error || res.statusText);
   }

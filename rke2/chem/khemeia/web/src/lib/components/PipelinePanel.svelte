@@ -7,7 +7,9 @@
     submitADMET, getADMETJob,
     submitMD, getMDJob,
     advanceStage,
+    AuthError,
   } from '$lib/api';
+  import { login } from '$lib/auth';
   import { loadFile, showPocketMarkers, clearPocketMarkers, focusPocketCenter } from '$lib/viewer';
 
   type StageStatus = 'pending' | 'running' | 'succeeded' | 'failed';
@@ -103,6 +105,12 @@
   // --- Target prep result (for displaying binding site info) ---
   let targetPrepResult = $state<any | null>(null);
 
+  // --- Library prep result (for displaying resolved compound count) ---
+  let libraryStatus = $state<any | null>(null);
+
+  // --- Session state ---
+  let sessionExpired = $state(false);
+
   // --- Polling ---
   let pollTimers = $state<Record<string, ReturnType<typeof setTimeout>>>({});
 
@@ -143,15 +151,19 @@
     if (pollTimers[stageKey]) clearTimeout(pollTimers[stageKey]);
 
     const tick = async () => {
+      if (sessionExpired) return;
       try {
         const res = await pollFn(name);
         const phase = (res.phase || res.status || '').toLowerCase();
+
+        // Stash library status for compound-count display during running
+        if (stageKey === 'library') libraryStatus = res;
+
         if (phase === 'completed' || phase === 'succeeded') {
           updateStage(stageKey, { status: 'succeeded', error: '' });
           // Stash poll result so we can display binding site info
           if (stageKey === 'target') {
             targetPrepResult = res;
-            // If pocket detection mode: load receptor PDB into viewer and show pocket markers
             if (res?.pockets?.length && res?.receptor_pdb_url) {
               try {
                 const pdbRes = await fetch(res.receptor_pdb_url);
@@ -178,6 +190,11 @@
         // Still running — poll again
         pollTimers[stageKey] = setTimeout(tick, 10_000);
       } catch (e: any) {
+        if (e instanceof AuthError) {
+          sessionExpired = true;
+          // Job is still running server-side — don't mark as failed
+          return;
+        }
         updateStage(stageKey, { status: 'failed', error: e.message || 'Poll failed' });
       }
     };
@@ -382,6 +399,14 @@
       </div>
     {/each}
   </div>
+
+  <!-- Session expired banner -->
+  {#if sessionExpired}
+    <div class="session-banner">
+      <span class="session-msg">Session expired — your jobs are still running on the server.</span>
+      <button class="session-login-btn" onclick={() => login()}>Log in again</button>
+    </div>
+  {/if}
 
   <!-- Stage 1: Target Prep -->
   <div id="stage-target">
@@ -604,7 +629,13 @@
         {#if stages.library.status === 'running'}
           <div class="running-indicator">
             <span class="pulse-dot"></span>
-            <span class="running-text">Preparing library {stages.library.jobName ?? ''}...</span>
+            <span class="running-text">
+              {#if libraryStatus?.compound_count > 0}
+                {libraryStatus.compound_count} compounds found — standardizing &amp; filtering...
+              {:else}
+                Resolving compounds from source...
+              {/if}
+            </span>
           </div>
         {/if}
 
@@ -1366,5 +1397,41 @@
     color: var(--text-muted, #484f58);
     font-size: 11px;
     flex-shrink: 0;
+  }
+
+  /* Session-expired banner */
+  .session-banner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    background: rgba(210, 153, 34, 0.12);
+    border: 1px solid rgba(210, 153, 34, 0.4);
+    border-radius: 6px;
+    padding: 8px 12px;
+    margin-bottom: 8px;
+    flex-wrap: wrap;
+  }
+
+  .session-msg {
+    font-size: 12px;
+    color: #d29922;
+  }
+
+  .session-login-btn {
+    background: rgba(210, 153, 34, 0.2);
+    border: 1px solid rgba(210, 153, 34, 0.5);
+    color: #d29922;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 4px 10px;
+    border-radius: 4px;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: all 0.15s;
+  }
+
+  .session-login-btn:hover {
+    background: rgba(210, 153, 34, 0.3);
   }
 </style>
