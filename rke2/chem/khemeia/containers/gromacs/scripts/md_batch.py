@@ -328,15 +328,16 @@ def _parse_gro_coords(line):
 
 def _gro_has_bad_coords(gro_path, max_nm=500.0):
     """Return True if any atom coordinate magnitude exceeds max_nm."""
+    import math as _math
     for line in Path(gro_path).read_text().splitlines()[2:-1]:
         if not line.strip():
             continue
         try:
             x, y, z = _parse_gro_coords(line)
-            if abs(x) > max_nm or abs(y) > max_nm or abs(z) > max_nm:
+            if any(not _math.isfinite(c) or abs(c) > max_nm for c in (x, y, z)):
                 return True
         except ValueError:
-            continue
+            return True  # unparseable coord (nan/inf text) → treat as bad
     return False
 
 
