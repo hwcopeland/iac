@@ -880,7 +880,7 @@ func lookupCachedCompounds(ctx context.Context, db *sql.DB, compounds []resolved
 			SELECT lc.compound_id, lc.canonical_smiles, lc.inchikey,
 			       lc.mw, lc.logp, lc.hba, lc.hbd, lc.psa, lc.rotatable_bonds, lc.qed,
 			       lc.lipinski_pass, lc.veber_pass, lc.pains_pass, lc.brenk_pass, lc.reos_pass,
-			       lc.s3_conformer_key
+			       lc.filtered, lc.s3_conformer_key
 			FROM library_compounds lc
 			INNER JOIN (
 				SELECT compound_id, MAX(id) AS max_id
@@ -903,7 +903,8 @@ func lookupCachedCompounds(ctx context.Context, db *sql.DB, compounds []resolved
 			if err := rows.Scan(
 				&c.CompoundID, &c.CanonicalSMILES, &c.InChIKey,
 				&mw, &logp, &hba, &hbd, &psa, &rotBonds, &qed,
-				&lipinski, &veber, &pains, &brenk, &reos, &s3Key,
+				&lipinski, &veber, &pains, &brenk, &reos,
+				&c.Filtered, &s3Key,
 			); err != nil {
 				rows.Close()
 				return nil, err
@@ -983,23 +984,18 @@ func (h *APIHandler) insertCachedCompoundsIntoLibrary(
 		if !ok {
 			continue
 		}
-		filtered, canCompute := computeFilteredFromCache(&c, filters)
-		if !canCompute {
-			needReprocess = append(needReprocess, r.CanonicalSMILES)
-			continue
-		}
 		conformerKey := sql.NullString{String: c.S3ConformerKey, Valid: c.S3ConformerKey != ""}
 		if _, err := stmt.ExecContext(ctx,
 			libraryID, c.CompoundID, c.CanonicalSMILES, c.InChIKey,
 			c.MW, c.LogP, c.HBA, c.HBD, c.PSA, c.RotatableBonds, c.QED,
 			c.LipinskiPass, c.VeberPass, c.PAINSPass, c.BrenkPass, c.REOSPass,
-			filtered, conformerKey,
+			c.Filtered, conformerKey,
 		); err != nil {
 			log.Printf("[library-prep] %s: warning: failed to insert cached compound %s: %v", jobName, c.CompoundID, err)
 			continue
 		}
 		compoundCount++
-		if filtered {
+		if c.Filtered {
 			filteredCount++
 		}
 	}
@@ -1071,6 +1067,7 @@ type cachedLibraryCompound struct {
 	PAINSPass       *bool
 	BrenkPass       *bool
 	REOSPass        *bool
+	Filtered        bool
 	S3ConformerKey  string
 }
 
