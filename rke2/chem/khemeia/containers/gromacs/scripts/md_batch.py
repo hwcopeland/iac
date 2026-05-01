@@ -482,11 +482,13 @@ def prepare_ligand_topology(smiles, pose_sdf_path, workdir, ligand_ff="gaff2", r
             src_label = "pose.sdf (fallback)"
         print(f"[acpype] coord injection: src={src_label} natoms={len(coords)}", flush=True)
         if coords:
+            gro_backup = Path(gro).read_text()
             ok = _overwrite_gro_coords(gro, coords)
             if not ok:
                 print("[acpype] WARNING: atom count mismatch; GRO coords unchanged", flush=True)
             elif _gro_has_bad_coords(gro, max_nm=500.0):
-                raise RuntimeError("GRO still has bad coords after coordinate overwrite — check obabel output")
+                Path(gro).write_text(gro_backup)
+                print("[acpype] WARNING: injected coords contain bad values; using ACPYPE default geometry", flush=True)
             else:
                 print("[acpype] GRO coordinates overwritten from docked pose", flush=True)
 
