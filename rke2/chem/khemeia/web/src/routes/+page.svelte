@@ -220,7 +220,7 @@
           {/key}
         {/if}
 
-        {#if showMDTrajectory && mdTrajFrames.length > 0}
+        {#if showMDTrajectory && (mdTrajFrames.length > 0 || mdTrajEnergy !== null)}
           {#key mdTrajCompound}
             <div class="md-trajectory-overlay">
               <MDTrajectoryOverlay
