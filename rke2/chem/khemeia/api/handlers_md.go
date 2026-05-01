@@ -7,9 +7,11 @@
 // S3 bucket. The handler polls for completion and surfaces per-compound status.
 //
 // Endpoints:
-//   POST /api/v1/md/submit              — submit an MD job
-//   GET  /api/v1/md/jobs/{name}         — get job status + per-compound progress
-//   GET  /api/v1/md/jobs/{name}/results — list completed compound MD results
+//   POST /api/v1/md/submit                                — submit an MD job
+//   GET  /api/v1/md/jobs/{name}                           — job status + per-compound progress
+//   GET  /api/v1/md/jobs/{name}/results                   — list completed compound results
+//   GET  /api/v1/md/jobs/{name}/trajectory/{compoundId}   — proxy PDB frames from S3
+//   GET  /api/v1/md/jobs/{name}/energy/{compoundId}       — proxy energy JSON from S3
 package main
 
 import (
@@ -69,12 +71,23 @@ func EnsureMDSchema(db *sql.DB) error {
 		duration_s              INT          NULL,
 		trajectory_s3_key       VARCHAR(512) NULL,
 		energy_s3_key           VARCHAR(512) NULL,
+		frames_s3_key           VARCHAR(512) NULL,
+		energy_json_s3_key      VARCHAR(512) NULL,
 		created_at              DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
 		INDEX idx_job_name (job_name),
 		INDEX idx_compound (compound_id)
 	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`
 	if _, err := db.Exec(resDDL); err != nil {
 		return fmt.Errorf("creating md_results table: %w", err)
+	}
+
+	// Add post-processing columns to existing deployments.
+	for _, col := range []struct{ name, def string }{
+		{"frames_s3_key", "VARCHAR(512) NULL"},
+		{"energy_json_s3_key", "VARCHAR(512) NULL"},
+	} {
+		db.Exec(fmt.Sprintf(
+			"ALTER TABLE md_results ADD COLUMN IF NOT EXISTS %s %s", col.name, col.def))
 	}
 
 	return nil
@@ -129,12 +142,16 @@ type MDJobStatus struct {
 }
 
 type MDResultEntry struct {
-	CompoundID   string  `json:"compound_id"`
-	Affinity     float64 `json:"dock_affinity_kcal_mol"`
-	DurationS    int     `json:"duration_s"`
-	TrajectoryKey string `json:"trajectory_s3_key"`
-	EnergyKey    string  `json:"energy_s3_key"`
-	CreatedAt    string  `json:"created_at"`
+	CompoundID      string  `json:"compound_id"`
+	Affinity        float64 `json:"dock_affinity_kcal_mol"`
+	DurationS       int     `json:"duration_s"`
+	TrajectoryKey   string  `json:"trajectory_s3_key"`
+	EnergyKey       string  `json:"energy_s3_key"`
+	FramesKey       string  `json:"frames_s3_key,omitempty"`
+	EnergyJSONKey   string  `json:"energy_json_s3_key,omitempty"`
+	HasTrajectory   bool    `json:"has_trajectory"`
+	HasEnergy       bool    `json:"has_energy"`
+	CreatedAt       string  `json:"created_at"`
 }
 
 type MDResultsResponse struct {
@@ -159,6 +176,16 @@ func (h *APIHandler) MDDispatch(w http.ResponseWriter, r *http.Request) {
 	}
 	if strings.HasPrefix(path, "jobs/") && strings.HasSuffix(path, "/results") {
 		h.MDResults(w, r)
+		return
+	}
+	// GET /api/v1/md/jobs/{name}/trajectory/{compoundId}
+	if strings.HasPrefix(path, "jobs/") && strings.Contains(path, "/trajectory/") {
+		h.MDTrajectory(w, r)
+		return
+	}
+	// GET /api/v1/md/jobs/{name}/energy/{compoundId}
+	if strings.HasPrefix(path, "jobs/") && strings.Contains(path, "/energy/") {
+		h.MDEnergy(w, r)
 		return
 	}
 	if strings.HasPrefix(path, "jobs/") {
@@ -372,7 +399,9 @@ func (h *APIHandler) MDResults(w http.ResponseWriter, r *http.Request) {
 
 	rows, err := db.QueryContext(r.Context(),
 		`SELECT compound_id, dock_affinity_kcal_mol, duration_s,
-		        trajectory_s3_key, energy_s3_key, created_at
+		        trajectory_s3_key, energy_s3_key,
+		        COALESCE(frames_s3_key, ''), COALESCE(energy_json_s3_key, ''),
+		        created_at
 		 FROM md_results WHERE job_name = ?
 		 ORDER BY dock_affinity_kcal_mol ASC`, jobName)
 	if err != nil {
@@ -387,7 +416,7 @@ func (h *APIHandler) MDResults(w http.ResponseWriter, r *http.Request) {
 		var aff sql.NullFloat64
 		var dur sql.NullInt64
 		var traj, edr sql.NullString
-		rows.Scan(&e.CompoundID, &aff, &dur, &traj, &edr, &e.CreatedAt)
+		rows.Scan(&e.CompoundID, &aff, &dur, &traj, &edr, &e.FramesKey, &e.EnergyJSONKey, &e.CreatedAt)
 		if aff.Valid {
 			e.Affinity = aff.Float64
 		}
@@ -400,6 +429,8 @@ func (h *APIHandler) MDResults(w http.ResponseWriter, r *http.Request) {
 		if edr.Valid {
 			e.EnergyKey = edr.String
 		}
+		e.HasTrajectory = e.FramesKey != ""
+		e.HasEnergy = e.EnergyJSONKey != ""
 		results = append(results, e)
 	}
 	if results == nil {
@@ -408,6 +439,83 @@ func (h *APIHandler) MDResults(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(MDResultsResponse{JobName: jobName, Total: len(results), Results: results})
+}
+
+// MDTrajectory handles GET /api/v1/md/jobs/{name}/trajectory/{compoundId}.
+// Looks up frames_s3_key in md_results and proxies the PDB content from S3.
+func (h *APIHandler) MDTrajectory(w http.ResponseWriter, r *http.Request) {
+	// path: jobs/{name}/trajectory/{compoundId}
+	path := strings.TrimPrefix(r.URL.Path, "/api/v1/md/jobs/")
+	parts := strings.SplitN(path, "/trajectory/", 2)
+	if len(parts) != 2 {
+		writeError(w, "invalid path", http.StatusBadRequest)
+		return
+	}
+	jobName, compoundID := parts[0], parts[1]
+	h.proxyMDS3(w, r, jobName, compoundID, "frames_s3_key", "application/octet-stream", "frames.pdb")
+}
+
+// MDEnergy handles GET /api/v1/md/jobs/{name}/energy/{compoundId}.
+// Looks up energy_json_s3_key in md_results and proxies the JSON from S3.
+func (h *APIHandler) MDEnergy(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimPrefix(r.URL.Path, "/api/v1/md/jobs/")
+	parts := strings.SplitN(path, "/energy/", 2)
+	if len(parts) != 2 {
+		writeError(w, "invalid path", http.StatusBadRequest)
+		return
+	}
+	jobName, compoundID := parts[0], parts[1]
+	h.proxyMDS3(w, r, jobName, compoundID, "energy_json_s3_key", "application/json", "energy.json")
+}
+
+// proxyMDS3 fetches an S3 key from md_results and streams it to the response.
+func (h *APIHandler) proxyMDS3(w http.ResponseWriter, r *http.Request, jobName, compoundID, col, contentType, fallbackName string) {
+	db := h.controller.firstDB()
+	if db == nil {
+		writeError(w, "no database available", http.StatusInternalServerError)
+		return
+	}
+
+	var s3Key sql.NullString
+	err := db.QueryRowContext(r.Context(),
+		fmt.Sprintf("SELECT %s FROM md_results WHERE job_name = ? AND compound_id = ? LIMIT 1", col),
+		jobName, compoundID,
+	).Scan(&s3Key)
+	if err == sql.ErrNoRows {
+		writeError(w, "result not found", http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		writeError(w, fmt.Sprintf("db error: %v", err), http.StatusInternalServerError)
+		return
+	}
+	if !s3Key.Valid || s3Key.String == "" {
+		writeError(w, "file not available (post-processing may be pending)", http.StatusNotFound)
+		return
+	}
+
+	rc, err := h.s3Client.GetArtifact(r.Context(), BucketTrajectories, s3Key.String)
+	if err != nil {
+		writeError(w, fmt.Sprintf("s3 fetch failed: %v", err), http.StatusInternalServerError)
+		return
+	}
+	defer rc.Close()
+
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, fallbackName))
+	// io.Copy without import — use http.ServeContent workaround via ResponseWriter
+	buf := make([]byte, 32*1024)
+	for {
+		n, readErr := rc.Read(buf)
+		if n > 0 {
+			if _, writeErr := w.Write(buf[:n]); writeErr != nil {
+				return
+			}
+		}
+		if readErr != nil {
+			break
+		}
+	}
 }
 
 // --- Orchestration ---
