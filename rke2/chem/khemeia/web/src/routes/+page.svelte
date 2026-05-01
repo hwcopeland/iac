@@ -10,6 +10,7 @@
   import InteractionNetwork from '$lib/components/InteractionNetwork.svelte';
   import CalculationsPanel from '$lib/components/CalculationsPanel.svelte';
   import PipelinePanel from '$lib/components/PipelinePanel.svelte';
+  import MDTrajectoryOverlay from '$lib/components/MDTrajectoryOverlay.svelte';
   import SelectionInfo from '$lib/components/SelectionInfo.svelte';
   import { focusResidue, setRepresentation, onRepresentationChange } from '$lib/viewer';
   import StatusBar from '$lib/components/StatusBar.svelte';
@@ -32,6 +33,10 @@
   let networkCompoundId = $state('');
   let showNetwork = $state(false);
   let surfaceLegend = $state<string | null>(null);
+  let showMDTrajectory = $state(false);
+  let mdTrajFrames = $state<string[]>([]);
+  let mdTrajEnergy = $state<{ time: number[]; potential: number[]; temperature: number[] } | null>(null);
+  let mdTrajCompound = $state('');
   let currentRepr = $state('cartoon');
 
   const SURFACE_LEGENDS: Record<string, { label: string; items: { color: string; text: string }[] }> = {
@@ -214,6 +219,19 @@
             </div>
           {/key}
         {/if}
+
+        {#if showMDTrajectory && mdTrajFrames.length > 0}
+          {#key mdTrajCompound}
+            <div class="md-trajectory-overlay">
+              <MDTrajectoryOverlay
+                frames={mdTrajFrames}
+                energy={mdTrajEnergy}
+                compoundId={mdTrajCompound}
+                onClose={() => showMDTrajectory = false}
+              />
+            </div>
+          {/key}
+        {/if}
       </div>
 
       {#if panelVisible}
@@ -230,7 +248,14 @@
             {:else if activeTab === 'calculations'}
               <CalculationsPanel />
             {:else if activeTab === 'pipeline'}
-              <PipelinePanel />
+              <PipelinePanel
+                onMDView={(frames, energy, compoundId) => {
+                  mdTrajFrames = frames;
+                  mdTrajEnergy = energy;
+                  mdTrajCompound = compoundId;
+                  showMDTrajectory = true;
+                }}
+              />
             {/if}
           </div>
         </aside>
@@ -448,6 +473,15 @@
     z-index: 50;
     width: 420px;
     max-width: 50%;
+  }
+
+  .md-trajectory-overlay {
+    position: absolute;
+    bottom: 12px;
+    right: 12px;
+    z-index: 50;
+    width: 380px;
+    max-width: 48%;
   }
 
   .side-panel {
