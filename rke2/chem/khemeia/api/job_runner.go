@@ -332,6 +332,40 @@ func (c *Controller) reconcileOrphanedJobs() {
 	} else {
 		log.Println("[reconcile] No orphaned jobs found")
 	}
+
+	// Fail any first-class pipeline jobs (library_prep_results, target_prep_results,
+	// docking_v2_jobs, admet_jobs, md_jobs) that are stuck in Running — their goroutines
+	// died with the previous controller instance and cannot be re-attached.
+	db := c.firstDB()
+	if db == nil {
+		return
+	}
+	type orphanTable struct {
+		table     string
+		phaseCol  string
+		runningVal string
+		failedVal  string
+	}
+	orphanTables := []orphanTable{
+		{"library_prep_results", "phase", "Running", "Failed"},
+		{"target_prep_results", "phase", "Running", "Failed"},
+		{"docking_v2_jobs", "phase", "Running", "Failed"},
+		{"admet_jobs", "phase", "Running", "Failed"},
+		{"md_jobs", "phase", "Running", "Failed"},
+	}
+	for _, t := range orphanTables {
+		res, err := db.ExecContext(ctx, fmt.Sprintf(
+			`UPDATE %s SET %s = ?, error_output = ?, completion_time = NOW()
+			 WHERE %s = ?`, t.table, t.phaseCol, t.phaseCol),
+			t.failedVal, "controller restarted — goroutine lost, resubmit job", t.runningVal)
+		if err != nil {
+			log.Printf("[reconcile] warning: could not check %s for orphans: %v", t.table, err)
+			continue
+		}
+		if n, _ := res.RowsAffected(); n > 0 {
+			log.Printf("[reconcile] marked %d orphaned Running job(s) in %s as Failed", n, t.table)
+		}
+	}
 }
 
 // waitForPluginJobCompletion polls for job completion with the given timeout.
