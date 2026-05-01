@@ -380,6 +380,11 @@ export async function getMDJob(name: string): Promise<any> {
   return api(`/api/v1/md/jobs/${name}`);
 }
 
+export async function listMDJobs(dockJob?: string): Promise<any> {
+  const qs = dockJob ? `?dock_job=${encodeURIComponent(dockJob)}` : '';
+  return api(`/api/v1/md/jobs${qs}`);
+}
+
 export async function getMDResults(name: string): Promise<any> {
   return api(`/api/v1/md/jobs/${name}/results`);
 }

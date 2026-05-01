@@ -174,6 +174,11 @@ func (h *APIHandler) MDDispatch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	// GET /api/v1/md/jobs  (optionally ?dock_job=<name>)
+	if path == "jobs" {
+		h.MDListJobs(w, r)
+		return
+	}
 	if strings.HasPrefix(path, "jobs/") && strings.HasSuffix(path, "/results") {
 		h.MDResults(w, r)
 		return
@@ -439,6 +444,57 @@ func (h *APIHandler) MDResults(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(MDResultsResponse{JobName: jobName, Total: len(results), Results: results})
+}
+
+// MDListJobs handles GET /api/v1/md/jobs[?dock_job=<name>].
+// Returns the 20 most recent MD jobs, optionally filtered by dock_job_name.
+func (h *APIHandler) MDListJobs(w http.ResponseWriter, r *http.Request) {
+	db := h.controller.firstDB()
+	if db == nil {
+		writeError(w, "no database available", http.StatusInternalServerError)
+		return
+	}
+
+	dockJob := r.URL.Query().Get("dock_job")
+
+	var (
+		rows *sql.Rows
+		err  error
+	)
+	if dockJob != "" {
+		rows, err = db.QueryContext(r.Context(),
+			`SELECT name, status, dock_job_name, top_n, created_at
+			 FROM md_jobs WHERE dock_job_name = ?
+			 ORDER BY created_at DESC LIMIT 10`, dockJob)
+	} else {
+		rows, err = db.QueryContext(r.Context(),
+			`SELECT name, status, dock_job_name, top_n, created_at
+			 FROM md_jobs ORDER BY created_at DESC LIMIT 20`)
+	}
+	if err != nil {
+		writeError(w, fmt.Sprintf("failed to list MD jobs: %v", err), http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	type MDJobSummary struct {
+		Name        string `json:"name"`
+		Status      string `json:"status"`
+		DockJobName string `json:"dock_job_name"`
+		TopN        int    `json:"top_n"`
+		CreatedAt   string `json:"created_at"`
+	}
+	var jobs []MDJobSummary
+	for rows.Next() {
+		var j MDJobSummary
+		rows.Scan(&j.Name, &j.Status, &j.DockJobName, &j.TopN, &j.CreatedAt)
+		jobs = append(jobs, j)
+	}
+	if jobs == nil {
+		jobs = []MDJobSummary{}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"jobs": jobs})
 }
 
 // MDTrajectory handles GET /api/v1/md/jobs/{name}/trajectory/{compoundId}.
