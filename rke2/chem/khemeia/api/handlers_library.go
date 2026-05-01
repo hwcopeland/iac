@@ -579,37 +579,7 @@ func (h *APIHandler) runLibraryPrepPipeline(jobName string, req LibraryPrepReque
 		log.Printf("[library-prep] %s: failed to update status to Running: %v", jobName, err)
 	}
 
-	// Step 1: Resolve input SMILES from source.
-	smilesList, err := h.resolveLibrarySource(ctx, req)
-	if err != nil {
-		h.failLibraryPrep(ctx, db, jobName, fmt.Sprintf("source resolution failed: %v", err))
-		return
-	}
-
-	if len(smilesList) == 0 {
-		h.failLibraryPrep(ctx, db, jobName, "no compounds found from source")
-		return
-	}
-
-	log.Printf("[library-prep] %s: resolved %d input compound(s) from source=%s", jobName, len(smilesList), req.Source)
-
-	// Write resolved count immediately so the UI can display progress during the sidecar call.
-	db.ExecContext(ctx, `UPDATE library_prep_results SET compound_count = ? WHERE name = ?`, len(smilesList), jobName)
-
-	// Step 2: Call library-prep sidecar for standardization + filtering + conformers.
-	sidecarReq := libraryPrepSidecarRequest{
-		SMILES:  smilesList,
-		Filters: req.Filters,
-		JobName: jobName,
-	}
-
-	sidecarResp, err := h.callLibraryPrepSidecar(ctx, sidecarReq)
-	if err != nil {
-		h.failLibraryPrep(ctx, db, jobName, fmt.Sprintf("sidecar processing failed: %v", err))
-		return
-	}
-
-	// Step 3: Insert compound records.
+	// Fetch library ID early — needed by both the cache path and the regular insert path.
 	var libraryID int
 	if err := db.QueryRowContext(ctx,
 		`SELECT id FROM library_prep_results WHERE name = ?`, jobName).Scan(&libraryID); err != nil {
@@ -617,13 +587,100 @@ func (h *APIHandler) runLibraryPrepPipeline(jobName string, req LibraryPrepReque
 		return
 	}
 
-	compoundCount, filteredCount, err := h.insertLibraryCompounds(ctx, db, libraryID, jobName, sidecarResp)
-	if err != nil {
-		h.failLibraryPrep(ctx, db, jobName, fmt.Sprintf("failed to insert compounds: %v", err))
-		return
+	var compoundCount, filteredCount int
+
+	if req.Source == "chembl" {
+		// ChEMBL cache-aware path: resolve with InChIKeys → look up existing conformers →
+		// insert cached rows directly (reuse S3 key) → send only misses to sidecar.
+		resolved, err := h.resolveChEMBLWithInChIKeys(ctx, req.ChEMBL)
+		if err != nil {
+			h.failLibraryPrep(ctx, db, jobName, fmt.Sprintf("source resolution failed: %v", err))
+			return
+		}
+		if len(resolved) == 0 {
+			h.failLibraryPrep(ctx, db, jobName, "no compounds found from source")
+			return
+		}
+		log.Printf("[library-prep] %s: resolved %d compound(s) from ChEMBL", jobName, len(resolved))
+		db.ExecContext(ctx, `UPDATE library_prep_results SET compound_count = ? WHERE name = ?`, len(resolved), jobName) //nolint:errcheck
+
+		cache, err := lookupCachedCompounds(ctx, db, resolved)
+		if err != nil {
+			log.Printf("[library-prep] %s: cache lookup warning (reprocessing all): %v", jobName, err)
+			cache = nil
+		}
+		log.Printf("[library-prep] %s: cache: %d/%d hits", jobName, len(cache), len(resolved))
+
+		cachedCount, cachedFiltered, needReprocess, err := h.insertCachedCompoundsIntoLibrary(
+			ctx, db, libraryID, jobName, resolved, cache, req.Filters)
+		if err != nil {
+			h.failLibraryPrep(ctx, db, jobName, fmt.Sprintf("failed to insert cached compounds: %v", err))
+			return
+		}
+		compoundCount += cachedCount
+		filteredCount += cachedFiltered
+
+		// Collect uncached SMILES: compounds not in cache + any whose filter flags were NULL.
+		cachedIDs := make(map[string]bool, len(cache))
+		for id := range cache {
+			cachedIDs[id] = true
+		}
+		var uncachedSMILES []string
+		for _, r := range resolved {
+			if !cachedIDs[r.CompoundID] {
+				uncachedSMILES = append(uncachedSMILES, r.CanonicalSMILES)
+			}
+		}
+		uncachedSMILES = append(uncachedSMILES, needReprocess...)
+
+		if len(uncachedSMILES) > 0 {
+			log.Printf("[library-prep] %s: sending %d uncached compound(s) to sidecar", jobName, len(uncachedSMILES))
+			sidecarResp, err := h.callLibraryPrepSidecar(ctx, libraryPrepSidecarRequest{
+				SMILES: uncachedSMILES, Filters: req.Filters, JobName: jobName,
+			})
+			if err != nil {
+				h.failLibraryPrep(ctx, db, jobName, fmt.Sprintf("sidecar processing failed: %v", err))
+				return
+			}
+			newCount, newFiltered, err := h.insertLibraryCompounds(ctx, db, libraryID, jobName, sidecarResp)
+			if err != nil {
+				h.failLibraryPrep(ctx, db, jobName, fmt.Sprintf("failed to insert new compounds: %v", err))
+				return
+			}
+			compoundCount += newCount
+			filteredCount += newFiltered
+		} else {
+			log.Printf("[library-prep] %s: all compounds served from cache — sidecar skipped", jobName)
+		}
+	} else {
+		// Original path for smiles/sdf/enamine sources.
+		smilesList, err := h.resolveLibrarySource(ctx, req)
+		if err != nil {
+			h.failLibraryPrep(ctx, db, jobName, fmt.Sprintf("source resolution failed: %v", err))
+			return
+		}
+		if len(smilesList) == 0 {
+			h.failLibraryPrep(ctx, db, jobName, "no compounds found from source")
+			return
+		}
+		log.Printf("[library-prep] %s: resolved %d input compound(s) from source=%s", jobName, len(smilesList), req.Source)
+		db.ExecContext(ctx, `UPDATE library_prep_results SET compound_count = ? WHERE name = ?`, len(smilesList), jobName) //nolint:errcheck
+
+		sidecarResp, err := h.callLibraryPrepSidecar(ctx, libraryPrepSidecarRequest{
+			SMILES: smilesList, Filters: req.Filters, JobName: jobName,
+		})
+		if err != nil {
+			h.failLibraryPrep(ctx, db, jobName, fmt.Sprintf("sidecar processing failed: %v", err))
+			return
+		}
+		compoundCount, filteredCount, err = h.insertLibraryCompounds(ctx, db, libraryID, jobName, sidecarResp)
+		if err != nil {
+			h.failLibraryPrep(ctx, db, jobName, fmt.Sprintf("failed to insert compounds: %v", err))
+			return
+		}
 	}
 
-	// Step 4: Store library summary artifact in Garage.
+	// Store library summary artifact in Garage.
 	s3Key := ArtifactKey("LibraryPrep", jobName, "library", "json")
 	summaryJSON, _ := json.Marshal(map[string]interface{}{
 		"name":           jobName,
@@ -759,6 +816,199 @@ func (h *APIHandler) resolveChEMBLSource(ctx context.Context, params *ChEMBLSour
 	return smiles, nil
 }
 
+// resolveChEMBLWithInChIKeys queries ChEMBL for (canonical_smiles, standard_inchi_key)
+// pairs so the pipeline can do cache lookup before calling the sidecar.
+func (h *APIHandler) resolveChEMBLWithInChIKeys(ctx context.Context, params *ChEMBLSourceParams) ([]resolvedChEMBLCompound, error) {
+	if h.chemblDB == nil {
+		return nil, fmt.Errorf("ChEMBL database not available")
+	}
+	conditions, args := buildChEMBLFilterClauses(params.toParamMap())
+	whereClause := ""
+	if len(conditions) > 0 {
+		whereClause = "WHERE " + strings.Join(conditions, " AND ")
+	}
+	query := fmt.Sprintf(`SELECT cs.canonical_smiles, cs.standard_inchi_key
+		FROM molecule_dictionary md
+		JOIN compound_structures cs ON md.molregno = cs.molregno
+		LEFT JOIN compound_properties cp ON md.molregno = cp.molregno
+		%s
+		ORDER BY md.chembl_id
+		LIMIT 50000`, whereClause)
+
+	rows, err := h.chemblDB.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("ChEMBL query failed: %w", err)
+	}
+	defer rows.Close()
+
+	var compounds []resolvedChEMBLCompound
+	for rows.Next() {
+		var smiles, inchikey string
+		if err := rows.Scan(&smiles, &inchikey); err != nil || inchikey == "" {
+			continue
+		}
+		compounds = append(compounds, resolvedChEMBLCompound{
+			CanonicalSMILES: smiles,
+			InChIKey:        inchikey,
+			CompoundID:      generateStableCompoundID(inchikey),
+		})
+	}
+	return compounds, rows.Err()
+}
+
+// lookupCachedCompounds fetches the most recent library_compounds row (with a conformer)
+// for each compound_id in the input slice. Queries in chunks of 500 to stay within
+// MySQL's practical IN() limit. Returns a map from compound_id → cached data.
+func lookupCachedCompounds(ctx context.Context, db *sql.DB, compounds []resolvedChEMBLCompound) (map[string]cachedLibraryCompound, error) {
+	result := make(map[string]cachedLibraryCompound)
+	const chunkSize = 500
+	for i := 0; i < len(compounds); i += chunkSize {
+		end := i + chunkSize
+		if end > len(compounds) {
+			end = len(compounds)
+		}
+		chunk := compounds[i:end]
+
+		ids := make([]interface{}, len(chunk))
+		placeholders := make([]string, len(chunk))
+		for j, c := range chunk {
+			ids[j] = c.CompoundID
+			placeholders[j] = "?"
+		}
+
+		query := fmt.Sprintf(`
+			SELECT lc.compound_id, lc.canonical_smiles, lc.inchikey,
+			       lc.mw, lc.logp, lc.hba, lc.hbd, lc.psa, lc.rotatable_bonds, lc.qed,
+			       lc.lipinski_pass, lc.veber_pass, lc.pains_pass, lc.brenk_pass, lc.reos_pass,
+			       lc.s3_conformer_key
+			FROM library_compounds lc
+			INNER JOIN (
+				SELECT compound_id, MAX(id) AS max_id
+				FROM library_compounds
+				WHERE compound_id IN (%s) AND s3_conformer_key IS NOT NULL
+				GROUP BY compound_id
+			) latest ON lc.id = latest.max_id`,
+			strings.Join(placeholders, ","))
+
+		rows, err := db.QueryContext(ctx, query, ids...)
+		if err != nil {
+			return nil, fmt.Errorf("cache lookup failed: %w", err)
+		}
+		for rows.Next() {
+			var c cachedLibraryCompound
+			var mw, logp, psa, qed sql.NullFloat64
+			var hba, hbd, rotBonds sql.NullInt64
+			var lipinski, veber, pains, brenk, reos sql.NullBool
+			var s3Key sql.NullString
+			if err := rows.Scan(
+				&c.CompoundID, &c.CanonicalSMILES, &c.InChIKey,
+				&mw, &logp, &hba, &hbd, &psa, &rotBonds, &qed,
+				&lipinski, &veber, &pains, &brenk, &reos, &s3Key,
+			); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			if mw.Valid      { v := mw.Float64;           c.MW             = &v }
+			if logp.Valid    { v := logp.Float64;          c.LogP           = &v }
+			if psa.Valid     { v := psa.Float64;           c.PSA            = &v }
+			if qed.Valid     { v := qed.Float64;           c.QED            = &v }
+			if hba.Valid     { v := int(hba.Int64);        c.HBA            = &v }
+			if hbd.Valid     { v := int(hbd.Int64);        c.HBD            = &v }
+			if rotBonds.Valid { v := int(rotBonds.Int64);  c.RotatableBonds = &v }
+			if lipinski.Valid { c.LipinskiPass = &lipinski.Bool }
+			if veber.Valid    { c.VeberPass    = &veber.Bool    }
+			if pains.Valid    { c.PAINSPass    = &pains.Bool    }
+			if brenk.Valid    { c.BrenkPass    = &brenk.Bool    }
+			if reos.Valid     { c.REOSPass     = &reos.Bool     }
+			if s3Key.Valid    { c.S3ConformerKey = s3Key.String }
+			result[c.CompoundID] = c
+		}
+		rows.Close()
+	}
+	return result, nil
+}
+
+// computeFilteredFromCache derives the filtered flag from stored per-filter pass columns
+// and the current run's filter settings. Returns (filtered, canCompute); canCompute=false
+// when a required flag is NULL in the cache row (compound must be re-processed).
+func computeFilteredFromCache(c *cachedLibraryCompound, filters LibraryPrepFilters) (filtered bool, canCompute bool) {
+	if (derefBool(filters.Lipinski) && c.LipinskiPass == nil) ||
+		(derefBool(filters.Veber) && c.VeberPass == nil) ||
+		(derefBool(filters.PAINS) && c.PAINSPass == nil) ||
+		(derefBool(filters.Brenk) && c.BrenkPass == nil) ||
+		(derefBool(filters.REOS) && c.REOSPass == nil) {
+		return false, false
+	}
+	check := func(enabled *bool, pass *bool) bool { return derefBool(enabled) && !derefBool(pass) }
+	filtered = check(filters.Lipinski, c.LipinskiPass) ||
+		check(filters.Veber, c.VeberPass) ||
+		check(filters.PAINS, c.PAINSPass) ||
+		check(filters.Brenk, c.BrenkPass) ||
+		check(filters.REOS, c.REOSPass)
+	return filtered, true
+}
+
+// insertCachedCompoundsIntoLibrary bulk-inserts cached compounds into a new library row,
+// reusing existing S3 keys without re-uploading. Returns (compoundCount, filteredCount,
+// needReprocess) where needReprocess contains SMILES for compounds whose filter flags
+// were NULL and must go through the sidecar.
+func (h *APIHandler) insertCachedCompoundsIntoLibrary(
+	ctx context.Context, db *sql.DB, libraryID int, jobName string,
+	resolved []resolvedChEMBLCompound, cache map[string]cachedLibraryCompound,
+	filters LibraryPrepFilters,
+) (compoundCount, filteredCount int, needReprocess []string, err error) {
+	if len(cache) == 0 {
+		return 0, 0, nil, nil
+	}
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, 0, nil, fmt.Errorf("beginning cached insert transaction: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	stmt, err := tx.PrepareContext(ctx,
+		`INSERT INTO library_compounds
+			(library_id, compound_id, canonical_smiles, inchikey,
+			 mw, logp, hba, hbd, psa, rotatable_bonds, qed,
+			 lipinski_pass, veber_pass, pains_pass, brenk_pass, reos_pass,
+			 filtered, s3_conformer_key)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+	if err != nil {
+		return 0, 0, nil, fmt.Errorf("preparing cached insert: %w", err)
+	}
+	defer stmt.Close()
+
+	for _, r := range resolved {
+		c, ok := cache[r.CompoundID]
+		if !ok {
+			continue
+		}
+		filtered, canCompute := computeFilteredFromCache(&c, filters)
+		if !canCompute {
+			needReprocess = append(needReprocess, r.CanonicalSMILES)
+			continue
+		}
+		conformerKey := sql.NullString{String: c.S3ConformerKey, Valid: c.S3ConformerKey != ""}
+		if _, err := stmt.ExecContext(ctx,
+			libraryID, c.CompoundID, c.CanonicalSMILES, c.InChIKey,
+			c.MW, c.LogP, c.HBA, c.HBD, c.PSA, c.RotatableBonds, c.QED,
+			c.LipinskiPass, c.VeberPass, c.PAINSPass, c.BrenkPass, c.REOSPass,
+			filtered, conformerKey,
+		); err != nil {
+			log.Printf("[library-prep] %s: warning: failed to insert cached compound %s: %v", jobName, c.CompoundID, err)
+			continue
+		}
+		compoundCount++
+		if filtered {
+			filteredCount++
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, 0, nil, fmt.Errorf("committing cached insert: %w", err)
+	}
+	return compoundCount, filteredCount, needReprocess, nil
+}
+
 // --- Sidecar communication ---
 
 // libraryPrepSidecarRequest is the request body sent to the library-prep sidecar.
@@ -794,6 +1044,34 @@ type libraryPrepSidecarCompound struct {
 type libraryPrepSidecarResponse struct {
 	Compounds []libraryPrepSidecarCompound `json:"compounds"`
 	Error     string                       `json:"error,omitempty"`
+}
+
+// resolvedChEMBLCompound is a compound resolved from ChEMBL with its InChIKey available
+// before sidecar processing, enabling cache lookup.
+type resolvedChEMBLCompound struct {
+	CanonicalSMILES string
+	InChIKey        string
+	CompoundID      string // KHM-{first14ofInChIKey}
+}
+
+// cachedLibraryCompound is a compound row fetched from a previous library_compounds entry.
+type cachedLibraryCompound struct {
+	CompoundID      string
+	CanonicalSMILES string
+	InChIKey        string
+	MW              *float64
+	LogP            *float64
+	HBA             *int
+	HBD             *int
+	PSA             *float64
+	RotatableBonds  *int
+	QED             *float64
+	LipinskiPass    *bool
+	VeberPass       *bool
+	PAINSPass       *bool
+	BrenkPass       *bool
+	REOSPass        *bool
+	S3ConformerKey  string
 }
 
 // callLibraryPrepSidecar sends compounds to the library-prep sidecar for
