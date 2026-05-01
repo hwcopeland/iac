@@ -86,7 +86,7 @@ def parse_binding_site(binding_site_json):
 
 def get_config():
     engine = os.environ.get("ENGINE", "vina-gpu")
-    default_threads = 4000 if engine == "vina-gpu-batch" else 256
+    default_threads = 4000
     return {
         "job_name": require_env("JOB_NAME"),
         "worker_name": require_env("WORKER_NAME"),
@@ -473,9 +473,7 @@ def _run_vina_gpu_single_mode(receptor_path, ligands, center, size, exhaustivene
 
 
 def run_vina_gpu_batch(receptor_path, ligands, center, size, exhaustiveness, threads, engine):
-    if engine == "vina-gpu-batch":
-        return _run_vina_gpu_batch_mode(receptor_path, ligands, center, size, exhaustiveness, threads)
-    return _run_vina_gpu_single_mode(receptor_path, ligands, center, size, exhaustiveness, threads)
+    return _run_vina_gpu_batch_mode(receptor_path, ligands, center, size, exhaustiveness, threads)
 
 
 def main():
