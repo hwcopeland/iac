@@ -745,14 +745,42 @@ def upload_s3(s3, bucket, key, path):
     print(f"[s3] Uploaded {path} → s3://{bucket}/{key}", flush=True)
 
 
-def write_result(cursor, conn, cfg, engine, affinity, duration_s, traj_key, energy_key):
+def _parse_xvg_to_json(xvg_path):
+    """Parse a GROMACS XVG file into {time, potential, temperature} arrays."""
+    data: dict = {"time": [], "potential": [], "temperature": []}
+    with open(xvg_path) as f:
+        for line in f:
+            line = line.strip()
+            if not line or line[0] in ('@', '#', '&'):
+                continue
+            parts = line.split()
+            if len(parts) >= 3:
+                try:
+                    data["time"].append(float(parts[0]))
+                    data["potential"].append(float(parts[1]))
+                    data["temperature"].append(float(parts[2]))
+                except ValueError:
+                    pass
+            elif len(parts) == 2:
+                try:
+                    data["time"].append(float(parts[0]))
+                    data["potential"].append(float(parts[1]))
+                except ValueError:
+                    pass
+    return data
+
+
+def write_result(cursor, conn, cfg, engine, affinity, duration_s, traj_key, energy_key,
+                 frames_key="", energy_json_key=""):
     cursor.execute(
         "INSERT INTO md_results "
         "(job_name, compound_id, dock_engine, dock_affinity_kcal_mol, "
-        " duration_s, trajectory_s3_key, energy_s3_key, created_at) "
-        "VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())",
+        " duration_s, trajectory_s3_key, energy_s3_key, frames_s3_key, "
+        " energy_json_s3_key, created_at) "
+        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())",
         (cfg["job_name"], cfg["compound_id"], engine, affinity,
-         round(duration_s), traj_key, energy_key),
+         round(duration_s), traj_key, energy_key,
+         frames_key or None, energy_json_key or None),
     )
     conn.commit()
 
@@ -863,7 +891,46 @@ def main():
         upload_s3(s3, BUCKET_MD, traj_key, wd / "md.xtc")
         upload_s3(s3, BUCKET_MD, energy_key, wd / "md.edr")
 
-        write_result(cursor, conn, cfg, dock_engine, dock_affinity, duration, traj_key, energy_key)
+        # --- Post-process: extract PDB frames and energy JSON ---
+        frames_key = f"{prefix}/frames.pdb"
+        energy_json_key = f"{prefix}/energy.json"
+        try:
+            frames_pdb = wd / "frames.pdb"
+            # -pbc mol wraps molecules; stdin "0\n" selects System group
+            result = subprocess.run(
+                ["gmx", "-quiet", "trjconv", "-f", "md.xtc", "-s", "md.tpr",
+                 "-o", str(frames_pdb), "-pbc", "mol"],
+                cwd=str(wd), input="0\n", capture_output=True, text=True,
+            )
+            if result.returncode == 0 and frames_pdb.exists():
+                upload_s3(s3, BUCKET_MD, frames_key, frames_pdb)
+            else:
+                print("[postproc] WARNING: trjconv failed, skipping frames.pdb", flush=True)
+                frames_key = ""
+        except Exception as exc:
+            print(f"[postproc] WARNING: trjconv exception: {exc}", flush=True)
+            frames_key = ""
+
+        try:
+            energy_xvg = wd / "energy.xvg"
+            result = subprocess.run(
+                ["gmx", "-quiet", "energy", "-f", "md.edr", "-o", str(energy_xvg)],
+                cwd=str(wd), input="Potential\nTemperature\n0\n", capture_output=True, text=True,
+            )
+            if result.returncode == 0 and energy_xvg.exists():
+                energy_data = _parse_xvg_to_json(energy_xvg)
+                energy_json_path = wd / "energy.json"
+                energy_json_path.write_text(json.dumps(energy_data))
+                upload_s3(s3, BUCKET_MD, energy_json_key, energy_json_path)
+            else:
+                print("[postproc] WARNING: gmx energy failed, skipping energy.json", flush=True)
+                energy_json_key = ""
+        except Exception as exc:
+            print(f"[postproc] WARNING: energy exception: {exc}", flush=True)
+            energy_json_key = ""
+
+        write_result(cursor, conn, cfg, dock_engine, dock_affinity, duration, traj_key, energy_key,
+                     frames_key, energy_json_key)
         print(f"Result written to DB: {cfg['compound_id']} duration={duration:.0f}s", flush=True)
 
     cursor.close()

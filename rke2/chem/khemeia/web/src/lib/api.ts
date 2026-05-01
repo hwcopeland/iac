@@ -384,6 +384,19 @@ export async function getMDResults(name: string): Promise<any> {
   return api(`/api/v1/md/jobs/${name}/results`);
 }
 
+export async function getMDTrajectory(name: string, compoundId: string): Promise<string> {
+  const headers: Record<string, string> = {};
+  const t = getToken();
+  if (t) headers['Authorization'] = `Bearer ${t}`;
+  const res = await fetch(`/api/v1/md/jobs/${name}/trajectory/${encodeURIComponent(compoundId)}`, { headers });
+  if (!res.ok) throw new Error(`Trajectory fetch failed: ${res.statusText}`);
+  return res.text();
+}
+
+export async function getMDEnergy(name: string, compoundId: string): Promise<{ time: number[]; potential: number[]; temperature: number[] }> {
+  return api(`/api/v1/md/jobs/${name}/energy/${encodeURIComponent(compoundId)}`);
+}
+
 // --- WP-9: Stage Advance ---
 
 export async function advanceStage(kind: string, name: string, body: any): Promise<any> {
