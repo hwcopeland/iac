@@ -49,6 +49,11 @@ BUCKET_RECEPTORS = "khemeia-receptors"
 BUCKET_MD = "khemeia-trajectories"
 BUCKET_RESP = "khemeia-resp"
 
+# NGC GROMACS image stores binaries in ISA-specific subdirectories.
+# Use whichever gmx is on PATH (set by GMXRC at container start), falling back
+# to the avx2_256 binary which runs on the RTX 3070 (Ampere / AVX2 capable).
+_GMX = shutil.which("gmx") or "/usr/local/gromacs/avx2_256/bin/gmx"
+
 # PDBQT records with no PDB equivalent
 _PDBQT_ONLY = frozenset({"ROOT", "ENDROOT", "BRANCH", "ENDBRANCH", "TORSDOF"})
 
@@ -903,7 +908,7 @@ def main():
             nsteps = cfg.get("nsteps", 500000)
             skip = max(1, nsteps // (5000 * 100))
             result = subprocess.run(
-                ["gmx", "-quiet", "trjconv", "-f", "md.xtc", "-s", "md.tpr",
+                [_GMX, "-quiet", "trjconv", "-f", "md.xtc", "-s", "md.tpr",
                  "-o", str(frames_pdb), "-pbc", "mol", "-skip", str(skip)],
                 cwd=str(wd), input="0\n", capture_output=True, text=True,
             )
@@ -919,7 +924,7 @@ def main():
         try:
             energy_xvg = wd / "energy.xvg"
             result = subprocess.run(
-                ["gmx", "-quiet", "energy", "-f", "md.edr", "-o", str(energy_xvg)],
+                [_GMX, "-quiet", "energy", "-f", "md.edr", "-o", str(energy_xvg)],
                 cwd=str(wd), input="Potential\nTemperature\n0\n", capture_output=True, text=True,
             )
             if result.returncode == 0 and energy_xvg.exists():
