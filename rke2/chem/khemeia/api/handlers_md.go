@@ -287,12 +287,13 @@ func (h *APIHandler) MDJobStatus(w http.ResponseWriter, r *http.Request) {
 		s.CompletedAt = &completedAt.Time
 	}
 
-	// Fetch top-N compounds from docking results.
+	// Fetch top-N compounds from docking results (best affinity per compound).
 	topRows, err := db.QueryContext(r.Context(),
-		`SELECT compound_id, affinity_kcal_mol FROM docking_v2_results
+		`SELECT compound_id, MIN(affinity_kcal_mol) AS affinity_kcal_mol
+		 FROM docking_v2_results
 		 WHERE job_name = ?
-		 GROUP BY compound_id HAVING affinity_kcal_mol = MIN(affinity_kcal_mol)
-		 ORDER BY affinity_kcal_mol ASC LIMIT ?`,
+		 GROUP BY compound_id
+		 ORDER BY MIN(affinity_kcal_mol) ASC LIMIT ?`,
 		s.DockJobName, s.TopN)
 	if err == nil {
 		defer topRows.Close()
@@ -414,13 +415,18 @@ func (c *Controller) RunMDJob(jobName string, req MDSubmitRequest) {
 
 	db.Exec(`UPDATE md_jobs SET status='Running', started_at=NOW() WHERE name=?`, jobName)
 
-	// Fetch top-N compounds from docking results.
+	// Fetch top-N compounds: best affinity per compound, with the engine that achieved it.
 	rows, err := db.Query(
-		`SELECT compound_id, affinity_kcal_mol, engine FROM docking_v2_results
-		 WHERE job_name = ?
-		 GROUP BY compound_id HAVING affinity_kcal_mol = MIN(affinity_kcal_mol)
-		 ORDER BY affinity_kcal_mol ASC LIMIT ?`,
-		req.DockJobName, req.TopN)
+		`SELECT r.compound_id, r.affinity_kcal_mol, r.engine
+		 FROM docking_v2_results r
+		 INNER JOIN (
+		   SELECT compound_id, MIN(affinity_kcal_mol) AS min_aff
+		   FROM docking_v2_results WHERE job_name = ?
+		   GROUP BY compound_id
+		 ) m ON r.compound_id = m.compound_id AND r.affinity_kcal_mol = m.min_aff
+		 WHERE r.job_name = ?
+		 ORDER BY r.affinity_kcal_mol ASC LIMIT ?`,
+		req.DockJobName, req.DockJobName, req.TopN)
 	if err != nil {
 		c.failMDJob(db, jobName, fmt.Sprintf("failed to query top compounds: %v", err))
 		return
