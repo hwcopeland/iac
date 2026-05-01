@@ -223,6 +223,17 @@
     }
   }
 
+  function libFormValid(): boolean {
+    if (libSource === 'smiles') return smilesCount > 0;
+    if (libSource === 'chembl') {
+      return chemblTarget.trim() !== '' ||
+        !!chemblMwMin || !!chemblMwMax ||
+        !!chemblLogpMin || !!chemblLogpMax ||
+        !!chemblHbaMax || !!chemblHbdMax;
+    }
+    return true;
+  }
+
   async function handleLibrarySubmit() {
     libSubmitting = true;
     updateStage('library', { error: '', status: 'running' });
@@ -239,10 +250,9 @@
       if (libSource === 'smiles') {
         params.smiles_list = smilesText.split('\n').map((s: string) => s.trim()).filter(Boolean);
       } else {
-        const chembl: Record<string, any> = {
-          q: chemblTarget,
-          max_phase: chemblMaxPhase,
-        };
+        const chembl: Record<string, any> = {};
+        if (chemblTarget.trim()) chembl.q = chemblTarget.trim();
+        if (chemblMaxPhase > 0) chembl.max_phase = chemblMaxPhase;
         if (chemblMwMin) chembl.mw_min = parseFloat(chemblMwMin);
         if (chemblMwMax) chembl.mw_max = parseFloat(chemblMwMax);
         if (chemblLogpMin) chembl.logp_min = parseFloat(chemblLogpMin);
@@ -585,7 +595,7 @@
               </label>
             </div>
 
-            <button type="submit" class="submit-btn" disabled={libSubmitting}>
+            <button type="submit" class="submit-btn" disabled={libSubmitting || !libFormValid()}>
               {libSubmitting ? 'Submitting...' : 'Prepare Library'}
             </button>
           </form>
