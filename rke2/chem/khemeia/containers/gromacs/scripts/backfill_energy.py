@@ -7,12 +7,23 @@ Downloads md.edr from S3, runs gmx energy, uploads energy.json, updates DB.
 """
 import json
 import os
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
 
 import boto3
 import mysql.connector
+
+# NGC GROMACS image: binary is at this path (not on subprocess PATH by default)
+_GMX_CANDIDATES = [
+    '/usr/local/gromacs/bin/gmx',
+    '/usr/local/gromacs/avx2_256/bin/gmx',
+    '/usr/local/gromacs/avx_512/bin/gmx',
+    '/usr/local/gromacs/avx_256/bin/gmx',
+    '/usr/local/gromacs/sse4.1/bin/gmx',
+]
+GMX = shutil.which('gmx') or next((p for p in _GMX_CANDIDATES if Path(p).exists()), 'gmx')
 
 
 def s3_client():
@@ -89,7 +100,7 @@ def main():
 
             # Extract energy
             result = subprocess.run(
-                ["gmx", "-quiet", "energy", "-f", str(edr_path), "-o", str(xvg_path)],
+                [GMX, "-quiet", "energy", "-f", str(edr_path), "-o", str(xvg_path)],
                 input="Potential\nTemperature\n0\n",
                 capture_output=True, text=True, cwd=str(wd),
             )
