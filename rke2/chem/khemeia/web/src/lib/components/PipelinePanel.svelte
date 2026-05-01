@@ -9,6 +9,7 @@
     advanceStage,
     AuthError,
   } from '$lib/api';
+  import { onMount } from 'svelte';
   import { login } from '$lib/auth';
   import { loadFile, showPocketMarkers, clearPocketMarkers, focusPocketCenter } from '$lib/viewer';
 
@@ -29,14 +30,34 @@
     collapsed: boolean;
   }
 
-  // --- Stage state ---
-  let stages = $state<Record<string, StageState>>({
-    target:  { status: 'pending', jobName: null, error: '', collapsed: false },
-    library: { status: 'pending', jobName: null, error: '', collapsed: true },
-    docking: { status: 'pending', jobName: null, error: '', collapsed: true },
-    md:      { status: 'pending', jobName: null, error: '', collapsed: true },
-    admet:   { status: 'pending', jobName: null, error: '', collapsed: true },
-  });
+  const PIPELINE_STORAGE_KEY = 'khemeia_pipeline_v1';
+
+  // Read saved pipeline state synchronously before any $effect runs.
+  // This avoids the persist-effect-before-restore-effect race condition.
+  function readSavedStages(): Record<string, StageState> {
+    const defaults: Record<string, StageState> = {
+      target:  { status: 'pending', jobName: null, error: '', collapsed: false },
+      library: { status: 'pending', jobName: null, error: '', collapsed: true },
+      docking: { status: 'pending', jobName: null, error: '', collapsed: true },
+      md:      { status: 'pending', jobName: null, error: '', collapsed: true },
+      admet:   { status: 'pending', jobName: null, error: '', collapsed: true },
+    };
+    try {
+      const raw = localStorage.getItem(PIPELINE_STORAGE_KEY);
+      if (!raw) return defaults;
+      const saved = JSON.parse(raw) as Record<string, { jobName: string | null; status: StageStatus }>;
+      for (const [k, v] of Object.entries(saved)) {
+        if (defaults[k] && v.jobName) {
+          defaults[k] = { ...defaults[k], jobName: v.jobName, status: v.status,
+            collapsed: v.status === 'pending' && k !== 'target' };
+        }
+      }
+    } catch {}
+    return defaults;
+  }
+
+  // --- Stage state (initialized from localStorage synchronously) ---
+  let stages = $state<Record<string, StageState>>(readSavedStages());
 
   // --- Target Prep form ---
   let pdbId = $state('');
@@ -506,8 +527,6 @@
     }
   }
 
-  const PIPELINE_STORAGE_KEY = 'khemeia_pipeline_v1';
-
   const POLL_FNS: Record<string, (name: string) => Promise<any>> = {
     target:  getTargetPrep,
     library: getLibraryPrep,
@@ -516,7 +535,9 @@
     admet:   getADMETJob,
   };
 
-  // Persist jobNames + statuses to localStorage whenever stages change
+  // Persist to localStorage whenever stages change.
+  // Initial state is already loaded (readSavedStages above), so the first
+  // write here just re-saves the same data — no clobber race.
   $effect(() => {
     const snapshot: Record<string, { jobName: string | null; status: StageStatus }> = {};
     for (const [k, s] of Object.entries(stages)) {
@@ -525,21 +546,22 @@
     try { localStorage.setItem(PIPELINE_STORAGE_KEY, JSON.stringify(snapshot)); } catch {}
   });
 
-  // Restore from localStorage on mount and re-poll running jobs
-  $effect(() => {
-    try {
-      const raw = localStorage.getItem(PIPELINE_STORAGE_KEY);
-      if (!raw) return;
-      const snapshot: Record<string, { jobName: string | null; status: StageStatus }> = JSON.parse(raw);
-      for (const [k, v] of Object.entries(snapshot)) {
-        if (!v.jobName) continue;
-        updateStage(k, { jobName: v.jobName, status: v.status, collapsed: v.status === 'pending' });
-        // Re-attach poll for stages that were running
-        if (v.status === 'running' && POLL_FNS[k]) {
-          startPoll(k, POLL_FNS[k]);
-        }
+  // Re-attach polls and load MD results for any running/succeeded stages
+  // from the restored localStorage state.
+  onMount(() => {
+    for (const [k, s] of Object.entries(stages)) {
+      if (s.status === 'running' && s.jobName && POLL_FNS[k]) {
+        startPoll(k, POLL_FNS[k]);
       }
-    } catch {}
+      if (k === 'docking' && s.status === 'succeeded' && s.jobName) {
+        loadDockingSummary(s.jobName);
+      }
+    }
+    const mdName = stages.md.jobName;
+    const mdStatus = stages.md.status;
+    if (mdName && (mdStatus === 'running' || mdStatus === 'succeeded')) {
+      loadMDResults(mdName);
+    }
   });
 
   // Cleanup poll timers on destroy
@@ -547,15 +569,6 @@
     return () => {
       for (const t of Object.values(pollTimers)) clearTimeout(t);
     };
-  });
-
-  // Auto-load MD results whenever the stage has a job and is succeeded/running
-  $effect(() => {
-    const name = stages.md.jobName;
-    const s = stages.md.status;
-    if (name && (s === 'succeeded' || s === 'running') && mdResults.length === 0) {
-      loadMDResults(name);
-    }
   });
 
   const stageLabels: Record<string, string> = {
