@@ -3,7 +3,7 @@
   import {
     submitTargetPrep, getTargetPrep, getTargetPockets, selectPocket,
     submitLibraryPrep, getLibraryPrep,
-    submitDocking, getDockingV2Job, listDockingJobs,
+    submitDocking, getDockingV2Job, listDockingJobs, getDockingV2Summary,
     submitADMET, getADMETJob,
     submitMD, getMDJob,
     advanceStage,
@@ -82,9 +82,16 @@
   let mdForceField = $state<'amber99sb-ildn' | 'amber14sb' | 'charmm36m'>('amber99sb-ildn');
   let mdLigandFF = $state<'gaff2' | 'gaff'>('gaff2');
   let mdNSteps = $state(500000);
-  let mdTopN = $state(5);
+  let mdTopN = $state(10);
+  let mdAffinityCutoff = $state(-7.0);
   let mdUseRESP = $state(false);
   let mdSubmitting = $state(false);
+
+  let mdEligibleCount = $derived.by(() => {
+    if (!dockingSummary?.cutoff_counts) return null;
+    const key = mdAffinityCutoff.toFixed(1);
+    return dockingSummary.cutoff_counts[key] ?? null;
+  });
 
   // --- ADMET form ---
   let mpoProfile = $state<'oral' | 'cns' | 'oncology' | 'antimicrobial'>('oral');
@@ -107,6 +114,15 @@
 
   // --- Library prep result (for displaying resolved compound count) ---
   let libraryStatus = $state<any | null>(null);
+
+  // --- Docking summary (loaded when docking succeeds) ---
+  let dockingSummary = $state<any | null>(null);
+
+  async function loadDockingSummary(name: string) {
+    try {
+      dockingSummary = await getDockingV2Summary(name);
+    } catch {}
+  }
 
   // --- Session state ---
   let sessionExpired = $state(false);
@@ -147,7 +163,9 @@
       };
       updateStage('target',  { status: toStatus(tRes.phase || tRes.status) });
       updateStage('library', { status: toStatus(lRes.phase || lRes.status) });
-      updateStage('docking', { status: toStatus(dRes.phase || dRes.status) });
+      const dockStatus = toStatus(dRes.phase || dRes.status);
+      updateStage('docking', { status: dockStatus });
+      if (dockStatus === 'succeeded') loadDockingSummary(job.name);
       // Re-poll anything still running
       if (stages.target.status  === 'running') startPoll('target',  getTargetPrep);
       if (stages.library.status === 'running') startPoll('library', getLibraryPrep);
@@ -216,6 +234,9 @@
 
         if (phase === 'completed' || phase === 'succeeded') {
           updateStage(stageKey, { status: 'succeeded', error: '' });
+          if (stageKey === 'docking' && stages.docking.jobName) {
+            loadDockingSummary(stages.docking.jobName);
+          }
           // Stash poll result so we can display binding site info
           if (stageKey === 'target') {
             targetPrepResult = res;
@@ -381,6 +402,7 @@
         dock_job_name: stages.docking.jobName,
         receptor_ref: stages.target.jobName,
         top_n: mdTopN,
+        affinity_cutoff: mdAffinityCutoff,
         md_nsteps: mdNSteps,
         force_field: mdForceField,
         ligand_ff: mdLigandFF,
@@ -840,6 +862,34 @@
         {/if}
 
         {#if canAdvance('docking')}
+          {#if dockingSummary}
+            <div class="dock-summary">
+              <div class="dock-summary-stats">
+                <span class="dock-stat"><strong>{dockingSummary.unique_compounds.toLocaleString()}</strong> compounds</span>
+                <span class="dock-stat">best <strong>{dockingSummary.best_affinity?.toFixed(1)}</strong> kcal/mol</span>
+              </div>
+              <div class="cutoff-table">
+                {#each Object.entries(dockingSummary.cutoff_counts).sort(([a], [b]) => parseFloat(a) - parseFloat(b)) as [cutoff, count]}
+                  <div class="cutoff-row">
+                    <span class="cutoff-val">≤ {cutoff}</span>
+                    <span class="cutoff-bar-wrap">
+                      <span class="cutoff-bar" style="width:{Math.min(100, (count as number) / dockingSummary.unique_compounds * 100 * 8)}%"></span>
+                    </span>
+                    <span class="cutoff-count">{(count as number).toLocaleString()}</span>
+                  </div>
+                {/each}
+              </div>
+              <div class="top-hits-label">Top hits</div>
+              <div class="top-hits-list">
+                {#each dockingSummary.top_hits.slice(0, 10) as hit}
+                  <div class="hit-row">
+                    <span class="hit-id">{hit.compound_id}</span>
+                    <span class="hit-aff">{hit.affinity_kcal_mol.toFixed(1)}</span>
+                  </div>
+                {/each}
+              </div>
+            </div>
+          {/if}
           <div class="advance-row">
             <span class="done-label">Docking complete: {stages.docking.jobName}</span>
             <button class="advance-btn" onclick={() => handleAdvance('docking')}>Next: MD Simulation</button>
@@ -894,7 +944,21 @@
               </div>
 
               <div class="form-field">
-                <label class="form-label" for="md-topn">Top-N Compounds: {mdTopN}</label>
+                <label class="form-label" for="md-cutoff">
+                  Affinity cutoff: ≤ {mdAffinityCutoff.toFixed(1)} kcal/mol
+                  {#if mdEligibleCount !== null}
+                    <span class="eligible-count">({mdEligibleCount.toLocaleString()} eligible)</span>
+                  {/if}
+                </label>
+                <input id="md-cutoff" type="range" min="-9" max="-5" step="0.5"
+                  bind:value={mdAffinityCutoff} class="form-slider" />
+                <div class="slider-ticks">
+                  <span>-9</span><span>-7.5</span><span>-6</span><span>-5</span>
+                </div>
+              </div>
+
+              <div class="form-field">
+                <label class="form-label" for="md-topn">Top-N from eligible: {mdTopN}</label>
                 <input id="md-topn" type="range" min="1" max="20" step="1"
                   bind:value={mdTopN} class="form-slider" />
                 <div class="slider-ticks">
@@ -1649,5 +1713,122 @@
     color: var(--text-muted, #484f58);
     flex-shrink: 0;
     white-space: nowrap;
+  }
+
+  /* Docking summary */
+  .dock-summary {
+    padding: 8px 0;
+    border-top: 1px solid rgba(48, 54, 61, 0.4);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .dock-summary-stats {
+    display: flex;
+    gap: 16px;
+  }
+
+  .dock-stat {
+    font-size: 12px;
+    color: var(--text-secondary, #8b949e);
+  }
+
+  .dock-stat strong {
+    color: var(--text-primary, #e6edf3);
+  }
+
+  .cutoff-table {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+  }
+
+  .cutoff-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    font-family: 'SF Mono', monospace;
+  }
+
+  .cutoff-val {
+    color: var(--text-muted, #484f58);
+    width: 42px;
+    flex-shrink: 0;
+    text-align: right;
+  }
+
+  .cutoff-bar-wrap {
+    flex: 1;
+    height: 6px;
+    background: rgba(48, 54, 61, 0.4);
+    border-radius: 3px;
+    overflow: hidden;
+  }
+
+  .cutoff-bar {
+    display: block;
+    height: 100%;
+    background: var(--accent, #58a6ff);
+    border-radius: 3px;
+    opacity: 0.6;
+  }
+
+  .cutoff-count {
+    color: var(--text-secondary, #8b949e);
+    width: 46px;
+    text-align: right;
+    flex-shrink: 0;
+  }
+
+  .top-hits-label {
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    color: var(--text-muted, #484f58);
+    margin-top: 2px;
+  }
+
+  .top-hits-list {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    max-height: 140px;
+    overflow-y: auto;
+  }
+
+  .hit-row {
+    display: flex;
+    justify-content: space-between;
+    font-size: 11px;
+    font-family: 'SF Mono', monospace;
+    padding: 1px 4px;
+    border-radius: 2px;
+  }
+
+  .hit-row:hover { background: rgba(88, 166, 255, 0.06); }
+
+  .hit-id {
+    color: var(--text-secondary, #8b949e);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .hit-aff {
+    color: #3fb950;
+    flex-shrink: 0;
+    margin-left: 8px;
+  }
+
+  /* Eligible count inline label */
+  .eligible-count {
+    color: var(--accent, #58a6ff);
+    font-size: 10px;
+    font-weight: 400;
+    text-transform: none;
+    margin-left: 4px;
   }
 </style>

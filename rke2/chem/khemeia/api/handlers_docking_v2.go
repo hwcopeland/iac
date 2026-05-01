@@ -10,10 +10,11 @@
 // docking_v2_results, then exits. The pattern mirrors parallel_docking.go.
 //
 // Endpoints:
-//   POST /api/v1/docking/v2/submit              — submit a multi-engine docking job
-//   GET  /api/v1/docking/v2/jobs               — list recent docking jobs
-//   GET  /api/v1/docking/v2/jobs/{name}        — get job status with per-engine progress
-//   GET  /api/v1/docking/v2/jobs/{name}/results — paginated consensus-ranked results
+//   POST /api/v1/docking/v2/submit                    — submit a multi-engine docking job
+//   GET  /api/v1/docking/v2/jobs                      — list recent docking jobs
+//   GET  /api/v1/docking/v2/jobs/{name}               — get job status with per-engine progress
+//   GET  /api/v1/docking/v2/jobs/{name}/summary        — affinity histogram + top hits
+//   GET  /api/v1/docking/v2/jobs/{name}/results       — paginated consensus-ranked results
 package main
 
 import (
@@ -227,6 +228,12 @@ func (h *APIHandler) DockingV2Dispatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// GET /api/v1/docking/v2/jobs/{name}/summary
+	if strings.HasPrefix(path, "jobs/") && strings.HasSuffix(path, "/summary") {
+		h.DockingV2Summary(w, r)
+		return
+	}
+
 	// GET /api/v1/docking/v2/jobs/{name}/results
 	if strings.HasPrefix(path, "jobs/") && strings.HasSuffix(path, "/results") {
 		h.DockingV2Results(w, r)
@@ -286,6 +293,108 @@ func (h *APIHandler) DockingV2ListJobs(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{"jobs": jobs})
+}
+
+// DockingV2SummaryResponse is the response for GET /api/v1/docking/v2/jobs/{name}/summary.
+type DockingV2SummaryResponse struct {
+	UniqueCompounds int                  `json:"unique_compounds"`
+	BestAffinity    float64              `json:"best_affinity"`
+	Histogram       []AffinityBin        `json:"histogram"`
+	TopHits         []DockingHit         `json:"top_hits"`
+	CutoffCounts    map[string]int       `json:"cutoff_counts"`
+}
+
+type AffinityBin struct {
+	Bin   int `json:"bin"`
+	Count int `json:"count"`
+}
+
+type DockingHit struct {
+	CompoundID string  `json:"compound_id"`
+	Affinity   float64 `json:"affinity_kcal_mol"`
+	SMILES     string  `json:"smiles,omitempty"`
+}
+
+// DockingV2Summary handles GET /api/v1/docking/v2/jobs/{name}/summary.
+// Returns the affinity score histogram, counts at common cutoffs, and top 50 hits.
+func (h *APIHandler) DockingV2Summary(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimPrefix(r.URL.Path, "/api/v1/docking/v2/jobs/")
+	jobName := strings.TrimSuffix(strings.TrimRight(path, "/"), "/summary")
+
+	if jobName == "" {
+		writeError(w, "job name required", http.StatusBadRequest)
+		return
+	}
+
+	db := h.controller.firstDB()
+	if db == nil {
+		writeError(w, "no database available", http.StatusInternalServerError)
+		return
+	}
+
+	var resp DockingV2SummaryResponse
+
+	// Unique compounds + best affinity.
+	db.QueryRowContext(r.Context(),
+		`SELECT COUNT(DISTINCT compound_id), MIN(affinity_kcal_mol)
+		 FROM docking_v2_results WHERE job_name = ?`, jobName).
+		Scan(&resp.UniqueCompounds, &resp.BestAffinity)
+
+	// Affinity histogram (1 kcal/mol bins).
+	rows, err := db.QueryContext(r.Context(),
+		`SELECT FLOOR(MIN(affinity_kcal_mol)) as bin, COUNT(DISTINCT compound_id) as cnt
+		 FROM docking_v2_results WHERE job_name = ?
+		 GROUP BY compound_id
+		 ORDER BY bin`, jobName)
+	if err == nil {
+		defer rows.Close()
+		binMap := map[int]int{}
+		for rows.Next() {
+			var bin int
+			var cnt int
+			if rows.Scan(&bin, &cnt) == nil {
+				binMap[bin] += cnt
+			}
+		}
+		for bin, cnt := range binMap {
+			resp.Histogram = append(resp.Histogram, AffinityBin{Bin: bin, Count: cnt})
+		}
+	}
+
+	// Counts at standard cutoffs.
+	resp.CutoffCounts = map[string]int{}
+	for _, cutoff := range []float64{-6.0, -7.0, -7.5, -8.0, -8.5} {
+		var n int
+		db.QueryRowContext(r.Context(),
+			`SELECT COUNT(DISTINCT compound_id) FROM docking_v2_results
+			 WHERE job_name = ? AND affinity_kcal_mol <= ?`, jobName, cutoff).Scan(&n)
+		resp.CutoffCounts[fmt.Sprintf("%.1f", cutoff)] = n
+	}
+
+	// Top 50 unique hits with SMILES.
+	hitRows, err := db.QueryContext(r.Context(),
+		`SELECT r.compound_id, MIN(r.affinity_kcal_mol), COALESCE(lc.canonical_smiles, '')
+		 FROM docking_v2_results r
+		 LEFT JOIN library_compounds lc ON lc.compound_id = r.compound_id
+		   AND lc.id = (SELECT MAX(id) FROM library_compounds WHERE compound_id = r.compound_id)
+		 WHERE r.job_name = ?
+		 GROUP BY r.compound_id
+		 ORDER BY MIN(r.affinity_kcal_mol) ASC
+		 LIMIT 50`, jobName)
+	if err == nil {
+		defer hitRows.Close()
+		for hitRows.Next() {
+			var hit DockingHit
+			hitRows.Scan(&hit.CompoundID, &hit.Affinity, &hit.SMILES)
+			resp.TopHits = append(resp.TopHits, hit)
+		}
+	}
+	if resp.TopHits == nil {
+		resp.TopHits = []DockingHit{}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
 }
 
 // DockingV2Submit handles POST /api/v1/docking/v2/submit.
