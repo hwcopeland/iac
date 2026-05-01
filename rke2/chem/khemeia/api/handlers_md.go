@@ -83,13 +83,14 @@ func EnsureMDSchema(db *sql.DB) error {
 // --- Request / response types ---
 
 type MDSubmitRequest struct {
-	DockJobName  string `json:"dock_job_name"`   // dockv2-* job name
-	ReceptorRef  string `json:"receptor_ref"`     // target-prep job name
-	TopN         int    `json:"top_n"`            // number of top hits to simulate
-	MDNSteps     int    `json:"md_nsteps"`        // production MD steps (default 500000 = 1ns)
-	ForceField   string `json:"force_field"`      // amber99sb-ildn | amber14sb | charmm36m
-	LigandFF     string `json:"ligand_ff"`        // gaff2 | gaff
-	UseRESP      bool   `json:"use_resp"`         // load CHELPG charges from khemeia-resp bucket
+	DockJobName     string  `json:"dock_job_name"`      // dockv2-* job name
+	ReceptorRef     string  `json:"receptor_ref"`       // target-prep job name
+	TopN            int     `json:"top_n"`              // number of top hits to simulate
+	AffinityCutoff  float64 `json:"affinity_cutoff"`    // only consider compounds scoring ≤ this (e.g. -7.0); 0 = no cutoff
+	MDNSteps        int     `json:"md_nsteps"`          // production MD steps (default 500000 = 1ns)
+	ForceField      string  `json:"force_field"`        // amber99sb-ildn | amber14sb | charmm36m
+	LigandFF        string  `json:"ligand_ff"`          // gaff2 | gaff
+	UseRESP         bool    `json:"use_resp"`           // load CHELPG charges from khemeia-resp bucket
 }
 
 type MDSubmitResponse struct {
@@ -416,17 +417,35 @@ func (c *Controller) RunMDJob(jobName string, req MDSubmitRequest) {
 	db.Exec(`UPDATE md_jobs SET status='Running', started_at=NOW() WHERE name=?`, jobName)
 
 	// Fetch top-N compounds: best affinity per compound, with the engine that achieved it.
-	rows, err := db.Query(
-		`SELECT r.compound_id, r.affinity_kcal_mol, r.engine
-		 FROM docking_v2_results r
-		 INNER JOIN (
-		   SELECT compound_id, MIN(affinity_kcal_mol) AS min_aff
-		   FROM docking_v2_results WHERE job_name = ?
-		   GROUP BY compound_id
-		 ) m ON r.compound_id = m.compound_id AND r.affinity_kcal_mol = m.min_aff
-		 WHERE r.job_name = ?
-		 ORDER BY r.affinity_kcal_mol ASC LIMIT ?`,
-		req.DockJobName, req.DockJobName, req.TopN)
+	// If AffinityCutoff is set (negative value), restrict to compounds scoring at or below it.
+	var rows *sql.Rows
+	var err error
+	if req.AffinityCutoff < 0 {
+		rows, err = db.Query(
+			`SELECT r.compound_id, r.affinity_kcal_mol, r.engine
+			 FROM docking_v2_results r
+			 INNER JOIN (
+			   SELECT compound_id, MIN(affinity_kcal_mol) AS min_aff
+			   FROM docking_v2_results WHERE job_name = ?
+			   GROUP BY compound_id
+			   HAVING MIN(affinity_kcal_mol) <= ?
+			 ) m ON r.compound_id = m.compound_id AND r.affinity_kcal_mol = m.min_aff
+			 WHERE r.job_name = ?
+			 ORDER BY r.affinity_kcal_mol ASC LIMIT ?`,
+			req.DockJobName, req.AffinityCutoff, req.DockJobName, req.TopN)
+	} else {
+		rows, err = db.Query(
+			`SELECT r.compound_id, r.affinity_kcal_mol, r.engine
+			 FROM docking_v2_results r
+			 INNER JOIN (
+			   SELECT compound_id, MIN(affinity_kcal_mol) AS min_aff
+			   FROM docking_v2_results WHERE job_name = ?
+			   GROUP BY compound_id
+			 ) m ON r.compound_id = m.compound_id AND r.affinity_kcal_mol = m.min_aff
+			 WHERE r.job_name = ?
+			 ORDER BY r.affinity_kcal_mol ASC LIMIT ?`,
+			req.DockJobName, req.DockJobName, req.TopN)
+	}
 	if err != nil {
 		c.failMDJob(db, jobName, fmt.Sprintf("failed to query top compounds: %v", err))
 		return

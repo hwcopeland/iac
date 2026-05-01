@@ -338,6 +338,10 @@ export async function listDockingJobs(): Promise<any> {
   return api('/api/v1/docking/v2/jobs');
 }
 
+export async function getDockingV2Summary(name: string): Promise<any> {
+  return api(`/api/v1/docking/v2/jobs/${name}/summary`);
+}
+
 export async function getDockingV2Results(name: string, page?: number, perPage?: number): Promise<any> {
   const p = new URLSearchParams();
   if (page) p.set('page', String(page));
