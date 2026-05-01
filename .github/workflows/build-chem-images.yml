@@ -201,6 +201,17 @@ jobs:
                   "context": "rke2/chem/khemeia/containers/gromacs/",
                   "prefixes": ["rke2/chem/khemeia/containers/gromacs/"],
               },
+              {
+                  # ORCA binary (~2 GB) is not in git — must be pre-staged on the runner.
+                  # Download from https://orcaforum.kofo.mpg.de/ and extract to:
+                  #   rke2/chem/khemeia/containers/orca/orca/
+                  "key": "orca",
+                  "name": "orca",
+                  "image": "zot.hwcopeland.net/chem/orca",
+                  "dockerfile": "rke2/chem/khemeia/containers/orca/Dockerfile",
+                  "context": "rke2/chem/khemeia/containers/orca/",
+                  "prefixes": ["rke2/chem/khemeia/containers/orca/"],
+              },
           ]
 
           def run(cmd):

@@ -5,8 +5,8 @@ Takes the top docked pose for a compound from docking_v2_results and runs a
 protein-ligand MD simulation:
 
   1. Fetch receptor (PDBQT → PDB) from S3 + docked pose from DB.
-  2. Prepare protein topology — CHARMM36m via gmx pdb2gmx.
-  3. Prepare ligand topology — OpenFF GAFF-2.11 via openff-toolkit.
+  2. Prepare protein topology — configurable FF (default amber99sb-ildn) via gmx pdb2gmx.
+  3. Prepare ligand topology — ACPYPE + GAFF2 (configurable) with docked-pose coordinates.
   4. Assemble complex, solvate (TIP3P-CHARMM), neutralise with NaCl.
   5. Energy minimise → NVT equilibration → NPT equilibration → Production MD.
   6. Store trajectory (.xtc) and energy (.edr) in S3; write summary to DB.
@@ -20,6 +20,8 @@ All configuration via environment variables:
   DOCK_ENGINE       - which engine's pose to use (default: best available)
   MD_NSTEPS         - production MD steps (default: 500000 = 1 ns at 2 fs)
   MD_BOX_PADDING    - nm from protein to box edge (default: 1.2)
+  FORCE_FIELD       - protein force field for pdb2gmx (default: amber99sb-ildn; also: amber14sb, charmm36m)
+  LIGAND_FF         - ligand force field for ACPYPE (default: gaff2; also: gaff)
   MYSQL_HOST / MYSQL_PORT / MYSQL_USER / MYSQL_PASSWORD
   GARAGE_ENABLED / GARAGE_ENDPOINT / GARAGE_ACCESS_KEY / GARAGE_SECRET_KEY / GARAGE_REGION
 """
@@ -44,9 +46,16 @@ except ImportError:
 MDP_DIR = Path("/mdp")
 BUCKET_RECEPTORS = "khemeia-receptors"
 BUCKET_MD = "khemeia-trajectories"
+BUCKET_RESP = "khemeia-resp"
 
 # PDBQT records with no PDB equivalent
 _PDBQT_ONLY = frozenset({"ROOT", "ENDROOT", "BRANCH", "ENDBRANCH", "TORSDOF"})
+
+_FF_WATER = {
+    "amber99sb-ildn": "tip3p",
+    "amber14sb":      "tip3p",
+    "charmm36m":      "tip3p",
+}
 
 
 def require_env(name):
@@ -67,6 +76,8 @@ def get_config():
         "dock_engine":  os.environ.get("DOCK_ENGINE", ""),
         "nsteps":       int(os.environ.get("MD_NSTEPS", "500000")),
         "box_padding":  float(os.environ.get("MD_BOX_PADDING", "1.2")),
+        "force_field":  os.environ.get("FORCE_FIELD", "amber99sb-ildn"),
+        "ligand_ff":    os.environ.get("LIGAND_FF", "gaff2"),
         "mysql_host":   os.environ.get("MYSQL_HOST", "localhost"),
         "mysql_port":   int(os.environ.get("MYSQL_PORT", "3306")),
         "mysql_user":   os.environ.get("MYSQL_USER", "root"),
@@ -275,8 +286,30 @@ def _overwrite_gro_coords(gro_path, coords_nm):
     return True
 
 
-def prepare_ligand_topology(smiles, pose_sdf_path, workdir):
-    """Generate GROMACS topology for the ligand using ACPYPE + GAFF2.
+def _fetch_resp_mol2(s3, compound_id, workdir):
+    """Download pre-computed RESP mol2 from S3, or return None if absent."""
+    if s3 is None:
+        return None
+    key = f"resp/{compound_id}/LIG.mol2"
+    mol2_path = Path(workdir) / "LIG_resp.mol2"
+    try:
+        s3.download_file(BUCKET_RESP, key, str(mol2_path))
+        print(f"[resp] Downloaded RESP mol2 from s3://{BUCKET_RESP}/{key}", flush=True)
+        return mol2_path
+    except Exception as exc:
+        if "NoSuchKey" in type(exc).__name__ or "404" in str(exc):
+            print(f"[resp] No pre-computed RESP charges for {compound_id}; using Gasteiger", flush=True)
+        else:
+            print(f"[resp] S3 fetch failed ({exc}); using Gasteiger", flush=True)
+        return None
+
+
+def prepare_ligand_topology(smiles, pose_sdf_path, workdir, ligand_ff="gaff2", resp_mol2=None):
+    """Generate GROMACS topology for the ligand using ACPYPE.
+
+    Charge method:
+      - resp_mol2 provided: RESP charges from ORCA (acpype -c user)
+      - otherwise: Gasteiger charges (acpype -c gas)
 
     Uses the 3D coordinates from the docked pose (pose_sdf_path) so the
     starting conformation is the docked geometry. Falls back to an RDKit
@@ -286,8 +319,13 @@ def prepare_ligand_topology(smiles, pose_sdf_path, workdir):
     """
     workdir = Path(workdir)
 
-    if pose_sdf_path and Path(pose_sdf_path).exists():
+    if resp_mol2 and Path(resp_mol2).exists():
+        lig_input = str(resp_mol2)
+        charge_method = "user"
+        print("[acpype] Using RESP mol2 with pre-computed charges", flush=True)
+    elif pose_sdf_path and Path(pose_sdf_path).exists():
         lig_input = str(pose_sdf_path)
+        charge_method = "gas"
         print("[acpype] Using docked pose SDF as ligand input", flush=True)
     else:
         from rdkit import Chem
@@ -299,11 +337,11 @@ def prepare_ligand_topology(smiles, pose_sdf_path, workdir):
         with Chem.SDWriter(lig_sdf) as w:
             w.write(mol)
         lig_input = lig_sdf
+        charge_method = "gas"
         print("[acpype] Generated RDKit conformer from SMILES", flush=True)
 
-    # ACPYPE: GAFF2 atom types, Gasteiger charges
     result = subprocess.run(
-        ["acpype", "-i", lig_input, "-b", "LIG", "-c", "gas", "-a", "gaff2"],
+        ["acpype", "-i", lig_input, "-b", "LIG", "-c", charge_method, "-a", ligand_ff],
         cwd=str(workdir),
         capture_output=True,
         text=True,
@@ -354,25 +392,26 @@ def prepare_ligand_topology(smiles, pose_sdf_path, workdir):
 
 
 
-def prepare_protein_topology(receptor_pdb_path, workdir):
-    """Run gmx pdb2gmx with CHARMM36m, TIP3P-CHARMM water, no H addition.
+def prepare_protein_topology(receptor_pdb_path, workdir, force_field="amber99sb-ildn"):
+    """Run gmx pdb2gmx with a configurable force field, no H addition.
 
     Returns (protein.gro, topol.top).
     """
     workdir = Path(workdir)
+    water = _FF_WATER.get(force_field, "tip3p")
     run_gmx(
         [
             "pdb2gmx",
             "-f", str(receptor_pdb_path),
             "-o", "protein.gro",
             "-p", "topol.top",
-            "-ff", "amber99sb-ildn",
-            "-water", "tip3p",
+            "-ff", force_field,
+            "-water", water,
             "-ignh",
             "-missing",
         ],
         cwd=str(workdir),
-        description="pdb2gmx — CHARMM36m protein topology",
+        description=f"pdb2gmx — {force_field} protein topology",
     )
     return workdir / "protein.gro", workdir / "topol.top"
 
@@ -663,11 +702,15 @@ def main():
                     pose_path = raw_pdbqt
 
         # --- Topology preparation ---
-        print("Preparing ligand topology (OpenFF GAFF-2.11)...", flush=True)
-        ligand_gro, ligand_itp = prepare_ligand_topology(smiles, pose_path, wd)
+        resp_mol2 = _fetch_resp_mol2(s3, cfg["compound_id"], wd)
+        charge_label = "RESP" if resp_mol2 else "Gasteiger"
+        print(f"Preparing ligand topology ({cfg['ligand_ff']}, {charge_label} charges)...", flush=True)
+        ligand_gro, ligand_itp = prepare_ligand_topology(
+            smiles, pose_path, wd, ligand_ff=cfg["ligand_ff"], resp_mol2=resp_mol2,
+        )
 
-        print("Preparing protein topology (CHARMM36m)...", flush=True)
-        protein_gro, topol_top = prepare_protein_topology(receptor_path, wd)
+        print(f"Preparing protein topology ({cfg['force_field']})...", flush=True)
+        protein_gro, topol_top = prepare_protein_topology(receptor_path, wd, force_field=cfg["force_field"])
 
         print("Assembling complex...", flush=True)
         complex_gro = assemble_complex(protein_gro, ligand_gro, topol_top, ligand_itp, wd)
