@@ -113,6 +113,8 @@
 
   // --- Polling ---
   let pollTimers = $state<Record<string, ReturnType<typeof setTimeout>>>({});
+  const pollFailures: Record<string, number> = {};
+  const POLL_MAX_FAILURES = 3;
 
   function updateStage(key: string, patch: Partial<StageState>) {
     stages[key] = { ...stages[key], ...patch };
@@ -154,6 +156,7 @@
       if (sessionExpired) return;
       try {
         const res = await pollFn(name);
+        pollFailures[stageKey] = 0;
         const phase = (res.phase || res.status || '').toLowerCase();
 
         // Stash library status for compound-count display during running
@@ -193,6 +196,12 @@
         if (e instanceof AuthError) {
           sessionExpired = true;
           // Job is still running server-side — don't mark as failed
+          return;
+        }
+        // Tolerate transient errors (DNS blips, 502s) — only fail after POLL_MAX_FAILURES consecutive errors
+        pollFailures[stageKey] = (pollFailures[stageKey] ?? 0) + 1;
+        if (pollFailures[stageKey] < POLL_MAX_FAILURES) {
+          pollTimers[stageKey] = setTimeout(tick, 15_000);
           return;
         }
         updateStage(stageKey, { status: 'failed', error: e.message || 'Poll failed' });
@@ -352,6 +361,42 @@
       admetSubmitting = false;
     }
   }
+
+  const PIPELINE_STORAGE_KEY = 'khemeia_pipeline_v1';
+
+  const POLL_FNS: Record<string, (name: string) => Promise<any>> = {
+    target:  getTargetPrep,
+    library: getLibraryPrep,
+    docking: getDockingV2Job,
+    md:      getMDJob,
+    admet:   getADMETJob,
+  };
+
+  // Persist jobNames + statuses to localStorage whenever stages change
+  $effect(() => {
+    const snapshot: Record<string, { jobName: string | null; status: StageStatus }> = {};
+    for (const [k, s] of Object.entries(stages)) {
+      snapshot[k] = { jobName: s.jobName, status: s.status };
+    }
+    try { localStorage.setItem(PIPELINE_STORAGE_KEY, JSON.stringify(snapshot)); } catch {}
+  });
+
+  // Restore from localStorage on mount and re-poll running jobs
+  $effect(() => {
+    try {
+      const raw = localStorage.getItem(PIPELINE_STORAGE_KEY);
+      if (!raw) return;
+      const snapshot: Record<string, { jobName: string | null; status: StageStatus }> = JSON.parse(raw);
+      for (const [k, v] of Object.entries(snapshot)) {
+        if (!v.jobName) continue;
+        updateStage(k, { jobName: v.jobName, status: v.status, collapsed: v.status === 'pending' });
+        // Re-attach poll for stages that were running
+        if (v.status === 'running' && POLL_FNS[k]) {
+          startPoll(k, POLL_FNS[k]);
+        }
+      }
+    } catch {}
+  });
 
   // Cleanup poll timers on destroy
   $effect(() => {
