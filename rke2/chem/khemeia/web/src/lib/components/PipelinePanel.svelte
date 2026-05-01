@@ -1015,6 +1015,26 @@
               {/each}
             </div>
           {/if}
+          {#if mdJobStatus?.progress}
+            {@const p = mdJobStatus.progress}
+            {@const phaseLabel: Record<string,string> = {
+              energy_minimization: 'Energy Minimization',
+              nvt_equilibration: 'NVT Equilibration',
+              npt_equilibration: 'NPT Equilibration',
+              production_md: 'Production MD',
+            }}
+            {@const pct = p.total_steps > 0 ? Math.round(p.step / p.total_steps * 100) : null}
+            <div class="md-phase-progress">
+              <span class="md-phase-label">{phaseLabel[p.phase] ?? p.phase}</span>
+              {#if pct !== null}
+                <div class="md-step-bar-wrap">
+                  <div class="md-step-bar" style="width:{pct}%"></div>
+                </div>
+                <span class="md-step-pct">{pct}%</span>
+                <span class="md-step-detail">{(p.step as number).toLocaleString()} / {(p.total_steps as number).toLocaleString()} steps</span>
+              {/if}
+            </div>
+          {/if}
         {/if}
 
         {#if stages.md.error}
@@ -1901,6 +1921,52 @@
   }
 
   .md-compound-dur {
+    color: var(--text-muted, #484f58);
+    flex-shrink: 0;
+  }
+
+  /* MD phase + step progress */
+  .md-phase-progress {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 6px;
+    flex-wrap: wrap;
+  }
+
+  .md-phase-label {
+    font-size: 11px;
+    font-weight: 600;
+    color: #d29922;
+    white-space: nowrap;
+  }
+
+  .md-step-bar-wrap {
+    flex: 1;
+    min-width: 60px;
+    height: 6px;
+    background: rgba(48, 54, 61, 0.6);
+    border-radius: 3px;
+    overflow: hidden;
+  }
+
+  .md-step-bar {
+    height: 100%;
+    background: #d29922;
+    border-radius: 3px;
+    transition: width 0.5s ease;
+  }
+
+  .md-step-pct {
+    font-size: 11px;
+    font-weight: 700;
+    color: #d29922;
+    flex-shrink: 0;
+  }
+
+  .md-step-detail {
+    font-size: 10px;
+    font-family: 'SF Mono', monospace;
     color: var(--text-muted, #484f58);
     flex-shrink: 0;
   }

@@ -121,6 +121,7 @@ type MDJobStatus struct {
 	Compounds   []MDCompoundProgress `json:"compounds"`
 	Completed   int                  `json:"completed"`
 	Failed      int                  `json:"failed"`
+	Progress    map[string]any       `json:"progress,omitempty"` // live phase/step from worker
 	CreatedAt   time.Time            `json:"created_at"`
 	StartedAt   *time.Time           `json:"started_at,omitempty"`
 	CompletedAt *time.Time           `json:"completed_at,omitempty"`
@@ -256,16 +257,16 @@ func (h *APIHandler) MDJobStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var s MDJobStatus
-	var submittedBy, errOut sql.NullString
+	var submittedBy, errOut, outputData sql.NullString
 	var startedAt, completedAt sql.NullTime
 
 	err := db.QueryRowContext(r.Context(),
 		`SELECT name, status, dock_job_name, receptor_ref, top_n, md_nsteps,
-		        force_field, ligand_ff, use_resp, error_output,
+		        force_field, ligand_ff, use_resp, error_output, output_data,
 		        created_at, started_at, completed_at
 		 FROM md_jobs WHERE name = ?`, jobName,
 	).Scan(&s.Name, &s.Status, &s.DockJobName, &s.ReceptorRef, &s.TopN, &s.MDNSteps,
-		&s.ForceField, &s.LigandFF, &s.UseRESP, &errOut,
+		&s.ForceField, &s.LigandFF, &s.UseRESP, &errOut, &outputData,
 		&s.CreatedAt, &startedAt, &completedAt)
 	if err == sql.ErrNoRows {
 		writeError(w, "job not found", http.StatusNotFound)
@@ -286,6 +287,12 @@ func (h *APIHandler) MDJobStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	if completedAt.Valid {
 		s.CompletedAt = &completedAt.Time
+	}
+	if outputData.Valid && outputData.String != "" && s.Status == "Running" {
+		var prog map[string]any
+		if json.Unmarshal([]byte(outputData.String), &prog) == nil {
+			s.Progress = prog
+		}
 	}
 
 	// Fetch top-N compounds from docking results (best affinity per compound).
