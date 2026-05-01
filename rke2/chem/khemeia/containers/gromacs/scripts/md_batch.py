@@ -342,26 +342,13 @@ def prepare_ligand_topology(smiles, pose_sdf_path, workdir):
             src_label = "pose.sdf (fallback)"
         print(f"[acpype] coord injection: src={src_label} natoms={len(coords)}", flush=True)
         if coords:
-            print(f"[acpype] coord range: x=[{min(c[0] for c in coords):.3f},{max(c[0] for c in coords):.3f}] "
-                  f"y=[{min(c[1] for c in coords):.3f},{max(c[1] for c in coords):.3f}] "
-                  f"z=[{min(c[2] for c in coords):.3f},{max(c[2] for c in coords):.3f}] nm", flush=True)
             ok = _overwrite_gro_coords(gro, coords)
             if not ok:
                 print("[acpype] WARNING: atom count mismatch; GRO coords unchanged", flush=True)
+            elif _gro_has_bad_coords(gro, max_nm=500.0):
+                raise RuntimeError("GRO still has bad coords after coordinate overwrite — check obabel output")
             else:
-                bad_after = _gro_has_bad_coords(gro, max_nm=500.0)
-                if bad_after:
-                    print("[acpype] ERROR: GRO still has bad coords after overwrite! Dumping:", flush=True)
-                    for i, ln in enumerate(Path(gro).read_text().splitlines()[2:-1]):
-                        if not ln.strip(): continue
-                        try:
-                            x, y, z = _parse_gro_coords(ln)
-                            if abs(x) > 500 or abs(y) > 500 or abs(z) > 500:
-                                print(f"[acpype]   atom {i}: ({x:.3f}, {y:.3f}, {z:.3f}) nm", flush=True)
-                        except Exception:
-                            pass
-                else:
-                    print("[acpype] GRO coordinates overwritten from docked pose", flush=True)
+                print("[acpype] GRO coordinates overwritten from docked pose", flush=True)
 
     return gro, itp
 
@@ -443,20 +430,9 @@ def assemble_complex(protein_gro, ligand_gro, protein_top, ligand_itp, workdir):
             fh.write(ln + "\n")
         fh.write(box + "\n")
 
-    print(f"[assemble] Complex: {len(p_atoms)} protein + {len(l_atoms)} ligand atoms "
-          f"(p_lines={len(p_lines)}, l_lines={len(l_lines)})", flush=True)
+    print(f"[assemble] Complex: {len(p_atoms)} protein + {len(l_atoms)} ligand atoms", flush=True)
     if _gro_has_bad_coords(complex_gro, max_nm=500.0):
-        print("[assemble] WARNING: complex.gro has atoms with |coord| > 500 nm — dumping:", flush=True)
-        for i, ln in enumerate(Path(complex_gro).read_text().splitlines()[2:-1]):
-            if not ln.strip(): continue
-            try:
-                x, y, z = _parse_gro_coords(ln)
-                if abs(x) > 500 or abs(y) > 500 or abs(z) > 500:
-                    print(f"[assemble]   line {i+2}: atom={ln[10:15].strip()} ({x:.3f},{y:.3f},{z:.3f}) nm", flush=True)
-                    print(f"[assemble]   raw={repr(ln[:80])}", flush=True)
-            except Exception as exc:
-                print(f"[assemble]   line {i+2}: parse error {exc} raw={repr(ln[:80])}", flush=True)
-                break
+        raise RuntimeError("complex.gro contains atoms with |coord| > 500 nm — coordinate injection failed")
 
     # Split ligand ITP: [ atomtypes ] must go before any [ moleculetype ]
     atomtypes_text, mol_text = _split_itp_atomtypes(ligand_itp)
