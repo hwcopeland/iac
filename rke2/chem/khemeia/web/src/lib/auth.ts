@@ -12,7 +12,8 @@ function getRedirectUri(): string {
   return `${window.location.origin}/auth/callback`;
 }
 
-// Session storage keys
+// PKCE verifier is tab-scoped (sessionStorage) — only needed during the callback redirect.
+// Refresh token persists across reloads/restarts (localStorage) so sessions survive navigation.
 const VERIFIER_KEY = 'khemeia_pkce_verifier';
 const REFRESH_KEY = 'khemeia_refresh_token';
 
@@ -82,7 +83,7 @@ function scheduleTokenRefresh(expiresIn?: number): void {
  * On success, schedules the next refresh. On failure, clears auth state.
  */
 export async function refreshToken(): Promise<boolean> {
-  const storedRefresh = sessionStorage.getItem(REFRESH_KEY);
+  const storedRefresh = localStorage.getItem(REFRESH_KEY);
   if (!storedRefresh) return false;
 
   try {
@@ -106,7 +107,7 @@ export async function refreshToken(): Promise<boolean> {
     const data = await res.json();
     accessToken = data.access_token;
     if (data.refresh_token) {
-      sessionStorage.setItem(REFRESH_KEY, data.refresh_token);
+      localStorage.setItem(REFRESH_KEY, data.refresh_token);
     }
 
     setToken(accessToken!);
@@ -180,7 +181,7 @@ export async function handleCallback(code: string): Promise<void> {
   // Store tokens
   accessToken = data.access_token;
   if (data.refresh_token) {
-    sessionStorage.setItem(REFRESH_KEY, data.refresh_token);
+    localStorage.setItem(REFRESH_KEY, data.refresh_token);
   }
 
   // Clean up verifier -- no longer needed
@@ -221,7 +222,7 @@ export function logout(): void {
     clearTimeout(refreshTimerId);
     refreshTimerId = null;
   }
-  sessionStorage.removeItem(REFRESH_KEY);
+  localStorage.removeItem(REFRESH_KEY);
   sessionStorage.removeItem(VERIFIER_KEY);
   setToken('');
 }
@@ -247,7 +248,7 @@ export function isAuthenticated(): boolean {
  * stub that clears stale state.
  */
 export async function restoreSession(): Promise<void> {
-  const refreshToken = sessionStorage.getItem(REFRESH_KEY);
+  const refreshToken = localStorage.getItem(REFRESH_KEY);
   if (!refreshToken) return;
 
   // Attempt token refresh using the stored refresh_token
@@ -273,7 +274,7 @@ export async function restoreSession(): Promise<void> {
     const data = await res.json();
     accessToken = data.access_token;
     if (data.refresh_token) {
-      sessionStorage.setItem(REFRESH_KEY, data.refresh_token);
+      localStorage.setItem(REFRESH_KEY, data.refresh_token);
     }
 
     setToken(accessToken!);
