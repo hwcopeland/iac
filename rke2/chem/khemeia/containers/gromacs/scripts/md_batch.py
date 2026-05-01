@@ -32,6 +32,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time as _time
 from pathlib import Path
 
@@ -206,6 +207,107 @@ def run_gmx(args, cwd, description, stdin_input=None):
     if result.returncode != 0:
         print(f"FATAL: gmx {args[0]} failed (exit {result.returncode})", flush=True)
         sys.exit(result.returncode)
+
+
+def write_progress(cursor, conn, cfg, phase, step=0, total_steps=0):
+    """Write current phase/step into output_data so the API can surface it."""
+    progress = {"phase": phase, "step": step, "total_steps": total_steps}
+    try:
+        cursor.execute(
+            "UPDATE md_jobs SET output_data=%s WHERE name=%s",
+            (json.dumps(progress), cfg["job_name"]),
+        )
+        conn.commit()
+    except Exception as exc:
+        print(f"[progress] DB write failed: {exc}", flush=True)
+
+
+def _parse_last_step_from_log(log_path):
+    """Return the latest step number written to a GROMACS .log file, or 0."""
+    try:
+        # Read last 8KB — steps are near the end
+        with open(log_path, "rb") as f:
+            f.seek(0, 2)
+            size = f.tell()
+            f.seek(max(0, size - 8192))
+            tail = f.read().decode("utf-8", errors="replace")
+        # Pattern: a line with just integers after "Step           Time"
+        last_step = 0
+        lines = tail.splitlines()
+        for i, line in enumerate(lines):
+            if "Step" in line and "Time" in line:
+                # Next non-empty line should be "   <step>   <time>"
+                for j in range(i + 1, min(i + 3, len(lines))):
+                    parts = lines[j].split()
+                    if len(parts) == 2:
+                        try:
+                            last_step = int(parts[0])
+                            break
+                        except ValueError:
+                            pass
+        return last_step
+    except Exception:
+        return 0
+
+
+def run_md_production(name, mdp, input_gro, topol_top, workdir, prev_cpt,
+                      index_ndx, gpu, cfg, cursor, conn):
+    """Run production MD with a background thread that tails md.log for step progress."""
+    workdir = Path(workdir)
+    tpr = workdir / f"{name}.tpr"
+    log_path = workdir / f"{name}.log"
+    nsteps = cfg["nsteps"]
+
+    grompp_args = [
+        "gmx", "-quiet", "grompp",
+        "-f", str(mdp), "-c", str(input_gro),
+        "-p", str(topol_top), "-o", str(tpr), "-maxwarn", "2",
+        "-t", str(prev_cpt),
+    ]
+    if index_ndx:
+        grompp_args += ["-n", str(index_ndx)]
+    print(f"[gmx] grompp — {name}", flush=True)
+    r = subprocess.run(grompp_args, cwd=str(workdir), capture_output=True, text=True)
+    for line in (r.stdout + r.stderr).splitlines():
+        print(f"[gmx] {line}", flush=True)
+    if r.returncode != 0:
+        print(f"FATAL: grompp failed (exit {r.returncode})", flush=True)
+        sys.exit(r.returncode)
+
+    mdrun_args = ["gmx", "-quiet", "mdrun", "-v", "-deffnm", name, "-ntmpi", "1", "-ntomp", "4"]
+    if gpu:
+        mdrun_args += ["-gpu_id", "0", "-nb", "gpu", "-pme", "gpu"]
+
+    print(f"[gmx] mdrun — {name} ({nsteps} steps)", flush=True)
+    proc = subprocess.Popen(mdrun_args, cwd=str(workdir), stdout=subprocess.PIPE,
+                             stderr=subprocess.STDOUT, text=True)
+
+    stop_flag = threading.Event()
+
+    def _monitor():
+        while not stop_flag.is_set():
+            stop_flag.wait(30)
+            if stop_flag.is_set():
+                break
+            step = _parse_last_step_from_log(log_path)
+            write_progress(cursor, conn, cfg, "production_md", step, nsteps)
+            pct = int(step / nsteps * 100) if nsteps > 0 else 0
+            print(f"[progress] production_md step={step}/{nsteps} ({pct}%)", flush=True)
+
+    monitor_thread = threading.Thread(target=_monitor, daemon=True)
+    monitor_thread.start()
+
+    for line in proc.stdout:
+        print(f"[gmx] {line}", end="", flush=True)
+    proc.wait()
+    stop_flag.set()
+    monitor_thread.join(timeout=2)
+
+    if proc.returncode != 0:
+        print(f"FATAL: mdrun failed (exit {proc.returncode})", flush=True)
+        sys.exit(proc.returncode)
+
+    return workdir / f"{name}.gro", workdir / f"{name}.cpt"
 
 
 import re as _re
@@ -728,20 +830,25 @@ def main():
         t0 = _time.time()
 
         # --- MD pipeline ---
+        write_progress(cursor, conn, cfg, "energy_minimization", 0, 0)
         print("Step 1/4: Energy minimisation...", flush=True)
         em_gro, _ = run_md_step("em", MDP_DIR / "em.mdp", ionised_gro, topol_top, wd, gpu=False, index_ndx=index_ndx)
 
+        write_progress(cursor, conn, cfg, "nvt_equilibration", 0, 0)
         print("Step 2/4: NVT equilibration (100 ps)...", flush=True)
         nvt_gro, nvt_cpt = run_md_step("nvt", MDP_DIR / "nvt.mdp", em_gro, topol_top, wd, index_ndx=index_ndx)
 
+        write_progress(cursor, conn, cfg, "npt_equilibration", 0, 0)
         print("Step 3/4: NPT equilibration (100 ps)...", flush=True)
         npt_gro, npt_cpt = run_md_step(
             "npt", MDP_DIR / "npt.mdp", nvt_gro, topol_top, wd, prev_cpt=nvt_cpt, index_ndx=index_ndx,
         )
 
+        write_progress(cursor, conn, cfg, "production_md", 0, cfg["nsteps"])
         print(f"Step 4/4: Production MD ({cfg['nsteps']} steps)...", flush=True)
-        _, _ = run_md_step(
-            "md", md_mdp, npt_gro, topol_top, wd, prev_cpt=npt_cpt, index_ndx=index_ndx,
+        run_md_production(
+            "md", md_mdp, npt_gro, topol_top, wd, prev_cpt=npt_cpt,
+            index_ndx=index_ndx, gpu=True, cfg=cfg, cursor=cursor, conn=conn,
         )
 
         duration = _time.time() - t0
