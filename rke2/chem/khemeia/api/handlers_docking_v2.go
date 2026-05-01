@@ -10,8 +10,9 @@
 // docking_v2_results, then exits. The pattern mirrors parallel_docking.go.
 //
 // Endpoints:
-//   POST /api/v1/docking/v2/submit         — submit a multi-engine docking job
-//   GET  /api/v1/docking/v2/jobs/{name}    — get job status with per-engine progress
+//   POST /api/v1/docking/v2/submit              — submit a multi-engine docking job
+//   GET  /api/v1/docking/v2/jobs               — list recent docking jobs
+//   GET  /api/v1/docking/v2/jobs/{name}        — get job status with per-engine progress
 //   GET  /api/v1/docking/v2/jobs/{name}/results — paginated consensus-ranked results
 package main
 
@@ -220,6 +221,12 @@ func (h *APIHandler) DockingV2Dispatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// GET /api/v1/docking/v2/jobs  (list)
+	if path == "jobs" {
+		h.DockingV2ListJobs(w, r)
+		return
+	}
+
 	// GET /api/v1/docking/v2/jobs/{name}/results
 	if strings.HasPrefix(path, "jobs/") && strings.HasSuffix(path, "/results") {
 		h.DockingV2Results(w, r)
@@ -233,6 +240,52 @@ func (h *APIHandler) DockingV2Dispatch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeError(w, "not found", http.StatusNotFound)
+}
+
+// DockingListItem is a summary row returned by DockingV2ListJobs.
+type DockingListItem struct {
+	Name        string    `json:"name"`
+	Status      string    `json:"status"`
+	ReceptorRef string    `json:"receptor_ref"`
+	LibraryRef  string    `json:"library_ref"`
+	Engines     []string  `json:"engines"`
+	CreatedAt   time.Time `json:"created_at"`
+}
+
+// DockingV2ListJobs handles GET /api/v1/docking/v2/jobs.
+// Returns the 20 most recent docking jobs (newest first).
+func (h *APIHandler) DockingV2ListJobs(w http.ResponseWriter, r *http.Request) {
+	db := h.controller.firstDB()
+	if db == nil {
+		writeError(w, "no database available", http.StatusInternalServerError)
+		return
+	}
+
+	rows, err := db.QueryContext(r.Context(),
+		`SELECT name, status, receptor_ref, library_ref, engines, created_at
+		 FROM docking_v2_jobs ORDER BY created_at DESC LIMIT 20`)
+	if err != nil {
+		writeError(w, fmt.Sprintf("failed to query jobs: %v", err), http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	var jobs []DockingListItem
+	for rows.Next() {
+		var item DockingListItem
+		var enginesJSON string
+		if err := rows.Scan(&item.Name, &item.Status, &item.ReceptorRef, &item.LibraryRef, &enginesJSON, &item.CreatedAt); err != nil {
+			continue
+		}
+		json.Unmarshal([]byte(enginesJSON), &item.Engines)
+		jobs = append(jobs, item)
+	}
+	if jobs == nil {
+		jobs = []DockingListItem{}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"jobs": jobs})
 }
 
 // DockingV2Submit handles POST /api/v1/docking/v2/submit.

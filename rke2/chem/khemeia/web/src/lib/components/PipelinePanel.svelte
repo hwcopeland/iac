@@ -3,7 +3,7 @@
   import {
     submitTargetPrep, getTargetPrep, getTargetPockets, selectPocket,
     submitLibraryPrep, getLibraryPrep,
-    submitDocking, getDockingV2Job,
+    submitDocking, getDockingV2Job, listDockingJobs,
     submitADMET, getADMETJob,
     submitMD, getMDJob,
     advanceStage,
@@ -110,6 +110,58 @@
 
   // --- Session state ---
   let sessionExpired = $state(false);
+
+  // --- Recent runs ---
+  let recentJobs = $state<any[]>([]);
+  let recentOpen = $state(false);
+
+  async function loadRecentJobs() {
+    recentOpen = !recentOpen;
+    if (recentOpen && recentJobs.length === 0) {
+      try {
+        const res = await listDockingJobs();
+        recentJobs = res.jobs ?? [];
+      } catch {}
+    }
+  }
+
+  async function restorePipeline(job: any) {
+    recentOpen = false;
+    // Set all three stage job names immediately
+    updateStage('target',  { jobName: job.receptor_ref, status: 'running', error: '', collapsed: false });
+    updateStage('library', { jobName: job.library_ref,  status: 'running', error: '', collapsed: false });
+    updateStage('docking', { jobName: job.name,          status: 'running', error: '', collapsed: false });
+    // Fetch current status for each and update
+    try {
+      const [tRes, lRes, dRes] = await Promise.all([
+        getTargetPrep(job.receptor_ref),
+        getLibraryPrep(job.library_ref),
+        getDockingV2Job(job.name),
+      ]);
+      const toStatus = (phase: string): StageStatus => {
+        const p = (phase || '').toLowerCase();
+        if (p === 'succeeded' || p === 'completed') return 'succeeded';
+        if (p === 'failed') return 'failed';
+        if (p === 'running') return 'running';
+        return 'pending';
+      };
+      updateStage('target',  { status: toStatus(tRes.phase || tRes.status) });
+      updateStage('library', { status: toStatus(lRes.phase || lRes.status) });
+      updateStage('docking', { status: toStatus(dRes.phase || dRes.status) });
+      // Re-poll anything still running
+      if (stages.target.status  === 'running') startPoll('target',  getTargetPrep);
+      if (stages.library.status === 'running') startPoll('library', getLibraryPrep);
+      if (stages.docking.status === 'running') startPoll('docking', getDockingV2Job);
+    } catch {}
+  }
+
+  function clearPipeline() {
+    for (const k of ['target', 'library', 'docking', 'md', 'admet']) {
+      for (const t of Object.values(pollTimers)) clearTimeout(t);
+      stages[k] = { status: 'pending', jobName: null, error: '', collapsed: k === 'target' ? false : true };
+    }
+    try { localStorage.removeItem(PIPELINE_STORAGE_KEY); } catch {}
+  }
 
   // --- Polling ---
   let pollTimers = $state<Record<string, ReturnType<typeof setTimeout>>>({});
@@ -425,7 +477,29 @@
   <div class="pipeline-header">
     <span class="pipeline-title">SBDD Pipeline</span>
     <span class="pipeline-subtitle">Structure-Based Drug Discovery</span>
+    <div class="pipeline-actions">
+      <button class="action-btn" onclick={loadRecentJobs}>
+        {recentOpen ? 'Hide runs' : 'Load previous'}
+      </button>
+      <button class="action-btn danger" onclick={clearPipeline}>New</button>
+    </div>
   </div>
+
+  {#if recentOpen}
+    <div class="recent-runs">
+      {#if recentJobs.length === 0}
+        <span class="recent-empty">No previous runs found.</span>
+      {:else}
+        {#each recentJobs as job}
+          <button class="recent-row" onclick={() => restorePipeline(job)}>
+            <span class="recent-name">{job.name}</span>
+            <span class="recent-badge {job.status.toLowerCase()}">{job.status}</span>
+            <span class="recent-meta">{new Date(job.created_at).toLocaleString()}</span>
+          </button>
+        {/each}
+      {/if}
+    </div>
+  {/if}
 
   <!-- Stepper indicator -->
   <div class="stepper">
@@ -1478,5 +1552,102 @@
 
   .session-login-btn:hover {
     background: rgba(210, 153, 34, 0.3);
+  }
+
+  /* Pipeline header actions */
+  .pipeline-actions {
+    display: flex;
+    gap: 6px;
+    margin-top: 6px;
+  }
+
+  .action-btn {
+    background: rgba(88, 166, 255, 0.1);
+    border: 1px solid rgba(88, 166, 255, 0.3);
+    color: var(--accent, #58a6ff);
+    font-size: 10px;
+    font-weight: 600;
+    padding: 3px 8px;
+    border-radius: 3px;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: all 0.15s;
+  }
+
+  .action-btn:hover { background: rgba(88, 166, 255, 0.2); }
+
+  .action-btn.danger {
+    background: rgba(248, 81, 73, 0.1);
+    border-color: rgba(248, 81, 73, 0.3);
+    color: #f85149;
+  }
+
+  .action-btn.danger:hover { background: rgba(248, 81, 73, 0.2); }
+
+  /* Recent runs dropdown */
+  .recent-runs {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    margin-bottom: 10px;
+    background: rgba(0, 0, 0, 0.2);
+    border: 1px solid rgba(48, 54, 61, 0.6);
+    border-radius: 4px;
+    padding: 6px;
+    max-height: 200px;
+    overflow-y: auto;
+  }
+
+  .recent-empty {
+    font-size: 11px;
+    color: var(--text-muted, #484f58);
+    padding: 4px;
+  }
+
+  .recent-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: none;
+    border: none;
+    padding: 4px 6px;
+    border-radius: 3px;
+    cursor: pointer;
+    text-align: left;
+    width: 100%;
+    transition: background 0.1s;
+  }
+
+  .recent-row:hover { background: rgba(88, 166, 255, 0.08); }
+
+  .recent-name {
+    font-size: 11px;
+    font-family: 'SF Mono', monospace;
+    color: var(--text-primary, #e6edf3);
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .recent-badge {
+    font-size: 9px;
+    font-weight: 700;
+    text-transform: uppercase;
+    padding: 1px 5px;
+    border-radius: 2px;
+    flex-shrink: 0;
+  }
+
+  .recent-badge.completed { background: rgba(63, 185, 80, 0.15); color: #3fb950; }
+  .recent-badge.failed    { background: rgba(248, 81, 73, 0.15); color: #f85149; }
+  .recent-badge.running   { background: rgba(210, 153, 34, 0.15); color: #d29922; }
+  .recent-badge.pending   { background: rgba(88, 166, 255, 0.1); color: var(--accent, #58a6ff); }
+
+  .recent-meta {
+    font-size: 10px;
+    color: var(--text-muted, #484f58);
+    flex-shrink: 0;
+    white-space: nowrap;
   }
 </style>
