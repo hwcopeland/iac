@@ -238,7 +238,15 @@
         <aside class="side-panel">
           <div class="side-panel-scroll">
             {#if activeTab === 'explorer'}
-              <ExplorerPanel onStructureLoad={() => structureBrowser?.refresh()} />
+              <ExplorerPanel
+                onStructureLoad={() => structureBrowser?.refresh()}
+                onMDView={(frames, energy, compoundId) => {
+                  mdTrajFrames = frames;
+                  mdTrajEnergy = energy;
+                  mdTrajCompound = compoundId;
+                  showMDTrajectory = true;
+                }}
+              />
               <StructureBrowser bind:this={structureBrowser} />
             {:else if activeTab === 'analysis'}
               <AnalysisPanel
