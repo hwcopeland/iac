@@ -28,6 +28,7 @@ spec:
       labels:
         app.kubernetes.io/name: arc-chem-runner
     spec:
+      serviceAccountName: ci-deployer
       containers:
         - name: runner
           image: ghcr.io/actions/actions-runner:2.333.0
