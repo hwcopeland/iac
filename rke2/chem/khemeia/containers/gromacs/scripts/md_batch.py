@@ -891,6 +891,7 @@ def main():
         energy_key = f"{prefix}/md.edr"
         upload_s3(s3, BUCKET_MD, traj_key, wd / "md.xtc")
         upload_s3(s3, BUCKET_MD, energy_key, wd / "md.edr")
+        upload_s3(s3, BUCKET_MD, f"{prefix}/md.tpr", wd / "md.tpr")
 
         # --- Post-process: extract PDB frames and energy JSON ---
         frames_key = f"{prefix}/frames.pdb"
@@ -898,9 +899,12 @@ def main():
         try:
             frames_pdb = wd / "frames.pdb"
             # -pbc mol wraps molecules; stdin "0\n" selects System group
+            # -skip keeps ~100 frames over the trajectory; stdin "0\n" = System group
+            nsteps = cfg.get("nsteps", 500000)
+            skip = max(1, nsteps // (5000 * 100))
             result = subprocess.run(
                 ["gmx", "-quiet", "trjconv", "-f", "md.xtc", "-s", "md.tpr",
-                 "-o", str(frames_pdb), "-pbc", "mol"],
+                 "-o", str(frames_pdb), "-pbc", "mol", "-skip", str(skip)],
                 cwd=str(wd), input="0\n", capture_output=True, text=True,
             )
             if result.returncode == 0 and frames_pdb.exists():

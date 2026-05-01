@@ -82,12 +82,20 @@ func EnsureMDSchema(db *sql.DB) error {
 	}
 
 	// Add post-processing columns to existing deployments.
+	// MySQL doesn't support ADD COLUMN IF NOT EXISTS, so check information_schema first.
 	for _, col := range []struct{ name, def string }{
 		{"frames_s3_key", "VARCHAR(512) NULL"},
 		{"energy_json_s3_key", "VARCHAR(512) NULL"},
 	} {
-		db.Exec(fmt.Sprintf(
-			"ALTER TABLE md_results ADD COLUMN IF NOT EXISTS %s %s", col.name, col.def))
+		var count int
+		db.QueryRow(
+			`SELECT COUNT(*) FROM information_schema.COLUMNS
+			 WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'md_results' AND COLUMN_NAME = ?`,
+			col.name,
+		).Scan(&count)
+		if count == 0 {
+			db.Exec(fmt.Sprintf("ALTER TABLE md_results ADD COLUMN %s %s", col.name, col.def))
+		}
 	}
 
 	return nil
