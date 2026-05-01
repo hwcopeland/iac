@@ -5,6 +5,7 @@
     submitLibraryPrep, getLibraryPrep,
     submitDocking, getDockingV2Job,
     submitADMET, getADMETJob,
+    submitMD, getMDJob,
     advanceStage,
   } from '$lib/api';
   import { loadFile, showPocketMarkers, clearPocketMarkers, focusPocketCenter } from '$lib/viewer';
@@ -23,6 +24,7 @@
     target:  { status: 'pending', jobName: null, error: '', collapsed: false },
     library: { status: 'pending', jobName: null, error: '', collapsed: true },
     docking: { status: 'pending', jobName: null, error: '', collapsed: true },
+    md:      { status: 'pending', jobName: null, error: '', collapsed: true },
     admet:   { status: 'pending', jobName: null, error: '', collapsed: true },
   });
 
@@ -70,8 +72,17 @@
   // --- Docking form ---
   let engVina = $state(true);
   let engGnina = $state(false);
+  let engVinaGpu = $state(false);
   let exhaustiveness = $state(8);
   let dockSubmitting = $state(false);
+
+  // --- MD Simulation form ---
+  let mdForceField = $state<'amber99sb-ildn' | 'amber14sb' | 'charmm36m'>('amber99sb-ildn');
+  let mdLigandFF = $state<'gaff2' | 'gaff'>('gaff2');
+  let mdNSteps = $state(500000);
+  let mdTopN = $state(5);
+  let mdUseRESP = $state(false);
+  let mdSubmitting = $state(false);
 
   // --- ADMET form ---
   let mpoProfile = $state<'oral' | 'cns' | 'oncology' | 'antimicrobial'>('oral');
@@ -100,7 +111,7 @@
   }
 
   function stageOrder(key: string): number {
-    return { target: 0, library: 1, docking: 2, admet: 3 }[key] ?? 99;
+    return { target: 0, library: 1, docking: 2, md: 3, admet: 4 }[key] ?? 99;
   }
 
   function canAdvance(key: string): boolean {
@@ -108,7 +119,7 @@
   }
 
   function nextStageKey(key: string): string | null {
-    const order = ['target', 'library', 'docking', 'admet'];
+    const order = ['target', 'library', 'docking', 'md', 'admet'];
     const idx = order.indexOf(key);
     return idx >= 0 && idx < order.length - 1 ? order[idx + 1] : null;
   }
@@ -257,6 +268,7 @@
       const engines: string[] = [];
       if (engVina) engines.push('vina-1.2');
       if (engGnina) engines.push('gnina');
+      if (engVinaGpu) engines.push('vina-gpu');
       const params: any = {
         receptor_ref: stages.target.jobName,
         library_ref: stages.library.jobName,
@@ -270,6 +282,29 @@
       updateStage('docking', { status: 'failed', error: e.message || 'Submission failed' });
     } finally {
       dockSubmitting = false;
+    }
+  }
+
+  async function handleMDSubmit() {
+    mdSubmitting = true;
+    updateStage('md', { error: '', status: 'running' });
+    try {
+      const params: any = {
+        dock_job_name: stages.docking.jobName,
+        receptor_ref: stages.target.jobName,
+        top_n: mdTopN,
+        md_nsteps: mdNSteps,
+        force_field: mdForceField,
+        ligand_ff: mdLigandFF,
+        use_resp: mdUseRESP,
+      };
+      const res = await submitMD(params);
+      updateStage('md', { jobName: res.name || res.job_name, status: 'running' });
+      startPoll('md', getMDJob);
+    } catch (e: any) {
+      updateStage('md', { status: 'failed', error: e.message || 'Submission failed' });
+    } finally {
+      mdSubmitting = false;
     }
   }
 
@@ -299,10 +334,11 @@
   });
 
   const stageLabels: Record<string, string> = {
-    target: '1. Target Preparation',
+    target:  '1. Target Preparation',
     library: '2. Library Preparation',
     docking: '3. Molecular Docking',
-    admet: '4. ADMET Prediction',
+    md:      '4. MD Simulation',
+    admet:   '5. ADMET Prediction',
   };
 
   function statusBadgeClass(s: StageStatus): string {
@@ -321,7 +357,7 @@
 
   <!-- Stepper indicator -->
   <div class="stepper">
-    {#each ['target', 'library', 'docking', 'admet'] as key, i}
+    {#each ['target', 'library', 'docking', 'md', 'admet'] as key, i}
       <div class="step" class:active={!stages[key].collapsed} class:done={stages[key].status === 'succeeded'}>
         <div class="step-dot {statusBadgeClass(stages[key].status)}">
           {#if stages[key].status === 'succeeded'}
@@ -330,7 +366,7 @@
             {i + 1}
           {/if}
         </div>
-        {#if i < 3}
+        {#if i < 4}
           <div class="step-line" class:done={stages[key].status === 'succeeded'}></div>
         {/if}
       </div>
@@ -603,6 +639,10 @@
                     <input type="checkbox" bind:checked={engGnina} />
                     <span>GNINA</span>
                   </label>
+                  <label class="toggle-label">
+                    <input type="checkbox" bind:checked={engVinaGpu} />
+                    <span>Vina GPU</span>
+                  </label>
                 </div>
               </div>
 
@@ -621,7 +661,7 @@
                 <span class="ref-chip">Library: {stages.library.jobName}</span>
               </div>
 
-              <button type="submit" class="submit-btn" disabled={dockSubmitting || (!engVina && !engGnina)}>
+              <button type="submit" class="submit-btn" disabled={dockSubmitting || (!engVina && !engGnina && !engVinaGpu)}>
                 {dockSubmitting ? 'Submitting...' : 'Start Docking'}
               </button>
             </form>
@@ -642,14 +682,107 @@
         {#if canAdvance('docking')}
           <div class="advance-row">
             <span class="done-label">Docking complete: {stages.docking.jobName}</span>
-            <button class="advance-btn" onclick={() => handleAdvance('docking')}>Next: ADMET</button>
+            <button class="advance-btn" onclick={() => handleAdvance('docking')}>Next: MD Simulation</button>
           </div>
         {/if}
       {/snippet}
     </Panel>
   </div>
 
-  <!-- Stage 4: ADMET -->
+  <!-- Stage 4: MD Simulation -->
+  <div id="stage-md">
+    <Panel title={stageLabels.md} collapsed={stages.md.collapsed}>
+      {#snippet children()}
+        <div class="stage-header" role="button" tabindex="0"
+          onclick={() => updateStage('md', { collapsed: !stages.md.collapsed })}
+          onkeydown={(e) => { if (e.key === 'Enter') updateStage('md', { collapsed: !stages.md.collapsed }); }}>
+          <span class="stage-label">{stageLabels.md}</span>
+          <span class="status-badge {statusBadgeClass(stages.md.status)}">{stages.md.status}</span>
+        </div>
+
+        {#if (stages.md.status === 'pending' || stages.md.status === 'failed')}
+          {#if !stages.docking.jobName}
+            <p class="prereq-msg">Complete Docking first.</p>
+          {:else}
+            <form class="stage-form" onsubmit={(e) => { e.preventDefault(); handleMDSubmit(); }}>
+              <div class="form-field">
+                <label class="form-label" for="md-ff">Protein Force Field</label>
+                <select id="md-ff" class="form-select" bind:value={mdForceField}>
+                  <option value="amber99sb-ildn">AMBER99SB-ILDN</option>
+                  <option value="amber14sb">AMBER14SB</option>
+                  <option value="charmm36m">CHARMM36m</option>
+                </select>
+              </div>
+
+              <div class="form-field">
+                <label class="form-label" for="md-lff">Ligand Force Field</label>
+                <select id="md-lff" class="form-select" bind:value={mdLigandFF}>
+                  <option value="gaff2">GAFF2</option>
+                  <option value="gaff">GAFF</option>
+                </select>
+              </div>
+
+              <div class="form-field">
+                <label class="form-label" for="md-steps">
+                  MD Steps: {mdNSteps.toLocaleString()} ({(mdNSteps * 0.002).toFixed(0)} ps)
+                </label>
+                <input id="md-steps" type="range" min="50000" max="2000000" step="50000"
+                  bind:value={mdNSteps} class="form-slider" />
+                <div class="slider-ticks">
+                  <span>100 ps</span><span>1 ns</span><span>2 ns</span><span>4 ns</span>
+                </div>
+              </div>
+
+              <div class="form-field">
+                <label class="form-label" for="md-topn">Top-N Compounds: {mdTopN}</label>
+                <input id="md-topn" type="range" min="1" max="20" step="1"
+                  bind:value={mdTopN} class="form-slider" />
+                <div class="slider-ticks">
+                  <span>1</span><span>5</span><span>10</span><span>20</span>
+                </div>
+              </div>
+
+              <div class="filter-toggles">
+                <label class="toggle-label">
+                  <input type="checkbox" bind:checked={mdUseRESP} />
+                  <span>RESP Charges (HF/6-31G*)</span>
+                </label>
+              </div>
+
+              <div class="ref-info">
+                <span class="ref-chip">Docking: {stages.docking.jobName}</span>
+                <span class="ref-chip">Target: {stages.target.jobName}</span>
+              </div>
+
+              <button type="submit" class="submit-btn" disabled={mdSubmitting}>
+                {mdSubmitting ? 'Submitting...' : 'Run MD Simulation'}
+              </button>
+            </form>
+          {/if}
+        {/if}
+
+        {#if stages.md.status === 'running'}
+          <div class="running-indicator">
+            <span class="pulse-dot"></span>
+            <span class="running-text">MD simulation {stages.md.jobName ?? ''}...</span>
+          </div>
+        {/if}
+
+        {#if stages.md.error}
+          <p class="error-msg">{stages.md.error}</p>
+        {/if}
+
+        {#if canAdvance('md')}
+          <div class="advance-row">
+            <span class="done-label">MD complete: {stages.md.jobName}</span>
+            <button class="advance-btn" onclick={() => handleAdvance('md')}>Next: ADMET</button>
+          </div>
+        {/if}
+      {/snippet}
+    </Panel>
+  </div>
+
+  <!-- Stage 5: ADMET -->
   <div id="stage-admet">
     <Panel title={stageLabels.admet} collapsed={stages.admet.collapsed}>
       {#snippet children()}
@@ -661,8 +794,8 @@
         </div>
 
         {#if (stages.admet.status === 'pending' || stages.admet.status === 'failed')}
-          {#if !stages.docking.jobName}
-            <p class="prereq-msg">Complete Docking first.</p>
+          {#if !stages.md.jobName}
+            <p class="prereq-msg">Complete MD Simulation first.</p>
           {:else}
             <form class="stage-form" onsubmit={(e) => { e.preventDefault(); handleADMETSubmit(); }}>
               <div class="form-field">
