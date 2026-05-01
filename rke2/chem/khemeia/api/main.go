@@ -318,7 +318,10 @@ func (c *Controller) initPluginDB(p Plugin) error {
 		if err := EnsureADMETSchema(db); err != nil {
 			log.Printf("Warning: failed to create admet tables in %s: %v", p.Database, err)
 		}
-		log.Printf("Shared tables (api_tokens, basis_sets, provenance, target_prep_results, library_prep, docking_v2, admet) created in %s database", p.Database)
+		if err := EnsureMDSchema(db); err != nil {
+			log.Printf("Warning: failed to create md tables in %s: %v", p.Database, err)
+		}
+		log.Printf("Shared tables (api_tokens, basis_sets, provenance, target_prep_results, library_prep, docking_v2, admet, md) created in %s database", p.Database)
 	}
 
 	return nil
@@ -644,6 +647,13 @@ func (c *Controller) startAPIServer() error {
 	// GET  /api/v1/admet/presets                        — list available MPO presets
 	mux.HandleFunc("/api/v1/admet/", wrap(handler.ADMETDispatch))
 	log.Println("Registered ADMET routes: /api/v1/admet/{predict,jobs/{name},jobs/{name}/results,compound/{id},presets}")
+
+	// MD simulation endpoints (WP-5).
+	// POST /api/v1/md/submit                    — submit an MD simulation job
+	// GET  /api/v1/md/jobs/{name}               — get MD job status
+	// GET  /api/v1/md/jobs/{name}/results       — per-compound MD results
+	mux.HandleFunc("/api/v1/md/", wrap(handler.MDDispatch))
+	log.Println("Registered MD routes: /api/v1/md/{submit,jobs/{name},jobs/{name}/results}")
 
 	// Token management — admin only (no external auth, internal IPs only).
 	mux.HandleFunc("/api/v1/tokens", func(w http.ResponseWriter, r *http.Request) {

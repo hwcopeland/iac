@@ -357,6 +357,20 @@ export async function getADMETCompound(compoundId: string): Promise<any> {
   return api(`/api/v1/admet/compound/${encodeURIComponent(compoundId)}`);
 }
 
+// --- WP-5: MD Simulation ---
+
+export async function submitMD(params: any): Promise<any> {
+  return api('/api/v1/md/submit', { method: 'POST', body: JSON.stringify(params) });
+}
+
+export async function getMDJob(name: string): Promise<any> {
+  return api(`/api/v1/md/jobs/${name}`);
+}
+
+export async function getMDResults(name: string): Promise<any> {
+  return api(`/api/v1/md/jobs/${name}/results`);
+}
+
 // --- WP-9: Stage Advance ---
 
 export async function advanceStage(kind: string, name: string, body: any): Promise<any> {
