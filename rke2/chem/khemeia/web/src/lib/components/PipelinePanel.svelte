@@ -5,7 +5,7 @@
     submitLibraryPrep, getLibraryPrep,
     submitDocking, getDockingV2Job, listDockingJobs, getDockingV2Summary,
     submitADMET, getADMETJob,
-    submitMD, getMDJob, getMDResults, getMDTrajectory, getMDEnergy,
+    submitMD, getMDJob, listMDJobs, getMDResults, getMDTrajectory, getMDEnergy,
     advanceStage,
     AuthError,
   } from '$lib/api';
@@ -198,33 +198,44 @@
 
   async function restorePipeline(job: any) {
     recentOpen = false;
-    // Set all three stage job names immediately
     updateStage('target',  { jobName: job.receptor_ref, status: 'running', error: '', collapsed: false });
     updateStage('library', { jobName: job.library_ref,  status: 'running', error: '', collapsed: false });
-    updateStage('docking', { jobName: job.name,          status: 'running', error: '', collapsed: false });
-    // Fetch current status for each and update
+    updateStage('docking', { jobName: job.name,         status: 'running', error: '', collapsed: false });
+
+    const toStatus = (phase: string): StageStatus => {
+      const p = (phase || '').toLowerCase();
+      if (p === 'succeeded' || p === 'completed') return 'succeeded';
+      if (p === 'failed') return 'failed';
+      if (p === 'running') return 'running';
+      return 'pending';
+    };
+
     try {
       const [tRes, lRes, dRes] = await Promise.all([
         getTargetPrep(job.receptor_ref),
         getLibraryPrep(job.library_ref),
         getDockingV2Job(job.name),
       ]);
-      const toStatus = (phase: string): StageStatus => {
-        const p = (phase || '').toLowerCase();
-        if (p === 'succeeded' || p === 'completed') return 'succeeded';
-        if (p === 'failed') return 'failed';
-        if (p === 'running') return 'running';
-        return 'pending';
-      };
       updateStage('target',  { status: toStatus(tRes.phase || tRes.status) });
       updateStage('library', { status: toStatus(lRes.phase || lRes.status) });
       const dockStatus = toStatus(dRes.phase || dRes.status);
       updateStage('docking', { status: dockStatus });
       if (dockStatus === 'succeeded') loadDockingSummary(job.name);
-      // Re-poll anything still running
       if (stages.target.status  === 'running') startPoll('target',  getTargetPrep);
       if (stages.library.status === 'running') startPoll('library', getLibraryPrep);
       if (stages.docking.status === 'running') startPoll('docking', getDockingV2Job);
+    } catch {}
+
+    // Also restore the MD stage if there's a job linked to this docking run
+    try {
+      const mdList = await listMDJobs(job.name);
+      const latestMD = mdList.jobs?.[0];
+      if (latestMD) {
+        const mdStatus = toStatus(latestMD.status);
+        updateStage('md', { jobName: latestMD.name, status: mdStatus, error: '', collapsed: false });
+        if (mdStatus === 'running') startPoll('md', getMDJob);
+        // loadMDResults fires automatically via $effect when stage has a name
+      }
     } catch {}
   }
 
@@ -536,6 +547,15 @@
     return () => {
       for (const t of Object.values(pollTimers)) clearTimeout(t);
     };
+  });
+
+  // Auto-load MD results whenever the stage has a job and is succeeded/running
+  $effect(() => {
+    const name = stages.md.jobName;
+    const s = stages.md.status;
+    if (name && (s === 'succeeded' || s === 'running') && mdResults.length === 0) {
+      loadMDResults(name);
+    }
   });
 
   const stageLabels: Record<string, string> = {
@@ -1096,34 +1116,41 @@
           <p class="error-msg">{stages.md.error}</p>
         {/if}
 
-        {#if stages.md.status === 'succeeded' && mdResults.length > 0}
+        {#if stages.md.jobName && (stages.md.status === 'succeeded' || stages.md.status === 'running')}
           <div class="md-results-section">
             <div class="md-results-label">
-              MD Results
-              <span class="md-results-count">{mdResults.length} compound{mdResults.length !== 1 ? 's' : ''}</span>
+              {stages.md.status === 'running' ? 'Completed so far' : 'MD Results'}
+              {#if mdResults.length > 0}
+                <span class="md-results-count">{mdResults.length} compound{mdResults.length !== 1 ? 's' : ''}</span>
+              {/if}
+              <button class="md-refresh-btn" onclick={() => loadMDResults(stages.md.jobName!)} title="Refresh results">↻</button>
             </div>
-            <div class="md-results-list">
-              {#each mdResults as r}
-                {@const isLoading = mdViewerLoading === r.compound_id}
-                <div class="md-result-row">
-                  <span class="md-result-id">{r.compound_id}</span>
-                  <span class="md-result-aff">{r.dock_affinity_kcal_mol?.toFixed(2)}</span>
-                  <span class="md-result-dur">{r.duration_s ? Math.round(r.duration_s / 60) + 'm' : ''}</span>
-                  <button
-                    class="md-result-view-btn"
-                    onclick={() => viewMDCompound(r)}
-                    disabled={!!mdViewerLoading || (!r.has_trajectory && !r.has_energy)}
-                    title={!r.has_trajectory && !r.has_energy ? 'Post-processing pending' : 'View in 3D'}
-                  >
-                    {#if isLoading}
-                      <span class="md-loading-dot"></span>
-                    {:else}
-                      View
-                    {/if}
-                  </button>
-                </div>
-              {/each}
-            </div>
+            {#if mdResults.length === 0}
+              <p class="md-no-results">No completed compounds yet.</p>
+            {:else}
+              <div class="md-results-list">
+                {#each mdResults as r}
+                  {@const isLoading = mdViewerLoading === r.compound_id}
+                  <div class="md-result-row">
+                    <span class="md-result-id">{r.compound_id}</span>
+                    <span class="md-result-aff">{r.dock_affinity_kcal_mol?.toFixed(2)}</span>
+                    <span class="md-result-dur">{r.duration_s ? Math.round(r.duration_s / 60) + 'm' : ''}</span>
+                    <button
+                      class="md-result-view-btn"
+                      onclick={() => viewMDCompound(r)}
+                      disabled={!!mdViewerLoading || (!r.has_trajectory && !r.has_energy)}
+                      title={!r.has_trajectory && !r.has_energy ? 'Post-processing pending' : 'View trajectory in 3D'}
+                    >
+                      {#if isLoading}
+                        <span class="md-loading-dot"></span>
+                      {:else}
+                        View
+                      {/if}
+                    </button>
+                  </div>
+                {/each}
+              </div>
+            {/if}
           </div>
         {/if}
 
@@ -2151,5 +2178,26 @@
     background: var(--accent, #58a6ff);
     border-radius: 50%;
     animation: pulse 0.8s ease-in-out infinite;
+  }
+
+  .md-refresh-btn {
+    margin-left: auto;
+    background: none;
+    border: none;
+    color: var(--text-muted, #484f58);
+    font-size: 13px;
+    cursor: pointer;
+    padding: 0 2px;
+    line-height: 1;
+    transition: color 0.12s;
+  }
+  .md-refresh-btn:hover { color: var(--accent, #58a6ff); }
+
+  .md-no-results {
+    font-size: 11px;
+    color: var(--text-muted, #484f58);
+    font-style: italic;
+    margin: 0;
+    padding: 2px 0;
   }
 </style>
