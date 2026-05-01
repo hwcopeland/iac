@@ -84,10 +84,10 @@ func buildChEMBLFilterClauses(params map[string]string) (conditions []string, ar
 		}
 	}
 
-	// Max phase
+	// Max phase — 0 means "Any", skip the filter
 	if v := params["max_phase"]; v != "" {
-		if f, err := strconv.ParseFloat(v, 64); err == nil {
-			conditions = append(conditions, "md.max_phase = ?")
+		if f, err := strconv.ParseFloat(v, 64); err == nil && f > 0 {
+			conditions = append(conditions, "md.max_phase >= ?")
 			args = append(args, f)
 		}
 	}
@@ -148,8 +148,8 @@ func buildFastCountQuery(params map[string]string) (string, []interface{}) {
 		conditions = append(conditions, "cp.num_ro5_violations = 0")
 	}
 	if v := params["max_phase"]; v != "" {
-		if f, err := strconv.ParseFloat(v, 64); err == nil {
-			conditions = append(conditions, "md.max_phase = ?")
+		if f, err := strconv.ParseFloat(v, 64); err == nil && f > 0 {
+			conditions = append(conditions, "md.max_phase >= ?")
 			args = append(args, f)
 			needsMD = true
 		}
