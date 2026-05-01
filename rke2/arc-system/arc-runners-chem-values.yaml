@@ -22,8 +22,10 @@ controllerServiceAccount:
 
 # Runner pod template — DinD sidecar without TLS (all traffic is pod-local localhost).
 # No TLS = no cert generation race condition; DinD ready immediately on start.
+# ci-deployer SA grants patch on chem Deployments so the rollout job can restart pods.
 template:
   spec:
+    serviceAccountName: ci-deployer
     containers:
       - name: runner
         image: ghcr.io/actions/actions-runner:2.333.0

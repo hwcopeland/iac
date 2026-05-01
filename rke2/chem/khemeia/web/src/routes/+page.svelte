@@ -13,6 +13,7 @@
   import MDTrajectoryOverlay from '$lib/components/MDTrajectoryOverlay.svelte';
   import SelectionInfo from '$lib/components/SelectionInfo.svelte';
   import { focusResidue, setRepresentation, onRepresentationChange } from '$lib/viewer';
+  import { getPocketAnalysis } from '$lib/api';
   import StatusBar from '$lib/components/StatusBar.svelte';
   import CommandPalette from '$lib/components/CommandPalette.svelte';
   import Toast from '$lib/components/Toast.svelte';
@@ -99,6 +100,20 @@
   }
 
   function setupKeybinds() {
+    document.addEventListener('khemeia:dock-network', async (e: Event) => {
+      const { smiles, jobName, compoundId } = (e as CustomEvent).detail;
+      try {
+        const analysis = await getPocketAnalysis(jobName, compoundId);
+        networkSmiles = smiles || '';
+        networkResidues = analysis.pocket_residues ?? [];
+        networkJobName = jobName;
+        networkCompoundId = compoundId;
+        showNetwork = true;
+      } catch (err) {
+        console.error('Failed to load interaction network:', err);
+      }
+    });
+
     window.addEventListener('keydown', (e: KeyboardEvent) => {
       const mod = e.metaKey || e.ctrlKey;
       if (mod && e.key === 'k') {

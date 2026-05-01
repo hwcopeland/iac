@@ -307,6 +307,15 @@ export async function selectPocket(name: string, index: number): Promise<any> {
   return api(`/api/v1/targets/${name}/pockets/${index}/select`, { method: 'POST' });
 }
 
+export async function getTargetReceptor(name: string): Promise<string> {
+  const t = getToken();
+  const headers: Record<string, string> = {};
+  if (t) headers['Authorization'] = `Bearer ${t}`;
+  const res = await fetch(`/api/v1/targets/${encodeURIComponent(name)}/receptor`, { headers });
+  if (!res.ok) throw new Error(`Receptor fetch failed: ${res.statusText}`);
+  return res.text();
+}
+
 // --- WP-2: Library Preparation ---
 
 export async function submitLibraryPrep(params: any): Promise<any> {
@@ -347,6 +356,18 @@ export async function getDockingV2Results(name: string, page?: number, perPage?:
   if (page) p.set('page', String(page));
   if (perPage) p.set('per_page', String(perPage));
   return api(`/api/v1/docking/v2/jobs/${name}/results?${p}`);
+}
+
+export async function getDockingPose(jobName: string, compoundId: string): Promise<string> {
+  const t = getToken();
+  const headers: Record<string, string> = {};
+  if (t) headers['Authorization'] = `Bearer ${t}`;
+  const res = await fetch(
+    `/api/v1/docking/v2/jobs/${encodeURIComponent(jobName)}/compound/${encodeURIComponent(compoundId)}/pose`,
+    { headers }
+  );
+  if (!res.ok) throw new Error(`Pose fetch failed: ${res.statusText}`);
+  return res.text();
 }
 
 // --- WP-4: ADMET Predictions ---

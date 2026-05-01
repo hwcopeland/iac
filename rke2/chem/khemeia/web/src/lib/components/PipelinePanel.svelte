@@ -2,16 +2,18 @@
   import Panel from './Panel.svelte';
   import {
     submitTargetPrep, getTargetPrep, getTargetPockets, selectPocket,
-    submitLibraryPrep, getLibraryPrep,
-    submitDocking, getDockingV2Job, listDockingJobs, getDockingV2Summary,
-    submitADMET, getADMETJob,
+    getTargetReceptor,
+    submitLibraryPrep, getLibraryPrep, getLibraryCompounds,
+    submitDocking, getDockingV2Job, listDockingJobs, getDockingV2Summary, getDockingV2Results,
+    getDockingPose,
+    submitADMET, getADMETJob, getADMETResults,
     submitMD, getMDJob, listMDJobs, getMDResults, getMDTrajectory, getMDEnergy,
     advanceStage,
     AuthError,
   } from '$lib/api';
   import { onMount } from 'svelte';
   import { login } from '$lib/auth';
-  import { loadFile, showPocketMarkers, clearPocketMarkers, focusPocketCenter } from '$lib/viewer';
+  import { loadFile, overlayStructure, showPocketMarkers, clearPocketMarkers, focusPocketCenter, showBindingBox, clearBindingBox } from '$lib/viewer';
 
   let { onMDView = undefined }: {
     onMDView?: (
@@ -125,6 +127,7 @@
   // --- MD results ---
   let mdResults = $state<any[]>([]);
   let mdViewerLoading = $state<string | null>(null); // compound_id being loaded, or null
+  let mdViewerError = $state<string | null>(null);
 
   async function loadMDResults(name: string) {
     try {
@@ -136,6 +139,7 @@
   async function viewMDCompound(compound: any) {
     if (!stages.md.jobName || !onMDView) return;
     mdViewerLoading = compound.compound_id;
+    mdViewerError = null;
     try {
       const [trajResult, energyResult] = await Promise.allSettled([
         compound.has_trajectory
@@ -157,10 +161,20 @@
         } else {
           frames.push(raw);
         }
+      } else if (trajResult.status === 'rejected' && compound.has_trajectory) {
+        mdViewerError = `Failed to load trajectory: ${trajResult.reason}`;
       }
 
       const energy = energyResult.status === 'fulfilled' ? energyResult.value as any : null;
+
+      if (frames.length === 0 && energy === null) {
+        if (!mdViewerError) mdViewerError = 'No trajectory or energy data available yet.';
+        return;
+      }
+
       onMDView(frames, energy, compound.compound_id);
+    } catch (err: any) {
+      mdViewerError = err?.message ?? 'Failed to load trajectory.';
     } finally {
       mdViewerLoading = null;
     }
@@ -200,6 +214,92 @@
     } catch {}
   }
 
+  // --- Docking full results browser ---
+  let dockResults = $state<any[]>([]);
+  let dockResultsPage = $state(1);
+  let dockResultsTotal = $state(0);
+  let dockResultsLoading = $state(false);
+  let loadingPoseId = $state<string | null>(null);
+  const DOCK_PER_PAGE = 25;
+
+  async function loadDockResults(name: string, page: number = 1) {
+    dockResultsLoading = true;
+    try {
+      const res = await getDockingV2Results(name, page, DOCK_PER_PAGE);
+      dockResults = res.results ?? [];
+      dockResultsTotal = res.total_results ?? 0;
+      dockResultsPage = page;
+    } catch {} finally {
+      dockResultsLoading = false;
+    }
+  }
+
+  async function loadPoseInViewer(compoundId: string) {
+    if (!stages.docking.jobName) return;
+    loadingPoseId = compoundId;
+    try {
+      const pdbqt = await getDockingPose(stages.docking.jobName, compoundId);
+      await overlayStructure(pdbqt, 'pdbqt');
+    } catch (e) {
+      console.error('Pose load failed:', e);
+    } finally {
+      loadingPoseId = null;
+    }
+  }
+
+  // --- ADMET results ---
+  let admetResults = $state<any[]>([]);
+  let admetResultsTotal = $state(0);
+  let admetResultsLoading = $state(false);
+
+  async function loadAdmetResults(name: string) {
+    admetResultsLoading = true;
+    try {
+      const res = await getADMETResults(name, 1, 100);
+      admetResults = res.results ?? [];
+      admetResultsTotal = res.total ?? admetResults.length;
+    } catch {} finally {
+      admetResultsLoading = false;
+    }
+  }
+
+  // --- Library sample compounds ---
+  let libraryCompoundSample = $state<any[]>([]);
+
+  async function loadLibrarySample(name: string) {
+    try {
+      const res = await getLibraryCompounds(name, 1, 8);
+      libraryCompoundSample = res.compounds ?? [];
+    } catch {}
+  }
+
+  // --- Target receptor auto-load ---
+  let receptorLoading = $state(false);
+
+  async function loadTargetInViewer(name: string, prepResult: any) {
+    if (receptorLoading) return;
+    receptorLoading = true;
+    try {
+      const pdb = await getTargetReceptor(name);
+      await loadFile(pdb, 'pdb');
+      // Overlay binding site visualization
+      if (prepResult?.pockets?.length) {
+        await showPocketMarkers(prepResult.pockets.map((p: any) => ({
+          center: p.center,
+          score: p.consensus_score ?? 0.5,
+          rank: p.rank ?? 1,
+        })));
+      } else if (prepResult?.binding_site) {
+        const bs = prepResult.binding_site;
+        await showBindingBox(bs.center, bs.size);
+      }
+    } catch (e) {
+      console.error('Target load failed:', e);
+    } finally {
+      receptorLoading = false;
+    }
+  }
+
   // --- Session state ---
   let sessionExpired = $state(false);
 
@@ -237,14 +337,29 @@
         getLibraryPrep(job.library_ref),
         getDockingV2Job(job.name),
       ]);
-      updateStage('target',  { status: toStatus(tRes.phase || tRes.status) });
+      const tStatus = toStatus(tRes.phase || tRes.status);
+      updateStage('target',  { status: tStatus });
       updateStage('library', { status: toStatus(lRes.phase || lRes.status) });
       const dockStatus = toStatus(dRes.phase || dRes.status);
       updateStage('docking', { status: dockStatus });
-      if (dockStatus === 'succeeded') loadDockingSummary(job.name);
-      if (stages.target.status  === 'running') startPoll('target',  getTargetPrep);
-      if (stages.library.status === 'running') startPoll('library', getLibraryPrep);
-      if (stages.docking.status === 'running') startPoll('docking', getDockingV2Job);
+
+      if (tStatus === 'succeeded') {
+        targetPrepResult = tRes;
+        loadTargetInViewer(job.receptor_ref, tRes);
+      } else if (tStatus === 'running') {
+        startPoll('target', getTargetPrep);
+      }
+      if (stages.library.status === 'succeeded') {
+        loadLibrarySample(job.library_ref);
+      } else if (stages.library.status === 'running') {
+        startPoll('library', getLibraryPrep);
+      }
+      if (dockStatus === 'succeeded') {
+        loadDockingSummary(job.name);
+        loadDockResults(job.name, 1);
+      } else if (dockStatus === 'running') {
+        startPoll('docking', getDockingV2Job);
+      }
     } catch {}
 
     // Also restore the MD stage if there's a job linked to this docking run
@@ -257,6 +372,12 @@
         if (mdStatus === 'running') startPoll('md', getMDJob);
         if (mdStatus === 'running' || mdStatus === 'succeeded') loadMDResults(latestMD.name);
       }
+    } catch {}
+
+    // Also restore ADMET if present
+    try {
+      // ADMET jobs reference the library_ref — list and find one matching this pipeline
+      // (best effort: if user ran ADMET, it shows up when they navigate to stage 5)
     } catch {}
   }
 
@@ -322,31 +443,22 @@
 
         if (phase === 'completed' || phase === 'succeeded') {
           updateStage(stageKey, { status: 'succeeded', error: '' });
+          if (stageKey === 'target') {
+            targetPrepResult = res;
+            loadTargetInViewer(stages.target.jobName!, res);
+          }
+          if (stageKey === 'library') {
+            loadLibrarySample(stages.library.jobName!);
+          }
           if (stageKey === 'docking' && stages.docking.jobName) {
             loadDockingSummary(stages.docking.jobName);
+            loadDockResults(stages.docking.jobName, 1);
           }
           if (stageKey === 'md' && stages.md.jobName) {
             loadMDResults(stages.md.jobName);
           }
-          // Stash poll result so we can display binding site info
-          if (stageKey === 'target') {
-            targetPrepResult = res;
-            if (res?.pockets?.length && res?.receptor_pdb_url) {
-              try {
-                const pdbRes = await fetch(res.receptor_pdb_url);
-                if (pdbRes.ok) {
-                  const pdbText = await pdbRes.text();
-                  await loadFile(pdbText, 'pdb');
-                }
-                await showPocketMarkers(res.pockets.map((p: any) => ({
-                  center: p.center,
-                  score: p.consensus_score ?? 0,
-                  rank: p.rank ?? 0,
-                })));
-              } catch (e) {
-                console.warn('Failed to load receptor/pockets into viewer:', e);
-              }
-            }
+          if (stageKey === 'admet' && stages.admet.jobName) {
+            loadAdmetResults(stages.admet.jobName);
           }
           return;
         }
@@ -546,21 +658,33 @@
     try { localStorage.setItem(PIPELINE_STORAGE_KEY, JSON.stringify(snapshot)); } catch {}
   });
 
-  // Re-attach polls and load MD results for any running/succeeded stages
+  // Re-attach polls and reload results for any running/succeeded stages
   // from the restored localStorage state.
-  onMount(() => {
+  onMount(async () => {
     for (const [k, s] of Object.entries(stages)) {
       if (s.status === 'running' && s.jobName && POLL_FNS[k]) {
         startPoll(k, POLL_FNS[k]);
       }
-      if (k === 'docking' && s.status === 'succeeded' && s.jobName) {
-        loadDockingSummary(s.jobName);
-      }
     }
-    const mdName = stages.md.jobName;
-    const mdStatus = stages.md.status;
-    if (mdName && (mdStatus === 'running' || mdStatus === 'succeeded')) {
-      loadMDResults(mdName);
+    if (stages.target.status === 'succeeded' && stages.target.jobName) {
+      try {
+        const res = await getTargetPrep(stages.target.jobName);
+        targetPrepResult = res;
+        loadTargetInViewer(stages.target.jobName, res);
+      } catch {}
+    }
+    if (stages.library.status === 'succeeded' && stages.library.jobName) {
+      loadLibrarySample(stages.library.jobName);
+    }
+    if (stages.docking.status === 'succeeded' && stages.docking.jobName) {
+      loadDockingSummary(stages.docking.jobName);
+      loadDockResults(stages.docking.jobName, 1);
+    }
+    if (stages.md.status === 'succeeded' && stages.md.jobName) {
+      loadMDResults(stages.md.jobName);
+    }
+    if (stages.admet.status === 'succeeded' && stages.admet.jobName) {
+      loadAdmetResults(stages.admet.jobName);
     }
   });
 
@@ -717,6 +841,16 @@
         {/if}
 
         {#if canAdvance('target')}
+          <div class="result-info">
+            <div class="result-row-actions">
+              <span class="done-label">Target ready: {stages.target.jobName}</span>
+              <button class="action-icon-btn" disabled={receptorLoading}
+                onclick={() => loadTargetInViewer(stages.target.jobName!, targetPrepResult)}
+                title="Load receptor into viewer">
+                {receptorLoading ? '⟳' : '⬡ Load 3D'}
+              </button>
+            </div>
+          </div>
           {#if targetPrepResult?.binding_site}
             <div class="result-info">
               <span class="result-label">Binding Site</span>
@@ -757,7 +891,6 @@
             </div>
           {/if}
           <div class="advance-row">
-            <span class="done-label">Target ready: {stages.target.jobName}</span>
             <button class="advance-btn" onclick={() => handleAdvance('target')}>Next: Library Prep</button>
           </div>
         {/if}
@@ -877,8 +1010,23 @@
         {/if}
 
         {#if canAdvance('library')}
+          <div class="result-info">
+            <span class="result-label">
+              {libraryStatus?.compound_count ?? libraryCompoundSample.length} compounds ready
+            </span>
+            {#if libraryCompoundSample.length > 0}
+              <div class="compound-sample">
+                {#each libraryCompoundSample.slice(0, 6) as cpd}
+                  <div class="compound-chip" title={cpd.smiles ?? cpd.compound_id}>
+                    <span class="compound-chip-id">{cpd.compound_id?.slice(0, 18)}</span>
+                    {#if cpd.mw}<span class="compound-chip-mw">{cpd.mw?.toFixed(0)} Da</span>{/if}
+                  </div>
+                {/each}
+              </div>
+            {/if}
+          </div>
           <div class="advance-row">
-            <span class="done-label">Library ready: {stages.library.jobName}</span>
+            <span class="done-label">Library: {stages.library.jobName}</span>
             <button class="advance-btn" onclick={() => handleAdvance('library')}>Next: Docking</button>
           </div>
         {/if}
@@ -971,19 +1119,68 @@
                   </div>
                 {/each}
               </div>
-              <div class="top-hits-label">Top hits</div>
-              <div class="top-hits-list">
-                {#each dockingSummary.top_hits.slice(0, 10) as hit}
-                  <div class="hit-row">
-                    <span class="hit-id">{hit.compound_id}</span>
-                    <span class="hit-aff">{hit.affinity_kcal_mol.toFixed(1)}</span>
+            </div>
+          {/if}
+
+          <!-- Pose browser -->
+          <div class="pose-browser">
+            <div class="pose-browser-header">
+              <span class="pose-browser-title">Results ({dockResultsTotal.toLocaleString()})</span>
+              {#if dockResultsLoading}
+                <span class="loading-inline">loading...</span>
+              {/if}
+            </div>
+            {#if dockResults.length > 0}
+              <div class="pose-list">
+                {#each dockResults as hit}
+                  <div class="pose-row">
+                    <div class="pose-row-main">
+                      <span class="pose-rank">#{hit.consensus_rank}</span>
+                      <span class="pose-id" title={hit.compound_id}>{hit.compound_id?.slice(0, 20)}</span>
+                      <span class="pose-score">{hit.per_engine?.[0]?.raw_score?.toFixed(1) ?? '?'}</span>
+                    </div>
+                    <div class="pose-row-actions">
+                      <button class="pose-action-btn" title="Load pose into viewer"
+                        disabled={loadingPoseId === hit.compound_id}
+                        onclick={() => loadPoseInViewer(hit.compound_id)}>
+                        {loadingPoseId === hit.compound_id ? '...' : '3D'}
+                      </button>
+                      {#if hit.smiles}
+                        <button class="pose-action-btn" title="Show interaction network"
+                          onclick={() => {
+                            // Reuse the same onMDView dispatch channel via a custom event on the page
+                            // The interaction network is wired through the Analysis panel pattern:
+                            // we dispatch a custom event that +page.svelte can pick up
+                            const evt = new CustomEvent('khemeia:dock-network', {
+                              bubbles: true,
+                              detail: { smiles: hit.smiles, jobName: stages.docking.jobName, compoundId: hit.compound_id }
+                            });
+                            document.dispatchEvent(evt);
+                          }}>
+                          Net
+                        </button>
+                      {/if}
+                    </div>
                   </div>
                 {/each}
               </div>
-            </div>
-          {/if}
+              <!-- Pagination -->
+              <div class="pose-pagination">
+                <button class="page-btn" disabled={dockResultsPage <= 1}
+                  onclick={() => loadDockResults(stages.docking.jobName!, dockResultsPage - 1)}>‹</button>
+                <span class="page-info">
+                  {dockResultsPage} / {Math.ceil(dockResultsTotal / DOCK_PER_PAGE) || 1}
+                </span>
+                <button class="page-btn" disabled={dockResultsPage * DOCK_PER_PAGE >= dockResultsTotal}
+                  onclick={() => loadDockResults(stages.docking.jobName!, dockResultsPage + 1)}>›</button>
+              </div>
+            {:else if !dockResultsLoading}
+              <span class="empty-msg">No results loaded.</span>
+            {/if}
+          </div>
+
           <div class="advance-row">
-            <span class="done-label">Docking complete: {stages.docking.jobName}</span>
+            <span class="done-label">Docking: {stages.docking.jobName}</span>
             <button class="advance-btn" onclick={() => handleAdvance('docking')}>Next: MD Simulation</button>
           </div>
         {/if}
@@ -1164,6 +1361,9 @@
                 {/each}
               </div>
             {/if}
+            {#if mdViewerError}
+              <p class="md-viewer-error">{mdViewerError}</p>
+            {/if}
           </div>
         {/if}
 
@@ -1226,9 +1426,42 @@
         {/if}
 
         {#if stages.admet.status === 'succeeded'}
+          <div class="admet-results">
+            <div class="admet-results-header">
+              <span class="admet-results-title">
+                ADMET Results {admetResultsTotal > 0 ? `(${admetResultsTotal})` : ''}
+              </span>
+              {#if admetResultsLoading}
+                <span class="loading-inline">loading...</span>
+              {:else}
+                <button class="refresh-btn" onclick={() => loadAdmetResults(stages.admet.jobName!)}>↻</button>
+              {/if}
+            </div>
+            {#if admetResults.length > 0}
+              <div class="admet-list">
+                {#each admetResults.slice(0, 50) as r}
+                  {@const mpo = r.mpo_score ?? 0}
+                  {@const mpoColor = mpo >= 0.7 ? '#3fb950' : mpo >= 0.4 ? '#d29922' : '#f85149'}
+                  <div class="admet-row">
+                    <span class="admet-id" title={r.compound_id}>{r.compound_id?.slice(0, 18)}</span>
+                    <span class="admet-mpo" style="color:{mpoColor}" title="MPO score">{mpo.toFixed(2)}</span>
+                    {#if r.mpo_profile}
+                      {@const prof = typeof r.mpo_profile === 'string' ? JSON.parse(r.mpo_profile) : r.mpo_profile}
+                      <span class="admet-flags">
+                        {#if prof.hia !== undefined}<span class="admet-pill" class:good={prof.hia > 0.5} title="HIA">HIA</span>{/if}
+                        {#if prof.bbb !== undefined}<span class="admet-pill" class:good={prof.bbb > 0.5} title="BBB">BBB</span>{/if}
+                        {#if prof.cyp_inhibition !== undefined}<span class="admet-pill" class:bad={prof.cyp_inhibition > 0.5} title="CYP">CYP</span>{/if}
+                      </span>
+                    {/if}
+                  </div>
+                {/each}
+              </div>
+            {:else if !admetResultsLoading}
+              <span class="empty-msg">No ADMET predictions found.</span>
+            {/if}
+          </div>
           <div class="advance-row">
-            <span class="done-label">ADMET complete: {stages.admet.jobName}</span>
-            <span class="pipeline-done">Pipeline finished. View results in Analysis tab.</span>
+            <span class="pipeline-done">Pipeline complete.</span>
           </div>
         {/if}
       {/snippet}
@@ -2185,6 +2418,16 @@
   .md-result-view-btn:hover:not(:disabled) { background: rgba(88, 166, 255, 0.2); }
   .md-result-view-btn:disabled { opacity: 0.35; cursor: default; }
 
+  .md-viewer-error {
+    font-size: 11px;
+    color: #f85149;
+    margin: 6px 0 0;
+    padding: 4px 6px;
+    background: rgba(248,81,73,0.08);
+    border-radius: 4px;
+    border: 1px solid rgba(248,81,73,0.2);
+  }
+
   .md-loading-dot {
     width: 5px;
     height: 5px;
@@ -2213,4 +2456,291 @@
     margin: 0;
     padding: 2px 0;
   }
+
+  /* ── Result row actions (target load 3D) ── */
+  .result-row-actions {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+
+  .action-icon-btn {
+    background: rgba(88,166,255,0.08);
+    border: 1px solid rgba(88,166,255,0.25);
+    color: var(--accent, #58a6ff);
+    font-size: 10px;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 3px;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 0.12s;
+  }
+  .action-icon-btn:hover:not(:disabled) { background: rgba(88,166,255,0.18); }
+  .action-icon-btn:disabled { opacity: 0.4; cursor: default; }
+
+  /* ── Library compound sample chips ── */
+  .compound-sample {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-top: 6px;
+  }
+
+  .compound-chip {
+    display: flex;
+    flex-direction: column;
+    background: rgba(255,255,255,0.04);
+    border: 1px solid var(--border-default, rgba(48,54,61,0.6));
+    border-radius: 4px;
+    padding: 3px 6px;
+    font-size: 10px;
+    max-width: 120px;
+    overflow: hidden;
+  }
+
+  .compound-chip-id {
+    color: var(--text-secondary, #8b949e);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-family: var(--font-mono, monospace);
+    font-size: 9px;
+  }
+
+  .compound-chip-mw {
+    color: var(--text-muted, #484f58);
+    font-size: 9px;
+  }
+
+  /* ── Pose browser ── */
+  .pose-browser {
+    margin-top: 8px;
+    border: 1px solid var(--border-default, rgba(48,54,61,0.6));
+    border-radius: 5px;
+    overflow: hidden;
+  }
+
+  .pose-browser-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 5px 8px;
+    background: rgba(255,255,255,0.03);
+    border-bottom: 1px solid var(--border-default, rgba(48,54,61,0.6));
+  }
+
+  .pose-browser-title {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-secondary, #8b949e);
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+  }
+
+  .loading-inline {
+    font-size: 10px;
+    color: var(--text-muted, #484f58);
+    font-style: italic;
+  }
+
+  .pose-list {
+    max-height: 280px;
+    overflow-y: auto;
+  }
+
+  .pose-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 4px 8px;
+    border-bottom: 1px solid rgba(48,54,61,0.4);
+    gap: 4px;
+  }
+
+  .pose-row:last-child { border-bottom: none; }
+  .pose-row:hover { background: rgba(255,255,255,0.02); }
+
+  .pose-row-main {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex: 1;
+    min-width: 0;
+  }
+
+  .pose-rank {
+    font-size: 9px;
+    color: var(--text-muted, #484f58);
+    flex-shrink: 0;
+    width: 22px;
+  }
+
+  .pose-id {
+    font-size: 11px;
+    font-family: var(--font-mono, monospace);
+    color: var(--text-secondary, #8b949e);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    flex: 1;
+  }
+
+  .pose-score {
+    font-size: 11px;
+    font-weight: 600;
+    color: #3fb950;
+    flex-shrink: 0;
+    width: 40px;
+    text-align: right;
+  }
+
+  .pose-row-actions {
+    display: flex;
+    gap: 3px;
+    flex-shrink: 0;
+  }
+
+  .pose-action-btn {
+    font-size: 9px;
+    font-weight: 600;
+    padding: 2px 6px;
+    border-radius: 3px;
+    cursor: pointer;
+    background: rgba(88,166,255,0.08);
+    border: 1px solid rgba(88,166,255,0.2);
+    color: var(--accent, #58a6ff);
+    transition: background 0.1s;
+    white-space: nowrap;
+  }
+  .pose-action-btn:hover:not(:disabled) { background: rgba(88,166,255,0.2); }
+  .pose-action-btn:disabled { opacity: 0.35; cursor: default; }
+
+  .pose-pagination {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 4px 8px;
+    border-top: 1px solid var(--border-default, rgba(48,54,61,0.6));
+  }
+
+  .page-btn {
+    background: none;
+    border: 1px solid var(--border-default, rgba(48,54,61,0.6));
+    color: var(--text-secondary, #8b949e);
+    font-size: 13px;
+    padding: 1px 6px;
+    border-radius: 3px;
+    cursor: pointer;
+    line-height: 1;
+    transition: border-color 0.1s, color 0.1s;
+  }
+  .page-btn:hover:not(:disabled) { border-color: var(--accent, #58a6ff); color: var(--accent, #58a6ff); }
+  .page-btn:disabled { opacity: 0.3; cursor: default; }
+
+  .page-info {
+    font-size: 10px;
+    color: var(--text-muted, #484f58);
+    min-width: 40px;
+    text-align: center;
+  }
+
+  .empty-msg {
+    display: block;
+    font-size: 11px;
+    color: var(--text-muted, #484f58);
+    font-style: italic;
+    padding: 8px;
+  }
+
+  .refresh-btn {
+    background: none;
+    border: none;
+    color: var(--text-muted, #484f58);
+    font-size: 13px;
+    cursor: pointer;
+    padding: 0 2px;
+    line-height: 1;
+    transition: color 0.12s;
+  }
+  .refresh-btn:hover { color: var(--accent, #58a6ff); }
+
+  /* ── ADMET results ── */
+  .admet-results {
+    margin-top: 8px;
+    border: 1px solid var(--border-default, rgba(48,54,61,0.6));
+    border-radius: 5px;
+    overflow: hidden;
+  }
+
+  .admet-results-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 5px 8px;
+    background: rgba(255,255,255,0.03);
+    border-bottom: 1px solid var(--border-default, rgba(48,54,61,0.6));
+  }
+
+  .admet-results-title {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-secondary, #8b949e);
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+  }
+
+  .admet-list {
+    max-height: 300px;
+    overflow-y: auto;
+  }
+
+  .admet-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 8px;
+    border-bottom: 1px solid rgba(48,54,61,0.4);
+  }
+  .admet-row:last-child { border-bottom: none; }
+  .admet-row:hover { background: rgba(255,255,255,0.02); }
+
+  .admet-id {
+    font-size: 10px;
+    font-family: var(--font-mono, monospace);
+    color: var(--text-secondary, #8b949e);
+    flex: 1;
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .admet-mpo {
+    font-size: 11px;
+    font-weight: 700;
+    flex-shrink: 0;
+    width: 34px;
+    text-align: right;
+  }
+
+  .admet-flags {
+    display: flex;
+    gap: 3px;
+    flex-shrink: 0;
+  }
+
+  .admet-pill {
+    font-size: 8px;
+    font-weight: 600;
+    padding: 1px 4px;
+    border-radius: 2px;
+    background: rgba(139,148,158,0.15);
+    color: var(--text-muted, #484f58);
+    border: 1px solid rgba(139,148,158,0.2);
+  }
+  .admet-pill.good { background: rgba(63,185,80,0.12); color: #3fb950; border-color: rgba(63,185,80,0.3); }
+  .admet-pill.bad  { background: rgba(248,81,73,0.12);  color: #f85149; border-color: rgba(248,81,73,0.3); }
 </style>

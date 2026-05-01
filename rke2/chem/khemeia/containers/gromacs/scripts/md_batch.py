@@ -903,19 +903,31 @@ def main():
         energy_json_key = f"{prefix}/energy.json"
         try:
             frames_pdb = wd / "frames.pdb"
-            # -pbc mol wraps molecules; stdin "0\n" selects System group
-            # -skip keeps ~100 frames over the trajectory; stdin "0\n" = System group
+            # Target ~30 frames of protein+ligand only (no water/ions).
+            # nstxout-compressed = 5000 in md.mdp → n_xtc_frames = nsteps / 5000
             nsteps = cfg.get("nsteps", 500000)
-            skip = max(1, nsteps // (5000 * 100))
+            n_xtc_frames = max(1, nsteps // 5000)
+            skip = max(1, n_xtc_frames // 30)
+            # Use Protein_LIG index group to strip water and ions.
+            ndx_path = wd / "index.ndx"
+            if ndx_path.exists():
+                ndx_args = ["-n", str(ndx_path)]
+                group_sel = "Protein_LIG\n"
+            else:
+                ndx_args = []
+                group_sel = "0\n"
             result = subprocess.run(
                 [_GMX, "-quiet", "trjconv", "-f", "md.xtc", "-s", "md.tpr",
+                 *ndx_args,
                  "-o", str(frames_pdb), "-pbc", "mol", "-skip", str(skip)],
-                cwd=str(wd), input="0\n", capture_output=True, text=True,
+                cwd=str(wd), input=group_sel, capture_output=True, text=True,
             )
             if result.returncode == 0 and frames_pdb.exists():
+                size_mb = frames_pdb.stat().st_size / 1024 / 1024
+                print(f"[postproc] frames.pdb: {size_mb:.1f} MB ({n_xtc_frames // skip} frames)", flush=True)
                 upload_s3(s3, BUCKET_MD, frames_key, frames_pdb)
             else:
-                print("[postproc] WARNING: trjconv failed, skipping frames.pdb", flush=True)
+                print(f"[postproc] WARNING: trjconv failed:\n{result.stdout}{result.stderr}", flush=True)
                 frames_key = ""
         except Exception as exc:
             print(f"[postproc] WARNING: trjconv exception: {exc}", flush=True)

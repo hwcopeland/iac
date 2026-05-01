@@ -33,8 +33,12 @@ logging.basicConfig(level=logging.INFO)
 # Default co-factors to retain during heteroatom stripping.
 DEFAULT_KEEP_COFACTORS = frozenset({"ZN", "MG", "CA", "FE"})
 
-# RCSB PDB download URL template.
-RCSB_URL = "https://files.rcsb.org/download/{pdb_id}.pdb"
+# PDB download URL templates, tried in order.
+_PDB_SOURCES = [
+    ("RCSB-PDB",  "https://files.rcsb.org/download/{id}.pdb"),
+    ("PDBe-PDB",  "https://www.ebi.ac.uk/pdbe/entry-files/download/{id_lower}.pdb"),
+    ("RCSB-CIF",  "https://files.rcsb.org/download/{id}.cif"),  # fallback; converted below
+]
 
 
 # ---------------------------------------------------------------------------
@@ -42,18 +46,55 @@ RCSB_URL = "https://files.rcsb.org/download/{pdb_id}.pdb"
 # ---------------------------------------------------------------------------
 
 def fetch_pdb(pdb_id: str) -> str:
-    """Download a PDB file from RCSB by ID.
+    """Download a structure from public repositories, trying multiple sources.
 
-    Returns the raw PDB text.  Raises ValueError on HTTP errors.
+    Order: RCSB legacy PDB → PDBe PDB → RCSB mmCIF (auto-converted to PDB).
+    Raises ValueError if all sources fail.
     """
-    url = RCSB_URL.format(pdb_id=pdb_id.upper())
-    resp = http_requests.get(url, timeout=30)
-    if resp.status_code != 200:
-        raise ValueError(
-            f"Failed to fetch PDB {pdb_id} from RCSB "
-            f"(HTTP {resp.status_code})"
-        )
-    return resp.text
+    uid = pdb_id.upper()
+    errors = []
+
+    for label, tmpl in _PDB_SOURCES:
+        url = tmpl.format(id=uid, id_lower=uid.lower())
+        try:
+            resp = http_requests.get(url, timeout=60)
+        except Exception as exc:
+            errors.append(f"{label}: request error ({exc})")
+            continue
+
+        if resp.status_code != 200:
+            errors.append(f"{label}: HTTP {resp.status_code}")
+            continue
+
+        text = resp.text
+        if not text.strip():
+            errors.append(f"{label}: empty response")
+            continue
+
+        # CIF source: convert to PDB using PDBFixer so the rest of the pipeline
+        # receives standard PDB format regardless of source.
+        if label == "RCSB-CIF":
+            with tempfile.NamedTemporaryFile(suffix=".cif", mode="w",
+                                             delete=False) as tmp:
+                tmp.write(text)
+                tmp_path = tmp.name
+            try:
+                fixer = PDBFixer(filename=tmp_path)
+                out = io.StringIO()
+                PDBFile.writeFile(fixer.topology, fixer.positions, out)
+                text = out.getvalue()
+            except Exception as exc:
+                errors.append(f"{label}: CIF→PDB conversion failed ({exc})")
+                continue
+            finally:
+                os.unlink(tmp_path)
+
+        return text
+
+    raise ValueError(
+        f"Could not fetch PDB {pdb_id} from any source: "
+        + "; ".join(errors)
+    )
 
 
 # ---------------------------------------------------------------------------
