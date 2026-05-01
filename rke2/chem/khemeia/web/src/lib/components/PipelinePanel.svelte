@@ -115,6 +115,9 @@
   // --- Library prep result (for displaying resolved compound count) ---
   let libraryStatus = $state<any | null>(null);
 
+  // --- MD job status (for per-compound progress display) ---
+  let mdJobStatus = $state<any | null>(null);
+
   // --- Docking summary (loaded when docking succeeds) ---
   let dockingSummary = $state<any | null>(null);
 
@@ -229,8 +232,9 @@
         pollFailures[stageKey] = 0;
         const phase = (res.phase || res.status || '').toLowerCase();
 
-        // Stash library status for compound-count display during running
+        // Stash stage-specific status for progress display
         if (stageKey === 'library') libraryStatus = res;
+        if (stageKey === 'md') mdJobStatus = res;
 
         if (phase === 'completed' || phase === 'succeeded') {
           updateStage(stageKey, { status: 'succeeded', error: '' });
@@ -988,8 +992,29 @@
         {#if stages.md.status === 'running'}
           <div class="running-indicator">
             <span class="pulse-dot"></span>
-            <span class="running-text">MD simulation {stages.md.jobName ?? ''}...</span>
+            <span class="running-text">
+              {#if mdJobStatus?.compounds?.length > 0}
+                MD: {mdJobStatus.completed ?? 0}/{mdJobStatus.compounds.length} compounds
+              {:else}
+                MD simulation {stages.md.jobName ?? ''}...
+              {/if}
+            </span>
           </div>
+          {#if mdJobStatus?.compounds?.length > 0}
+            <div class="md-compound-list">
+              {#each mdJobStatus.compounds as c}
+                <div class="md-compound-row">
+                  <span class="md-compound-status-dot" class:done={c.status === 'Completed'} class:running={c.status === 'Running'} class:failed={c.status === 'Failed'}></span>
+                  <span class="md-compound-id">{c.compound_id}</span>
+                  <span class="md-compound-aff">{c.dock_affinity_kcal_mol?.toFixed(1)}</span>
+                  <span class="md-compound-status">{c.status}</span>
+                  {#if c.duration_s}
+                    <span class="md-compound-dur">{c.duration_s}s</span>
+                  {/if}
+                </div>
+              {/each}
+            </div>
+          {/if}
         {/if}
 
         {#if stages.md.error}
@@ -1821,6 +1846,63 @@
     color: #3fb950;
     flex-shrink: 0;
     margin-left: 8px;
+  }
+
+  /* MD per-compound progress */
+  .md-compound-list {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    margin-top: 4px;
+    max-height: 200px;
+    overflow-y: auto;
+  }
+
+  .md-compound-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    font-family: 'SF Mono', monospace;
+    padding: 2px 4px;
+    border-radius: 2px;
+  }
+
+  .md-compound-status-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    background: rgba(48, 54, 61, 0.8);
+  }
+
+  .md-compound-status-dot.done    { background: #3fb950; }
+  .md-compound-status-dot.running { background: #d29922; animation: pulse 1.5s ease-in-out infinite; }
+  .md-compound-status-dot.failed  { background: #f85149; }
+
+  .md-compound-id {
+    flex: 1;
+    color: var(--text-secondary, #8b949e);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .md-compound-aff {
+    color: #3fb950;
+    flex-shrink: 0;
+  }
+
+  .md-compound-status {
+    color: var(--text-muted, #484f58);
+    flex-shrink: 0;
+    width: 60px;
+    text-align: right;
+  }
+
+  .md-compound-dur {
+    color: var(--text-muted, #484f58);
+    flex-shrink: 0;
   }
 
   /* Eligible count inline label */
