@@ -1457,6 +1457,95 @@ export function focusPocketCenter(center: number[]): void {
   } catch {}
 }
 
+// ─── Binding Box Wireframe ───
+
+/** Remove any existing binding box overlay. */
+export async function clearBindingBox(): Promise<void> {
+  await removeStructureByLabel('binding-box');
+}
+
+/**
+ * Render a binding box as a wireframe in the viewer.
+ * Generates 8 corner HETATM atoms + CONECT edges, loads as overlay,
+ * applies a thin line representation in amber.
+ */
+export async function showBindingBox(center: [number, number, number], size: [number, number, number]): Promise<void> {
+  if (!viewerInstance) return;
+  await clearBindingBox();
+
+  const [cx, cy, cz] = center;
+  const [sx, sy, sz] = size;
+  const hx = sx / 2, hy = sy / 2, hz = sz / 2;
+
+  const corners: [number, number, number][] = [
+    [cx - hx, cy - hy, cz - hz], // 1
+    [cx + hx, cy - hy, cz - hz], // 2
+    [cx + hx, cy + hy, cz - hz], // 3
+    [cx - hx, cy + hy, cz - hz], // 4
+    [cx - hx, cy - hy, cz + hz], // 5
+    [cx + hx, cy - hy, cz + hz], // 6
+    [cx + hx, cy + hy, cz + hz], // 7
+    [cx - hx, cy + hy, cz + hz], // 8
+  ];
+
+  const pdbLines: string[] = [];
+  corners.forEach(([x, y, z], i) => {
+    const serial = String(i + 1).padStart(5);
+    const resSeq = String(i + 1).padStart(4);
+    pdbLines.push(
+      `HETATM${serial}  CA  BOX Z${resSeq}    ${x.toFixed(3).padStart(8)}${y.toFixed(3).padStart(8)}${z.toFixed(3).padStart(8)}  1.00  0.00          CA`
+    );
+  });
+
+  // 12 box edges — bottom face, top face, 4 side uprights
+  const edges = [[1,2],[2,3],[3,4],[4,1],[5,6],[6,7],[7,8],[8,5],[1,5],[2,6],[3,7],[4,8]];
+  for (const [a, b] of edges) {
+    pdbLines.push(`CONECT${String(a).padStart(5)}${String(b).padStart(5)}`);
+    pdbLines.push(`CONECT${String(b).padStart(5)}${String(a).padStart(5)}`);
+  }
+  pdbLines.push('END');
+
+  const blob = new Blob([pdbLines.join('\n')], { type: 'text/plain' });
+  const url = URL.createObjectURL(blob);
+  try {
+    await viewerInstance.loadStructureFromUrl(url, 'pdb', false);
+  } finally {
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+  }
+
+  const structures = plugin.managers?.structure?.hierarchy?.current?.structures ?? [];
+  const boxStruct = structures[structures.length - 1];
+  if (!boxStruct?.cell?.transform?.ref) return;
+
+  const boxRef = boxStruct.cell.transform.ref;
+  _structureRefs.set('binding-box', boxRef);
+
+  // Remove auto-added representations
+  const autoReprs = [
+    ...(boxStruct.components ?? []).flatMap((c: any) => c.representations ?? []),
+    ...(boxStruct.representations ?? []),
+  ];
+  if (autoReprs.length > 0) {
+    const d = plugin.build();
+    for (const repr of autoReprs) {
+      if (repr.cell?.transform?.ref) d.delete(repr.cell.transform.ref);
+    }
+    await d.commit();
+  }
+
+  // Thin line representation — renders CONECT bonds as lines, looks like wireframe
+  const { StateTransforms } = getLib().plugin;
+  const builder = plugin.build();
+  builder.to(boxRef).apply(StateTransforms.Representation.StructureRepresentation3D, {
+    type: { name: 'ball-and-stick', params: { sizeFactor: 0.08, sizeAspectRatio: 0.05 } },
+    colorTheme: { name: 'uniform', params: { value: 0xf5a623 } },
+    sizeTheme: { name: 'uniform', params: { value: 0.08 } },
+  });
+  await builder.commit();
+
+  applyCanvasProps();
+}
+
 export async function togglePocketSurface(show: boolean, colorTheme: string = 'residue-charge', alpha: number = 0.8): Promise<void> {
   if (!plugin) return;
   try {

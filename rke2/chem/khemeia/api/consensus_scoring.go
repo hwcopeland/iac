@@ -35,6 +35,7 @@ type ConsensusResult struct {
 	ConsensusRank  int               `json:"consensus_rank"`
 	ConsensusScore float64           `json:"consensus_score"` // mean of normalized scores
 	PerEngine      []NormalizedScore `json:"per_engine"`
+	Smiles         string            `json:"smiles,omitempty"` // populated by DockingV2Results from the ligands table
 }
 
 // engineMinMax tracks the range of affinities for a single engine.

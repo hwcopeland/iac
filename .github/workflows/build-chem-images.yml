@@ -313,3 +313,60 @@ jobs:
           tags: |
             ${{ matrix.image }}:${{ steps.tags.outputs.build_tag }}
             ${{ matrix.image }}:latest
+
+  rollout:
+    name: Rollout restart deployments
+    needs: [detect-changes, build-and-push]
+    if: needs.detect-changes.outputs.count != '0' && needs.build-and-push.result == 'success'
+    runs-on: [self-hosted, arc-chem]
+    steps:
+      - name: Restart changed long-running deployments
+        env:
+          MATRIX: ${{ needs.detect-changes.outputs.matrix }}
+        run: |
+          # Only long-running deployments need a rollout restart.
+          # Worker images (autodock-vina, gromacs, etc.) are ephemeral Jobs — no action needed.
+          KUBE_TOKEN=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
+          KUBE_CA=/var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+          KUBE_API="https://${KUBERNETES_SERVICE_HOST}:${KUBERNETES_SERVICE_PORT}"
+          NAMESPACE=chem
+          RESTART_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          PATCH="{\"spec\":{\"template\":{\"metadata\":{\"annotations\":{\"kubectl.kubernetes.io/restartedAt\":\"${RESTART_TIME}\"}}}}}"
+
+          # image name → deployment name mapping (only long-running services)
+          get_deploy() {
+            case "$1" in
+              khemeia-controller)    echo "khemeia-controller" ;;
+              khemeia-web)           echo "khemeia-web" ;;
+              khemeia-result-writer) echo "result-writer" ;;
+            esac
+          }
+
+          NAMES=$(python3 -c "import json,sys; [print(i['name']) for i in json.loads(sys.argv[1])]" "$MATRIX")
+          RESTARTED=0
+          while IFS= read -r name; do
+            deploy=$(get_deploy "$name")
+            [ -z "$deploy" ] && continue
+            echo "Patching deployment/${deploy} in ${NAMESPACE}..."
+            HTTP=$(curl -s -o /tmp/kube_resp.json -w "%{http_code}" \
+              --cacert "$KUBE_CA" \
+              -H "Authorization: Bearer $KUBE_TOKEN" \
+              -H "Content-Type: application/strategic-merge-patch+json" \
+              -X PATCH \
+              "${KUBE_API}/apis/apps/v1/namespaces/${NAMESPACE}/deployments/${deploy}" \
+              -d "$PATCH")
+            if [ "$HTTP" = "200" ]; then
+              echo "  OK"
+              RESTARTED=$((RESTARTED + 1))
+            else
+              echo "  FAILED (HTTP ${HTTP}):"
+              cat /tmp/kube_resp.json
+              exit 1
+            fi
+          done <<< "$NAMES"
+
+          if [ "$RESTARTED" -eq 0 ]; then
+            echo "No long-running deployments in this build — no rollout needed."
+          else
+            echo "Triggered rollout restart for ${RESTARTED} deployment(s)."
+          fi

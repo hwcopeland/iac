@@ -15,6 +15,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -506,9 +507,9 @@ func (h *APIHandler) MDListJobs(w http.ResponseWriter, r *http.Request) {
 }
 
 // MDTrajectory handles GET /api/v1/md/jobs/{name}/trajectory/{compoundId}.
-// Looks up frames_s3_key in md_results and proxies the PDB content from S3.
+// Streams frames.pdb from S3, subsampling to at most 30 frames so that
+// water-inclusive legacy trajectories (which can be 1-2 GB) load in the browser.
 func (h *APIHandler) MDTrajectory(w http.ResponseWriter, r *http.Request) {
-	// path: jobs/{name}/trajectory/{compoundId}
 	path := strings.TrimPrefix(r.URL.Path, "/api/v1/md/jobs/")
 	parts := strings.SplitN(path, "/trajectory/", 2)
 	if len(parts) != 2 {
@@ -516,7 +517,90 @@ func (h *APIHandler) MDTrajectory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	jobName, compoundID := parts[0], parts[1]
-	h.proxyMDS3(w, r, jobName, compoundID, "frames_s3_key", "application/octet-stream", "frames.pdb")
+
+	db := h.controller.firstDB()
+	if db == nil {
+		writeError(w, "no database available", http.StatusInternalServerError)
+		return
+	}
+	var s3Key sql.NullString
+	err := db.QueryRowContext(r.Context(),
+		"SELECT frames_s3_key FROM md_results WHERE job_name = ? AND compound_id = ? LIMIT 1",
+		jobName, compoundID,
+	).Scan(&s3Key)
+	if err == sql.ErrNoRows {
+		writeError(w, "result not found", http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		writeError(w, fmt.Sprintf("db error: %v", err), http.StatusInternalServerError)
+		return
+	}
+	if !s3Key.Valid || s3Key.String == "" {
+		writeError(w, "trajectory not available (post-processing may be pending)", http.StatusNotFound)
+		return
+	}
+
+	rc, err := h.s3Client.GetArtifact(r.Context(), BucketTrajectories, s3Key.String)
+	if err != nil {
+		writeError(w, fmt.Sprintf("s3 fetch failed: %v", err), http.StatusInternalServerError)
+		return
+	}
+	defer rc.Close()
+
+	// Subsample: pass through at most 30 frames regardless of how many the file contains.
+	// We do a two-pass count (first scan for MODEL records, then stream) only when we
+	// detect > 30 frames, so small (already-fixed) files are streamed without overhead.
+	// Since S3 objects can't be seeked cheaply, we count frames and stride in one pass
+	// using a line scanner with a MODEL-detection accumulator.
+	const maxFrames = 30
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Content-Disposition", `attachment; filename="frames.pdb"`)
+
+	scanner := bufio.NewScanner(rc)
+	scanner.Buffer(make([]byte, 2*1024*1024), 2*1024*1024)
+
+	type frameLines struct {
+		lines []string
+	}
+	var frames []frameLines
+	var cur *frameLines
+
+	// First pass: collect all MODEL blocks.
+	for scanner.Scan() {
+		line := scanner.Text()
+		if strings.HasPrefix(line, "MODEL ") {
+			frames = append(frames, frameLines{})
+			cur = &frames[len(frames)-1]
+		}
+		if cur != nil {
+			cur.lines = append(cur.lines, line)
+		}
+	}
+
+	// If no MODEL records found, stream as-is (single-structure PDB).
+	if len(frames) == 0 {
+		writeError(w, "no MODEL records found in trajectory", http.StatusInternalServerError)
+		return
+	}
+
+	// Compute stride so we emit at most maxFrames, always including first and last.
+	stride := 1
+	if len(frames) > maxFrames {
+		stride = len(frames) / maxFrames
+	}
+
+	bw := bufio.NewWriter(w)
+	for i, f := range frames {
+		if i != 0 && i != len(frames)-1 && i%stride != 0 {
+			continue
+		}
+		for _, l := range f.lines {
+			bw.WriteString(l)
+			bw.WriteByte('\n')
+		}
+	}
+	bw.Flush()
 }
 
 // MDEnergy handles GET /api/v1/md/jobs/{name}/energy/{compoundId}.

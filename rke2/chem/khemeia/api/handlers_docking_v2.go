@@ -240,6 +240,12 @@ func (h *APIHandler) DockingV2Dispatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// GET /api/v1/docking/v2/jobs/{name}/compound/{compound_id}/pose
+	if strings.HasPrefix(path, "jobs/") && strings.Contains(path, "/compound/") && strings.HasSuffix(path, "/pose") {
+		h.DockingV2PoseHandler(w, r)
+		return
+	}
+
 	// GET /api/v1/docking/v2/jobs/{name}
 	if strings.HasPrefix(path, "jobs/") {
 		h.DockingV2JobStatus(w, r)
@@ -740,8 +746,75 @@ func (h *APIHandler) DockingV2Results(w http.ResponseWriter, r *http.Request) {
 		resp.Results = []ConsensusResult{}
 	}
 
+	// Enrich page results with SMILES from the ligands table.
+	if len(resp.Results) > 0 {
+		placeholders := make([]string, len(resp.Results))
+		ids := make([]interface{}, len(resp.Results))
+		for i, res := range resp.Results {
+			placeholders[i] = "?"
+			ids[i] = res.CompoundID
+		}
+		smilesRows, sErr := db.QueryContext(r.Context(),
+			"SELECT compound_id, smiles FROM ligands WHERE compound_id IN ("+strings.Join(placeholders, ",")+")", ids...)
+		if sErr == nil {
+			smilesMap := make(map[string]string)
+			for smilesRows.Next() {
+				var cid, sm string
+				if smilesRows.Scan(&cid, &sm) == nil {
+					smilesMap[cid] = sm
+				}
+			}
+			smilesRows.Close()
+			for i := range resp.Results {
+				if sm, ok := smilesMap[resp.Results[i].CompoundID]; ok {
+					resp.Results[i].Smiles = sm
+				}
+			}
+		}
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
+}
+
+// DockingV2PoseHandler handles GET /api/v1/docking/v2/jobs/{name}/compound/{compound_id}/pose.
+// Returns the best (lowest affinity) PDBQT pose for a compound as raw text.
+func (h *APIHandler) DockingV2PoseHandler(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimPrefix(r.URL.Path, "/api/v1/docking/v2/jobs/")
+	path = strings.TrimRight(path, "/")
+	// Expected: {name}/compound/{compound_id}/pose
+	parts := strings.SplitN(path, "/", 4)
+	if len(parts) != 4 || parts[1] != "compound" || parts[3] != "pose" {
+		writeError(w, "invalid path: expected /api/v1/docking/v2/jobs/{name}/compound/{id}/pose", http.StatusBadRequest)
+		return
+	}
+	jobName := parts[0]
+	compoundID := parts[2]
+
+	db := h.controller.firstDB()
+	if db == nil {
+		writeError(w, "no database available", http.StatusInternalServerError)
+		return
+	}
+
+	var pdbqt []byte
+	err := db.QueryRowContext(r.Context(),
+		`SELECT docked_pdbqt FROM docking_v2_results
+		 WHERE job_name = ? AND compound_id = ? AND docked_pdbqt IS NOT NULL
+		 ORDER BY affinity_kcal_mol ASC LIMIT 1`,
+		jobName, compoundID).Scan(&pdbqt)
+	if err == sql.ErrNoRows {
+		writeError(w, "pose not found for compound", http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		writeError(w, fmt.Sprintf("failed to query pose: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "chemical/x-pdbqt")
+	w.Header().Set("Cache-Control", "public, max-age=3600")
+	w.Write(pdbqt) //nolint:errcheck
 }
 
 // --- Multi-engine orchestration ---

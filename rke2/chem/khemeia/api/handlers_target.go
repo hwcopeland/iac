@@ -556,6 +556,12 @@ func (h *APIHandler) TargetDispatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// GET /api/v1/targets/{name}/receptor
+	if len(parts) == 2 && parts[1] == "receptor" {
+		h.TargetReceptorHandler(w, r)
+		return
+	}
+
 	// GET /api/v1/targets/{name}/pockets
 	if len(parts) == 2 && parts[1] == "pockets" {
 		h.TargetPocketsHandler(w, r)
@@ -569,6 +575,47 @@ func (h *APIHandler) TargetDispatch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeError(w, "not found", http.StatusNotFound)
+}
+
+// TargetReceptorHandler handles GET /api/v1/targets/{name}/receptor.
+// Streams the cleaned receptor PDB from S3 so the frontend can load it into Molstar.
+func (h *APIHandler) TargetReceptorHandler(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimPrefix(r.URL.Path, "/api/v1/targets/")
+	path = strings.TrimRight(path, "/")
+	name := strings.TrimSuffix(path, "/receptor")
+
+	db := h.controller.firstDB()
+	if db == nil {
+		writeError(w, "no database available", http.StatusInternalServerError)
+		return
+	}
+
+	var s3Key sql.NullString
+	err := db.QueryRowContext(r.Context(),
+		`SELECT receptor_s3_key FROM target_prep_results WHERE name = ?`, name).Scan(&s3Key)
+	if err == sql.ErrNoRows {
+		writeError(w, "target not found", http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		writeError(w, fmt.Sprintf("failed to query target: %v", err), http.StatusInternalServerError)
+		return
+	}
+	if !s3Key.Valid || s3Key.String == "" {
+		writeError(w, "receptor not yet available", http.StatusNotFound)
+		return
+	}
+
+	rc, err := h.controller.s3Client.GetArtifact(r.Context(), BucketReceptors, s3Key.String)
+	if err != nil {
+		writeError(w, fmt.Sprintf("failed to fetch receptor: %v", err), http.StatusInternalServerError)
+		return
+	}
+	defer rc.Close()
+
+	w.Header().Set("Content-Type", "chemical/x-pdb")
+	w.Header().Set("Cache-Control", "public, max-age=3600")
+	io.Copy(w, rc) //nolint:errcheck
 }
 
 // --- Async pipeline ---
