@@ -255,7 +255,7 @@
         const mdStatus = toStatus(latestMD.status);
         updateStage('md', { jobName: latestMD.name, status: mdStatus, error: '', collapsed: false });
         if (mdStatus === 'running') startPoll('md', getMDJob);
-        // loadMDResults fires automatically via $effect when stage has a name
+        if (mdStatus === 'running' || mdStatus === 'succeeded') loadMDResults(latestMD.name);
       }
     } catch {}
   }
