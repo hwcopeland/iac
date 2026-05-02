@@ -92,12 +92,24 @@
     paper_bgcolor: 'rgba(0,0,0,0)',
     plot_bgcolor: 'rgba(0,0,0,0)',
     font: { color: '#8b949e', size: 10 },
-    xaxis: { title: { text: 'Time (ps)', standoff: 4, font: { size: 10 } }, color: '#484f58', gridcolor: 'rgba(48,54,61,0.4)', zerolinecolor: 'rgba(48,54,61,0.4)' },
-    yaxis: { title: { text: 'Potential (kJ/mol)', standoff: 4, font: { size: 10 } }, color: '#484f58', gridcolor: 'rgba(48,54,61,0.4)', side: 'left' },
-    yaxis2: { title: { text: 'Temp (K)', standoff: 4, font: { size: 10 } }, color: '#484f58', overlaying: 'y', side: 'right', showgrid: false },
-    legend: { font: { size: 9 }, bgcolor: 'rgba(0,0,0,0)', x: 0, y: 1 },
-    margin: { t: 6, b: 36, l: 54, r: 46 },
-    height: 160,
+    xaxis: {
+      title: { text: 'Time (ps)', standoff: 2, font: { size: 9 } },
+      color: '#484f58', gridcolor: 'rgba(48,54,61,0.4)', zerolinecolor: 'rgba(48,54,61,0.4)',
+      tickfont: { size: 9 },
+    },
+    yaxis: {
+      title: { text: 'E (kJ/mol)', standoff: 2, font: { size: 9 } },
+      color: '#484f58', gridcolor: 'rgba(48,54,61,0.4)', side: 'left',
+      tickfont: { size: 9 }, exponentformat: 'SI', showexponent: 'all',
+    },
+    yaxis2: {
+      title: { text: 'T (K)', standoff: 2, font: { size: 9 } },
+      color: '#484f58', overlaying: 'y', side: 'right', showgrid: false,
+      tickfont: { size: 9 }, range: [270, 330],
+    },
+    legend: { font: { size: 9 }, bgcolor: 'rgba(0,0,0,0)', orientation: 'h', x: 0, y: 1.15 },
+    margin: { t: 20, b: 32, l: 52, r: 44 },
+    height: 150,
     showlegend: true,
   };
 </script>
