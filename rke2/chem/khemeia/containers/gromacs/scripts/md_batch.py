@@ -903,11 +903,11 @@ def main():
         energy_json_key = f"{prefix}/energy.json"
         try:
             frames_pdb = wd / "frames.pdb"
-            # Target ~30 frames of protein+ligand only (no water/ions).
+            # Target ~50 frames of protein+ligand only (no water/ions).
             # nstxout-compressed = 5000 in md.mdp → n_xtc_frames = nsteps / 5000
             nsteps = cfg.get("nsteps", 500000)
             n_xtc_frames = max(1, nsteps // 5000)
-            skip = max(1, n_xtc_frames // 30)
+            skip = max(1, n_xtc_frames // 50)
             # Use Protein_LIG index group to strip water and ions.
             ndx_path = wd / "index.ndx"
             if ndx_path.exists():

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { loadTrajectoryFrame } from '$lib/viewer';
+  import { loadFullTrajectory, gotoTrajectoryFrame } from '$lib/viewer';
   import PlotlyChart from './charts/PlotlyChart.svelte';
 
   let {
@@ -18,28 +18,23 @@
   let playing = $state(false);
   let speed = $state(200);
   let tickId = $state<ReturnType<typeof setTimeout> | null>(null);
-  let loading = $state(false);
+  // trajReady: full multi-model PDB has been loaded into Molstar.
+  // trajLoading: initial parse in progress (can be seconds for large files).
+  let trajReady = $state(false);
+  let trajLoading = $state(false);
   let showEnergy = $state(true);
   let frameError = $state<string | null>(null);
 
-  // Not reactive — tracks whether we've shown the first frame so we know
-  // whether to let Molstar auto-fit (first load) vs preserve camera (playback).
-  let firstFrameShown = false;
-
   async function showFrame(index: number) {
-    if (index < 0 || index >= frames.length) return;
+    if (!trajReady || index < 0 || index >= frames.length) return;
     currentFrame = index;
-    loading = true;
     frameError = null;
-    const preserve = firstFrameShown;
     try {
-      await loadTrajectoryFrame(frames[index], preserve);
-      firstFrameShown = true;
+      await gotoTrajectoryFrame(index);
     } catch (err: any) {
-      console.error('[MDTraj] loadTrajectoryFrame error:', err);
+      console.error('[MDTraj] gotoTrajectoryFrame error:', err);
       frameError = err?.message ?? String(err);
     }
-    loading = false;
   }
 
   function tick() {
@@ -51,6 +46,7 @@
   }
 
   function play() {
+    if (!trajReady) return;
     playing = true;
     tickId = setTimeout(tick, speed);
   }
@@ -69,9 +65,21 @@
     showFrame(parseInt((e.target as HTMLInputElement).value, 10));
   }
 
-  // Load first frame on mount
+  // Load all frames as a single multi-model PDB on mount.
+  // Navigation is then O(ms) via ModelFromTrajectory modelIndex update.
   $effect(() => {
-    if (frames.length > 0) showFrame(0);
+    if (frames.length === 0) return;
+    const fullPdb = frames.join('');
+    trajLoading = true;
+    trajReady = false;
+    frameError = null;
+    loadFullTrajectory(fullPdb)
+      .then(() => { trajReady = true; })
+      .catch((err: any) => {
+        console.error('[MDTraj] loadFullTrajectory error:', err);
+        frameError = err?.message ?? String(err);
+      })
+      .finally(() => { trajLoading = false; });
   });
 
   let energyChartData = $derived.by(() => {
@@ -149,36 +157,39 @@
     </div>
   {/if}
 
-  <!-- Frame load error -->
-  {#if frameError}
+  <!-- Trajectory load state / error -->
+  {#if trajLoading}
+    <div class="traj-status">
+      <span class="loading-dot"></span> Parsing trajectory…
+    </div>
+  {:else if frameError}
     <div class="frame-error">{frameError}</div>
   {/if}
 
   <!-- Playback controls -->
   <div class="controls">
     <div class="ctrl-row">
-      <button class="ctrl-btn" onclick={() => { pause(); showFrame(0); }} title="First frame" disabled={frames.length <= 1}>
+      <button class="ctrl-btn" onclick={() => { pause(); showFrame(0); }} title="First frame" disabled={!trajReady || frames.length <= 1}>
         <svg width="11" height="11" viewBox="0 0 11 11"><line x1="1" y1="1" x2="1" y2="10" stroke="currentColor" stroke-width="1.5"/><path d="M3 5.5l6-4v8z" fill="currentColor"/></svg>
       </button>
-      <button class="ctrl-btn" onclick={stepBack} title="Previous" disabled={frames.length <= 1}>
+      <button class="ctrl-btn" onclick={stepBack} title="Previous" disabled={!trajReady || frames.length <= 1}>
         <svg width="11" height="11" viewBox="0 0 11 11"><path d="M9 5.5l-7-4v8z" fill="currentColor"/></svg>
       </button>
-      <button class="ctrl-btn play-btn" onclick={togglePlay} title={playing ? 'Pause' : 'Play'} disabled={frames.length <= 1}>
+      <button class="ctrl-btn play-btn" onclick={togglePlay} title={playing ? 'Pause' : 'Play'} disabled={!trajReady || frames.length <= 1}>
         {#if playing}
           <svg width="11" height="11" viewBox="0 0 11 11"><rect x="1" y="1" width="3" height="9" rx="1" fill="currentColor"/><rect x="7" y="1" width="3" height="9" rx="1" fill="currentColor"/></svg>
         {:else}
           <svg width="11" height="11" viewBox="0 0 11 11"><path d="M2 1l8 4.5-8 4.5z" fill="currentColor"/></svg>
         {/if}
       </button>
-      <button class="ctrl-btn" onclick={stepForward} title="Next" disabled={frames.length <= 1}>
+      <button class="ctrl-btn" onclick={stepForward} title="Next" disabled={!trajReady || frames.length <= 1}>
         <svg width="11" height="11" viewBox="0 0 11 11"><path d="M2 5.5l7-4v8z" fill="currentColor"/></svg>
       </button>
-      <button class="ctrl-btn" onclick={() => { pause(); showFrame(frames.length - 1); }} title="Last frame" disabled={frames.length <= 1}>
+      <button class="ctrl-btn" onclick={() => { pause(); showFrame(frames.length - 1); }} title="Last frame" disabled={!trajReady || frames.length <= 1}>
         <svg width="11" height="11" viewBox="0 0 11 11"><line x1="10" y1="1" x2="10" y2="10" stroke="currentColor" stroke-width="1.5"/><path d="M8 5.5l-6-4v8z" fill="currentColor"/></svg>
       </button>
 
       <span class="frame-counter">
-        {#if loading}<span class="loading-dot"></span>{/if}
         {currentFrame + 1} / {frames.length}
       </span>
 
@@ -374,6 +385,16 @@
   }
 
   .frame-slider:disabled { opacity: 0.3; cursor: default; }
+
+  .traj-status {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 10px;
+    color: var(--text-muted, #484f58);
+    padding: 4px 10px;
+    border-bottom: 1px solid rgba(48, 54, 61, 0.3);
+  }
 
   .frame-error {
     font-size: 10px;

@@ -548,10 +548,10 @@ func (h *APIHandler) MDTrajectory(w http.ResponseWriter, r *http.Request) {
 	}
 	defer rc.Close()
 
-	// Single streaming pass: subsample every 5th MODEL block and strip solvent/ions
-	// so legacy water-inclusive trajectories (1-2 GB) become browser-loadable (~5 MB).
+	// Single streaming pass: subsample MODEL blocks and strip solvent/ions.
+	// stride=2 gives ~50 frames for a typical 100-frame trajectory (~40 MB).
 	// O(line) memory — no frame buffering.
-	const stride = 5
+	const stride = 2
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Header().Set("Content-Disposition", `attachment; filename="frames.pdb"`)
 
