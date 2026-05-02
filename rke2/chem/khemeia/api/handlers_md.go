@@ -507,8 +507,8 @@ func (h *APIHandler) MDListJobs(w http.ResponseWriter, r *http.Request) {
 }
 
 // MDTrajectory handles GET /api/v1/md/jobs/{name}/trajectory/{compoundId}.
-// Streams frames.pdb from S3, subsampling to at most 30 frames so that
-// water-inclusive legacy trajectories (which can be 1-2 GB) load in the browser.
+// Streams frames.pdb from S3, filtered to binding-site residues within 8 Å of
+// the ligand (~100-300 atoms/frame vs ~9500 full-protein).
 func (h *APIHandler) MDTrajectory(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimPrefix(r.URL.Path, "/api/v1/md/jobs/")
 	parts := strings.SplitN(path, "/trajectory/", 2)
@@ -548,43 +548,151 @@ func (h *APIHandler) MDTrajectory(w http.ResponseWriter, r *http.Request) {
 	}
 	defer rc.Close()
 
-	// Single streaming pass: strip solvent/ions and stream all frames.
-	// Frame density is controlled by trjconv skip in md_batch.py (target 50).
-	// O(line) memory — no frame buffering.
-	const stride = 1
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	w.Header().Set("Content-Disposition", `attachment; filename="frames.pdb"`)
+	// Two-phase binding-site filter.
+	//
+	// Phase 1: buffer the first MODEL block, parse Cα/heavy atom positions,
+	// identify which protein residues have any atom within bindingCutoff Å of
+	// any ligand (HETATM, non-solvent) atom.
+	//
+	// Phase 2: re-emit the buffered first frame and stream all subsequent frames,
+	// keeping only the binding-site residues + ligand + structural lines.
+	//
+	// Result: ~100-300 atoms/frame instead of ~9500 → 20-50× smaller download.
+	const bindingCutoff = 8.0 // Å — first-shell binding site
+
+	type vec3 struct{ x, y, z float64 }
+	type resKey struct{ chain byte; seq string }
+
+	solvent := map[string]bool{
+		"SOL": true, "HOH": true, "TIP": true, "WAT": true,
+		"NA": true, "CL": true, "MG": true, "K": true, "CA": true, "ZN": true,
+	}
+
+	parseVec := func(line string) (vec3, bool) {
+		if len(line) < 54 {
+			return vec3{}, false
+		}
+		x, ex := strconv.ParseFloat(strings.TrimSpace(line[30:38]), 64)
+		y, ey := strconv.ParseFloat(strings.TrimSpace(line[38:46]), 64)
+		z, ez := strconv.ParseFloat(strings.TrimSpace(line[46:54]), 64)
+		if ex != nil || ey != nil || ez != nil {
+			return vec3{}, false
+		}
+		return vec3{x, y, z}, true
+	}
 
 	scanner := bufio.NewScanner(rc)
-	bw := bufio.NewWriter(w)
-	frameNum := 0
-	write := false
+	scanner.Buffer(make([]byte, 256*1024), 256*1024)
+
+	// ── Phase 1: buffer first frame ──────────────────────────────────────────
+	var firstFrame []string
+	var ligAtoms []vec3
+	resAtoms := make(map[resKey][]vec3)
 
 	for scanner.Scan() {
 		line := scanner.Text()
-
-		if strings.HasPrefix(line, "MODEL ") {
-			frameNum++
-			write = frameNum == 1 || frameNum%stride == 0
+		firstFrame = append(firstFrame, line)
+		if strings.HasPrefix(line, "ENDMDL") {
+			break
 		}
-
-		if !write {
+		isAtom := strings.HasPrefix(line, "ATOM  ")
+		isHetatm := strings.HasPrefix(line, "HETATM")
+		if !isAtom && !isHetatm {
 			continue
 		}
+		if len(line) < 20 {
+			continue
+		}
+		resname := strings.TrimSpace(line[17:20])
+		if solvent[resname] {
+			continue
+		}
+		pos, ok := parseVec(line)
+		if !ok {
+			continue
+		}
+		if isHetatm {
+			ligAtoms = append(ligAtoms, pos)
+		} else {
+			rk := resKey{line[21], strings.TrimSpace(line[22:26])}
+			resAtoms[rk] = append(resAtoms[rk], pos)
+		}
+	}
 
-		// Strip solvent and monovalent ions — residue name is cols 18-20 (0-indexed 17:20).
-		if len(line) >= 20 && (strings.HasPrefix(line, "ATOM  ") || strings.HasPrefix(line, "HETATM")) {
-			resname := strings.TrimSpace(line[17:20])
-			switch resname {
-			case "SOL", "HOH", "TIP", "WAT", "NA", "CL":
-				continue
+	// ── Determine nearby residues ─────────────────────────────────────────────
+	nearbyRes := make(map[resKey]bool)
+	cutSq := bindingCutoff * bindingCutoff
+	for rk, patoms := range resAtoms {
+	outer:
+		for _, pa := range patoms {
+			for _, la := range ligAtoms {
+				dx := pa.x - la.x
+				dy := pa.y - la.y
+				dz := pa.z - la.z
+				if dx*dx+dy*dy+dz*dz <= cutSq {
+					nearbyRes[rk] = true
+					break outer
+				}
 			}
 		}
+	}
+	// Fallback: no ligand found → keep all non-solvent residues
+	noFilter := len(ligAtoms) == 0
+	if noFilter {
+		log.Printf("[MDTrajectory] no ligand atoms found, streaming full protein")
+	} else {
+		log.Printf("[MDTrajectory] binding site: %d residues within %.0fÅ of ligand (%d atoms)",
+			len(nearbyRes), bindingCutoff, len(ligAtoms))
+	}
 
-		bw.WriteString(line)
-		bw.WriteByte('\n')
+	// ── keepLine predicate ────────────────────────────────────────────────────
+	keepLine := func(line string) bool {
+		isAtom := strings.HasPrefix(line, "ATOM  ")
+		isHetatm := strings.HasPrefix(line, "HETATM")
+		if !isAtom && !isHetatm {
+			// Keep MODEL, ENDMDL, TER, TITLE, REMARK, CRYST1, etc.
+			return true
+		}
+		if len(line) < 20 {
+			return true
+		}
+		resname := strings.TrimSpace(line[17:20])
+		if solvent[resname] {
+			return false
+		}
+		if isHetatm {
+			return true // always keep ligand
+		}
+		if noFilter {
+			return true
+		}
+		rk := resKey{line[21], strings.TrimSpace(line[22:26])}
+		return nearbyRes[rk]
+	}
+
+	// ── Phase 2: emit ─────────────────────────────────────────────────────────
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Content-Disposition", `attachment; filename="frames.pdb"`)
+	bw := bufio.NewWriter(w)
+
+	// Emit buffered first frame
+	for _, line := range firstFrame {
+		if keepLine(line) {
+			bw.WriteString(line)
+			bw.WriteByte('\n')
+		}
+	}
+
+	// Stream remaining frames
+	for scanner.Scan() {
+		line := scanner.Text()
+		if keepLine(line) {
+			bw.WriteString(line)
+			bw.WriteByte('\n')
+		}
 	}
 	bw.Flush()
+
 }
 
 // MDEnergy handles GET /api/v1/md/jobs/{name}/energy/{compoundId}.
