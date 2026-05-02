@@ -548,10 +548,10 @@ func (h *APIHandler) MDTrajectory(w http.ResponseWriter, r *http.Request) {
 	}
 	defer rc.Close()
 
-	// Single streaming pass: subsample MODEL blocks and strip solvent/ions.
-	// stride=2 gives ~50 frames for a typical 100-frame trajectory (~40 MB).
+	// Single streaming pass: strip solvent/ions and stream all frames.
+	// Frame density is controlled by trjconv skip in md_batch.py (target 50).
 	// O(line) memory — no frame buffering.
-	const stride = 2
+	const stride = 1
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Header().Set("Content-Disposition", `attachment; filename="frames.pdb"`)
 
