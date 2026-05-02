@@ -548,57 +548,41 @@ func (h *APIHandler) MDTrajectory(w http.ResponseWriter, r *http.Request) {
 	}
 	defer rc.Close()
 
-	// Subsample: pass through at most 30 frames regardless of how many the file contains.
-	// We do a two-pass count (first scan for MODEL records, then stream) only when we
-	// detect > 30 frames, so small (already-fixed) files are streamed without overhead.
-	// Since S3 objects can't be seeked cheaply, we count frames and stride in one pass
-	// using a line scanner with a MODEL-detection accumulator.
-	const maxFrames = 30
+	// Single streaming pass: subsample every 5th MODEL block and strip solvent/ions
+	// so legacy water-inclusive trajectories (1-2 GB) become browser-loadable (~5 MB).
+	// O(line) memory — no frame buffering.
+	const stride = 5
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Header().Set("Content-Disposition", `attachment; filename="frames.pdb"`)
 
 	scanner := bufio.NewScanner(rc)
-	scanner.Buffer(make([]byte, 2*1024*1024), 2*1024*1024)
+	bw := bufio.NewWriter(w)
+	frameNum := 0
+	write := false
 
-	type frameLines struct {
-		lines []string
-	}
-	var frames []frameLines
-	var cur *frameLines
-
-	// First pass: collect all MODEL blocks.
 	for scanner.Scan() {
 		line := scanner.Text()
+
 		if strings.HasPrefix(line, "MODEL ") {
-			frames = append(frames, frameLines{})
-			cur = &frames[len(frames)-1]
+			frameNum++
+			write = frameNum == 1 || frameNum%stride == 0
 		}
-		if cur != nil {
-			cur.lines = append(cur.lines, line)
-		}
-	}
 
-	// If no MODEL records found, stream as-is (single-structure PDB).
-	if len(frames) == 0 {
-		writeError(w, "no MODEL records found in trajectory", http.StatusInternalServerError)
-		return
-	}
-
-	// Compute stride so we emit at most maxFrames, always including first and last.
-	stride := 1
-	if len(frames) > maxFrames {
-		stride = len(frames) / maxFrames
-	}
-
-	bw := bufio.NewWriter(w)
-	for i, f := range frames {
-		if i != 0 && i != len(frames)-1 && i%stride != 0 {
+		if !write {
 			continue
 		}
-		for _, l := range f.lines {
-			bw.WriteString(l)
-			bw.WriteByte('\n')
+
+		// Strip solvent and monovalent ions — residue name is cols 18-20 (0-indexed 17:20).
+		if len(line) >= 20 && (strings.HasPrefix(line, "ATOM  ") || strings.HasPrefix(line, "HETATM")) {
+			resname := strings.TrimSpace(line[17:20])
+			switch resname {
+			case "SOL", "HOH", "TIP", "WAT", "NA", "CL":
+				continue
+			}
 		}
+
+		bw.WriteString(line)
+		bw.WriteByte('\n')
 	}
 	bw.Flush()
 }
