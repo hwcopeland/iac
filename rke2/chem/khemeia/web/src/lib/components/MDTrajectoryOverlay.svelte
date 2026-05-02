@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { loadFullTrajectory, gotoTrajectoryFrame } from '$lib/viewer';
+  import { loadFullTrajectory, gotoTrajectoryFrame, focusLigand } from '$lib/viewer';
   import PlotlyChart from './charts/PlotlyChart.svelte';
 
   let {
@@ -74,7 +74,7 @@
     trajReady = false;
     frameError = null;
     loadFullTrajectory(fullPdb)
-      .then(() => { trajReady = true; })
+      .then(() => { trajReady = true; focusLigand(); })
       .catch((err: any) => {
         console.error('[MDTraj] loadFullTrajectory error:', err);
         frameError = err?.message ?? String(err);

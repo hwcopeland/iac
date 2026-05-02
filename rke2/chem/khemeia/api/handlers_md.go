@@ -568,6 +568,22 @@ func (h *APIHandler) MDTrajectory(w http.ResponseWriter, r *http.Request) {
 		"NA": true, "CL": true, "MG": true, "K": true, "CA": true, "ZN": true,
 	}
 
+	// GROMACS writes ALL atoms (protein + ligand) as ATOM records, not HETATM.
+	// Classify by residue name: anything not in stdAA and not solvent is the ligand.
+	stdAA := map[string]bool{
+		"ALA": true, "ARG": true, "ASN": true, "ASP": true, "CYS": true,
+		"GLN": true, "GLU": true, "GLY": true, "HIS": true, "ILE": true,
+		"LEU": true, "LYS": true, "MET": true, "PHE": true, "PRO": true,
+		"SER": true, "THR": true, "TRP": true, "TYR": true, "VAL": true,
+		"HID": true, "HIE": true, "HIP": true, // histidine tautomers
+		"HSD": true, "HSE": true, "HSP": true, // CHARMM histidine
+		"CYX": true, "CYM": true,              // cysteine variants
+		"LYN": true, "ASH": true, "GLH": true, // protonation variants
+		"ACE": true, "NME": true,              // terminal caps
+		"DA": true, "DC": true, "DG": true, "DT": true, // DNA
+		"A": true, "C": true, "G": true, "T": true, "U": true, // RNA
+	}
+
 	parseVec := func(line string) (vec3, bool) {
 		if len(line) < 54 {
 			return vec3{}, false
@@ -611,11 +627,11 @@ func (h *APIHandler) MDTrajectory(w http.ResponseWriter, r *http.Request) {
 		if !ok {
 			continue
 		}
-		if isHetatm {
-			ligAtoms = append(ligAtoms, pos)
-		} else {
+		if stdAA[resname] {
 			rk := resKey{line[21], strings.TrimSpace(line[22:26])}
 			resAtoms[rk] = append(resAtoms[rk], pos)
+		} else {
+			ligAtoms = append(ligAtoms, pos)
 		}
 	}
 
@@ -660,8 +676,8 @@ func (h *APIHandler) MDTrajectory(w http.ResponseWriter, r *http.Request) {
 		if solvent[resname] {
 			return false
 		}
-		if isHetatm {
-			return true // always keep ligand
+		if !stdAA[resname] {
+			return true // ligand (non-standard residue): always keep
 		}
 		if noFilter {
 			return true
