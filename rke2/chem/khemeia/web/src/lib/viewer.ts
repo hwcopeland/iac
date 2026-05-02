@@ -871,6 +871,51 @@ export function focusResidue(chainId: string, resId: number): void {
   } catch {}
 }
 
+const _STD_AA = new Set([
+  'ALA','ARG','ASN','ASP','CYS','GLN','GLU','GLY','HIS','ILE',
+  'LEU','LYS','MET','PHE','PRO','SER','THR','TRP','TYR','VAL',
+  'HID','HIE','HIP','HSD','HSE','HSP','CYX','CYM','LYN','ASH','GLH',
+  'ACE','NME',
+  'DA','DC','DG','DT','DU','A','C','G','T','U',
+]);
+const _SOLVENT = new Set(['HOH','WAT','SOL','TIP','TIP3','NA','CL','MG','K','CA','ZN']);
+
+/** Focus camera on the ligand (non-standard, non-solvent residues) in the current structure. */
+export function focusLigand(): void {
+  if (!plugin) return;
+  try {
+    const { StructureElement, StructureProperties } = getLib().structure;
+    const structures = plugin?.managers?.structure?.hierarchy?.current?.structures;
+    if (!structures?.length) { plugin?.managers?.camera?.reset?.(); return; }
+    const structData = structures[structures.length - 1]?.cell?.obj?.data;
+    if (!structData) { plugin?.managers?.camera?.reset?.(); return; }
+
+    const lociElements: any[] = [];
+    for (const unit of structData.units) {
+      const indices: number[] = [];
+      for (let i = 0, len = unit.elements.length; i < len; i++) {
+        const loc = StructureElement.Location.create(structData, unit, unit.elements[i]);
+        const resName = StructureProperties.residue.label_comp_id(loc);
+        if (!_STD_AA.has(resName) && !_SOLVENT.has(resName)) {
+          indices.push(i);
+        }
+      }
+      if (indices.length > 0) lociElements.push({ unit, indices: toSortedArray(indices) });
+    }
+
+    if (lociElements.length > 0) {
+      plugin.managers.camera.focusLoci(
+        StructureElement.Loci(structData, lociElements),
+        { durationMs: 400 },
+      );
+    } else {
+      plugin?.managers?.camera?.reset?.();
+    }
+  } catch {
+    plugin?.managers?.camera?.reset?.();
+  }
+}
+
 export function highlightResidue(chainId: string, resId: number): void {
   if (!plugin) return;
   try {
