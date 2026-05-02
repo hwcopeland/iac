@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { loadFile } from '$lib/viewer';
+  import { loadTrajectoryFrame } from '$lib/viewer';
   import PlotlyChart from './charts/PlotlyChart.svelte';
 
   let {
@@ -20,14 +20,25 @@
   let tickId = $state<ReturnType<typeof setTimeout> | null>(null);
   let loading = $state(false);
   let showEnergy = $state(true);
+  let frameError = $state<string | null>(null);
+
+  // Not reactive — tracks whether we've shown the first frame so we know
+  // whether to let Molstar auto-fit (first load) vs preserve camera (playback).
+  let firstFrameShown = false;
 
   async function showFrame(index: number) {
     if (index < 0 || index >= frames.length) return;
     currentFrame = index;
     loading = true;
+    frameError = null;
+    const preserve = firstFrameShown;
     try {
-      await loadFile(frames[index], 'pdb', true);
-    } catch {}
+      await loadTrajectoryFrame(frames[index], preserve);
+      firstFrameShown = true;
+    } catch (err: any) {
+      console.error('[MDTraj] loadTrajectoryFrame error:', err);
+      frameError = err?.message ?? String(err);
+    }
     loading = false;
   }
 
@@ -136,6 +147,11 @@
     <div class="energy-section">
       <PlotlyChart data={energyChartData} layout={energyLayout} />
     </div>
+  {/if}
+
+  <!-- Frame load error -->
+  {#if frameError}
+    <div class="frame-error">{frameError}</div>
   {/if}
 
   <!-- Playback controls -->
@@ -358,4 +374,13 @@
   }
 
   .frame-slider:disabled { opacity: 0.3; cursor: default; }
+
+  .frame-error {
+    font-size: 10px;
+    color: #f85149;
+    padding: 4px 10px;
+    border-bottom: 1px solid rgba(248, 81, 73, 0.2);
+    background: rgba(248, 81, 73, 0.06);
+    word-break: break-word;
+  }
 </style>

@@ -554,6 +554,32 @@ export async function toggleIsolateComponent(comp: StructureComponent): Promise<
 
 // ─── Trajectory Support ───
 
+/**
+ * Load a single trajectory frame into the viewer without touching currentStructureText.
+ * preserveCamera=false on the first frame so Molstar auto-fits to the trajectory
+ * coordinate space (GROMACS recenters atoms in the simulation box, which differs from
+ * the docking pose coordinates the camera was last set to).
+ */
+export async function loadTrajectoryFrame(data: string, preserveCamera = true): Promise<void> {
+  if (!viewerInstance) throw new Error('Viewer not initialized');
+  const cam = preserveCamera ? saveCameraSnapshot() : null;
+  await plugin.clear();
+  _structureRefs.clear();
+  _pocketViewRefs = [];
+  _surfaceRefs = [];
+  const blob = new Blob([data], { type: 'text/plain' });
+  const url = URL.createObjectURL(blob);
+  try {
+    await viewerInstance.loadStructureFromUrl(url, 'pdb', false);
+    applyCanvasProps();
+  } finally {
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+  }
+  if (cam) {
+    requestAnimationFrame(() => restoreCameraSnapshot(cam));
+  }
+}
+
 export async function loadTrajectory(frames: string[], format: string = 'xyz'): Promise<void> {
   if (!viewerInstance) throw new Error('Viewer not initialized');
   if (frames.length === 0) return;
