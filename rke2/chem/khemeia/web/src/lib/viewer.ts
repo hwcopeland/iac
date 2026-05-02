@@ -555,11 +555,65 @@ export async function toggleIsolateComponent(comp: StructureComponent): Promise<
 // ─── Trajectory Support ───
 
 /**
- * Load a single trajectory frame into the viewer without touching currentStructureText.
- * preserveCamera=false on the first frame so Molstar auto-fits to the trajectory
- * coordinate space (GROMACS recenters atoms in the simulation box, which differs from
- * the docking pose coordinates the camera was last set to).
+ * Load a full multi-model trajectory PDB into Molstar once.
+ * Frame navigation is then done via gotoTrajectoryFrame() which only
+ * updates the ModelFromTrajectory modelIndex — O(ms) vs O(500ms) for
+ * the clear+reload approach.
  */
+export async function loadFullTrajectory(pdb: string): Promise<void> {
+  if (!viewerInstance) throw new Error('Viewer not initialized');
+  await plugin.clear();
+  _structureRefs.clear();
+  _pocketViewRefs = [];
+  _surfaceRefs = [];
+  const blob = new Blob([pdb], { type: 'text/plain' });
+  const url = URL.createObjectURL(blob);
+  try {
+    await viewerInstance.loadStructureFromUrl(url, 'pdb', false);
+    applyCanvasProps();
+  } finally {
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+  }
+}
+
+/**
+ * Switch to frame `index` (0-based) in the currently loaded multi-model trajectory.
+ * Finds the ModelFromTrajectory state cell and updates its modelIndex.
+ * Tries hierarchy parent chain first, then scans state cells as fallback.
+ */
+export async function gotoTrajectoryFrame(index: number): Promise<void> {
+  if (!plugin) return;
+  const { StateTransforms } = getLib().plugin;
+  const MTF = StateTransforms.Model.ModelFromTrajectory;
+
+  // Strategy 1: via hierarchy parent chain (structures[0].parent = ModelRef)
+  const structures = plugin.managers?.structure?.hierarchy?.current?.structures;
+  const modelRef1 = structures?.[0]?.parent?.cell?.transform?.ref as string | undefined;
+  if (modelRef1) {
+    await plugin.state.data.build()
+      .to(modelRef1)
+      .update(MTF, (p: any) => ({ ...p, modelIndex: index }))
+      .commit();
+    return;
+  }
+
+  // Strategy 2: scan state cells for the ModelFromTrajectory transformer
+  let modelRef2: string | null = null;
+  plugin.state.data.cells.forEach((cell: any, ref: string) => {
+    if (!modelRef2 && cell.transform?.transformer === MTF) modelRef2 = ref;
+  });
+  if (modelRef2) {
+    await plugin.state.data.build()
+      .to(modelRef2)
+      .update(MTF, (p: any) => ({ ...p, modelIndex: index }))
+      .commit();
+    return;
+  }
+
+  throw new Error('No ModelFromTrajectory transform found — trajectory not loaded as multi-model PDB');
+}
+
+/** Single-frame loader kept for non-trajectory use cases. */
 export async function loadTrajectoryFrame(data: string, preserveCamera = true): Promise<void> {
   if (!viewerInstance) throw new Error('Viewer not initialized');
   const cam = preserveCamera ? saveCameraSnapshot() : null;
