@@ -20,4 +20,5 @@ COPY app.py ./
 EXPOSE 8000
 
 # Model loading can take 30-60s; gunicorn preload + generous timeout.
-CMD ["gunicorn", "-w", "2", "-b", "0.0.0.0:8000", "--timeout", "600", "--preload", "app:app"]
+# CPU inference on 500-compound batches takes 10-30 min; 3600s covers worst case.
+CMD ["gunicorn", "-w", "2", "-b", "0.0.0.0:8000", "--timeout", "3600", "--preload", "app:app"]

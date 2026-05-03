@@ -798,7 +798,7 @@ func (h *APIHandler) callADMETSidecar(ctx context.Context, req admetSidecarPredi
 		return nil, fmt.Errorf("failed to marshal sidecar request: %w", err)
 	}
 
-	client := &http.Client{Timeout: 10 * time.Minute}
+	client := &http.Client{Timeout: 60 * time.Minute}
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost,
 		admetServiceURL+"/predict", strings.NewReader(string(reqBody)))
