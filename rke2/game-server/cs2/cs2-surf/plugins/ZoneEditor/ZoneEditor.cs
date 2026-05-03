@@ -850,7 +850,7 @@ public sealed class ZoneEditor : IModSharpModule, IClientListener, IGameListener
             // expose it directly in the C# interface even though it implements it at runtime.
             var entity = pawn as IBaseEntity;
             if (entity is null) return null;
-            var origin = entity.AbsOrigin;
+            var origin = entity.GetAbsOrigin();
             return new Vec3(origin.X, origin.Y, origin.Z);
         }
         catch (Exception ex)
