@@ -2,5 +2,5 @@ numpy<2
 rdkit-pypi
 flask
 gunicorn
-torch --index-url https://download.pytorch.org/whl/cpu
+torch --index-url https://download.pytorch.org/whl/cu121
 admet_ai

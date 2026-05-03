@@ -2,6 +2,7 @@
 # Serves Stanford Chemprop-D models (admet_ai) for full ADMET endpoint prediction.
 # Runs as a persistent Deployment (not a per-job Job) to avoid model loading
 # overhead on every request. Model load takes 30-60s at startup.
+# Scheduled on nixos-gpu (RTX 3070) for GPU-accelerated Chemprop inference.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -24,6 +25,19 @@ spec:
     spec:
       imagePullSecrets:
         - name: zot-pull-secret
+      nodeSelector:
+        gpu: "rtx3070"
+      tolerations:
+        - key: "gpu"
+          value: "true"
+          effect: "NoSchedule"
+      volumes:
+        - name: nvidia-driver
+          hostPath:
+            path: /run/opengl-driver
+        - name: nix-store
+          hostPath:
+            path: /nix/store
       containers:
         - name: admet
           image: zot.hwcopeland.net/chem/admet:latest
@@ -32,13 +46,25 @@ spec:
             - containerPort: 8000
               name: http
               protocol: TCP
+          env:
+            - name: LD_LIBRARY_PATH
+              value: /run/opengl-driver/lib
+          volumeMounts:
+            - name: nvidia-driver
+              mountPath: /run/opengl-driver
+              readOnly: true
+            - name: nix-store
+              mountPath: /nix/store
+              readOnly: true
           resources:
             requests:
               cpu: "1"
               memory: 4Gi
+              nvidia.com/gpu: "1"
             limits:
               cpu: "4"
               memory: 8Gi
+              nvidia.com/gpu: "1"
           livenessProbe:
             httpGet:
               path: /health
