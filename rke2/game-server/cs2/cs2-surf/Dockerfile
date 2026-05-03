@@ -57,6 +57,15 @@ RUN dotnet publish SurfMapCommand.csproj \
         -p:DebugType=None -p:DebugSymbols=false \
         -o /build/out/surf-map-command
 
+# --- ZoneEditor (in-repo, live zone inspection and editing) ---
+# Provides !zones, !pos1/!pos2, !addzone, !editzone, !savezone, !delzone, !tpzone, !showzones.
+COPY plugins/ZoneEditor /build/zone-editor
+WORKDIR /build/zone-editor
+RUN dotnet publish ZoneEditor.csproj \
+        -c Release -r linux-x64 --no-self-contained \
+        -p:DebugType=None -p:DebugSymbols=false \
+        -o /build/out/zone-editor
+
 # MapChooserSharpMS removed entirely — see git log for rationale. TL;DR:
 # upstream CS#→ModSharp port was ~5% done, pulled in 4 broken Tnms libs,
 # and provided zero actual functionality. SurfMapCommand above replaces
@@ -142,9 +151,12 @@ COPY addon/csgo_addons/cs2quakesounds/ /staging/csgo_addons/cs2quakesounds/
 # --- SurfMapCommand (in-repo native !map plugin) ---
 COPY --from=plugin-builder /build/out/surf-map-command/ /staging/sharp/modules/SurfMapCommand/
 
+# --- ZoneEditor (in-repo live zone editor) ---
+COPY --from=plugin-builder /build/out/zone-editor/ /staging/sharp/modules/ZoneEditor/
+
 # Generate runtimeconfig.json if missing (UseCommonOutputDirectory suppresses
 # it for source-built modules; without it ModSharp silently skips the module).
-RUN for mod in Timer Timer.RequestManager Timer.Shared SurfMapCommand; do \
+RUN for mod in Timer Timer.RequestManager Timer.Shared SurfMapCommand ZoneEditor; do \
       for base in /staging/sharp/modules /staging/sharp/shared; do \
         dir="${base}/${mod}"; \
         if [ -d "${dir}" ] && [ ! -f "${dir}/${mod}.runtimeconfig.json" ]; then \
