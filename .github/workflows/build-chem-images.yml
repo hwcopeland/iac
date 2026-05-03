@@ -339,6 +339,7 @@ jobs:
               khemeia-controller)    echo "khemeia-controller" ;;
               khemeia-web)           echo "khemeia-web" ;;
               khemeia-result-writer) echo "result-writer" ;;
+              admet)                 echo "admet" ;;
             esac
           }
 
