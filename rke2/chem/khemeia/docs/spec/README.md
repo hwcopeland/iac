@@ -1,5 +1,13 @@
 # Khemeia SBDD Work Package Specifications
 
+## Design Philosophy
+
+Before reading any work package spec, read **[ux-object-model.md](ux-object-model.md)**.
+It defines the object model, user interaction principles, and controller responsibilities
+that all WPs and the UI redesign are built against.
+
+---
+
 ## Preamble
 
 Khemeia is a Kubernetes-orchestrated framework for computational chemistry targeting
