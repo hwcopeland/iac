@@ -583,7 +583,7 @@ public sealed class ZoneEditor : IModSharpModule, IClientListener, IGameListener
         try
         {
             var center = z.Center;
-            // Teleport(Vector? position, Vector? angles, Vector? velocity) — pass only position, keep angles/velocity.
+            // Teleport is on IBaseEntity — cast from IPlayerPawn before calling.
             _shared.GetModSharp().InvokeFrameAction(() =>
             {
                 try
@@ -591,7 +591,8 @@ public sealed class ZoneEditor : IModSharpModule, IClientListener, IGameListener
                     var ctrl = client.GetPlayerController();
                     var pawn = ctrl?.GetPlayerPawn();
                     if (pawn is null) return;
-                    pawn.Teleport(new Sharp.Shared.Types.Vector(center.X, center.Y, center.Z + 10), null, null);
+                    var entity = pawn as IBaseEntity;
+                    entity?.Teleport(new Sharp.Shared.Types.Vector(center.X, center.Y, center.Z + 10), null, null);
                 }
                 catch (Exception ex)
                 {
@@ -845,8 +846,11 @@ public sealed class ZoneEditor : IModSharpModule, IClientListener, IGameListener
             var ctrl = client.GetPlayerController();
             var pawn = ctrl?.GetPlayerPawn();
             if (pawn is null) return null;
-            // pawn.AbsOrigin → Sharp.Shared.Types.Vector with X/Y/Z float properties
-            var origin = pawn.AbsOrigin;
+            // AbsOrigin is defined on IBaseEntity; cast through since IPlayerPawn doesn't
+            // expose it directly in the C# interface even though it implements it at runtime.
+            var entity = pawn as IBaseEntity;
+            if (entity is null) return null;
+            var origin = entity.AbsOrigin;
             return new Vec3(origin.X, origin.Y, origin.Z);
         }
         catch (Exception ex)
