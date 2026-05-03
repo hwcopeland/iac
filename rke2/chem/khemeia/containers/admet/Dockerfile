@@ -19,6 +19,7 @@ COPY app.py ./
 
 EXPOSE 8000
 
-# Model loading can take 30-60s; gunicorn preload + generous timeout.
-# CPU inference on 500-compound batches takes 10-30 min; 3600s covers worst case.
-CMD ["gunicorn", "-w", "2", "-b", "0.0.0.0:8000", "--timeout", "3600", "--preload", "app:app"]
+# 2 workers, no --preload: each worker initializes its own CUDA context after fork.
+# --preload causes SIGSEGV because CUDA contexts are not fork-safe.
+# Worker 1 handles predictions; worker 2 keeps health probes alive during long inference.
+CMD ["gunicorn", "-w", "2", "-b", "0.0.0.0:8000", "--timeout", "3600", "app:app"]
