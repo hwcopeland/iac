@@ -400,8 +400,12 @@ def _ml_predict_batch(smiles_list: list[str]) -> list[dict[str, Any] | None]:
         return [None] * len(smiles_list)
 
     try:
-        # admet_ai expects a list of SMILES and returns a DataFrame.
+        app.logger.info("[admet] predicting %d SMILES on %s", len(smiles_list), _admet_predictor.device)
+        t0 = time.time()
         preds_df = _admet_predictor.predict(smiles=smiles_list)
+        elapsed = time.time() - t0
+        app.logger.info("[admet] prediction complete: %d compounds in %.2fs (%.0f/s)",
+                        len(smiles_list), elapsed, len(smiles_list) / elapsed)
         col_map = _build_column_map(list(preds_df.columns))
 
         results = []
