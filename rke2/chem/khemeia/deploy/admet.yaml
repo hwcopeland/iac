@@ -66,19 +66,18 @@ spec:
               memory: 8Gi
               nvidia.com/gpu: "1"
           livenessProbe:
-            httpGet:
-              path: /health
-              port: 8000
+            exec:
+              command: ["python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
             initialDelaySeconds: 90
             periodSeconds: 20
-            timeoutSeconds: 30
+            timeoutSeconds: 10
             failureThreshold: 10
           readinessProbe:
-            httpGet:
-              path: /readyz
-              port: 8000
+            exec:
+              command: ["python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/readyz')"]
             initialDelaySeconds: 60
             periodSeconds: 10
+            timeoutSeconds: 10
             failureThreshold: 6
 ---
 # Service for the ADMET sidecar
