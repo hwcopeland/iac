@@ -2,7 +2,7 @@
   import { isAuthenticated, getUser, login, logout } from '$lib/auth';
   import type { UserInfo } from '$lib/auth';
 
-  type Tab = 'explorer' | 'analysis' | 'calculations' | 'pipeline';
+  type Tab = 'explorer' | 'analysis' | 'calculations';
 
   let { activeTab = $bindable('explorer'), onCommandPalette, authReady = false }: {
     activeTab: Tab;
@@ -11,10 +11,9 @@
   } = $props();
 
   const tabs: { id: Tab; label: string }[] = [
-    { id: 'explorer', label: 'Explorer' },
-    { id: 'analysis', label: 'Analysis' },
-    { id: 'calculations', label: 'Calculations' },
-    { id: 'pipeline', label: 'Pipeline' },
+    { id: 'explorer', label: 'Explore' },
+    { id: 'analysis', label: 'Analyse' },
+    { id: 'calculations', label: 'Calculate' },
   ];
 
   const isMac = typeof navigator !== 'undefined' && navigator.platform?.includes('Mac');
