@@ -686,6 +686,20 @@ func (h *APIHandler) MDTrajectory(w http.ResponseWriter, r *http.Request) {
 		return nearbyRes[rk]
 	}
 
+	// transformLine rewrites ligand ATOM records to HETATM so Molstar classifies
+	// them as small-molecule (ball-and-stick) rather than polymer (broken cartoon).
+	// GROMACS writes ALL atoms as ATOM; non-standard residues are ligands.
+	transformLine := func(line string) string {
+		if !strings.HasPrefix(line, "ATOM  ") || len(line) < 20 {
+			return line
+		}
+		resname := strings.TrimSpace(line[17:20])
+		if !stdAA[resname] && !solvent[resname] {
+			return "HETATM" + line[6:]
+		}
+		return line
+	}
+
 	// ── Phase 2: emit ─────────────────────────────────────────────────────────
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Header().Set("Content-Disposition", `attachment; filename="frames.pdb"`)
@@ -694,7 +708,7 @@ func (h *APIHandler) MDTrajectory(w http.ResponseWriter, r *http.Request) {
 	// Emit buffered first frame
 	for _, line := range firstFrame {
 		if keepLine(line) {
-			bw.WriteString(line)
+			bw.WriteString(transformLine(line))
 			bw.WriteByte('\n')
 		}
 	}
@@ -703,7 +717,7 @@ func (h *APIHandler) MDTrajectory(w http.ResponseWriter, r *http.Request) {
 	for scanner.Scan() {
 		line := scanner.Text()
 		if keepLine(line) {
-			bw.WriteString(line)
+			bw.WriteString(transformLine(line))
 			bw.WriteByte('\n')
 		}
 	}
