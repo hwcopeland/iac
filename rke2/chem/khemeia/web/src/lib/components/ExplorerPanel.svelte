@@ -1,7 +1,10 @@
 <script lang="ts">
   import Panel from './Panel.svelte';
   import MDTrajectoryBrowser from './MDTrajectoryBrowser.svelte';
-  import { loadPdb, loadFile, resetCamera, isReady } from '$lib/viewer';
+  import { loadPdb, loadFile, resetCamera, isReady, focusPocketCenter } from '$lib/viewer';
+  import { onMount } from 'svelte';
+  import { login } from '$lib/auth';
+  import { pipeline } from '$lib/pipeline.svelte.ts';
 
   let {
     onStructureLoad = () => {},
@@ -61,7 +64,7 @@
     resetCamera();
   }
 
-
+  onMount(() => { pipeline.init(); });
 </script>
 
 <div class="explorer-panels">
@@ -102,6 +105,299 @@
   {#if onMDView}
     <MDTrajectoryBrowser onView={onMDView} />
   {/if}
+
+  <!-- Session expired banner -->
+  {#if pipeline.sessionExpired}
+    <div class="session-banner">
+      <span class="session-msg">Session expired — jobs still running server-side.</span>
+      <button class="session-login-btn" onclick={() => login()}>Sign in</button>
+    </div>
+  {/if}
+
+  <!-- Pipeline header -->
+  <div class="pl-header">
+    <span class="pl-title">SBDD Workflow</span>
+    <div class="pl-actions">
+      <button class="action-btn" onclick={() => pipeline.loadRecentJobs()}>
+        {pipeline.recentOpen ? 'Hide runs' : 'Load previous'}
+      </button>
+      <button class="action-btn danger" onclick={() => pipeline.clearPipeline()}>New</button>
+    </div>
+  </div>
+
+  {#if pipeline.recentOpen}
+    <div class="recent-runs">
+      {#if pipeline.recentJobs.length === 0}
+        <span class="recent-empty">No previous runs found.</span>
+      {:else}
+        {#each pipeline.recentJobs as job}
+          <button class="recent-row" onclick={() => pipeline.restorePipeline(job)}>
+            <span class="recent-name">{job.name}</span>
+            <span class="recent-badge {job.status.toLowerCase()}">{job.status}</span>
+            <span class="recent-meta">{new Date(job.created_at).toLocaleString()}</span>
+          </button>
+        {/each}
+      {/if}
+    </div>
+  {/if}
+
+  <!-- Stage 1: Target Preparation -->
+  <div id="stage-target">
+    <Panel title="Target Preparation">
+      {#snippet children()}
+        <div class="stage-header" role="button" tabindex="0"
+          onclick={() => pipeline.updateStage('target', { collapsed: !pipeline.stages.target.collapsed })}
+          onkeydown={(e) => { if (e.key === 'Enter') pipeline.updateStage('target', { collapsed: !pipeline.stages.target.collapsed }); }}>
+          <span class="stage-label">1. Target Preparation</span>
+          <span class="status-badge {pipeline.statusBadgeClass(pipeline.stages.target.status)}">{pipeline.stages.target.status}</span>
+        </div>
+
+        {#if pipeline.stages.target.status === 'pending' || pipeline.stages.target.status === 'failed'}
+          <form class="stage-form" onsubmit={(e) => { e.preventDefault(); pipeline.handleTargetSubmit(); }}>
+            <div class="form-field">
+              <label class="form-label" for="ep-pdb">PDB ID <span class="required">*</span></label>
+              <input id="ep-pdb" type="text" class="form-input" placeholder="e.g. 1AKE" bind:value={pipeline.pdbId} required />
+            </div>
+            <div class="form-field">
+              <label class="form-label" for="ep-mode">Binding Site Mode</label>
+              <select id="ep-mode" class="form-select" bind:value={pipeline.bindingSiteMode}>
+                <option value="native-ligand">Native Ligand</option>
+                <option value="custom-box">Custom Box</option>
+                <option value="pocket-detection">Pocket Detection (P2Rank)</option>
+              </select>
+            </div>
+            {#if pipeline.bindingSiteMode === 'native-ligand'}
+              <div class="form-field">
+                <label class="form-label" for="ep-lig">Native Ligand ID <span class="required">*</span></label>
+                <input id="ep-lig" type="text" class="form-input" placeholder="e.g. ATP" bind:value={pipeline.nativeLigandId} required />
+              </div>
+              {#if !pipeline.nativeLigandId.trim()}
+                <p class="validation-msg">Native Ligand ID is required for this mode.</p>
+              {/if}
+            {/if}
+            {#if pipeline.bindingSiteMode === 'custom-box'}
+              <div class="box-grid">
+                <div class="box-group">
+                  <span class="box-group-label">Center (x, y, z)</span>
+                  <div class="box-inputs">
+                    <input type="number" step="0.1" class="form-input box-input" placeholder="x" bind:value={pipeline.boxCenterX} />
+                    <input type="number" step="0.1" class="form-input box-input" placeholder="y" bind:value={pipeline.boxCenterY} />
+                    <input type="number" step="0.1" class="form-input box-input" placeholder="z" bind:value={pipeline.boxCenterZ} />
+                  </div>
+                </div>
+                <div class="box-group">
+                  <span class="box-group-label">Size (x, y, z)</span>
+                  <div class="box-inputs">
+                    <input type="number" step="0.1" min="1" class="form-input box-input" placeholder="x" bind:value={pipeline.boxSizeX} />
+                    <input type="number" step="0.1" min="1" class="form-input box-input" placeholder="y" bind:value={pipeline.boxSizeY} />
+                    <input type="number" step="0.1" min="1" class="form-input box-input" placeholder="z" bind:value={pipeline.boxSizeZ} />
+                  </div>
+                </div>
+              </div>
+            {/if}
+            <button type="submit" class="submit-btn" disabled={pipeline.targetSubmitting || !pipeline.targetFormValid()}>
+              {pipeline.targetSubmitting ? 'Submitting...' : 'Prepare Target'}
+            </button>
+          </form>
+        {/if}
+
+        {#if pipeline.stages.target.status === 'running'}
+          <div class="running-indicator">
+            <span class="pulse-dot"></span>
+            <span class="running-text">Preparing target {pipeline.stages.target.jobName ?? ''}...</span>
+          </div>
+        {/if}
+
+        {#if pipeline.stages.target.error}
+          <p class="error-msg">{pipeline.stages.target.error}</p>
+        {/if}
+
+        {#if pipeline.canAdvance('target')}
+          <div class="result-info">
+            <div class="result-row-actions">
+              <span class="done-label">Ready: {pipeline.stages.target.jobName}</span>
+              <button class="action-icon-btn" disabled={pipeline.receptorLoading}
+                onclick={() => pipeline.loadTargetInViewer(pipeline.stages.target.jobName!, pipeline.targetPrepResult)}
+                title="Load receptor into viewer">
+                {pipeline.receptorLoading ? '⟳' : '⬡ Load 3D'}
+              </button>
+            </div>
+          </div>
+          {#if pipeline.targetPrepResult?.binding_site}
+            <div class="result-info">
+              <span class="result-label">Binding Site</span>
+              <div class="result-detail">
+                <span class="result-field">Center: ({pipeline.targetPrepResult.binding_site.center.map((v: number) => v.toFixed(1)).join(', ')})</span>
+                <span class="result-field">Size: ({pipeline.targetPrepResult.binding_site.size.map((v: number) => v.toFixed(1)).join(', ')})</span>
+              </div>
+            </div>
+          {/if}
+          {#if pipeline.targetPrepResult?.pockets?.length}
+            <div class="result-info">
+              <span class="result-label">Detected Pockets ({pipeline.targetPrepResult.pockets.length})</span>
+              {#each pipeline.targetPrepResult.pockets.slice(0, 5) as pocket, i}
+                <div class="pocket-row" class:selected={pipeline.selectedPocketIdx === i}>
+                  <button class="pocket-focus-btn" type="button"
+                    onclick={() => { pipeline.selectedPocketIdx = i; focusPocketCenter(pocket.center); }}>
+                    <span class="pocket-rank">#{pocket.rank}</span>
+                    <span class="pocket-score">consensus: {pocket.consensus_score?.toFixed(2) ?? '?'}</span>
+                    <span class="pocket-center">({pocket.center.map((v: number) => v.toFixed(1)).join(', ')})</span>
+                  </button>
+                  <button class="pocket-select-btn" type="button"
+                    disabled={pipeline.selectedPocketIdx === i && pipeline.targetPrepResult.selected_pocket === i}
+                    onclick={async () => {
+                      if (!pipeline.stages.target.jobName) return;
+                      pipeline.selectedPocketIdx = i;
+                      try {
+                        const { selectPocket } = await import('$lib/api');
+                        await selectPocket(pipeline.stages.target.jobName, i);
+                        pipeline.targetPrepResult = { ...pipeline.targetPrepResult, selected_pocket: i };
+                      } catch (e) {
+                        pipeline.updateStage('target', { error: (e as Error).message || 'Pocket selection failed' });
+                      }
+                    }}>
+                    {pipeline.targetPrepResult.selected_pocket === i ? 'Selected' : 'Select'}
+                  </button>
+                </div>
+              {/each}
+            </div>
+          {/if}
+          <div class="advance-row">
+            <button class="advance-btn" onclick={() => pipeline.handleAdvance('target')}>Next: Library Prep</button>
+          </div>
+        {/if}
+      {/snippet}
+    </Panel>
+  </div>
+
+  <!-- Stage 2: Library Preparation -->
+  <div id="stage-library">
+    <Panel title="Library Preparation">
+      {#snippet children()}
+        <div class="stage-header" role="button" tabindex="0"
+          onclick={() => pipeline.updateStage('library', { collapsed: !pipeline.stages.library.collapsed })}
+          onkeydown={(e) => { if (e.key === 'Enter') pipeline.updateStage('library', { collapsed: !pipeline.stages.library.collapsed }); }}>
+          <span class="stage-label">2. Library Preparation</span>
+          <span class="status-badge {pipeline.statusBadgeClass(pipeline.stages.library.status)}">{pipeline.stages.library.status}</span>
+        </div>
+
+        {#if pipeline.stages.library.status === 'pending' || pipeline.stages.library.status === 'failed'}
+          <form class="stage-form" onsubmit={(e) => { e.preventDefault(); pipeline.handleLibrarySubmit(); }}>
+            <div class="form-field">
+              <label class="form-label" for="ep-lsource">Source</label>
+              <select id="ep-lsource" class="form-select" bind:value={pipeline.libSource}>
+                <option value="smiles">SMILES Input</option>
+                <option value="chembl">ChEMBL Filter</option>
+              </select>
+            </div>
+
+            {#if pipeline.libSource === 'smiles'}
+              <div class="form-field">
+                <label class="form-label" for="ep-smiles">SMILES (one per line)</label>
+                <textarea id="ep-smiles" class="form-textarea" rows="6"
+                  placeholder="CC(=O)Oc1ccccc1C(=O)O&#10;c1ccccc1"
+                  bind:value={pipeline.smilesText}></textarea>
+                <div class="smiles-meta">
+                  <span class="compound-count">{pipeline.smilesCount} compound{pipeline.smilesCount !== 1 ? 's' : ''}</span>
+                  <button type="button" class="load-example-btn" onclick={() => { pipeline.smilesText = pipeline.EXAMPLE_SMILES; }}>
+                    Load example
+                  </button>
+                </div>
+              </div>
+            {:else}
+              <div class="form-field">
+                <label class="form-label" for="ep-chtarget">ChEMBL Target ID</label>
+                <input id="ep-chtarget" type="text" class="form-input" placeholder="e.g. CHEMBL25" bind:value={pipeline.chemblTarget} />
+              </div>
+              <div class="form-field">
+                <label class="form-label" for="ep-phase">Min Clinical Phase</label>
+                <select id="ep-phase" class="form-select" bind:value={pipeline.chemblMaxPhase}>
+                  <option value={0}>Any</option>
+                  <option value={1}>Phase I+</option>
+                  <option value={2}>Phase II+</option>
+                  <option value={3}>Phase III+</option>
+                  <option value={4}>Approved</option>
+                </select>
+              </div>
+              <div class="form-field">
+                <label class="form-label">MW Range</label>
+                <div class="range-row">
+                  <input type="number" step="1" class="form-input" placeholder="Min" bind:value={pipeline.chemblMwMin} />
+                  <span class="range-sep">-</span>
+                  <input type="number" step="1" class="form-input" placeholder="Max" bind:value={pipeline.chemblMwMax} />
+                </div>
+              </div>
+              <div class="form-field">
+                <label class="form-label">LogP Range</label>
+                <div class="range-row">
+                  <input type="number" step="0.1" class="form-input" placeholder="Min" bind:value={pipeline.chemblLogpMin} />
+                  <span class="range-sep">-</span>
+                  <input type="number" step="0.1" class="form-input" placeholder="Max" bind:value={pipeline.chemblLogpMax} />
+                </div>
+              </div>
+              <div class="form-field">
+                <label class="form-label" for="ep-hba">HBA Max</label>
+                <input id="ep-hba" type="number" step="1" min="0" class="form-input" placeholder="e.g. 10" bind:value={pipeline.chemblHbaMax} />
+              </div>
+              <div class="form-field">
+                <label class="form-label" for="ep-hbd">HBD Max</label>
+                <input id="ep-hbd" type="number" step="1" min="0" class="form-input" placeholder="e.g. 5" bind:value={pipeline.chemblHbdMax} />
+              </div>
+            {/if}
+
+            <div class="filter-toggles">
+              <label class="toggle-label"><input type="checkbox" bind:checked={pipeline.filterLipinski} /><span>Lipinski</span></label>
+              <label class="toggle-label"><input type="checkbox" bind:checked={pipeline.filterVeber} /><span>Veber</span></label>
+              <label class="toggle-label"><input type="checkbox" bind:checked={pipeline.filterPAINS} /><span>PAINS</span></label>
+            </div>
+
+            <button type="submit" class="submit-btn" disabled={pipeline.libSubmitting || !pipeline.libFormValid()}>
+              {pipeline.libSubmitting ? 'Submitting...' : 'Prepare Library'}
+            </button>
+          </form>
+        {/if}
+
+        {#if pipeline.stages.library.status === 'running'}
+          <div class="running-indicator">
+            <span class="pulse-dot"></span>
+            <span class="running-text">
+              {#if pipeline.libraryStatus?.compound_count > 0}
+                {pipeline.libraryStatus.compound_count} compounds found — standardizing &amp; filtering...
+              {:else}
+                Resolving compounds from source...
+              {/if}
+            </span>
+          </div>
+        {/if}
+
+        {#if pipeline.stages.library.error}
+          <p class="error-msg">{pipeline.stages.library.error}</p>
+        {/if}
+
+        {#if pipeline.canAdvance('library')}
+          <div class="result-info">
+            <span class="result-label">
+              {pipeline.libraryStatus?.compound_count ?? pipeline.libraryCompoundSample.length} compounds ready
+            </span>
+            {#if pipeline.libraryCompoundSample.length > 0}
+              <div class="compound-sample">
+                {#each pipeline.libraryCompoundSample.slice(0, 6) as cpd}
+                  <div class="compound-chip" title={cpd.smiles ?? cpd.compound_id}>
+                    <span class="compound-chip-id">{cpd.compound_id?.slice(0, 18)}</span>
+                    {#if cpd.mw}<span class="compound-chip-mw">{cpd.mw?.toFixed(0)} Da</span>{/if}
+                  </div>
+                {/each}
+              </div>
+            {/if}
+          </div>
+          <div class="advance-row">
+            <span class="done-label">Library: {pipeline.stages.library.jobName}</span>
+            <button class="advance-btn" onclick={() => pipeline.handleAdvance('library')}>Next: Docking</button>
+          </div>
+        {/if}
+      {/snippet}
+    </Panel>
+  </div>
 </div>
 
 <style>
@@ -206,4 +502,146 @@
     font-size: 12px;
     margin-top: 6px;
   }
+
+  /* Pipeline sections */
+  .pl-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 0 4px;
+  }
+  .pl-title { font-size: 12px; font-weight: 700; color: var(--text-secondary, #8b949e); text-transform: uppercase; letter-spacing: 0.5px; }
+  .pl-actions { display: flex; gap: 6px; }
+
+  .action-btn {
+    background: var(--accent-subtle);
+    border: 1px solid transparent;
+    color: var(--accent);
+    font-size: 11px;
+    font-weight: 500;
+    padding: 3px 10px;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    font-family: var(--font-sans);
+  }
+  .action-btn.danger { background: rgba(248,81,73,0.1); color: #f85149; }
+  .action-btn:hover { opacity: 0.85; }
+
+  .recent-runs { display: flex; flex-direction: column; gap: 2px; margin-bottom: 8px; }
+  .recent-empty { font-size: 11px; color: var(--text-muted, #484f58); padding: 4px 0; }
+  .recent-row { display: flex; align-items: center; gap: 8px; padding: 4px 6px; background: none; border: 1px solid var(--border-default); border-radius: 3px; cursor: pointer; text-align: left; }
+  .recent-row:hover { border-color: var(--accent); }
+  .recent-name { font-size: 11px; font-family: 'SF Mono', monospace; color: var(--text-primary, #e6edf3); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .recent-badge { font-size: 9px; padding: 1px 5px; border-radius: 3px; text-transform: uppercase; font-weight: 600; }
+  .recent-badge.succeeded, .recent-badge.completed { background: rgba(63,185,80,0.15); color: #3fb950; }
+  .recent-badge.failed { background: rgba(248,81,73,0.15); color: #f85149; }
+  .recent-badge.running { background: rgba(210,153,34,0.15); color: #d29922; }
+  .recent-meta { font-size: 10px; color: var(--text-muted, #484f58); white-space: nowrap; }
+
+  .stage-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; cursor: pointer; }
+  .stage-label { font-size: 12px; font-weight: 600; color: var(--text-primary, #e6edf3); }
+  .status-badge { font-size: 10px; font-weight: 600; text-transform: uppercase; padding: 1px 6px; border-radius: 3px; white-space: nowrap; }
+  .status-badge.pending { background: rgba(88,166,255,0.1); color: var(--accent, #58a6ff); }
+  .status-badge.running { background: rgba(210,153,34,0.15); color: #d29922; }
+  .status-badge.completed { background: rgba(63,185,80,0.15); color: #3fb950; }
+  .status-badge.failed { background: rgba(248,81,73,0.15); color: #f85149; }
+
+  .stage-form { display: flex; flex-direction: column; gap: 10px; }
+  .form-field { display: flex; flex-direction: column; gap: 3px; }
+  .form-label { font-size: 11px; font-weight: 600; color: var(--text-secondary, #8b949e); text-transform: uppercase; letter-spacing: 0.3px; }
+  .required { color: #f85149; }
+  .form-input, .form-select, .form-textarea {
+    background: rgba(0,0,0,0.3);
+    border: 1px solid rgba(48,54,61,0.6);
+    color: var(--text-primary, #e6edf3);
+    font-family: 'SF Mono', monospace;
+    font-size: 12px;
+    padding: 6px 8px;
+    border-radius: 4px;
+    outline: none;
+    width: 100%;
+    transition: border-color 0.15s;
+  }
+  .form-input:focus, .form-select:focus, .form-textarea:focus { border-color: var(--accent, #58a6ff); }
+  .form-textarea { resize: vertical; min-height: 60px; }
+  .validation-msg { color: #f85149; font-size: 11px; margin: 0; }
+
+  .box-grid { display: flex; flex-direction: column; gap: 8px; }
+  .box-group { display: flex; flex-direction: column; gap: 3px; }
+  .box-group-label { font-size: 11px; font-weight: 600; color: var(--text-secondary, #8b949e); text-transform: uppercase; letter-spacing: 0.3px; }
+  .box-inputs { display: flex; gap: 6px; }
+  .box-input { flex: 1; min-width: 0; }
+
+  .submit-btn {
+    background: var(--accent, #58a6ff);
+    border: none;
+    color: #000;
+    font-size: 13px;
+    font-weight: 600;
+    padding: 8px 12px;
+    border-radius: 6px;
+    cursor: pointer;
+    width: 100%;
+  }
+  .submit-btn:hover:not(:disabled) { opacity: 0.9; }
+  .submit-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  .filter-toggles { display: flex; gap: 12px; flex-wrap: wrap; }
+  .toggle-label { display: flex; align-items: center; gap: 4px; font-size: 12px; color: var(--text-secondary, #8b949e); cursor: pointer; }
+  .toggle-label input[type="checkbox"] { accent-color: var(--accent, #58a6ff); }
+
+  .smiles-meta { display: flex; align-items: center; justify-content: space-between; margin-top: 2px; }
+  .compound-count { font-size: 11px; color: var(--text-muted, #484f58); }
+  .load-example-btn { background: none; border: none; color: var(--accent, #58a6ff); font-size: 11px; cursor: pointer; padding: 0; }
+  .load-example-btn:hover { text-decoration: underline; }
+
+  .range-row { display: flex; align-items: center; gap: 6px; }
+  .range-sep { color: var(--text-muted, #484f58); font-size: 12px; flex-shrink: 0; }
+
+  .running-indicator { display: flex; align-items: center; gap: 8px; padding: 8px 0; }
+  .pulse-dot { width: 8px; height: 8px; border-radius: 50%; background: #d29922; animation: pulse 1.5s ease-in-out infinite; flex-shrink: 0; }
+  @keyframes pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.5; transform: scale(0.8); } }
+  .running-text { font-size: 12px; color: #d29922; }
+
+  .result-info { display: flex; flex-direction: column; gap: 4px; padding: 8px 0; border-top: 1px solid rgba(48,54,61,0.4); }
+  .result-row-actions { display: flex; align-items: center; justify-content: space-between; }
+  .result-label { font-size: 11px; font-weight: 600; color: var(--text-secondary, #8b949e); text-transform: uppercase; letter-spacing: 0.3px; }
+  .result-detail { display: flex; gap: 12px; flex-wrap: wrap; }
+  .result-field { font-size: 11px; font-family: 'SF Mono', monospace; color: var(--text-primary, #e6edf3); }
+
+  .action-icon-btn {
+    background: rgba(88,166,255,0.1);
+    border: 1px solid rgba(88,166,255,0.3);
+    color: var(--accent, #58a6ff);
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 3px;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .action-icon-btn:hover:not(:disabled) { background: rgba(88,166,255,0.2); }
+  .action-icon-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  .pocket-row { display: flex; gap: 8px; align-items: center; font-size: 11px; font-family: 'SF Mono', monospace; color: var(--text-secondary, #8b949e); padding: 2px 0; }
+  .pocket-row.selected { color: var(--accent, #58a6ff); }
+  .pocket-focus-btn { background: none; border: none; color: inherit; font: inherit; cursor: pointer; display: flex; gap: 6px; align-items: center; flex: 1; text-align: left; padding: 0; }
+  .pocket-focus-btn:hover { color: var(--text-primary, #e6edf3); }
+  .pocket-rank { font-weight: 700; }
+  .pocket-score, .pocket-center { color: var(--text-muted, #484f58); font-size: 10px; }
+  .pocket-select-btn { background: rgba(88,166,255,0.1); border: 1px solid rgba(88,166,255,0.3); color: var(--accent, #58a6ff); font-size: 10px; padding: 1px 6px; border-radius: 3px; cursor: pointer; white-space: nowrap; }
+  .pocket-select-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  .compound-sample { display: flex; flex-direction: column; gap: 2px; margin-top: 4px; }
+  .compound-chip { display: flex; align-items: center; justify-content: space-between; padding: 2px 6px; background: rgba(0,0,0,0.2); border-radius: 3px; border: 1px solid rgba(48,54,61,0.4); }
+  .compound-chip-id { font-size: 10px; font-family: 'SF Mono', monospace; color: var(--text-secondary, #8b949e); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .compound-chip-mw { font-size: 10px; color: var(--text-muted, #484f58); white-space: nowrap; margin-left: 8px; }
+
+  .done-label { font-size: 11px; color: #3fb950; font-family: 'SF Mono', monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 160px; }
+  .advance-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 0; flex-wrap: wrap; }
+  .advance-btn { background: rgba(63,185,80,0.15); border: 1px solid rgba(63,185,80,0.4); color: #3fb950; font-size: 11px; font-weight: 600; padding: 4px 12px; border-radius: 4px; cursor: pointer; white-space: nowrap; }
+  .advance-btn:hover { background: rgba(63,185,80,0.25); }
+
+  .session-banner { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px; background: rgba(210,153,34,0.1); border: 1px solid rgba(210,153,34,0.3); border-radius: 4px; margin-bottom: 8px; }
+  .session-msg { font-size: 11px; color: #d29922; }
+  .session-login-btn { background: rgba(210,153,34,0.2); border: 1px solid rgba(210,153,34,0.5); color: #d29922; font-size: 11px; padding: 2px 10px; border-radius: 3px; cursor: pointer; }
 </style>
