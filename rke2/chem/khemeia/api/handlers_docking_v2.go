@@ -112,18 +112,18 @@ type DockingV2ResultsResponse struct {
 
 // EnsureDockingV2Schema creates the v2 docking tables.
 // Called during startup alongside other schema initialization.
-func EnsureDockingV2Schema(db *sql.DB) error {
+func EnsureDockingV2Schema(db *DB) error {
 	// Master job table for v2 docking jobs.
 	jobsDDL := `CREATE TABLE IF NOT EXISTS docking_v2_jobs (
-		id              INT AUTO_INCREMENT PRIMARY KEY,
+		id              SERIAL PRIMARY KEY,
 		name            VARCHAR(255) NOT NULL UNIQUE,
-		status          ENUM('Pending', 'Running', 'Completed', 'Failed') NOT NULL DEFAULT 'Pending',
+		status          TEXT NOT NULL DEFAULT 'Pending' CHECK (status IN ('Pending', 'Running', 'Completed', 'Failed')),
 		receptor_ref    VARCHAR(255) NOT NULL,
 		library_ref     VARCHAR(255) NOT NULL,
 		engines         JSON NOT NULL,
 		exhaustiveness  INT NOT NULL DEFAULT 32,
 		scoring         VARCHAR(32) NOT NULL DEFAULT 'vina',
-		consensus       TINYINT(1) NOT NULL DEFAULT 0,
+		consensus       BOOLEAN NOT NULL DEFAULT FALSE,
 		top_n_refine    INT NOT NULL DEFAULT 100,
 		chunk_size      INT NOT NULL DEFAULT 10000,
 		submitted_by    VARCHAR(255) NULL,
@@ -132,40 +132,50 @@ func EnsureDockingV2Schema(db *sql.DB) error {
 		output_data     JSON NULL,
 		created_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
 		started_at      TIMESTAMP NULL,
-		completed_at    TIMESTAMP NULL,
-		INDEX idx_status (status),
-		INDEX idx_receptor_ref (receptor_ref),
-		INDEX idx_created_at (created_at)
-	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`
+		completed_at    TIMESTAMP NULL
+	)`
 
 	if _, err := db.Exec(jobsDDL); err != nil {
 		return fmt.Errorf("creating docking_v2_jobs table: %w", err)
 	}
+	for _, idx := range []string{
+		`CREATE INDEX IF NOT EXISTS idx_docking_v2_jobs_status ON docking_v2_jobs (status)`,
+		`CREATE INDEX IF NOT EXISTS idx_docking_v2_jobs_receptor_ref ON docking_v2_jobs (receptor_ref)`,
+		`CREATE INDEX IF NOT EXISTS idx_docking_v2_jobs_created_at ON docking_v2_jobs (created_at)`,
+	} {
+		if _, err := db.Exec(idx); err != nil {
+			return fmt.Errorf("creating docking_v2_jobs index: %w", err)
+		}
+	}
 
 	// Per-engine progress tracking.
 	enginesDDL := `CREATE TABLE IF NOT EXISTS docking_v2_engine_status (
-		id              INT AUTO_INCREMENT PRIMARY KEY,
+		id              SERIAL PRIMARY KEY,
 		job_name        VARCHAR(255) NOT NULL,
 		engine          VARCHAR(32)  NOT NULL,
-		status          ENUM('Pending', 'Running', 'Completed', 'Failed') NOT NULL DEFAULT 'Pending',
+		status          TEXT NOT NULL DEFAULT 'Pending' CHECK (status IN ('Pending', 'Running', 'Completed', 'Failed')),
 		result_count    INT NOT NULL DEFAULT 0,
 		best_affinity   FLOAT NULL,
 		error_output    TEXT NULL,
 		started_at      TIMESTAMP NULL,
-		completed_at    TIMESTAMP NULL,
-		UNIQUE KEY uq_job_engine (job_name, engine),
-		INDEX idx_job_name (job_name)
-	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`
+		completed_at    TIMESTAMP NULL
+	)`
 
 	if _, err := db.Exec(enginesDDL); err != nil {
 		return fmt.Errorf("creating docking_v2_engine_status table: %w", err)
 	}
+	for _, idx := range []string{
+		`CREATE UNIQUE INDEX IF NOT EXISTS uq_docking_v2_job_engine ON docking_v2_engine_status (job_name, engine)`,
+		`CREATE INDEX IF NOT EXISTS idx_docking_v2_engine_status_job ON docking_v2_engine_status (job_name)`,
+	} {
+		if _, err := db.Exec(idx); err != nil {
+			return fmt.Errorf("creating docking_v2_engine_status index: %w", err)
+		}
+	}
 
-	// Per-engine docking results. Extends the v1 docking_results pattern with
-	// an engine column to support multi-engine aggregation.
-	// cnn_score / cnn_affinity are gnina-specific; NULL for other engines.
+	// Per-engine docking results.
 	resultsDDL := `CREATE TABLE IF NOT EXISTS docking_v2_results (
-		id                INT AUTO_INCREMENT PRIMARY KEY,
+		id                SERIAL PRIMARY KEY,
 		job_name          VARCHAR(255) NOT NULL,
 		engine            VARCHAR(32)  NOT NULL,
 		compound_id       VARCHAR(255) NOT NULL,
@@ -173,31 +183,32 @@ func EnsureDockingV2Schema(db *sql.DB) error {
 		affinity_kcal_mol FLOAT        NOT NULL,
 		cnn_score         FLOAT        NULL,
 		cnn_affinity      FLOAT        NULL,
-		docked_pdbqt      MEDIUMBLOB   NULL,
-		created_at        TIMESTAMP    DEFAULT CURRENT_TIMESTAMP,
-		INDEX idx_job_name (job_name),
-		INDEX idx_engine (engine),
-		INDEX idx_compound (compound_id),
-		INDEX idx_affinity (affinity_kcal_mol),
-		INDEX idx_job_engine (job_name, engine)
-	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`
+		docked_pdbqt      BYTEA        NULL,
+		created_at        TIMESTAMP    DEFAULT CURRENT_TIMESTAMP
+	)`
 
 	if _, err := db.Exec(resultsDDL); err != nil {
 		return fmt.Errorf("creating docking_v2_results table: %w", err)
 	}
+	for _, idx := range []string{
+		`CREATE INDEX IF NOT EXISTS idx_docking_v2_results_job ON docking_v2_results (job_name)`,
+		`CREATE INDEX IF NOT EXISTS idx_docking_v2_results_engine ON docking_v2_results (engine)`,
+		`CREATE INDEX IF NOT EXISTS idx_docking_v2_results_compound ON docking_v2_results (compound_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_docking_v2_results_affinity ON docking_v2_results (affinity_kcal_mol)`,
+		`CREATE INDEX IF NOT EXISTS idx_docking_v2_results_job_engine ON docking_v2_results (job_name, engine)`,
+	} {
+		if _, err := db.Exec(idx); err != nil {
+			return fmt.Errorf("creating docking_v2_results index: %w", err)
+		}
+	}
 
-	// Migration: add CNN score columns to tables created before this schema version.
-	// ALTER TABLE ... ADD COLUMN fails with error 1060 if the column already exists;
-	// we ignore that error so the migration is idempotent.
+	// Migration: add CNN score columns if missing. PostgreSQL supports ADD COLUMN IF NOT EXISTS.
 	for _, alter := range []string{
-		"ALTER TABLE docking_v2_results ADD COLUMN cnn_score FLOAT NULL AFTER affinity_kcal_mol",
-		"ALTER TABLE docking_v2_results ADD COLUMN cnn_affinity FLOAT NULL AFTER cnn_score",
+		"ALTER TABLE docking_v2_results ADD COLUMN IF NOT EXISTS cnn_score FLOAT NULL",
+		"ALTER TABLE docking_v2_results ADD COLUMN IF NOT EXISTS cnn_affinity FLOAT NULL",
 	} {
 		if _, err := db.Exec(alter); err != nil {
-			// MySQL error 1060 = Duplicate column name — already migrated, skip.
-			if !strings.Contains(err.Error(), "Duplicate column name") {
-				return fmt.Errorf("migrating docking_v2_results: %w", err)
-			}
+			return fmt.Errorf("migrating docking_v2_results: %w", err)
 		}
 	}
 
@@ -996,7 +1007,7 @@ func (c *Controller) runSingleEngineDocking(jobName, engine string, req DockingV
 }
 
 // failEngine marks an engine as failed and returns an error for the caller.
-func (c *Controller) failEngine(db *sql.DB, jobName, engine, msg string) error {
+func (c *Controller) failEngine(db *DB, jobName, engine, msg string) error {
 	db.Exec(
 		`UPDATE docking_v2_engine_status
 		 SET status='Failed', error_output=?, completed_at=NOW()

@@ -340,7 +340,7 @@ func (h *APIHandler) ImportFromChEMBL(w http.ResponseWriter, r *http.Request) {
 		_, err := dockingDB.ExecContext(r.Context(),
 			`INSERT INTO ligands (compound_id, smiles, source_db)
 			 VALUES (?, ?, ?)
-			 ON DUPLICATE KEY UPDATE smiles = VALUES(smiles)`,
+			 ON CONFLICT (compound_id, source_db) DO UPDATE SET smiles = EXCLUDED.smiles`,
 			chemblID, smiles, req.SourceDB)
 		if err != nil {
 			continue
@@ -502,19 +502,13 @@ func (h *APIHandler) ImportFromFilter(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback() // no-op after Commit
 
-	stmt, err := tx.PrepareContext(r.Context(),
-		`INSERT INTO ligands (compound_id, smiles, source_db)
-		 VALUES (?, ?, ?)
-		 ON DUPLICATE KEY UPDATE smiles = VALUES(smiles)`)
-	if err != nil {
-		writeError(w, fmt.Sprintf("failed to prepare insert: %v", err), http.StatusInternalServerError)
-		return
-	}
-	defer stmt.Close()
-
 	imported := 0
 	for _, lig := range ligands {
-		if _, err := stmt.ExecContext(r.Context(), lig.chemblID, lig.smiles, req.SourceDB); err != nil {
+		if _, err := tx.ExecContext(r.Context(),
+			`INSERT INTO ligands (compound_id, smiles, source_db)
+			 VALUES (?, ?, ?)
+			 ON CONFLICT (compound_id, source_db) DO UPDATE SET smiles = EXCLUDED.smiles`,
+			lig.chemblID, lig.smiles, req.SourceDB); err != nil {
 			continue
 		}
 		imported++

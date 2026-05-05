@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Batch docking worker.
 
-Fetches receptor PDBQT and pre-computed ligand PDBQTs from MySQL, runs
+Fetches receptor PDBQT and pre-computed ligand PDBQTs from PostgreSQL, runs
 AutoDock Vina for each ligand, and writes results to the staging table.
 
 Replaces the previous ligandprepv2.py + dockingv2.py + export_energies_mysql.py
@@ -14,11 +14,11 @@ All configuration is via environment variables:
   SOURCE_DB      — ligand source database filter
   BATCH_OFFSET   — starting row offset in ligands table
   BATCH_LIMIT    — number of ligands to process
-  MYSQL_HOST     — MySQL hostname (default: localhost)
-  MYSQL_PORT     — MySQL port (default: 3306)
-  MYSQL_USER     — MySQL user (default: root)
-  MYSQL_PASSWORD — MySQL password (required)
-  MYSQL_DATABASE — MySQL database (default: docking)
+  POSTGRES_HOST     — PostgreSQL hostname (default: localhost)
+  POSTGRES_PORT     — PostgreSQL port (default: 3306)
+  POSTGRES_USER     — PostgreSQL user (default: root)
+  POSTGRES_PASSWORD — PostgreSQL password (required)
+  POSTGRES_DB — PostgreSQL database (default: docking)
   POSE_THRESHOLD — affinity threshold for saving docked poses (default: -7.0)
 """
 
@@ -29,7 +29,7 @@ import subprocess
 import sys
 import tempfile
 
-import mysql.connector
+import psycopg2
 
 VINA_BIN = "/autodock/vina"
 DATA_DIR = "/data"
@@ -59,26 +59,26 @@ def get_config():
         "source_db": require_env("SOURCE_DB"),
         "batch_offset": int(require_env("BATCH_OFFSET")),
         "batch_limit": int(require_env("BATCH_LIMIT")),
-        "mysql_host": os.environ.get("MYSQL_HOST", "localhost"),
-        "mysql_port": int(os.environ.get("MYSQL_PORT", "3306")),
-        "mysql_user": os.environ.get("MYSQL_USER", "root"),
-        "mysql_password": require_env("MYSQL_PASSWORD"),
-        "mysql_database": os.environ.get("MYSQL_DATABASE", "docking"),
+        "pg_host": os.environ.get("POSTGRES_HOST", "localhost"),
+        "pg_port": int(os.environ.get("POSTGRES_PORT", ("5432"))),
+        "pg_user": os.environ.get("POSTGRES_USER", "root"),
+        "pg_password": require_env("POSTGRES_PASSWORD"),
+        "pg_dbname": os.environ.get("POSTGRES_DB", "docking"),
     }
 
 
 def connect_db(cfg):
-    """Connect to MySQL. Exits on failure."""
+    """Connect to PostgreSQL. Exits on failure."""
     try:
-        return mysql.connector.connect(
-            host=cfg["mysql_host"],
-            port=cfg["mysql_port"],
-            user=cfg["mysql_user"],
-            password=cfg["mysql_password"],
-            database=cfg["mysql_database"],
+        return psycopg2.connect(
+            host=cfg["pg_host"],
+            port=cfg["pg_port"],
+            user=cfg["pg_user"],
+            password=cfg["pg_password"],
+            dbname=cfg["pg_dbname"],
         )
-    except mysql.connector.Error as exc:
-        print(f"FATAL: MySQL connection failed: {exc}", flush=True)
+    except psycopg2.Error as exc:
+        print(f"FATAL: PostgreSQL connection failed: {exc}", flush=True)
         sys.exit(1)
 
 

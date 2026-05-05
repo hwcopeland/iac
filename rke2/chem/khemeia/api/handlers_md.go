@@ -35,67 +35,73 @@ import (
 
 // --- Schema ---
 
-func EnsureMDSchema(db *sql.DB) error {
+func EnsureMDSchema(db *DB) error {
 	ddl := `CREATE TABLE IF NOT EXISTS md_jobs (
-		id             INT AUTO_INCREMENT PRIMARY KEY,
+		id             SERIAL PRIMARY KEY,
 		name           VARCHAR(255) NOT NULL UNIQUE,
-		status         ENUM('Pending','Running','Completed','Failed') NOT NULL DEFAULT 'Pending',
+		status         TEXT NOT NULL DEFAULT 'Pending' CHECK (status IN ('Pending','Running','Completed','Failed')),
 		dock_job_name  VARCHAR(255) NOT NULL,
 		receptor_ref   VARCHAR(255) NOT NULL,
 		top_n          INT NOT NULL DEFAULT 5,
 		md_nsteps      INT NOT NULL DEFAULT 500000,
 		force_field    VARCHAR(64) NOT NULL DEFAULT 'amber99sb-ildn',
 		ligand_ff      VARCHAR(32) NOT NULL DEFAULT 'gaff2',
-		use_resp       TINYINT(1) NOT NULL DEFAULT 0,
+		use_resp       BOOLEAN NOT NULL DEFAULT FALSE,
 		submitted_by   VARCHAR(255) NULL,
 		error_output   TEXT NULL,
 		input_data     JSON NULL,
 		output_data    JSON NULL,
 		created_at     TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
 		started_at     TIMESTAMP NULL,
-		completed_at   TIMESTAMP NULL,
-		INDEX idx_status (status),
-		INDEX idx_dock_job (dock_job_name)
-	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`
+		completed_at   TIMESTAMP NULL
+	)`
 	if _, err := db.Exec(ddl); err != nil {
 		return fmt.Errorf("creating md_jobs table: %w", err)
+	}
+	for _, idx := range []string{
+		`CREATE INDEX IF NOT EXISTS idx_md_jobs_status ON md_jobs (status)`,
+		`CREATE INDEX IF NOT EXISTS idx_md_jobs_dock_job ON md_jobs (dock_job_name)`,
+	} {
+		if _, err := db.Exec(idx); err != nil {
+			return fmt.Errorf("creating md_jobs index: %w", err)
+		}
 	}
 
 	// md_results is created by the GROMACS worker directly; ensure it exists here
 	// so the controller can query it without depending on a prior worker run.
 	resDDL := `CREATE TABLE IF NOT EXISTS md_results (
-		id                      BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+		id                      BIGSERIAL PRIMARY KEY,
 		job_name                VARCHAR(128) NOT NULL,
 		compound_id             VARCHAR(64)  NOT NULL,
 		dock_engine             VARCHAR(32)  NOT NULL,
-		dock_affinity_kcal_mol  DOUBLE       NULL,
+		dock_affinity_kcal_mol  DOUBLE PRECISION NULL,
 		duration_s              INT          NULL,
 		trajectory_s3_key       VARCHAR(512) NULL,
 		energy_s3_key           VARCHAR(512) NULL,
 		frames_s3_key           VARCHAR(512) NULL,
 		energy_json_s3_key      VARCHAR(512) NULL,
-		created_at              DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
-		INDEX idx_job_name (job_name),
-		INDEX idx_compound (compound_id)
-	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`
+		created_at              TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP
+	)`
 	if _, err := db.Exec(resDDL); err != nil {
 		return fmt.Errorf("creating md_results table: %w", err)
 	}
+	for _, idx := range []string{
+		`CREATE INDEX IF NOT EXISTS idx_md_results_job_name ON md_results (job_name)`,
+		`CREATE INDEX IF NOT EXISTS idx_md_results_compound ON md_results (compound_id)`,
+	} {
+		if _, err := db.Exec(idx); err != nil {
+			return fmt.Errorf("creating md_results index: %w", err)
+		}
+	}
 
 	// Add post-processing columns to existing deployments.
-	// MySQL doesn't support ADD COLUMN IF NOT EXISTS, so check information_schema first.
+	// PostgreSQL supports ADD COLUMN IF NOT EXISTS natively.
 	for _, col := range []struct{ name, def string }{
 		{"frames_s3_key", "VARCHAR(512) NULL"},
 		{"energy_json_s3_key", "VARCHAR(512) NULL"},
 	} {
-		var count int
-		db.QueryRow(
-			`SELECT COUNT(*) FROM information_schema.COLUMNS
-			 WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'md_results' AND COLUMN_NAME = ?`,
-			col.name,
-		).Scan(&count)
-		if count == 0 {
-			db.Exec(fmt.Sprintf("ALTER TABLE md_results ADD COLUMN %s %s", col.name, col.def))
+		if _, err := db.Exec(fmt.Sprintf("ALTER TABLE md_results ADD COLUMN IF NOT EXISTS %s %s", col.name, col.def)); err != nil {
+			return fmt.Errorf("migrating md_results column %s: %w", col.name, err)
 		}
 	}
 
@@ -910,7 +916,7 @@ func (c *Controller) RunMDJob(jobName string, req MDSubmitRequest) {
 	log.Printf("[md] %s: completed, %d results", jobName, resultCount)
 }
 
-func (c *Controller) failMDJob(db *sql.DB, jobName, msg string) {
+func (c *Controller) failMDJob(db *DB, jobName, msg string) {
 	db.Exec(`UPDATE md_jobs SET status='Failed', error_output=?, completed_at=NOW() WHERE name=?`, msg, jobName)
 	log.Printf("[md] %s: FAILED: %s", jobName, msg)
 }

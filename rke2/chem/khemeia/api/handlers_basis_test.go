@@ -1,7 +1,6 @@
 package main
 
 import (
-	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -110,7 +109,7 @@ func TestBasisSetDetailJSON_NilDescription(t *testing.T) {
 func TestListBasisSetsNoDB(t *testing.T) {
 	handler := &APIHandler{
 		controller: &Controller{
-			pluginDBs: map[string]*sql.DB{},
+			pluginDBs: map[string]*DB{},
 		},
 	}
 
@@ -127,7 +126,7 @@ func TestListBasisSetsNoDB(t *testing.T) {
 func TestGetBasisSetNoDB(t *testing.T) {
 	handler := &APIHandler{
 		controller: &Controller{
-			pluginDBs: map[string]*sql.DB{},
+			pluginDBs: map[string]*DB{},
 		},
 	}
 
@@ -144,7 +143,7 @@ func TestGetBasisSetNoDB(t *testing.T) {
 func TestGetBasisSetEmptyID(t *testing.T) {
 	handler := &APIHandler{
 		controller: &Controller{
-			pluginDBs: map[string]*sql.DB{},
+			pluginDBs: map[string]*DB{},
 		},
 	}
 
@@ -162,7 +161,7 @@ func TestGetBasisSetEmptyID(t *testing.T) {
 func TestSearchBasisSetsNoDB(t *testing.T) {
 	handler := &APIHandler{
 		controller: &Controller{
-			pluginDBs: map[string]*sql.DB{},
+			pluginDBs: map[string]*DB{},
 		},
 	}
 
@@ -179,7 +178,7 @@ func TestSearchBasisSetsNoDB(t *testing.T) {
 func TestUploadBasisSetNoDB(t *testing.T) {
 	handler := &APIHandler{
 		controller: &Controller{
-			pluginDBs: map[string]*sql.DB{},
+			pluginDBs: map[string]*DB{},
 		},
 	}
 
@@ -198,7 +197,7 @@ func TestUploadBasisSetNoDB(t *testing.T) {
 func TestImportBasisSetNoDB(t *testing.T) {
 	handler := &APIHandler{
 		controller: &Controller{
-			pluginDBs: map[string]*sql.DB{},
+			pluginDBs: map[string]*DB{},
 		},
 	}
 
@@ -217,7 +216,7 @@ func TestImportBasisSetNoDB(t *testing.T) {
 func TestDeleteBasisSetNoDB(t *testing.T) {
 	handler := &APIHandler{
 		controller: &Controller{
-			pluginDBs: map[string]*sql.DB{},
+			pluginDBs: map[string]*DB{},
 		},
 	}
 

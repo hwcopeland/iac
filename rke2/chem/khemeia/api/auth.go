@@ -4,7 +4,6 @@ package main
 import (
 	"context"
 	"crypto/rand"
-	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -34,13 +33,13 @@ func UserFromContext(r *http.Request) string {
 }
 
 // AuthMiddleware validates JWT tokens against an OIDC provider's JWKS endpoint.
-// It also supports static API tokens stored in MySQL. Requests from internal
+// It also supports static API tokens stored in PostgreSQL. Requests from internal
 // pod/service CIDRs bypass authentication entirely.
 type AuthMiddleware struct {
 	jwks      keyfunc.Keyfunc
 	issuerURL string
 	cidrs     []*net.IPNet
-	db        *sql.DB // for static API token lookups
+	db        *DB // for static API token lookups
 
 	mu     sync.RWMutex
 	cancel context.CancelFunc
@@ -314,25 +313,25 @@ func writeAuthError(w http.ResponseWriter, msg string, code int) {
 }
 
 // SetDB attaches a database connection for static API token lookups.
-func (a *AuthMiddleware) SetDB(db *sql.DB) {
+func (a *AuthMiddleware) SetDB(db *DB) {
 	a.db = db
 }
 
 // checkStaticToken looks up a bearer token in the api_tokens table.
-// Returns the username if the token is valid and not expired, or "" if not found/expired.
+// Returns the token label if the token is valid (not expired and not revoked), or "" otherwise.
 func (a *AuthMiddleware) checkStaticToken(token string) string {
 	if a.db == nil {
 		return ""
 	}
-	var username string
+	var label string
 	err := a.db.QueryRow(
-		"SELECT username FROM api_tokens WHERE token = ? AND expires_at > NOW()",
+		"SELECT label FROM api_tokens WHERE token = ? AND (expires_at IS NULL OR expires_at > NOW()) AND revoked = FALSE",
 		token,
-	).Scan(&username)
+	).Scan(&label)
 	if err != nil {
 		return ""
 	}
-	return username
+	return label
 }
 
 // generateToken creates a cryptographically random 32-byte hex token.
@@ -345,16 +344,23 @@ func generateToken() (string, error) {
 }
 
 // EnsureAPITokenSchema creates the api_tokens table if it doesn't exist.
-func EnsureAPITokenSchema(db *sql.DB) error {
-	_, err := db.Exec(`CREATE TABLE IF NOT EXISTS api_tokens (
-		id         INT AUTO_INCREMENT PRIMARY KEY,
-		token      VARCHAR(64) NOT NULL UNIQUE,
-		username   VARCHAR(255) NOT NULL,
+func EnsureAPITokenSchema(db *DB) error {
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS api_tokens (
+		id         SERIAL PRIMARY KEY,
+		token      CHAR(64) NOT NULL UNIQUE,
+		label      VARCHAR(255) NOT NULL,
 		created_by VARCHAR(255) NOT NULL DEFAULT 'admin',
 		created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-		expires_at TIMESTAMP NOT NULL,
-		INDEX idx_token (token),
-		INDEX idx_expires (expires_at)
-	)`)
-	return err
+		expires_at TIMESTAMP NULL,
+		revoked    BOOLEAN NOT NULL DEFAULT FALSE
+	)`); err != nil {
+		return err
+	}
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_api_tokens_token ON api_tokens (token)`); err != nil {
+		return err
+	}
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_api_tokens_expires ON api_tokens (expires_at)`); err != nil {
+		return err
+	}
+	return nil
 }

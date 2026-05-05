@@ -71,9 +71,9 @@ func (c *Controller) RunParallelDockingJob(plugin Plugin, jobName string, input 
 		// Copy workflow record for this job name
 		_, _ = db.Exec(
 			`INSERT INTO docking_workflows (name, pdbid, source_db, native_ligand, chunk_size, image, receptor_pdbqt, grid_center_x, grid_center_y, grid_center_z, phase)
-			 SELECT ?, pdbid, ?, ?, ?, 'generic', receptor_pdbqt, grid_center_x, grid_center_y, grid_center_z, 'Running'
-			 FROM docking_workflows WHERE pdbid = ? AND receptor_pdbqt IS NOT NULL LIMIT 1
-			 ON DUPLICATE KEY UPDATE receptor_pdbqt=VALUES(receptor_pdbqt)`,
+			 SELECT $1, pdbid, $2, $3, $4, 'generic', receptor_pdbqt, grid_center_x, grid_center_y, grid_center_z, 'Running'
+			 FROM docking_workflows WHERE pdbid = $5 AND receptor_pdbqt IS NOT NULL LIMIT 1
+			 ON CONFLICT (name) DO UPDATE SET receptor_pdbqt = EXCLUDED.receptor_pdbqt`,
 			jobName, ligandDB, nativeLigand, chunkSize, pdbid,
 		)
 	} else {
