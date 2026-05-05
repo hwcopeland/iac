@@ -900,8 +900,8 @@ func TestWP3_IsGPUEngine(t *testing.T) {
 	}{
 		{"vina-gpu", true},
 		{"vina-gpu-batch", true},
-		{"gnina", true},
-		{"diffdock", true},
+		{"gnina", false},   // gpu-parallel: concurrent via time-slicing, not serialised
+		{"diffdock", true}, // gpu-exclusive: holds all GPU slots, runs serially
 		{"vina-1.2", false},
 		{"unknown", false},
 	}

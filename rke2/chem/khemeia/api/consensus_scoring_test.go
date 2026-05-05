@@ -160,29 +160,35 @@ func TestValidateEngineSelection_Invalid(t *testing.T) {
 }
 
 func TestEngineComputeClass(t *testing.T) {
-	gpuEngines := []string{"vina-gpu", "vina-gpu-batch", "gnina", "diffdock"}
-	cpuEngines := []string{"vina-1.2"}
-
-	for _, e := range gpuEngines {
-		if EngineComputeClass(e) != "gpu" {
-			t.Errorf("expected gpu for %s", e)
-		}
+	cases := []struct {
+		engine string
+		want   string
+	}{
+		{"vina-gpu", "gpu"},
+		{"vina-gpu-batch", "gpu"},
+		{"gnina", "gpu-parallel"},   // concurrent GPU time-slicing
+		{"diffdock", "gpu-exclusive"}, // exclusive single-GPU
+		{"vina-1.2", "cpu"},
+		{"unknown", "cpu"},
 	}
-	for _, e := range cpuEngines {
-		if EngineComputeClass(e) != "cpu" {
-			t.Errorf("expected cpu for %s", e)
+	for _, tc := range cases {
+		if got := EngineComputeClass(tc.engine); got != tc.want {
+			t.Errorf("EngineComputeClass(%q) = %q, want %q", tc.engine, got, tc.want)
 		}
 	}
 }
 
 func TestSortEnginesForScheduling(t *testing.T) {
+	// gnina is gpu-parallel → runs concurrently with CPU engines, not serialised
+	// vina-1.2 is cpu → cpuEngines
+	// vina-gpu is gpu → gpuEngines (serial)
 	cpu, gpu := SortEnginesForScheduling([]string{"gnina", "vina-1.2", "vina-gpu"})
 
-	if len(cpu) != 1 {
-		t.Errorf("expected 1 CPU engine, got %d", len(cpu))
+	if len(cpu) != 2 {
+		t.Errorf("expected 2 CPU/parallel engines, got %d", len(cpu))
 	}
-	if len(gpu) != 2 {
-		t.Errorf("expected 2 GPU engines, got %d", len(gpu))
+	if len(gpu) != 1 {
+		t.Errorf("expected 1 serial GPU engine, got %d", len(gpu))
 	}
 }
 
