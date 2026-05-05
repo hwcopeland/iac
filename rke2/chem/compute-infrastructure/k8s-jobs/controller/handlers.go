@@ -23,8 +23,8 @@ type APIHandler struct {
 	client     *kubernetes.Clientset
 	namespace  string
 	controller *DockingJobController
-	db         *sql.DB   // docking database
-	qeDb       *sql.DB   // qe database
+	db         *sql.DB
+	qeDb       *sql.DB
 }
 
 // NewAPIHandler creates a new API handler
@@ -145,7 +145,7 @@ func (h *APIHandler) CreateJob(w http.ResponseWriter, r *http.Request) {
 	// Validate that ligands exist for the given source_db.
 	var ligandCount int
 	err := h.db.QueryRowContext(r.Context(),
-		`SELECT COUNT(*) FROM ligands WHERE source_db = ?`, req.LigandDb).Scan(&ligandCount)
+		`SELECT COUNT(*) FROM ligands WHERE source_db = $1`, req.LigandDb).Scan(&ligandCount)
 	if err != nil {
 		writeError(w, fmt.Sprintf("failed to check ligands: %v", err), http.StatusInternalServerError)
 		return
@@ -161,7 +161,7 @@ func (h *APIHandler) CreateJob(w http.ResponseWriter, r *http.Request) {
 	// INSERT workflow row with phase='Running'.
 	_, err = h.db.ExecContext(r.Context(),
 		`INSERT INTO docking_workflows (name, phase, pdbid, source_db, native_ligand, chunk_size, image, submitted_by)
-		 VALUES (?, 'Running', ?, ?, ?, ?, ?, ?)`,
+		 VALUES ($1, 'Running', $2, $3, $4, $5, $6, $7)`,
 		jobName, req.PDBID, req.LigandDb, req.NativeLigand, req.LigandsChunkSize, req.Image, submittedBy)
 	if err != nil {
 		writeError(w, fmt.Sprintf("failed to create workflow: %v", err), http.StatusInternalServerError)
@@ -208,7 +208,7 @@ func (h *APIHandler) GetJob(w http.ResponseWriter, r *http.Request) {
 	err := h.db.QueryRowContext(r.Context(),
 		`SELECT name, phase, pdbid, source_db, batch_count, completed_batches,
 		        message, created_at, started_at, completed_at
-		   FROM docking_workflows WHERE name = ?`, jobName).Scan(
+		   FROM docking_workflows WHERE name = $1`, jobName).Scan(
 		&resp.Name, &resp.Status, &resp.PDBID, &resp.LigandDb,
 		&resp.BatchCount, &resp.CompletedBatches,
 		&message, &resp.CreatedAt, &startTime, &completionTime)
@@ -261,19 +261,19 @@ func (h *APIHandler) DeleteJob(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Delete from MySQL tables (staging first, then results, then workflow).
+	// Delete from DB tables (staging first, then results, then workflow).
 	if _, err := h.db.ExecContext(r.Context(),
-		`DELETE FROM staging WHERE job_type = 'dock' AND JSON_EXTRACT(payload, '$.workflow_name') = ?`, jobName); err != nil {
+		`DELETE FROM staging WHERE job_type = 'dock' AND payload->>'workflow_name' = $1`, jobName); err != nil {
 		log.Printf("Failed to delete staging rows for workflow %s: %v", jobName, err)
 	}
 
 	if _, err := h.db.ExecContext(r.Context(),
-		`DELETE FROM docking_results WHERE workflow_name = ?`, jobName); err != nil {
+		`DELETE FROM docking_results WHERE workflow_name = $1`, jobName); err != nil {
 		log.Printf("Failed to delete results for workflow %s: %v", jobName, err)
 	}
 
 	if _, err := h.db.ExecContext(r.Context(),
-		`DELETE FROM docking_workflows WHERE name = ?`, jobName); err != nil {
+		`DELETE FROM docking_workflows WHERE name = $1`, jobName); err != nil {
 		log.Printf("Failed to delete workflow %s: %v", jobName, err)
 	}
 
@@ -323,7 +323,7 @@ func (h *APIHandler) GetLogs(w http.ResponseWriter, r *http.Request) {
 	w.Write(logs)
 }
 
-// DockingResultsResponse holds aggregated MySQL stats for a workflow
+// DockingResultsResponse holds aggregated docking stats for a workflow
 type DockingResultsResponse struct {
 	WorkflowName         string  `json:"workflow_name"`
 	ResultCount          int     `json:"result_count"`
@@ -333,7 +333,6 @@ type DockingResultsResponse struct {
 }
 
 // GetResults handles GET /api/v1/dockingjobs/{name}/results
-// Returns aggregated docking affinity stats from MySQL for the given workflow.
 func (h *APIHandler) GetResults(w http.ResponseWriter, r *http.Request) {
 	trimmed := strings.TrimPrefix(r.URL.Path, "/api/v1/dockingjobs/")
 	jobName := strings.TrimSuffix(trimmed, "/results")
@@ -346,7 +345,7 @@ func (h *APIHandler) GetResults(w http.ResponseWriter, r *http.Request) {
 	var best, worst, avg sql.NullFloat64
 	row := h.db.QueryRowContext(r.Context(),
 		`SELECT COUNT(*), MIN(affinity_kcal_mol), MAX(affinity_kcal_mol), AVG(affinity_kcal_mol)
-		   FROM docking_results WHERE workflow_name = ?`, jobName)
+		   FROM docking_results WHERE workflow_name = $1`, jobName)
 	if err := row.Scan(&count, &best, &worst, &avg); err != nil {
 		writeError(w, fmt.Sprintf("query error: %v", err), http.StatusInternalServerError)
 		return
@@ -416,8 +415,8 @@ func (h *APIHandler) ImportLigands(w http.ResponseWriter, r *http.Request) {
 
 		_, err := h.db.ExecContext(r.Context(),
 			`INSERT INTO ligands (compound_id, smiles, pdbqt, source_db)
-			 VALUES (?, ?, ?, ?)
-			 ON DUPLICATE KEY UPDATE smiles = VALUES(smiles), pdbqt = VALUES(pdbqt)`,
+			 VALUES ($1, $2, $3, $4)
+			 ON CONFLICT (compound_id, source_db) DO UPDATE SET smiles = EXCLUDED.smiles, pdbqt = EXCLUDED.pdbqt`,
 			lig.CompoundID, lig.Smiles, pdbqt, lig.SourceDb)
 		if err != nil {
 			log.Printf("[ImportLigands] failed to upsert %s: %v", lig.CompoundID, err)
@@ -512,7 +511,7 @@ func (h *APIHandler) SubmitQEJob(w http.ResponseWriter, r *http.Request) {
 
 	_, err := h.qeDb.ExecContext(r.Context(),
 		`INSERT INTO qe_jobs (name, executable, input_file, num_cpus, memory_mb, image, submitted_by)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
 		jobName, req.Executable, req.InputFile, req.NumCPUs, req.MemoryMB, req.Image, submittedBy)
 	if err != nil {
 		writeError(w, fmt.Sprintf("failed to create QE job: %v", err), http.StatusInternalServerError)
@@ -598,7 +597,7 @@ func (h *APIHandler) GetQEJob(w http.ResponseWriter, r *http.Request) {
 		`SELECT id, name, status, executable, input_file, output_file, error_output,
 		        total_energy, wall_time_sec, num_cpus, memory_mb, image,
 		        created_at, started_at, completed_at
-		   FROM qe_jobs WHERE name = ?`, jobName).Scan(
+		   FROM qe_jobs WHERE name = $1`, jobName).Scan(
 		&j.ID, &j.Name, &j.Status, &j.Executable, &j.InputFile, &outputFile, &errorOutput,
 		&totalEnergy, &wallTime, &j.NumCPUs, &j.MemoryMB, &j.Image,
 		&j.CreatedAt, &startedAt, &completedAt)
@@ -657,9 +656,8 @@ func (h *APIHandler) DeleteQEJob(w http.ResponseWriter, r *http.Request) {
 		log.Printf("[DeleteQEJob] Failed to delete ConfigMap %s: %v", cmName, err)
 	}
 
-	// Delete from MySQL.
 	if _, err := h.qeDb.ExecContext(r.Context(),
-		`DELETE FROM qe_jobs WHERE name = ?`, jobName); err != nil {
+		`DELETE FROM qe_jobs WHERE name = $1`, jobName); err != nil {
 		log.Printf("[DeleteQEJob] Failed to delete QE job %s from DB: %v", jobName, err)
 	}
 
@@ -698,8 +696,8 @@ func (h *APIHandler) UploadPseudopotential(w http.ResponseWriter, r *http.Reques
 
 	_, err = h.qeDb.ExecContext(r.Context(),
 		`INSERT INTO pseudopotentials (filename, content, element, functional, source_url)
-		 VALUES (?, ?, ?, ?, ?)
-		 ON DUPLICATE KEY UPDATE content = VALUES(content), functional = VALUES(functional)`,
+		 VALUES ($1, $2, $3, $4, $5)
+		 ON CONFLICT (filename) DO UPDATE SET content = EXCLUDED.content, functional = EXCLUDED.functional`,
 		req.Filename, content, req.Element, req.Functional, req.SourceURL)
 	if err != nil {
 		writeError(w, fmt.Sprintf("failed to store pseudopotential: %v", err), http.StatusInternalServerError)
@@ -716,7 +714,7 @@ func (h *APIHandler) UploadPseudopotential(w http.ResponseWriter, r *http.Reques
 // ListPseudopotentials handles GET /api/v1/qe/pseudopotentials
 func (h *APIHandler) ListPseudopotentials(w http.ResponseWriter, r *http.Request) {
 	rows, err := h.qeDb.QueryContext(r.Context(),
-		`SELECT filename, element, functional, LENGTH(content) as size, created_at FROM pseudopotentials ORDER BY element, filename`)
+		`SELECT filename, element, functional, length(content) as size, created_at FROM pseudopotentials ORDER BY element, filename`)
 	if err != nil {
 		writeError(w, fmt.Sprintf("query error: %v", err), http.StatusInternalServerError)
 		return
@@ -773,7 +771,7 @@ func (h *APIHandler) StartPrep(w http.ResponseWriter, r *http.Request) {
 	// Count unprepared ligands (those without PDBQT data).
 	var unpreparedCount int
 	err := h.db.QueryRowContext(r.Context(),
-		`SELECT COUNT(*) FROM ligands WHERE source_db = ? AND pdbqt IS NULL`,
+		`SELECT COUNT(*) FROM ligands WHERE source_db = $1 AND pdbqt IS NULL`,
 		req.SourceDb).Scan(&unpreparedCount)
 	if err != nil {
 		writeError(w, fmt.Sprintf("failed to count unprepared ligands: %v", err), http.StatusInternalServerError)
@@ -838,7 +836,7 @@ func (h *APIHandler) CreateAPIToken(w http.ResponseWriter, r *http.Request) {
 
 	expiresAt := time.Now().Add(time.Duration(req.ExpiresInHours) * time.Hour)
 	_, err = h.db.Exec(
-		"INSERT INTO api_tokens (token, username, expires_at) VALUES (?, ?, ?)",
+		"INSERT INTO api_tokens (token, username, expires_at) VALUES ($1, $2, $3)",
 		token, req.Username, expiresAt,
 	)
 	if err != nil {
@@ -901,7 +899,7 @@ func (h *APIHandler) RevokeAPIToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := h.db.Exec("DELETE FROM api_tokens WHERE id = ?", path)
+	result, err := h.db.Exec("DELETE FROM api_tokens WHERE id = $1", path)
 	if err != nil {
 		writeError(w, "failed to revoke token", http.StatusInternalServerError)
 		return
@@ -919,7 +917,7 @@ func (h *APIHandler) RevokeAPIToken(w http.ResponseWriter, r *http.Request) {
 // ReadinessCheck handles GET /readyz
 func (h *APIHandler) ReadinessCheck(w http.ResponseWriter, r *http.Request) {
 	if err := h.db.PingContext(r.Context()); err != nil {
-		log.Printf("[ReadinessCheck] MySQL ping failed: %v", err)
+		log.Printf("[ReadinessCheck] postgres ping failed: %v", err)
 		writeError(w, "database not reachable", http.StatusServiceUnavailable)
 		return
 	}

@@ -20,7 +20,7 @@ import (
 	"syscall"
 	"time"
 
-	_ "github.com/go-sql-driver/mysql"
+	_ "github.com/lib/pq"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -47,13 +47,12 @@ const (
 )
 
 // DockingJobController handles the lifecycle of docking workflows.
-// State is persisted in MySQL; no in-memory maps.
+// State is persisted in PostgreSQL; no in-memory maps.
 type DockingJobController struct {
 	client    *kubernetes.Clientset
 	namespace string
 	jobClient typed.JobInterface
-	db        *sql.DB   // docking database
-	qeDb      *sql.DB   // qe database
+	db        *sql.DB
 	stopCh    chan struct{}
 }
 
@@ -110,66 +109,47 @@ func NewDockingJobController() (*DockingJobController, error) {
 		namespace = "chem"
 	}
 
-	// Build MySQL DSN from environment variables.
-	mysqlHost := os.Getenv("MYSQL_HOST")
-	mysqlPort := os.Getenv("MYSQL_PORT")
-	mysqlUser := os.Getenv("MYSQL_USER")
-	mysqlPassword := os.Getenv("MYSQL_PASSWORD")
-	mysqlDatabase := os.Getenv("MYSQL_DATABASE")
-	if mysqlPort == "" {
-		mysqlPort = "3306"
+	pgHost := os.Getenv("POSTGRES_HOST")
+	pgPort := os.Getenv("POSTGRES_PORT")
+	if pgPort == "" {
+		pgPort = "5432"
 	}
-	dsn := fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?parseTime=true",
-		mysqlUser, mysqlPassword, mysqlHost, mysqlPort, mysqlDatabase)
+	pgUser := os.Getenv("POSTGRES_USER")
+	pgPassword := os.Getenv("POSTGRES_PASSWORD")
+	pgDB := os.Getenv("POSTGRES_DB")
+	if pgDB == "" {
+		pgDB = "khemeia"
+	}
+	dsn := fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=disable",
+		pgHost, pgPort, pgUser, pgPassword, pgDB)
 
-	db, err := sql.Open("mysql", dsn)
+	db, err := sql.Open("postgres", dsn)
 	if err != nil {
-		return nil, fmt.Errorf("failed to open mysql connection: %v", err)
+		return nil, fmt.Errorf("failed to open postgres connection: %v", err)
 	}
 	db.SetMaxOpenConns(10)
 	db.SetConnMaxLifetime(5 * time.Minute)
 
 	if err := db.Ping(); err != nil {
 		db.Close()
-		return nil, fmt.Errorf("failed to ping mysql: %v", err)
+		return nil, fmt.Errorf("failed to ping postgres: %v", err)
 	}
-	log.Println("MySQL docking connection established")
-
-	// Create and connect to the QE database.
-	db.Exec("CREATE DATABASE IF NOT EXISTS qe")
-	qeDsn := fmt.Sprintf("%s:%s@tcp(%s:%s)/qe?parseTime=true",
-		mysqlUser, mysqlPassword, mysqlHost, mysqlPort)
-	qeDb, err := sql.Open("mysql", qeDsn)
-	if err != nil {
-		db.Close()
-		return nil, fmt.Errorf("failed to open qe mysql connection: %v", err)
-	}
-	qeDb.SetMaxOpenConns(5)
-	qeDb.SetConnMaxLifetime(5 * time.Minute)
-	if err := qeDb.Ping(); err != nil {
-		db.Close()
-		qeDb.Close()
-		return nil, fmt.Errorf("failed to ping qe database: %v", err)
-	}
-	log.Println("MySQL qe connection established")
+	log.Println("PostgreSQL connection established")
 
 	controller := &DockingJobController{
 		client:    client,
 		namespace: namespace,
 		jobClient: client.BatchV1().Jobs(namespace),
 		db:        db,
-		qeDb:      qeDb,
 		stopCh:    make(chan struct{}),
 	}
 
 	if err := controller.ensureSchema(); err != nil {
 		db.Close()
-		qeDb.Close()
 		return nil, fmt.Errorf("failed to ensure docking schema: %v", err)
 	}
 	if err := controller.ensureQESchema(); err != nil {
 		db.Close()
-		qeDb.Close()
 		return nil, fmt.Errorf("failed to ensure qe schema: %v", err)
 	}
 	log.Println("Database schemas verified")
@@ -190,7 +170,7 @@ func (c *DockingJobController) ensureSchema() error {
 	tables := []string{
 		`CREATE TABLE IF NOT EXISTS docking_workflows (
 			name              VARCHAR(255) PRIMARY KEY,
-			phase             ENUM('Pending', 'Running', 'Completed', 'Failed') NOT NULL DEFAULT 'Pending',
+			phase             VARCHAR(16)  NOT NULL DEFAULT 'Pending',
 			pdbid             VARCHAR(32)  NOT NULL,
 			source_db         VARCHAR(255) NOT NULL,
 			native_ligand     VARCHAR(32)  NOT NULL DEFAULT 'TTT',
@@ -201,44 +181,38 @@ func (c *DockingJobController) ensureSchema() error {
 			current_step      VARCHAR(64)  NULL,
 			message           TEXT         NULL,
 			result            TEXT         NULL,
-			receptor_pdbqt    MEDIUMBLOB   NULL,
+			receptor_pdbqt    BYTEA        NULL,
 			grid_center_x     FLOAT        NULL,
 			grid_center_y     FLOAT        NULL,
 			grid_center_z     FLOAT        NULL,
 			created_at        TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
 			started_at        TIMESTAMP    NULL,
-			completed_at      TIMESTAMP    NULL,
-			INDEX idx_phase (phase),
-			INDEX idx_created_at (created_at)
+			completed_at      TIMESTAMP    NULL
 		)`,
 		`CREATE TABLE IF NOT EXISTS ligands (
-			id            INT AUTO_INCREMENT PRIMARY KEY,
+			id            SERIAL       PRIMARY KEY,
 			compound_id   VARCHAR(255) NOT NULL,
 			smiles        TEXT         NOT NULL,
-			pdbqt         MEDIUMBLOB   NULL,
+			pdbqt         BYTEA        NULL,
 			source_db     VARCHAR(255) NOT NULL,
 			created_at    TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
-			INDEX idx_source_db (source_db),
-			UNIQUE INDEX idx_compound_source (compound_id, source_db)
+			UNIQUE (compound_id, source_db)
 		)`,
 		`CREATE TABLE IF NOT EXISTS docking_results (
-			id                INT AUTO_INCREMENT PRIMARY KEY,
+			id                SERIAL       PRIMARY KEY,
 			workflow_name     VARCHAR(255) NOT NULL,
 			pdb_id            VARCHAR(10)  NOT NULL,
 			ligand_id         INT          NOT NULL,
 			compound_id       VARCHAR(255) NOT NULL,
 			affinity_kcal_mol FLOAT        NOT NULL,
-			created_at        TIMESTAMP    DEFAULT CURRENT_TIMESTAMP,
-			INDEX idx_workflow (workflow_name),
-			INDEX idx_pdbid    (pdb_id),
-			INDEX idx_affinity (affinity_kcal_mol),
-			INDEX idx_ligand   (ligand_id)
+			docked_pdbqt      BYTEA        NULL,
+			created_at        TIMESTAMP    DEFAULT CURRENT_TIMESTAMP
 		)`,
 		`CREATE TABLE IF NOT EXISTS staging (
-			id         INT AUTO_INCREMENT PRIMARY KEY,
-			job_type   ENUM('prep', 'dock') NOT NULL,
-			payload    JSON NOT NULL,
-			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+			id         SERIAL    PRIMARY KEY,
+			job_type   VARCHAR(8) NOT NULL,
+			payload    JSONB      NOT NULL,
+			created_at TIMESTAMP  NOT NULL DEFAULT CURRENT_TIMESTAMP
 		)`,
 	}
 
@@ -248,15 +222,25 @@ func (c *DockingJobController) ensureSchema() error {
 		}
 	}
 
-	// Migrate old docking_results schema if needed (add ligand_id/compound_id, drop batch_label/ligand_name).
+	indexes := []string{
+		`CREATE INDEX IF NOT EXISTS idx_dw_phase      ON docking_workflows (phase)`,
+		`CREATE INDEX IF NOT EXISTS idx_dw_created_at ON docking_workflows (created_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_lig_source_db ON ligands (source_db)`,
+		`CREATE INDEX IF NOT EXISTS idx_dr_workflow   ON docking_results (workflow_name)`,
+		`CREATE INDEX IF NOT EXISTS idx_dr_pdbid      ON docking_results (pdb_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_dr_affinity   ON docking_results (affinity_kcal_mol)`,
+		`CREATE INDEX IF NOT EXISTS idx_dr_ligand     ON docking_results (ligand_id)`,
+	}
+	for _, idx := range indexes {
+		c.db.Exec(idx)
+	}
+
+	// Migrate old docking_results schema if needed.
 	migrations := []string{
-		`ALTER TABLE docking_results ADD COLUMN ligand_id INT NOT NULL DEFAULT 0 AFTER pdb_id`,
-		`ALTER TABLE docking_results ADD COLUMN compound_id VARCHAR(255) NOT NULL DEFAULT '' AFTER ligand_id`,
-		`ALTER TABLE docking_results ADD INDEX idx_ligand (ligand_id)`,
-		`ALTER TABLE docking_results DROP COLUMN batch_label`,
-		`ALTER TABLE docking_results DROP COLUMN ligand_name`,
-		`ALTER TABLE docking_results ADD COLUMN docked_pdbqt MEDIUMBLOB NULL`,
-		`ALTER TABLE docking_workflows ADD COLUMN submitted_by VARCHAR(255) NULL`,
+		`ALTER TABLE docking_results ADD COLUMN IF NOT EXISTS ligand_id INT NOT NULL DEFAULT 0`,
+		`ALTER TABLE docking_results ADD COLUMN IF NOT EXISTS compound_id VARCHAR(255) NOT NULL DEFAULT ''`,
+		`ALTER TABLE docking_results ADD COLUMN IF NOT EXISTS docked_pdbqt BYTEA NULL`,
+		`ALTER TABLE docking_workflows ADD COLUMN IF NOT EXISTS submitted_by VARCHAR(255) NULL`,
 	}
 	for _, m := range migrations {
 		c.db.Exec(m) // Ignore errors (column may already exist or not exist)
@@ -265,45 +249,45 @@ func (c *DockingJobController) ensureSchema() error {
 	return nil
 }
 
-// ensureQESchema creates QE tables in the separate 'qe' database.
+// ensureQESchema creates QE tables in the khemeia database.
 func (c *DockingJobController) ensureQESchema() error {
 	tables := []string{
 		`CREATE TABLE IF NOT EXISTS qe_jobs (
-			id              INT AUTO_INCREMENT PRIMARY KEY,
+			id              SERIAL       PRIMARY KEY,
 			name            VARCHAR(255) NOT NULL UNIQUE,
-			status          ENUM('Pending','Running','Completed','Failed') NOT NULL DEFAULT 'Pending',
+			status          VARCHAR(16)  NOT NULL DEFAULT 'Pending',
 			executable      VARCHAR(64)  NOT NULL DEFAULT 'pw.x',
-			input_file      MEDIUMTEXT   NOT NULL,
-			output_file     MEDIUMTEXT   NULL,
-			error_output    MEDIUMTEXT   NULL,
-			total_energy    DOUBLE       NULL,
-			wall_time_sec   FLOAT        NULL,
+			input_file      TEXT         NOT NULL,
+			output_file     TEXT         NULL,
+			error_output    TEXT         NULL,
+			total_energy    DOUBLE PRECISION NULL,
+			wall_time_sec   REAL         NULL,
 			num_cpus        INT          NOT NULL DEFAULT 1,
 			memory_mb       INT          NOT NULL DEFAULT 2048,
 			image           VARCHAR(512) NOT NULL DEFAULT 'costrouc/quantum-espresso:latest',
 			submitted_by    VARCHAR(255) NULL,
 			created_at      TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
 			started_at      TIMESTAMP    NULL,
-			completed_at    TIMESTAMP    NULL,
-			INDEX idx_status (status),
-			INDEX idx_created_at (created_at)
+			completed_at    TIMESTAMP    NULL
 		)`,
 		`CREATE TABLE IF NOT EXISTS pseudopotentials (
-			id          INT AUTO_INCREMENT PRIMARY KEY,
+			id          SERIAL       PRIMARY KEY,
 			filename    VARCHAR(255) NOT NULL UNIQUE,
-			content     MEDIUMBLOB NOT NULL,
-			element     VARCHAR(4) NOT NULL,
-			functional  VARCHAR(32) NULL,
-			source_url  TEXT NULL,
-			created_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-			INDEX idx_element (element)
+			content     BYTEA        NOT NULL,
+			element     VARCHAR(4)   NOT NULL,
+			functional  VARCHAR(32)  NULL,
+			source_url  TEXT         NULL,
+			created_at  TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP
 		)`,
 	}
 	for _, ddl := range tables {
-		if _, err := c.qeDb.Exec(ddl); err != nil {
+		if _, err := c.db.Exec(ddl); err != nil {
 			return fmt.Errorf("executing QE DDL: %w\n%s", err, ddl)
 		}
 	}
+	c.db.Exec(`CREATE INDEX IF NOT EXISTS idx_qe_status     ON qe_jobs (status)`)
+	c.db.Exec(`CREATE INDEX IF NOT EXISTS idx_qe_created_at ON qe_jobs (created_at)`)
+	c.db.Exec(`CREATE INDEX IF NOT EXISTS idx_pp_element    ON pseudopotentials (element)`)
 	return nil
 }
 
@@ -322,7 +306,7 @@ func (c *DockingJobController) Run(ctx context.Context) error {
 }
 
 func (c *DockingJobController) startAPIServer() error {
-	handler := NewAPIHandler(c.client, c.namespace, c, c.db, c.qeDb)
+	handler := NewAPIHandler(c.client, c.namespace, c, c.db, c.db)
 
 	// Initialize auth middleware. When AUTH_ENABLED is "true", JWT validation
 	// is enforced for external requests; internal pod/service CIDRs are exempt.
@@ -506,7 +490,7 @@ func (c *DockingJobController) processDockingJob(job DockingJob) {
 	// Compute batch count from ligand count.
 	var ligandCount int
 	if err := c.db.QueryRow(
-		`SELECT COUNT(*) FROM ligands WHERE source_db = ? AND pdbqt IS NOT NULL`,
+		`SELECT COUNT(*) FROM ligands WHERE source_db = $1 AND pdbqt IS NOT NULL`,
 		job.Spec.LigandDb).Scan(&ligandCount); err != nil {
 		c.failJob(job.Name, fmt.Sprintf("failed to count ligands: %v", err))
 		return
@@ -517,7 +501,7 @@ func (c *DockingJobController) processDockingJob(job DockingJob) {
 	}
 
 	batchCount := int(math.Ceil(float64(ligandCount) / float64(job.Spec.LigandsChunkSize)))
-	if _, err := c.db.Exec(`UPDATE docking_workflows SET batch_count = ?, current_step = 'dock-batch' WHERE name = ?`,
+	if _, err := c.db.Exec(`UPDATE docking_workflows SET batch_count = $1, current_step = 'dock-batch' WHERE name = $2`,
 		batchCount, job.Name); err != nil {
 		log.Printf("[%s] failed to update batch_count: %v", job.Name, err)
 	}
@@ -542,7 +526,7 @@ func (c *DockingJobController) processDockingJob(job DockingJob) {
 		}
 		dockStreamCancel()
 
-		if _, err := c.db.Exec(`UPDATE docking_workflows SET completed_batches = ? WHERE name = ?`, i+1, job.Name); err != nil {
+		if _, err := c.db.Exec(`UPDATE docking_workflows SET completed_batches = $1 WHERE name = $2`, i+1, job.Name); err != nil {
 			log.Printf("[%s] failed to update completed_batches: %v", job.Name, err)
 		}
 		log.Printf("[%s] Batch %d/%d complete", job.Name, i+1, batchCount)
@@ -555,7 +539,7 @@ func (c *DockingJobController) processDockingJob(job DockingJob) {
 	}
 
 	var bestEnergy sql.NullFloat64
-	c.db.QueryRow(`SELECT MIN(affinity_kcal_mol) FROM docking_results WHERE workflow_name = ?`,
+	c.db.QueryRow(`SELECT MIN(affinity_kcal_mol) FROM docking_results WHERE workflow_name = $1`,
 		job.Name).Scan(&bestEnergy)
 
 	result := "No results"
@@ -564,7 +548,7 @@ func (c *DockingJobController) processDockingJob(job DockingJob) {
 	}
 
 	if _, err := c.db.Exec(`UPDATE docking_workflows SET phase = 'Completed', completed_at = NOW(),
-		current_step = NULL, result = ?, message = ? WHERE name = ?`,
+		current_step = NULL, result = $1, message = $2 WHERE name = $3`,
 		result, result, job.Name); err != nil {
 		log.Printf("[%s] failed to mark workflow completed: %v", job.Name, err)
 	}
@@ -580,7 +564,7 @@ func (c *DockingJobController) processLigandPrep(req PrepRequest) {
 	// Recount unprepared ligands at processing time (may differ from handler check).
 	var unpreparedCount int
 	if err := c.db.QueryRow(
-		`SELECT COUNT(*) FROM ligands WHERE source_db = ? AND pdbqt IS NULL`,
+		`SELECT COUNT(*) FROM ligands WHERE source_db = $1 AND pdbqt IS NULL`,
 		req.SourceDb).Scan(&unpreparedCount); err != nil {
 		log.Printf("[prep] Failed to count unprepared ligands: %v", err)
 		return
@@ -621,7 +605,7 @@ func (c *DockingJobController) processQEJob(jobName, executable, inputFile, imag
 		jobName, executable, numCPUs, memoryMB, image)
 
 	// 1. Update status to Running.
-	if _, err := c.qeDb.Exec(`UPDATE qe_jobs SET status='Running', started_at=NOW() WHERE name=?`, jobName); err != nil {
+	if _, err := c.db.Exec(`UPDATE qe_jobs SET status='Running', started_at=NOW() WHERE name=$1`, jobName); err != nil {
 		log.Printf("[%s] Failed to update QE job status to Running: %v", jobName, err)
 		return
 	}
@@ -640,7 +624,7 @@ func (c *DockingJobController) processQEJob(jobName, executable, inputFile, imag
 		for _, f := range fields {
 			if strings.HasSuffix(strings.ToUpper(f), ".UPF") {
 				var content []byte
-				err := c.qeDb.QueryRow(`SELECT content FROM pseudopotentials WHERE filename = ?`, f).Scan(&content)
+				err := c.db.QueryRow(`SELECT content FROM pseudopotentials WHERE filename = $1`, f).Scan(&content)
 				if err == nil && len(content) > 0 {
 					cmBinary[f] = content
 					log.Printf("[%s] Loaded pseudopotential %s from DB (%d bytes)", jobName, f, len(content))
@@ -771,8 +755,8 @@ fi`,
 	wallTimeSec := parseQEWallTime(output)
 
 	// 8. Store output and parsed values.
-	if _, err := c.qeDb.Exec(
-		`UPDATE qe_jobs SET status='Completed', output_file=?, total_energy=?, wall_time_sec=?, completed_at=NOW() WHERE name=?`,
+	if _, err := c.db.Exec(
+		`UPDATE qe_jobs SET status='Completed', output_file=$1, total_energy=$2, wall_time_sec=$3, completed_at=NOW() WHERE name=$4`,
 		output, totalEnergy, wallTimeSec, jobName); err != nil {
 		log.Printf("[%s] CRITICAL: failed to store QE results: %v", jobName, err)
 		return
@@ -834,8 +818,8 @@ func (c *DockingJobController) waitForQEJobCompletion(jobName string) error {
 
 // failQEJob marks a QE job as Failed and stores the error output.
 func (c *DockingJobController) failQEJob(jobName, message string) {
-	if _, err := c.qeDb.Exec(
-		`UPDATE qe_jobs SET status='Failed', error_output=?, completed_at=NOW() WHERE name=?`,
+	if _, err := c.db.Exec(
+		`UPDATE qe_jobs SET status='Failed', error_output=$1, completed_at=NOW() WHERE name=$2`,
 		message, jobName); err != nil {
 		log.Printf("[%s] CRITICAL: failed to mark QE job as Failed: %v", jobName, err)
 	}
@@ -919,16 +903,16 @@ func (c *DockingJobController) createPrepBatchJob(sourceDb, image string, batchI
 								{Name: "SOURCE_DB", Value: sourceDb},
 								{Name: "BATCH_OFFSET", Value: fmt.Sprintf("%d", offset)},
 								{Name: "BATCH_LIMIT", Value: fmt.Sprintf("%d", chunkSize)},
-								{Name: "MYSQL_HOST", Value: os.Getenv("MYSQL_HOST")},
-								{Name: "MYSQL_PORT", Value: os.Getenv("MYSQL_PORT")},
-								{Name: "MYSQL_USER", Value: os.Getenv("MYSQL_USER")},
-								{Name: "MYSQL_DATABASE", Value: os.Getenv("MYSQL_DATABASE")},
+								{Name: "POSTGRES_HOST", Value: os.Getenv("POSTGRES_HOST")},
+								{Name: "POSTGRES_PORT", Value: os.Getenv("POSTGRES_PORT")},
+								{Name: "POSTGRES_USER", Value: os.Getenv("POSTGRES_USER")},
+								{Name: "POSTGRES_DB", Value: "khemeia"},
 								{
-									Name: "MYSQL_PASSWORD",
+									Name: "POSTGRES_PASSWORD",
 									ValueFrom: &corev1.EnvVarSource{
 										SecretKeyRef: &corev1.SecretKeySelector{
-											LocalObjectReference: corev1.LocalObjectReference{Name: "docking-mysql-secret"},
-											Key:                  "root-password",
+											LocalObjectReference: corev1.LocalObjectReference{Name: "khemeia-postgres-secret"},
+											Key:                  "password",
 										},
 									},
 								},
@@ -960,7 +944,7 @@ func (c *DockingJobController) waitForStagingDrain(workflowName string) error {
 		case <-ticker.C:
 			var count int
 			err := c.db.QueryRow(
-				`SELECT COUNT(*) FROM staging WHERE job_type = 'dock' AND JSON_EXTRACT(payload, '$.workflow_name') = ?`,
+				`SELECT COUNT(*) FROM staging WHERE job_type = 'dock' AND payload->>'workflow_name' = $1`,
 				workflowName).Scan(&count)
 			if err != nil {
 				log.Printf("[%s] staging drain query error: %v", workflowName, err)
@@ -975,7 +959,7 @@ func (c *DockingJobController) waitForStagingDrain(workflowName string) error {
 }
 
 func (c *DockingJobController) failJob(workflowName string, message string) {
-	if _, err := c.db.Exec(`UPDATE docking_workflows SET phase = 'Failed', current_step = NULL, message = ? WHERE name = ?`,
+	if _, err := c.db.Exec(`UPDATE docking_workflows SET phase = 'Failed', current_step = NULL, message = $1 WHERE name = $2`,
 		message, workflowName); err != nil {
 		log.Printf("[%s] CRITICAL: failed to mark workflow as Failed: %v", workflowName, err)
 	}
@@ -992,7 +976,7 @@ func (c *DockingJobController) updateWorkflow(name, column string, value interfa
 		log.Printf("[updateWorkflow] rejected unknown column %q for workflow %s", column, name)
 		return
 	}
-	if _, err := c.db.Exec(fmt.Sprintf(`UPDATE docking_workflows SET %s = ? WHERE name = ?`, column), value, name); err != nil {
+	if _, err := c.db.Exec(fmt.Sprintf(`UPDATE docking_workflows SET %s = $1 WHERE name = $2`, column), value, name); err != nil {
 		log.Printf("[updateWorkflow] failed to update %s for workflow %s: %v", column, name, err)
 	}
 }
@@ -1066,8 +1050,8 @@ func (c *DockingJobController) captureReceptorData(workflowName, jobName string)
 	}
 
 	_, err = c.db.Exec(`UPDATE docking_workflows
-		SET receptor_pdbqt = ?, grid_center_x = ?, grid_center_y = ?, grid_center_z = ?
-		WHERE name = ?`,
+		SET receptor_pdbqt = $1, grid_center_x = $2, grid_center_y = $3, grid_center_z = $4
+		WHERE name = $5`,
 		pdbqtBytes, rd.GridCenter.X, rd.GridCenter.Y, rd.GridCenter.Z, workflowName)
 	return err
 }
@@ -1104,16 +1088,16 @@ func (c *DockingJobController) createDockBatchJob(job DockingJob, batchIndex, of
 								{Name: "SOURCE_DB", Value: job.Spec.LigandDb},
 								{Name: "BATCH_OFFSET", Value: fmt.Sprintf("%d", offset)},
 								{Name: "BATCH_LIMIT", Value: fmt.Sprintf("%d", job.Spec.LigandsChunkSize)},
-								{Name: "MYSQL_HOST", Value: os.Getenv("MYSQL_HOST")},
-								{Name: "MYSQL_PORT", Value: os.Getenv("MYSQL_PORT")},
-								{Name: "MYSQL_USER", Value: os.Getenv("MYSQL_USER")},
-								{Name: "MYSQL_DATABASE", Value: os.Getenv("MYSQL_DATABASE")},
+								{Name: "POSTGRES_HOST", Value: os.Getenv("POSTGRES_HOST")},
+								{Name: "POSTGRES_PORT", Value: os.Getenv("POSTGRES_PORT")},
+								{Name: "POSTGRES_USER", Value: os.Getenv("POSTGRES_USER")},
+								{Name: "POSTGRES_DB", Value: "khemeia"},
 								{
-									Name: "MYSQL_PASSWORD",
+									Name: "POSTGRES_PASSWORD",
 									ValueFrom: &corev1.EnvVarSource{
 										SecretKeyRef: &corev1.SecretKeySelector{
-											LocalObjectReference: corev1.LocalObjectReference{Name: "docking-mysql-secret"},
-											Key:                  "root-password",
+											LocalObjectReference: corev1.LocalObjectReference{Name: "khemeia-postgres-secret"},
+											Key:                  "password",
 										},
 									},
 								},
