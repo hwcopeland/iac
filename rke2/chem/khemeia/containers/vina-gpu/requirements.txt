@@ -1,5 +1,5 @@
 numpy<2
 flask
 gunicorn
-psycopg2-binary
+mysql-connector-python
 boto3

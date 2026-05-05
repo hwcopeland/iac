@@ -124,9 +124,9 @@ type admetSidecarMPOScore struct {
 // as EnsureTargetPrepSchema and EnsureLibraryPrepSchema.
 func EnsureADMETSchema(db *DB) error {
 	jobsDDL := `CREATE TABLE IF NOT EXISTS admet_jobs (
-		id              SERIAL PRIMARY KEY,
+		id              INT AUTO_INCREMENT PRIMARY KEY,
 		name            VARCHAR(255) NOT NULL UNIQUE,
-		phase           TEXT NOT NULL DEFAULT 'Pending' CHECK (phase IN ('Pending', 'Running', 'Succeeded', 'Failed')),
+		phase           ENUM('Pending','Running','Succeeded','Failed') NOT NULL DEFAULT 'Pending',
 		library_ref     VARCHAR(255) NOT NULL,
 		mpo_profile     VARCHAR(32) NOT NULL DEFAULT 'oral',
 		engines         JSON NULL,
@@ -139,24 +139,18 @@ func EnsureADMETSchema(db *DB) error {
 		request_params  JSON NULL,
 		start_time      TIMESTAMP NULL,
 		completion_time TIMESTAMP NULL,
-		created_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+		created_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		KEY idx_admet_jobs_phase (phase),
+		KEY idx_admet_jobs_library_ref (library_ref),
+		KEY idx_admet_jobs_created_at (created_at)
 	)`
 
 	if _, err := db.Exec(jobsDDL); err != nil {
 		return fmt.Errorf("creating admet_jobs table: %w", err)
 	}
-	for _, idx := range []string{
-		`CREATE INDEX IF NOT EXISTS idx_admet_jobs_phase ON admet_jobs (phase)`,
-		`CREATE INDEX IF NOT EXISTS idx_admet_jobs_library_ref ON admet_jobs (library_ref)`,
-		`CREATE INDEX IF NOT EXISTS idx_admet_jobs_created_at ON admet_jobs (created_at)`,
-	} {
-		if _, err := db.Exec(idx); err != nil {
-			return fmt.Errorf("creating admet_jobs index: %w", err)
-		}
-	}
 
 	resultsDDL := `CREATE TABLE IF NOT EXISTS admet_results (
-		id              SERIAL PRIMARY KEY,
+		id              INT AUTO_INCREMENT PRIMARY KEY,
 		job_name        VARCHAR(255) NOT NULL,
 		compound_id     VARCHAR(64) NOT NULL,
 		smiles          TEXT NOT NULL,
@@ -165,21 +159,15 @@ func EnsureADMETSchema(db *DB) error {
 		endpoints       JSON NOT NULL,
 		flags           JSON NOT NULL,
 		engine          VARCHAR(32) NOT NULL DEFAULT 'admet_ai',
-		predicted_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+		predicted_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		KEY idx_admet_results_job_name (job_name),
+		KEY idx_admet_results_compound_id (compound_id),
+		KEY idx_admet_results_mpo_score (mpo_score),
+		UNIQUE KEY idx_admet_results_job_compound (job_name, compound_id)
 	)`
 
 	if _, err := db.Exec(resultsDDL); err != nil {
 		return fmt.Errorf("creating admet_results table: %w", err)
-	}
-	for _, idx := range []string{
-		`CREATE INDEX IF NOT EXISTS idx_admet_results_job_name ON admet_results (job_name)`,
-		`CREATE INDEX IF NOT EXISTS idx_admet_results_compound_id ON admet_results (compound_id)`,
-		`CREATE INDEX IF NOT EXISTS idx_admet_results_mpo_score ON admet_results (mpo_score)`,
-		`CREATE UNIQUE INDEX IF NOT EXISTS idx_admet_results_job_compound ON admet_results (job_name, compound_id)`,
-	} {
-		if _, err := db.Exec(idx); err != nil {
-			return fmt.Errorf("creating admet_results index: %w", err)
-		}
 	}
 
 	return nil
@@ -732,11 +720,11 @@ func (h *APIHandler) runADMETPipeline(jobName string, req ADMETSubmitRequest) {
 			`INSERT INTO admet_results
 				(job_name, compound_id, smiles, mpo_score, mpo_profile, endpoints, flags, engine)
 			 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-			 ON CONFLICT (job_name, compound_id) DO UPDATE SET
-				mpo_score = EXCLUDED.mpo_score,
-				endpoints = EXCLUDED.endpoints,
-				flags = EXCLUDED.flags,
-				engine = EXCLUDED.engine,
+			 ON DUPLICATE KEY UPDATE
+				mpo_score = VALUES(mpo_score),
+				endpoints = VALUES(endpoints),
+				flags = VALUES(flags),
+				engine = VALUES(engine),
 				predicted_at = NOW()`,
 			jobName, compoundID, pred.SMILES, mpoScore, req.MPOProfile,
 			string(endpointsJSON), string(flagsJSON), pred.Engine); err != nil {

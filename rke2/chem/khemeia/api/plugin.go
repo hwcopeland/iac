@@ -101,9 +101,9 @@ func (p *Plugin) TimeoutDuration() time.Duration {
 // All plugins share the same table schema with JSON columns for flexible input/output.
 func (p *Plugin) GenerateTableDDL() string {
 	return fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s (
-		id            SERIAL PRIMARY KEY,
+		id            INT AUTO_INCREMENT PRIMARY KEY,
 		name          VARCHAR(255) NOT NULL UNIQUE,
-		status        TEXT NOT NULL DEFAULT 'Pending' CHECK (status IN ('Pending','Running','Completed','Failed')),
+		status        ENUM('Pending','Running','Completed','Failed') NOT NULL DEFAULT 'Pending',
 		submitted_by  VARCHAR(255) NULL,
 		input_data    JSON NULL,
 		output_data   JSON NULL,
@@ -328,21 +328,17 @@ func toFloat64(v interface{}) (float64, bool) {
 // This table stores binary file artifacts produced by completed jobs.
 func EnsureArtifactSchema(db *DB) error {
 	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS job_artifacts (
-		id           SERIAL PRIMARY KEY,
+		id           INT AUTO_INCREMENT PRIMARY KEY,
 		job_name     VARCHAR(255) NOT NULL,
 		filename     VARCHAR(255) NOT NULL,
 		content_type VARCHAR(128) NOT NULL DEFAULT 'application/octet-stream',
 		size_bytes   INT NOT NULL,
-		content      BYTEA NOT NULL,
+		content      MEDIUMBLOB NOT NULL,
 		s3_key       VARCHAR(512) NULL,
-		created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+		created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+		KEY idx_artifact_job (job_name),
+		UNIQUE KEY uq_artifact_file (job_name, filename)
 	)`); err != nil {
-		return err
-	}
-	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_artifact_job ON job_artifacts (job_name)`); err != nil {
-		return err
-	}
-	if _, err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS uq_artifact_file ON job_artifacts (job_name, filename)`); err != nil {
 		return err
 	}
 	return nil

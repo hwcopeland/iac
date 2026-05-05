@@ -346,20 +346,15 @@ func generateToken() (string, error) {
 // EnsureAPITokenSchema creates the api_tokens table if it doesn't exist.
 func EnsureAPITokenSchema(db *DB) error {
 	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS api_tokens (
-		id         SERIAL PRIMARY KEY,
+		id         INT AUTO_INCREMENT PRIMARY KEY,
 		token      CHAR(64) NOT NULL UNIQUE,
 		label      VARCHAR(255) NOT NULL,
 		created_by VARCHAR(255) NOT NULL DEFAULT 'admin',
 		created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
 		expires_at TIMESTAMP NULL,
-		revoked    BOOLEAN NOT NULL DEFAULT FALSE
+		revoked    BOOLEAN NOT NULL DEFAULT FALSE,
+		KEY idx_api_tokens_expires (expires_at)
 	)`); err != nil {
-		return err
-	}
-	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_api_tokens_token ON api_tokens (token)`); err != nil {
-		return err
-	}
-	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_api_tokens_expires ON api_tokens (expires_at)`); err != nil {
 		return err
 	}
 	return nil

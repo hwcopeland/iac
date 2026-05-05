@@ -21,7 +21,7 @@ Configuration via environment variables:
   DOCK_JOB_NAME     - docking job for pose geometry (optional)
   PYSCF_NPROC       - CPU threads for PySCF (default: 4)
   PYSCF_MEMORY_MB   - memory for PySCF in MB (default: 4000)
-  POSTGRES_HOST / POSTGRES_PORT / POSTGRES_USER / POSTGRES_PASSWORD
+  MYSQL_HOST / MYSQL_PORT / MYSQL_USER / MYSQL_PASSWORD
   GARAGE_ENABLED / GARAGE_ENDPOINT / GARAGE_ACCESS_KEY / GARAGE_SECRET_KEY / GARAGE_REGION
 """
 
@@ -34,7 +34,7 @@ from pathlib import Path
 import numpy as np
 from scipy.linalg import solve
 
-import psycopg2
+import mysql.connector
 
 try:
     import boto3
@@ -69,22 +69,22 @@ def get_config():
         "dock_job_name": os.environ.get("DOCK_JOB_NAME", ""),
         "nproc":         int(os.environ.get("PYSCF_NPROC", "4")),
         "memory_mb":     int(os.environ.get("PYSCF_MEMORY_MB", "4000")),
-        "pg_host":    os.environ.get("POSTGRES_HOST", "localhost"),
-        "pg_port":    int(os.environ.get("POSTGRES_PORT", ("5432"))),
-        "pg_user":    os.environ.get("POSTGRES_USER", "root"),
-        "pg_password": require_env("POSTGRES_PASSWORD"),
+        "mysql_host":    os.environ.get("MYSQL_HOST", "localhost"),
+        "mysql_port":    int(os.environ.get("MYSQL_PORT", ("3306"))),
+        "mysql_user":    os.environ.get("MYSQL_USER", "root"),
+        "mysql_password": require_env("MYSQL_PASSWORD"),
     }
 
 
 def connect_db(cfg):
     try:
-        return psycopg2.connect(
-            host=cfg["pg_host"], port=cfg["pg_port"],
-            user=cfg["pg_user"], password=cfg["pg_password"],
-            dbname=os.environ.get("POSTGRES_DB", "khemeia"),
+        return mysql.connector.connect(
+            host=cfg["mysql_host"], port=cfg["mysql_port"],
+            user=cfg["mysql_user"], password=cfg["mysql_password"],
+            database=os.environ.get("MYSQL_DATABASE", "khemeia"),
         )
-    except psycopg2.Error as exc:
-        print(f"FATAL: PostgreSQL: {exc}", flush=True)
+    except mysql.connector.Error as exc:
+        print(f"FATAL: MySQL: {exc}", flush=True)
         sys.exit(1)
 
 

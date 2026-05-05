@@ -21,7 +21,6 @@ import (
 	"time"
 
 	_ "github.com/go-sql-driver/mysql"
-	_ "github.com/lib/pq"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/dynamic"
@@ -32,7 +31,7 @@ import (
 )
 
 // Controller handles the lifecycle of plugin-driven compute jobs.
-// State is persisted in PostgreSQL; no in-memory maps.
+// State is persisted in MySQL; no in-memory maps.
 type Controller struct {
 	client        *kubernetes.Clientset
 	dynamicClient dynamic.Interface
@@ -42,12 +41,12 @@ type Controller struct {
 	pluginDBs     map[string]*DB
 	stopCh        chan struct{}
 
-	// sharedDB is the single PostgreSQL connection shared by all plugins and
+	// sharedDB is the single MySQL connection shared by all plugins and
 	// all tables. All pluginDBs entries point to the same underlying *DB.
 	sharedDB *DB
 
 	// chemblDB is an optional read-only connection to the ChEMBL compound database.
-	// Used for ligand search/filtering. Stays on MySQL permanently (external DB).
+	// Used for ligand search/filtering. Shares the same MySQL instance as sharedDB.
 	// Nil if ChEMBL is not available.
 	chemblDB *sql.DB
 
@@ -84,17 +83,17 @@ func NewController() (*Controller, error) {
 		namespace = "chem"
 	}
 
-	// Read PostgreSQL connection parameters from environment.
-	pgHost := os.Getenv("POSTGRES_HOST")
-	pgPort := os.Getenv("POSTGRES_PORT")
-	pgUser := os.Getenv("POSTGRES_USER")
-	pgPassword := os.Getenv("POSTGRES_PASSWORD")
-	pgDBName := os.Getenv("POSTGRES_DB")
-	if pgPort == "" {
-		pgPort = "5432"
+	// Read MySQL connection parameters from environment.
+	mysqlHost := os.Getenv("MYSQL_HOST")
+	mysqlPort := os.Getenv("MYSQL_PORT")
+	mysqlUser := os.Getenv("MYSQL_USER")
+	mysqlPassword := os.Getenv("MYSQL_PASSWORD")
+	mysqlDBName := os.Getenv("MYSQL_DATABASE")
+	if mysqlPort == "" {
+		mysqlPort = "3306"
 	}
-	if pgDBName == "" {
-		pgDBName = "khemeia"
+	if mysqlDBName == "" {
+		mysqlDBName = "khemeia"
 	}
 
 	// Load plugins from the plugins directory.
@@ -112,21 +111,20 @@ func NewController() (*Controller, error) {
 		log.Printf("  - %s (slug=%s, type=%s)", p.Name, p.Slug, p.Type)
 	}
 
-	// Open a single shared PostgreSQL connection used by all plugins.
-	pgDSN := fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=disable",
-		pgHost, pgPort, pgUser, pgPassword, pgDBName)
-	rawDB, err := sql.Open("postgres", pgDSN)
+	// Open a single shared MySQL connection used by all plugins.
+	mysqlDSN := fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?parseTime=true",
+		mysqlUser, mysqlPassword, mysqlHost, mysqlPort, mysqlDBName)
+	sharedDB, err := sql.Open("mysql", mysqlDSN)
 	if err != nil {
-		return nil, fmt.Errorf("failed to open PostgreSQL: %w", err)
+		return nil, fmt.Errorf("failed to open MySQL: %w", err)
 	}
-	rawDB.SetMaxOpenConns(20)
-	rawDB.SetConnMaxLifetime(5 * time.Minute)
-	if err := rawDB.Ping(); err != nil {
-		rawDB.Close()
-		return nil, fmt.Errorf("failed to ping PostgreSQL: %w", err)
+	sharedDB.SetMaxOpenConns(20)
+	sharedDB.SetConnMaxLifetime(5 * time.Minute)
+	if err := sharedDB.Ping(); err != nil {
+		sharedDB.Close()
+		return nil, fmt.Errorf("failed to ping MySQL: %w", err)
 	}
-	sharedDB := &DB{DB: rawDB}
-	log.Printf("PostgreSQL connection established to %s/%s", pgHost, pgDBName)
+	log.Printf("MySQL connection established to %s/%s", mysqlHost, mysqlDBName)
 
 	controller := &Controller{
 		client:        client,
@@ -141,15 +139,15 @@ func NewController() (*Controller, error) {
 
 	// Point every plugin slug at the shared DB and initialize all tables.
 	if err := controller.initPluginDB(plugins); err != nil {
-		rawDB.Close()
+		sharedDB.Close()
 		return nil, fmt.Errorf("failed to initialize plugin tables: %w", err)
 	}
 	log.Println("All plugin tables initialized")
 
-	// Connect to ChEMBL database (optional — stays on MySQL permanently).
+	// Connect to ChEMBL database (optional — on same MySQL instance as khemeia).
 	chemblHost := os.Getenv("CHEMBL_MYSQL_HOST")
 	if chemblHost == "" {
-		chemblHost = "chembl-mysql.chem.svc.cluster.local"
+		chemblHost = "chem-mysql.chem.svc.cluster.local"
 	}
 	chemblDBName := os.Getenv("CHEMBL_DATABASE")
 	if chemblDBName == "" {
@@ -181,7 +179,7 @@ func NewController() (*Controller, error) {
 	// Initialize S3 client for Garage artifact storage.
 	s3Client, err := NewS3ClientFromEnv()
 	if err != nil {
-		rawDB.Close()
+		sharedDB.Close()
 		return nil, fmt.Errorf("failed to initialize S3 client: %w", err)
 	}
 	controller.s3Client = s3Client
