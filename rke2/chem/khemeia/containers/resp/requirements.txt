@@ -2,5 +2,5 @@ pyscf
 scipy
 rdkit
 boto3
-psycopg2-binary
+mysql-connector-python
 acpype

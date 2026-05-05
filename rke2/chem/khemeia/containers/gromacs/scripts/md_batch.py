@@ -22,7 +22,7 @@ All configuration via environment variables:
   MD_BOX_PADDING    - nm from protein to box edge (default: 1.2)
   FORCE_FIELD       - protein force field for pdb2gmx (default: amber99sb-ildn; also: amber14sb, charmm36m)
   LIGAND_FF         - ligand force field for ACPYPE (default: gaff2; also: gaff)
-  POSTGRES_HOST / POSTGRES_PORT / POSTGRES_USER / POSTGRES_PASSWORD
+  MYSQL_HOST / MYSQL_PORT / MYSQL_USER / MYSQL_PASSWORD
   GARAGE_ENABLED / GARAGE_ENDPOINT / GARAGE_ACCESS_KEY / GARAGE_SECRET_KEY / GARAGE_REGION
 """
 
@@ -36,7 +36,7 @@ import threading
 import time as _time
 from pathlib import Path
 
-import psycopg2
+import mysql.connector
 
 try:
     import boto3
@@ -84,22 +84,22 @@ def get_config():
         "box_padding":  float(os.environ.get("MD_BOX_PADDING", "1.2")),
         "force_field":  os.environ.get("FORCE_FIELD", "amber99sb-ildn"),
         "ligand_ff":    os.environ.get("LIGAND_FF", "gaff2"),
-        "pg_host":   os.environ.get("POSTGRES_HOST", "localhost"),
-        "pg_port":   int(os.environ.get("POSTGRES_PORT", ("5432"))),
-        "pg_user":   os.environ.get("POSTGRES_USER", "root"),
-        "pg_password": require_env("POSTGRES_PASSWORD"),
+        "mysql_host":   os.environ.get("MYSQL_HOST", "localhost"),
+        "mysql_port":   int(os.environ.get("MYSQL_PORT", ("3306"))),
+        "mysql_user":   os.environ.get("MYSQL_USER", "root"),
+        "mysql_password": require_env("MYSQL_PASSWORD"),
     }
 
 
 def connect_db(cfg):
     try:
-        return psycopg2.connect(
-            host=cfg["pg_host"], port=cfg["pg_port"],
-            user=cfg["pg_user"], password=cfg["pg_password"],
-            dbname=os.environ.get("POSTGRES_DB", "khemeia"),
+        return mysql.connector.connect(
+            host=cfg["mysql_host"], port=cfg["mysql_port"],
+            user=cfg["mysql_user"], password=cfg["mysql_password"],
+            database=os.environ.get("MYSQL_DATABASE", "khemeia"),
         )
-    except psycopg2.Error as exc:
-        print(f"FATAL: PostgreSQL: {exc}", flush=True)
+    except mysql.connector.Error as exc:
+        print(f"FATAL: MySQL: {exc}", flush=True)
         sys.exit(1)
 
 
