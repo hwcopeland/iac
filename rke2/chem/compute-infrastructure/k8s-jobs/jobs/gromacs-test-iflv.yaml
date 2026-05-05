@@ -1,0 +1,110 @@
+---
+# Manual test job: GROMACS GPU MD on top docking hit KHM-IFLVGRRVGPXYON
+# MD_NSTEPS=1000 = 2 ps — smoke test only, not science.
+# Best vina-gpu docking score: -9.4 kcal/mol
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: gromacs-test-iflv
+  namespace: chem
+  labels:
+    app.kubernetes.io/name: gromacs
+    khemeia.io/job-type: md
+    khemeia.io/compound: KHM-IFLVGRRVGPXYON
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: gromacs
+        khemeia.io/job-type: md
+    spec:
+      restartPolicy: Never
+      imagePullSecrets:
+        - name: zot-pull-secret
+      nodeSelector:
+        gpu: "rtx3070"
+      tolerations:
+        - key: "gpu"
+          value: "true"
+          effect: NoSchedule
+      containers:
+        - name: gromacs
+          image: zot.hwcopeland.net/chem/gromacs:latest
+          imagePullPolicy: Always
+          resources:
+            requests:
+              cpu: "4"
+              memory: "16Gi"
+              nvidia.com/gpu: "1"
+            limits:
+              nvidia.com/gpu: "1"
+          env:
+            - name: JOB_NAME
+              value: "gromacs-test-001"
+            - name: WORKER_NAME
+              value: "gromacs-test-iflv-0"
+            - name: COMPOUND_ID
+              value: "KHM-IFLVGRRVGPXYON"
+            - name: RECEPTOR_REF
+              value: "target-prep-7jrn-1777477937703996821"
+            - name: DOCK_JOB_NAME
+              value: "dockv2-1777526544999427958"
+            - name: DOCK_ENGINE
+              value: "vina-gpu"
+            - name: MD_NSTEPS
+              value: "1000"
+            - name: POSTGRES_HOST
+              value: "khemeia-postgres.chem.svc.cluster.local"
+            - name: POSTGRES_PORT
+              value: "5432"
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: khemeia-postgres-secret
+                  key: username
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: khemeia-postgres-secret
+                  key: password
+            - name: POSTGRES_DB
+              value: "khemeia"
+            # Garage S3
+            - name: GARAGE_ENABLED
+              value: "true"
+            - name: GARAGE_ENDPOINT
+              value: "http://garage-s3.chem.svc.cluster.local:3900"
+            - name: GARAGE_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: garage-s3-secret
+                  key: access-key
+            - name: GARAGE_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: garage-s3-secret
+                  key: secret-key
+            - name: GARAGE_REGION
+              value: "garage"
+          volumeMounts:
+            - name: nvidia-driver
+              mountPath: /run/opengl-driver
+              readOnly: true
+            - name: nix-store
+              mountPath: /nix/store
+              readOnly: true
+            - name: dri
+              mountPath: /dev/dri
+          workingDir: /tmp
+      volumes:
+        - name: nvidia-driver
+          hostPath:
+            path: /run/opengl-driver
+        - name: nix-store
+          hostPath:
+            path: /nix/store
+        - name: dri
+          hostPath:
+            path: /dev/dri

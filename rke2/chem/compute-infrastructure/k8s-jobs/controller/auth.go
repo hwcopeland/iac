@@ -326,7 +326,7 @@ func (a *AuthMiddleware) checkStaticToken(token string) string {
 	}
 	var username string
 	err := a.db.QueryRow(
-		"SELECT username FROM api_tokens WHERE token = ? AND expires_at > NOW()",
+		"SELECT username FROM api_tokens WHERE token = $1 AND expires_at > NOW()",
 		token,
 	).Scan(&username)
 	if err != nil {
@@ -347,14 +347,17 @@ func generateToken() (string, error) {
 // EnsureAPITokenSchema creates the api_tokens table if it doesn't exist.
 func EnsureAPITokenSchema(db *sql.DB) error {
 	_, err := db.Exec(`CREATE TABLE IF NOT EXISTS api_tokens (
-		id         INT AUTO_INCREMENT PRIMARY KEY,
-		token      VARCHAR(64) NOT NULL UNIQUE,
+		id         SERIAL       PRIMARY KEY,
+		token      VARCHAR(64)  NOT NULL UNIQUE,
 		username   VARCHAR(255) NOT NULL,
 		created_by VARCHAR(255) NOT NULL DEFAULT 'admin',
-		created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-		expires_at TIMESTAMP NOT NULL,
-		INDEX idx_token (token),
-		INDEX idx_expires (expires_at)
+		created_at TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		expires_at TIMESTAMP    NOT NULL
 	)`)
+	if err != nil {
+		return err
+	}
+	db.Exec(`CREATE INDEX IF NOT EXISTS idx_at_token   ON api_tokens (token)`)
+	db.Exec(`CREATE INDEX IF NOT EXISTS idx_at_expires ON api_tokens (expires_at)`)
 	return err
 }
