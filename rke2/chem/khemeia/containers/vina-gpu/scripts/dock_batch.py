@@ -10,7 +10,7 @@ import tempfile
 import time as _time
 from pathlib import Path
 
-import mysql.connector
+import psycopg2
 
 try:
     import boto3
@@ -97,24 +97,24 @@ def get_config():
         "batch_offset": int(require_env("BATCH_OFFSET")),
         "batch_limit": int(require_env("BATCH_LIMIT")),
         "threads": int(os.environ.get("VINA_GPU_THREADS", str(default_threads))),
-        "mysql_host": os.environ.get("MYSQL_HOST", "localhost"),
-        "mysql_port": int(os.environ.get("MYSQL_PORT", ("3306"))),
-        "mysql_user": os.environ.get("MYSQL_USER", "root"),
-        "mysql_password": require_env("MYSQL_PASSWORD"),
+        "pg_host": os.environ.get("POSTGRES_HOST", "localhost"),
+        "pg_port": int(os.environ.get("POSTGRES_PORT", ("5432"))),
+        "pg_user": os.environ.get("POSTGRES_USER", "root"),
+        "pg_password": require_env("POSTGRES_PASSWORD"),
     }
 
 
 def connect_db(cfg):
     try:
-        return mysql.connector.connect(
-            host=cfg["mysql_host"],
-            port=cfg["mysql_port"],
-            user=cfg["mysql_user"],
-            password=cfg["mysql_password"],
+        return psycopg2.connect(
+            host=cfg["pg_host"],
+            port=cfg["pg_port"],
+            user=cfg["pg_user"],
+            password=cfg["pg_password"],
             database="docking",
         )
-    except mysql.connector.Error as exc:
-        print(f"FATAL: MySQL connection failed: {exc}", flush=True)
+    except psycopg2.Error as exc:
+        print(f"FATAL: PostgreSQL connection failed: {exc}", flush=True)
         sys.exit(1)
 
 

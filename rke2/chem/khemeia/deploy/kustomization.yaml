@@ -13,8 +13,8 @@ resources:
   - prolif-runner.yaml
   - library-prep.yaml
   - admet.yaml
-  - mysql.yaml
-  - mysql-secret.yaml
+  - postgres.yaml
+  - postgres-secret.yaml
   - httproute.yaml
   - flux-webhook-secret.yaml
   - flux-webhook-receiver.yaml

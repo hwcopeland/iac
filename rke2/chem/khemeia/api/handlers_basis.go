@@ -82,16 +82,18 @@ type BasisSetImportRequest struct {
 // EnsureBasisSetSchema creates the basis_sets table if it does not exist.
 func EnsureBasisSetSchema(db *DB) error {
 	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS basis_sets (
-		id          INT AUTO_INCREMENT PRIMARY KEY,
+		id          SERIAL PRIMARY KEY,
 		name        VARCHAR(255) NOT NULL,
 		elements    VARCHAR(512) NOT NULL,
 		format      VARCHAR(64) NOT NULL,
 		source      VARCHAR(64) NOT NULL,
 		description TEXT,
 		content     TEXT NOT NULL,
-		created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-		UNIQUE KEY uq_basis (name, elements, format)
+		created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 	)`); err != nil {
+		return err
+	}
+	if _, err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS uq_basis ON basis_sets (name, elements, format)`); err != nil {
 		return err
 	}
 	return nil
@@ -270,22 +272,18 @@ func (h *APIHandler) UploadBasisSet(w http.ResponseWriter, r *http.Request) {
 		description = &req.Description
 	}
 
-	result, err := db.ExecContext(r.Context(),
+	var id int64
+	if err := db.QueryRowContext(r.Context(),
 		`INSERT INTO basis_sets (name, elements, format, source, description, content)
-		 VALUES (?, ?, ?, 'user', ?, ?)`,
-		req.Name, req.Elements, req.Format, description, req.Content)
-	if err != nil {
-		if strings.Contains(err.Error(), "Duplicate entry") || strings.Contains(err.Error(), "duplicate") {
+		 VALUES (?, ?, ?, 'user', ?, ?)
+		 RETURNING id`,
+		req.Name, req.Elements, req.Format, description, req.Content).Scan(&id); err != nil {
+		if strings.Contains(err.Error(), "unique") || strings.Contains(err.Error(), "duplicate") {
 			writeError(w, fmt.Sprintf("basis set %q with elements %q in format %q already exists",
 				req.Name, req.Elements, req.Format), http.StatusConflict)
 			return
 		}
 		writeError(w, fmt.Sprintf("failed to store basis set: %v", err), http.StatusInternalServerError)
-		return
-	}
-	id, err := result.LastInsertId()
-	if err != nil {
-		writeError(w, fmt.Sprintf("failed to get insert id: %v", err), http.StatusInternalServerError)
 		return
 	}
 
@@ -402,19 +400,20 @@ func (h *APIHandler) ImportBasisSet(w http.ResponseWriter, r *http.Request) {
 	elementsCSV := strings.Join(req.Elements, ",")
 	description := fmt.Sprintf("Imported from BSE (%s)", req.Name)
 
-	insertResult, insertErr := db.ExecContext(r.Context(),
+	var id int64
+	insertErr := db.QueryRowContext(r.Context(),
 		`INSERT INTO basis_sets (name, elements, format, source, description, content)
 		 VALUES (?, ?, ?, 'bse', ?, ?)
-		 ON DUPLICATE KEY UPDATE
-		   content = VALUES(content),
-		   description = VALUES(description),
-		   source = 'bse'`,
-		req.Name, elementsCSV, req.Format, description, string(content))
+		 ON CONFLICT (name, elements, format) DO UPDATE SET
+		   content = EXCLUDED.content,
+		   description = EXCLUDED.description,
+		   source = 'bse'
+		 RETURNING id`,
+		req.Name, elementsCSV, req.Format, description, string(content)).Scan(&id)
 	if insertErr != nil {
 		writeError(w, fmt.Sprintf("failed to store imported basis set: %v", insertErr), http.StatusInternalServerError)
 		return
 	}
-	id, _ := insertResult.LastInsertId()
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)

@@ -54,7 +54,7 @@ RUN pip3 install --no-cache-dir \
     pyyaml \
     prody \
     "fair-esm>=2.0.0" \
-    mysql-connector-python \
+    psycopg2-binary \
     boto3
 
 # Clone DiffDock source (no LFS needed; model weights are in GitHub Releases).

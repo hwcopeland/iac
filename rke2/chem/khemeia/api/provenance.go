@@ -57,9 +57,13 @@ func newUUIDv7() string {
 // pattern as EnsureAPITokenSchema and EnsureBasisSetSchema.
 func EnsureProvenanceSchema(db *DB) error {
 	provenanceDDL := `CREATE TABLE IF NOT EXISTS provenance (
-		id              BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+		id              BIGSERIAL PRIMARY KEY,
 		artifact_id     CHAR(36) NOT NULL,
-		artifact_type   VARCHAR(64) NOT NULL,
+		artifact_type   TEXT NOT NULL CHECK (artifact_type IN (
+			'receptor', 'library', 'compound', 'docked_pose', 'refined_pose',
+			'admet_result', 'generated_compound', 'linked_compound', 'report',
+			'selectivity_matrix', 'fep_result'
+		)),
 		s3_bucket       VARCHAR(64) NULL,
 		s3_key          VARCHAR(512) NULL,
 		checksum_sha256 CHAR(64) NULL,
@@ -68,31 +72,45 @@ func EnsureProvenanceSchema(db *DB) error {
 		job_namespace   VARCHAR(64) NOT NULL DEFAULT 'chem',
 		parameters      JSON NULL,
 		tool_versions   JSON NULL,
-		created_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-		UNIQUE KEY uq_provenance_artifact_id (artifact_id),
-		KEY idx_provenance_artifact_type (artifact_type),
-		KEY idx_provenance_created_by_job (created_by_job),
-		KEY idx_provenance_created_at (created_at),
-		KEY idx_provenance_s3_key (s3_bucket, s3_key)
+		created_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 	)`
 
 	if _, err := db.Exec(provenanceDDL); err != nil {
 		return fmt.Errorf("creating provenance table: %w", err)
 	}
 
+	for _, ddl := range []string{
+		`CREATE UNIQUE INDEX IF NOT EXISTS uq_provenance_artifact_id ON provenance (artifact_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_provenance_artifact_type ON provenance (artifact_type)`,
+		`CREATE INDEX IF NOT EXISTS idx_provenance_created_by_job ON provenance (created_by_job)`,
+		`CREATE INDEX IF NOT EXISTS idx_provenance_created_at ON provenance (created_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_provenance_s3_key ON provenance (s3_bucket, s3_key)`,
+	} {
+		if _, err := db.Exec(ddl); err != nil {
+			return fmt.Errorf("creating provenance index: %w", err)
+		}
+	}
+
 	edgesDDL := `CREATE TABLE IF NOT EXISTS provenance_edges (
-		id        BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+		id        BIGSERIAL PRIMARY KEY,
 		parent_id CHAR(36) NOT NULL,
 		child_id  CHAR(36) NOT NULL,
-		UNIQUE KEY uq_provenance_edges (parent_id, child_id),
-		KEY idx_provenance_edges_parent (parent_id),
-		KEY idx_provenance_edges_child (child_id),
 		CONSTRAINT fk_prov_parent FOREIGN KEY (parent_id) REFERENCES provenance(artifact_id),
 		CONSTRAINT fk_prov_child  FOREIGN KEY (child_id)  REFERENCES provenance(artifact_id)
 	)`
 
 	if _, err := db.Exec(edgesDDL); err != nil {
 		return fmt.Errorf("creating provenance_edges table: %w", err)
+	}
+
+	for _, ddl := range []string{
+		`CREATE UNIQUE INDEX IF NOT EXISTS uq_provenance_edges ON provenance_edges (parent_id, child_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_provenance_edges_parent ON provenance_edges (parent_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_provenance_edges_child ON provenance_edges (child_id)`,
+	} {
+		if _, err := db.Exec(ddl); err != nil {
+			return fmt.Errorf("creating provenance_edges index: %w", err)
+		}
 	}
 
 	return nil

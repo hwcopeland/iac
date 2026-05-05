@@ -1,4 +1,4 @@
-mysql-connector-python
+psycopg2-binary
 boto3
 acpype
 rdkit
