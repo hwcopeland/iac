@@ -1,0 +1,135 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: chembl-import
+  namespace: chem
+spec:
+  ttlSecondsAfterFinished: 86400
+  backoffLimit: 1
+  template:
+    spec:
+      restartPolicy: Never
+      imagePullSecrets:
+        - name: zot-pull-secret
+      initContainers:
+        - name: download-chembl
+          image: alpine:latest
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+              CHEMBL_VERSION="36"
+              DUMP_DIR="/chembl-dump"
+              MARKER="$DUMP_DIR/.chembl_${CHEMBL_VERSION}_downloaded"
+
+              if [ -f "$MARKER" ]; then
+                echo "ChEMBL ${CHEMBL_VERSION} dump already downloaded, skipping."
+                exit 0
+              fi
+
+              apk add --no-cache wget tar
+              mkdir -p "$DUMP_DIR"
+              cd "$DUMP_DIR"
+
+              echo "Downloading ChEMBL ${CHEMBL_VERSION} PostgreSQL dump (~3GB)..."
+              wget -q --show-progress \
+                "https://ftp.ebi.ac.uk/pub/databases/chembl/ChEMBLdb/latest/chembl_${CHEMBL_VERSION}_postgresql.tar.gz" \
+                -O "chembl_${CHEMBL_VERSION}_postgresql.tar.gz"
+
+              echo "Extracting..."
+              tar xzf "chembl_${CHEMBL_VERSION}_postgresql.tar.gz"
+              rm "chembl_${CHEMBL_VERSION}_postgresql.tar.gz"
+
+              touch "$MARKER"
+              echo "Download complete."
+              find "$DUMP_DIR" -name "*.dmp" | head -5
+          volumeMounts:
+            - name: chembl-dump
+              mountPath: /chembl-dump
+
+      containers:
+        - name: import-chembl
+          image: postgres:16
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -e
+              CHEMBL_VERSION="36"
+
+              DUMP_FILE=$(find /chembl-dump -name "*.dmp" 2>/dev/null | head -1)
+              if [ -z "$DUMP_FILE" ]; then
+                echo "ERROR: No ChEMBL dump found in /chembl-dump"
+                exit 1
+              fi
+
+              echo "Checking if chembl_${CHEMBL_VERSION} already exists..."
+              EXISTS=$(psql "host=$POSTGRES_HOST port=$POSTGRES_PORT user=$POSTGRES_USER password=$POSTGRES_PASSWORD dbname=khemeia sslmode=disable" \
+                -tc "SELECT 1 FROM pg_database WHERE datname='chembl_${CHEMBL_VERSION}'" | tr -d ' \n')
+              if [ "$EXISTS" = "1" ]; then
+                TABLE_COUNT=$(psql "host=$POSTGRES_HOST port=$POSTGRES_PORT user=$POSTGRES_USER password=$POSTGRES_PASSWORD dbname=chembl_${CHEMBL_VERSION} sslmode=disable" \
+                  -tc "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='public'" | tr -d ' \n')
+                if [ "$TABLE_COUNT" -gt 50 ]; then
+                  echo "ChEMBL ${CHEMBL_VERSION} already imported ($TABLE_COUNT tables). Nothing to do."
+                  exit 0
+                fi
+                echo "chembl_${CHEMBL_VERSION} exists but incomplete ($TABLE_COUNT tables), re-importing..."
+                psql "host=$POSTGRES_HOST port=$POSTGRES_PORT user=$POSTGRES_USER password=$POSTGRES_PASSWORD dbname=khemeia sslmode=disable" \
+                  -c "DROP DATABASE chembl_${CHEMBL_VERSION}"
+              fi
+
+              echo "Creating chembl_${CHEMBL_VERSION} database..."
+              psql "host=$POSTGRES_HOST port=$POSTGRES_PORT user=$POSTGRES_USER password=$POSTGRES_PASSWORD dbname=khemeia sslmode=disable" \
+                -c "CREATE DATABASE chembl_${CHEMBL_VERSION}"
+
+              echo "Restoring ${DUMP_FILE} (this takes 20-40 minutes)..."
+              pg_restore \
+                -h "$POSTGRES_HOST" -p "$POSTGRES_PORT" -U "$POSTGRES_USER" \
+                -d "chembl_${CHEMBL_VERSION}" \
+                --no-owner --no-acl --jobs=2 \
+                "$DUMP_FILE" 2>&1 | tail -20 || true
+
+              TABLE_COUNT=$(psql "host=$POSTGRES_HOST port=$POSTGRES_PORT user=$POSTGRES_USER password=$POSTGRES_PASSWORD dbname=chembl_${CHEMBL_VERSION} sslmode=disable" \
+                -tc "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='public'" | tr -d ' \n')
+              echo "=== Import complete: $TABLE_COUNT tables in chembl_${CHEMBL_VERSION} ==="
+
+              if [ "$TABLE_COUNT" -lt 50 ]; then
+                echo "ERROR: Only $TABLE_COUNT tables found, import likely failed."
+                exit 1
+              fi
+              echo "ChEMBL import done."
+          env:
+            - name: POSTGRES_HOST
+              value: khemeia-postgres.chem.svc.cluster.local
+            - name: POSTGRES_PORT
+              value: "5432"
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: khemeia-postgres-secret
+                  key: username
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: khemeia-postgres-secret
+                  key: password
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: khemeia-postgres-secret
+                  key: password
+          volumeMounts:
+            - name: chembl-dump
+              mountPath: /chembl-dump
+          resources:
+            requests:
+              cpu: "1"
+              memory: 3Gi
+            limits:
+              cpu: "2"
+              memory: 4Gi
+      volumes:
+        - name: chembl-dump
+          emptyDir:
+            sizeLimit: 12Gi
