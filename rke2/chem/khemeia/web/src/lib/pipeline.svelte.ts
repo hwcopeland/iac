@@ -18,15 +18,29 @@ export interface StageState {
 }
 
 const PIPELINE_STORAGE_KEY = 'khemeia_pipeline_v1';
+const WORKGROUPS_KEY = 'khemeia_workgroups_v1';
+const ACTIVE_WG_KEY = 'khemeia_active_wg_v1';
 
-function readSavedStages(): Record<string, StageState> {
-  const defaults: Record<string, StageState> = {
+export interface WorkgroupMeta {
+  id: string;
+  name: string;
+  createdAt: number;
+  stages: Record<string, { jobName: string | null; status: StageStatus }>;
+  pdbId: string;
+}
+
+function defaultStages(): Record<string, StageState> {
+  return {
     target:  { status: 'pending', jobName: null, error: '', collapsed: false },
     library: { status: 'pending', jobName: null, error: '', collapsed: true },
     docking: { status: 'pending', jobName: null, error: '', collapsed: true },
     md:      { status: 'pending', jobName: null, error: '', collapsed: true },
     admet:   { status: 'pending', jobName: null, error: '', collapsed: true },
   };
+}
+
+function readSavedStages(): Record<string, StageState> {
+  const defaults = defaultStages();
   try {
     const raw = localStorage.getItem(PIPELINE_STORAGE_KEY);
     if (!raw) return defaults;
@@ -49,10 +63,48 @@ function saveStages(stages: Record<string, StageState>) {
   try { localStorage.setItem(PIPELINE_STORAGE_KEY, JSON.stringify(snapshot)); } catch {}
 }
 
+function stageSnapshot(stages: Record<string, StageState>): Record<string, { jobName: string | null; status: StageStatus }> {
+  const snap: Record<string, { jobName: string | null; status: StageStatus }> = {};
+  for (const [k, s] of Object.entries(stages)) snap[k] = { jobName: s.jobName, status: s.status };
+  return snap;
+}
+
+function _initWorkgroupData(): { workgroups: WorkgroupMeta[]; activeId: string } {
+  try {
+    const wgsRaw = localStorage.getItem(WORKGROUPS_KEY);
+    let wgs: WorkgroupMeta[] = wgsRaw ? JSON.parse(wgsRaw) : [];
+
+    if (wgs.length === 0) {
+      const stagesRaw = localStorage.getItem(PIPELINE_STORAGE_KEY);
+      const legacyStages: Record<string, { jobName: string | null; status: StageStatus }> = stagesRaw ? JSON.parse(stagesRaw) : {};
+      const wg: WorkgroupMeta = { id: crypto.randomUUID(), name: 'Workgroup 1', createdAt: Date.now(), stages: legacyStages, pdbId: '' };
+      wgs = [wg];
+      localStorage.setItem(WORKGROUPS_KEY, JSON.stringify(wgs));
+      localStorage.setItem(ACTIVE_WG_KEY, wg.id);
+      return { workgroups: wgs, activeId: wg.id };
+    }
+
+    const savedActive = localStorage.getItem(ACTIVE_WG_KEY);
+    const activeId = savedActive && wgs.some(w => w.id === savedActive) ? savedActive : wgs[0].id;
+    return { workgroups: wgs, activeId };
+  } catch {
+    const wg: WorkgroupMeta = { id: crypto.randomUUID(), name: 'Workgroup 1', createdAt: Date.now(), stages: {}, pdbId: '' };
+    return { workgroups: [wg], activeId: wg.id };
+  }
+}
+
+const _wgInit = _initWorkgroupData();
+
 class PipelineStore {
   // Core stage state
   stages = $state<Record<string, StageState>>(readSavedStages());
   sessionExpired = $state(false);
+
+  // Workgroups
+  workgroups = $state<WorkgroupMeta[]>(_wgInit.workgroups);
+  activeWorkgroupId = $state<string>(_wgInit.activeId);
+  wgRenaming = $state(false);
+  wgRenameValue = $state('');
 
   // Target Prep form
   pdbId = $state('');
@@ -148,6 +200,108 @@ class PipelineStore {
   updateStage(key: string, patch: Partial<StageState>) {
     this.stages[key] = { ...this.stages[key], ...patch };
     saveStages(this.stages);
+    this._syncActiveWorkgroup();
+  }
+
+  // --- Workgroup management ---
+
+  get activeWorkgroup(): WorkgroupMeta | undefined {
+    return this.workgroups.find(w => w.id === this.activeWorkgroupId);
+  }
+
+  _syncActiveWorkgroup() {
+    const snap = stageSnapshot(this.stages);
+    this.workgroups = this.workgroups.map(w =>
+      w.id === this.activeWorkgroupId ? { ...w, stages: snap, pdbId: this.pdbId } : w
+    );
+    try { localStorage.setItem(WORKGROUPS_KEY, JSON.stringify(this.workgroups)); } catch {}
+  }
+
+  newWorkgroup(name?: string) {
+    this._syncActiveWorkgroup();
+    const n = this.workgroups.length + 1;
+    const wg: WorkgroupMeta = { id: crypto.randomUUID(), name: name ?? `Workgroup ${n}`, createdAt: Date.now(), stages: {}, pdbId: '' };
+    this.workgroups = [...this.workgroups, wg];
+    this.activeWorkgroupId = wg.id;
+    try { localStorage.setItem(ACTIVE_WG_KEY, wg.id); localStorage.setItem(WORKGROUPS_KEY, JSON.stringify(this.workgroups)); } catch {}
+    this._applyWorkgroupStages({});
+    this.clearPolls();
+    this._resetLoadedState();
+    this.initialized = false;
+  }
+
+  switchWorkgroup(id: string) {
+    if (id === this.activeWorkgroupId) return;
+    this._syncActiveWorkgroup();
+    const wg = this.workgroups.find(w => w.id === id);
+    if (!wg) return;
+    this.clearPolls();
+    this._resetLoadedState();
+    this.initialized = false;
+    this.activeWorkgroupId = id;
+    try { localStorage.setItem(ACTIVE_WG_KEY, id); } catch {}
+    this._applyWorkgroupStages(wg.stages);
+    if (wg.pdbId) this.pdbId = wg.pdbId;
+    this.init();
+  }
+
+  renameWorkgroup(id: string, name: string) {
+    this.workgroups = this.workgroups.map(w => w.id === id ? { ...w, name } : w);
+    try { localStorage.setItem(WORKGROUPS_KEY, JSON.stringify(this.workgroups)); } catch {}
+  }
+
+  deleteWorkgroup(id: string) {
+    const filtered = this.workgroups.filter(w => w.id !== id);
+    if (filtered.length === 0) { this.newWorkgroup('Workgroup 1'); return; }
+    this.workgroups = filtered;
+    try { localStorage.setItem(WORKGROUPS_KEY, JSON.stringify(this.workgroups)); } catch {}
+    if (this.activeWorkgroupId === id) this.switchWorkgroup(filtered[0].id);
+  }
+
+  startRename() {
+    this.wgRenameValue = this.activeWorkgroup?.name ?? '';
+    this.wgRenaming = true;
+  }
+
+  commitRename() {
+    const name = this.wgRenameValue.trim();
+    if (name) this.renameWorkgroup(this.activeWorkgroupId, name);
+    this.wgRenaming = false;
+  }
+
+  cancelRename() { this.wgRenaming = false; }
+
+  _applyWorkgroupStages(snap: Record<string, { jobName: string | null; status: StageStatus }>) {
+    const fresh = defaultStages();
+    for (const [k, v] of Object.entries(snap)) {
+      if (fresh[k] && v.jobName) {
+        fresh[k] = { ...fresh[k], jobName: v.jobName, status: v.status, collapsed: v.status === 'pending' && k !== 'target' };
+      }
+    }
+    this.stages = fresh;
+    saveStages(this.stages);
+  }
+
+  _resetLoadedState() {
+    this.targetPrepResult = null;
+    this.pockets = null;
+    this.selectedPocketIdx = null;
+    this.receptorLoading = false;
+    this.libraryStatus = null;
+    this.libraryCompoundSample = [];
+    this.dockingSummary = null;
+    this.dockResults = [];
+    this.dockResultsTotal = 0;
+    this.dockResultsPage = 1;
+    this.mdJobStatus = null;
+    this.mdResults = [];
+    this.mdViewerLoading = null;
+    this.mdViewerError = null;
+    this.admetResults = [];
+    this.admetResultsTotal = 0;
+    this.recentJobs = [];
+    this.recentOpen = false;
+    this.sessionExpired = false;
   }
 
   canAdvance(key: string): boolean {
@@ -403,10 +557,10 @@ class PipelineStore {
 
   clearPipeline() {
     this.clearPolls();
-    for (const k of ['target', 'library', 'docking', 'md', 'admet']) {
-      this.stages[k] = { status: 'pending', jobName: null, error: '', collapsed: k === 'target' ? false : true };
-    }
+    this._resetLoadedState();
+    this.stages = defaultStages();
     try { localStorage.removeItem(PIPELINE_STORAGE_KEY); } catch {}
+    this._syncActiveWorkgroup();
   }
 
   // --- Submit handlers ---
