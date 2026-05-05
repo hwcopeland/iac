@@ -145,15 +145,15 @@ func TestPluginGenerateTableDDL(t *testing.T) {
 		t.Error("expected non-empty DDL")
 	}
 
-	// Verify it contains key components.
+	// Verify it contains key components (PostgreSQL syntax).
 	mustContain := []string{
 		"CREATE TABLE IF NOT EXISTS qe_jobs",
-		"id            INT AUTO_INCREMENT PRIMARY KEY",
+		"SERIAL PRIMARY KEY",
 		"name          VARCHAR(255) NOT NULL UNIQUE",
-		"status        ENUM",
+		"status        TEXT NOT NULL",
 		"input_data    JSON",
 		"output_data   JSON",
-		"error_output  MEDIUMTEXT",
+		"error_output  TEXT",
 		"submitted_by  VARCHAR(255)",
 	}
 	for _, s := range mustContain {
