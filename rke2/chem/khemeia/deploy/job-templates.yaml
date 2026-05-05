@@ -84,19 +84,22 @@ spec:
               value: "{{ .BatchOffset }}"
             - name: BATCH_LIMIT
               value: "{{ .BatchLimit }}"
-            - name: MYSQL_HOST
-              value: chem-mysql.chem.svc.cluster.local
-            - name: MYSQL_PORT
-              value: "3306"
-            - name: MYSQL_DATABASE
+            - name: POSTGRES_HOST
+              value: khemeia-postgres.chem.svc.cluster.local
+            - name: POSTGRES_PORT
+              value: "5432"
+            - name: POSTGRES_DB
               value: khemeia
-            - name: MYSQL_USER
-              value: "root"
-            - name: MYSQL_PASSWORD
+            - name: POSTGRES_USER
               valueFrom:
                 secretKeyRef:
-                  name: chem-mysql-secret
-                  key: root-password
+                  name: khemeia-postgres-secret
+                  key: username
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: khemeia-postgres-secret
+                  key: password
           volumeMounts:
             - name: scratch
               mountPath: /data

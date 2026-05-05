@@ -17,7 +17,7 @@ import (
 	"syscall"
 	"time"
 
-	_ "github.com/go-sql-driver/mysql"
+	_ "github.com/lib/pq"
 )
 
 const (
@@ -53,12 +53,12 @@ type dockPayload struct {
 func main() {
 	log.Println("Result-writer starting...")
 
-	db, err := connectMySQL()
+	db, err := connectPostgres()
 	if err != nil {
-		log.Fatalf("Failed to connect to MySQL: %v", err)
+		log.Fatalf("Failed to connect to PostgreSQL: %v", err)
 	}
 	defer db.Close()
-	log.Println("MySQL connection established")
+	log.Println("PostgreSQL connection established")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -84,33 +84,33 @@ func main() {
 	log.Println("Result-writer stopped")
 }
 
-// connectMySQL builds a DSN from MYSQL_* env vars and opens a connection pool.
-func connectMySQL() (*sql.DB, error) {
-	host := os.Getenv("MYSQL_HOST")
-	port := os.Getenv("MYSQL_PORT")
-	user := os.Getenv("MYSQL_USER")
-	password := os.Getenv("MYSQL_PASSWORD")
-	dbname := os.Getenv("MYSQL_DATABASE")
+// connectPostgres builds a DSN from POSTGRES_* env vars and opens a connection pool.
+func connectPostgres() (*sql.DB, error) {
+	host := os.Getenv("POSTGRES_HOST")
+	port := os.Getenv("POSTGRES_PORT")
+	user := os.Getenv("POSTGRES_USER")
+	password := os.Getenv("POSTGRES_PASSWORD")
+	dbname := os.Getenv("POSTGRES_DB")
 	if port == "" {
-		port = "3306"
+		port = "5432"
 	}
 	if dbname == "" {
 		dbname = "khemeia"
 	}
 
-	dsn := fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?parseTime=true",
-		user, password, host, port, dbname)
+	dsn := fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=disable",
+		host, port, user, password, dbname)
 
-	db, err := sql.Open("mysql", dsn)
+	db, err := sql.Open("postgres", dsn)
 	if err != nil {
-		return nil, fmt.Errorf("opening mysql: %w", err)
+		return nil, fmt.Errorf("opening postgres: %w", err)
 	}
 	db.SetMaxOpenConns(10)
 	db.SetConnMaxLifetime(5 * time.Minute)
 
 	if err := db.Ping(); err != nil {
 		db.Close()
-		return nil, fmt.Errorf("pinging mysql: %w", err)
+		return nil, fmt.Errorf("pinging postgres: %w", err)
 	}
 	return db, nil
 }
@@ -151,7 +151,7 @@ func pollLoop(ctx context.Context, db *sql.DB) {
 // single transaction, and deletes the processed rows.
 func processBatch(ctx context.Context, db *sql.DB) (prepProcessed, dockProcessed int, err error) {
 	rows, err := db.QueryContext(ctx,
-		`SELECT id, job_type, payload FROM staging ORDER BY id ASC LIMIT ?`, batchSize)
+		`SELECT id, job_type, payload FROM staging ORDER BY id ASC LIMIT $1`, batchSize)
 	if err != nil {
 		return 0, 0, fmt.Errorf("querying staging: %w", err)
 	}
@@ -230,7 +230,7 @@ func processPrep(ctx context.Context, tx *sql.Tx, row stagingRow) error {
 	}
 
 	_, err = tx.ExecContext(ctx,
-		`UPDATE ligands SET pdbqt = ? WHERE id = ?`, pdbqtBytes, p.LigandID)
+		`UPDATE ligands SET pdbqt = $1 WHERE id = $2`, pdbqtBytes, p.LigandID)
 	if err != nil {
 		return fmt.Errorf("updating ligand %d pdbqt: %w", p.LigandID, err)
 	}
@@ -247,7 +247,7 @@ func processDock(ctx context.Context, tx *sql.Tx, row stagingRow) error {
 
 	_, err := tx.ExecContext(ctx,
 		`INSERT INTO docking_results (workflow_name, pdb_id, ligand_id, compound_id, affinity_kcal_mol, docked_pdbqt)
-		 VALUES (?, ?, ?, ?, ?, ?)`,
+		 VALUES ($1, $2, $3, $4, $5, $6)`,
 		d.WorkflowName, d.PDBID, d.LigandID, d.CompoundID, d.AffinityKcalMol, d.DockedPDBQT)
 	if err != nil {
 		return fmt.Errorf("inserting docking result for ligand %d: %w", d.LigandID, err)
@@ -261,14 +261,14 @@ func deleteProcessedRows(ctx context.Context, tx *sql.Tx, ids []int) error {
 		return nil
 	}
 
-	// Build a parameterized IN clause with ?, ?, ... placeholders.
+	// Build a parameterized IN clause with $1, $2, ... placeholders.
 	var b strings.Builder
 	args := make([]interface{}, len(ids))
 	for i, id := range ids {
 		if i > 0 {
 			b.WriteByte(',')
 		}
-		b.WriteByte('?')
+		fmt.Fprintf(&b, "$%d", i+1)
 		args[i] = id
 	}
 

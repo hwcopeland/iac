@@ -18,10 +18,10 @@ All configuration via environment variables:
   SCORING        - scoring mode (default "default" for CNN+Vina hybrid)
   BATCH_OFFSET   - starting row offset in library_compounds
   BATCH_LIMIT    - number of compounds to process
-  MYSQL_HOST     - MySQL hostname
-  MYSQL_PORT     - MySQL port (default 3306)
-  MYSQL_USER     - MySQL user
-  MYSQL_PASSWORD - MySQL password
+  POSTGRES_HOST     - PostgreSQL hostname
+  POSTGRES_PORT     - PostgreSQL port (default 3306)
+  POSTGRES_USER     - PostgreSQL user
+  POSTGRES_PASSWORD - PostgreSQL password
   GARAGE_ENABLED - "true" to use S3 artifact storage
   GARAGE_ENDPOINT   - S3 endpoint URL
   GARAGE_ACCESS_KEY - S3 access key
@@ -37,7 +37,7 @@ import sys
 import tempfile
 import time as _time
 
-import mysql.connector
+import psycopg2
 
 try:
     import boto3
@@ -90,25 +90,25 @@ def get_config():
         "scoring": os.environ.get("SCORING", "default"),
         "batch_offset": int(require_env("BATCH_OFFSET")),
         "batch_limit": int(require_env("BATCH_LIMIT")),
-        "mysql_host": os.environ.get("MYSQL_HOST", "localhost"),
-        "mysql_port": int(os.environ.get("MYSQL_PORT", ("3306"))),
-        "mysql_user": os.environ.get("MYSQL_USER", "root"),
-        "mysql_password": require_env("MYSQL_PASSWORD"),
+        "pg_host": os.environ.get("POSTGRES_HOST", "localhost"),
+        "pg_port": int(os.environ.get("POSTGRES_PORT", ("5432"))),
+        "pg_user": os.environ.get("POSTGRES_USER", "root"),
+        "pg_password": require_env("POSTGRES_PASSWORD"),
     }
 
 
 def connect_db(cfg):
-    """Connect to MySQL. Exits on failure."""
+    """Connect to PostgreSQL. Exits on failure."""
     try:
-        return mysql.connector.connect(
-            host=cfg["mysql_host"],
-            port=cfg["mysql_port"],
-            user=cfg["mysql_user"],
-            password=cfg["mysql_password"],
+        return psycopg2.connect(
+            host=cfg["pg_host"],
+            port=cfg["pg_port"],
+            user=cfg["pg_user"],
+            password=cfg["pg_password"],
             database="docking",
         )
-    except mysql.connector.Error as exc:
-        print(f"FATAL: MySQL connection failed: {exc}", flush=True)
+    except psycopg2.Error as exc:
+        print(f"FATAL: PostgreSQL connection failed: {exc}", flush=True)
         sys.exit(1)
 
 

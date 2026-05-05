@@ -1,14 +1,10 @@
 ---
-# Single MySQL instance serving two databases:
-#   khemeia  — all khemeia plugin tables (docking results, QE, ADMET, etc.)
-#   chembl_36 — ChEMBL compound database (imported from EBI dump on first boot)
-#
-# Init containers download and import the ChEMBL dump on first boot (~30-60 min).
-# Subsequent restarts detect the import marker and skip within seconds.
+# MySQL instance for storing docking results in the chem namespace.
+# ClusterIP only — accessible at docking-mysql.chem.svc.cluster.local:3306.
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: pvc-chem-mysql
+  name: pvc-docking-mysql
   namespace: chem
 spec:
   accessModes:
@@ -16,160 +12,25 @@ spec:
   storageClassName: longhorn
   resources:
     requests:
-      storage: 120Gi
+      storage: 10Gi
 
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: chem-mysql
+  name: docking-mysql
   namespace: chem
-  labels:
-    app: chem-mysql
 spec:
-  replicas: 1
-  strategy:
-    type: Recreate
   selector:
     matchLabels:
-      app: chem-mysql
+      app: docking-mysql
+  strategy:
+    type: Recreate
   template:
     metadata:
       labels:
-        app: chem-mysql
+        app: docking-mysql
     spec:
-      initContainers:
-        - name: download-chembl
-          image: alpine:latest
-          command:
-            - /bin/sh
-            - -c
-            - |
-              set -e
-              CHEMBL_VERSION="36"
-              DUMP_DIR="/chembl-dump"
-              MARKER="$DUMP_DIR/.chembl_${CHEMBL_VERSION}_downloaded"
-
-              if [ -f "$MARKER" ]; then
-                echo "ChEMBL ${CHEMBL_VERSION} already downloaded, skipping."
-                exit 0
-              fi
-
-              apk add --no-cache wget tar
-              mkdir -p "$DUMP_DIR"
-              cd "$DUMP_DIR"
-
-              echo "Downloading ChEMBL ${CHEMBL_VERSION} MySQL dump (~1.9GB)..."
-              wget -q --show-progress \
-                "https://ftp.ebi.ac.uk/pub/databases/chembl/ChEMBLdb/latest/chembl_${CHEMBL_VERSION}_mysql.tar.gz" \
-                -O "chembl_${CHEMBL_VERSION}_mysql.tar.gz"
-
-              echo "Extracting..."
-              tar xzf "chembl_${CHEMBL_VERSION}_mysql.tar.gz"
-              rm "chembl_${CHEMBL_VERSION}_mysql.tar.gz"
-
-              touch "$MARKER"
-              echo "Download complete."
-          volumeMounts:
-            - name: chembl-dump
-              mountPath: /chembl-dump
-
-        - name: import-chembl
-          image: mysql:8.0
-          command:
-            - /bin/bash
-            - -c
-            - |
-              set -e
-              CHEMBL_VERSION="36"
-              DATADIR="/var/lib/mysql"
-              IMPORT_MARKER="$DATADIR/.chembl_${CHEMBL_VERSION}_imported"
-
-              if [ -f "$IMPORT_MARKER" ]; then
-                echo "ChEMBL ${CHEMBL_VERSION} already imported, skipping."
-                exit 0
-              fi
-
-              if [ ! -d "$DATADIR/mysql" ] || [ ! -d "$DATADIR/sys" ]; then
-                echo "Initializing MySQL data directory..."
-                find "$DATADIR" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
-                mysqld --initialize-insecure --user=mysql --datadir=$DATADIR
-              fi
-
-              echo "Starting temporary MySQL for import..."
-              mysqld --user=mysql --datadir=$DATADIR \
-                --innodb-buffer-pool-size=2G \
-                --innodb-log-file-size=512M \
-                --max-allowed-packet=256M \
-                --skip-networking \
-                --socket=/tmp/mysql.sock &
-              MYSQL_PID=$!
-
-              echo "Waiting for MySQL to be ready..."
-              for i in $(seq 1 60); do
-                if mysqladmin ping --socket=/tmp/mysql.sock --silent 2>/dev/null; then
-                  echo "MySQL ready"
-                  break
-                fi
-                [ "$i" -eq 60 ] && echo "TIMEOUT" && kill $MYSQL_PID && exit 1
-                sleep 2
-              done
-
-              if mysql --socket=/tmp/mysql.sock -u root -e "SELECT 1" 2>/dev/null; then
-                mysql --socket=/tmp/mysql.sock -u root \
-                  -e "ALTER USER 'root'@'localhost' IDENTIFIED BY '$MYSQL_ROOT_PASSWORD'; \
-                      CREATE USER IF NOT EXISTS 'root'@'%' IDENTIFIED BY '$MYSQL_ROOT_PASSWORD'; \
-                      GRANT ALL PRIVILEGES ON *.* TO 'root'@'%' WITH GRANT OPTION; \
-                      FLUSH PRIVILEGES;"
-              fi
-
-              TABLE_COUNT=$(mysql --socket=/tmp/mysql.sock -u root -p"$MYSQL_ROOT_PASSWORD" -N \
-                -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'chembl_${CHEMBL_VERSION}'" 2>/dev/null || echo "0")
-
-              if [ "$TABLE_COUNT" -gt 100 ]; then
-                echo "Already imported ($TABLE_COUNT tables). Marking done."
-                touch "$IMPORT_MARKER"
-                kill $MYSQL_PID 2>/dev/null; wait $MYSQL_PID 2>/dev/null
-                exit 0
-              fi
-
-              mysql --socket=/tmp/mysql.sock -u root -p"$MYSQL_ROOT_PASSWORD" \
-                -e "CREATE DATABASE IF NOT EXISTS chembl_${CHEMBL_VERSION} CHARACTER SET utf8mb4"
-
-              DUMP_FILE=$(find /chembl-dump -name "*.dmp" -o -name "*.sql" 2>/dev/null | head -1)
-              if [ -z "$DUMP_FILE" ]; then
-                echo "ERROR: No dump file found"
-                kill $MYSQL_PID 2>/dev/null; wait $MYSQL_PID 2>/dev/null
-                exit 1
-              fi
-
-              echo "Importing $DUMP_FILE (this takes 20-40 minutes)..."
-              mysql --socket=/tmp/mysql.sock -u root -p"$MYSQL_ROOT_PASSWORD" \
-                "chembl_${CHEMBL_VERSION}" < "$DUMP_FILE"
-
-              touch "$IMPORT_MARKER"
-              echo "Import complete. Shutting down."
-              kill $MYSQL_PID 2>/dev/null
-              wait $MYSQL_PID 2>/dev/null || true
-          env:
-            - name: MYSQL_ROOT_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: chem-mysql-secret
-                  key: root-password
-          volumeMounts:
-            - name: data
-              mountPath: /var/lib/mysql
-            - name: chembl-dump
-              mountPath: /chembl-dump
-          resources:
-            requests:
-              cpu: "1"
-              memory: 3Gi
-            limits:
-              cpu: "2"
-              memory: 4Gi
-
       containers:
         - name: mysql
           image: mysql:8.0
@@ -177,25 +38,16 @@ spec:
             - name: MYSQL_ROOT_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: chem-mysql-secret
+                  name: docking-mysql-secret
                   key: root-password
-          args:
-            - --innodb-buffer-pool-size=2G
-            - --innodb-log-file-size=512M
-            - --max-allowed-packet=256M
+            - name: MYSQL_DATABASE
+              value: docking
           ports:
             - containerPort: 3306
               name: mysql
           volumeMounts:
             - name: data
               mountPath: /var/lib/mysql
-          resources:
-            requests:
-              cpu: 500m
-              memory: 3Gi
-            limits:
-              cpu: "2"
-              memory: 4Gi
           readinessProbe:
             exec:
               command: ["mysqladmin", "ping", "-h", "localhost"]
@@ -208,28 +60,22 @@ spec:
             initialDelaySeconds: 60
             periodSeconds: 30
             timeoutSeconds: 5
-
       volumes:
         - name: data
           persistentVolumeClaim:
-            claimName: pvc-chem-mysql
-        - name: chembl-dump
-          emptyDir:
-            sizeLimit: 25Gi
+            claimName: pvc-docking-mysql
 
 ---
 apiVersion: v1
 kind: Service
 metadata:
-  name: chem-mysql
+  name: docking-mysql
   namespace: chem
-  labels:
-    app: chem-mysql
 spec:
   selector:
-    app: chem-mysql
+    app: docking-mysql
   ports:
     - port: 3306
       targetPort: 3306
       protocol: TCP
-  type: ClusterIP
+  type: LoadBalancer
