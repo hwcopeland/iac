@@ -4,5 +4,5 @@ meeko
 rdkit-pypi
 flask
 gunicorn
-mysql-connector-python
+psycopg2-binary
 boto3

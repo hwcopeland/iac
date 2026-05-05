@@ -180,12 +180,12 @@ var validLibrarySources = map[string]bool{
 // EnsureLibraryPrepSchema creates the library_prep_results and library_compounds
 // tables if they do not exist. Called during startup on the shared database,
 // following the same pattern as EnsureTargetPrepSchema.
-func EnsureLibraryPrepSchema(db *sql.DB) error {
+func EnsureLibraryPrepSchema(db *DB) error {
 	resultsDDL := `CREATE TABLE IF NOT EXISTS library_prep_results (
-		id              INT AUTO_INCREMENT PRIMARY KEY,
+		id              SERIAL PRIMARY KEY,
 		name            VARCHAR(255) NOT NULL UNIQUE,
-		source          ENUM('smiles', 'sdf', 'chembl', 'enamine') NOT NULL,
-		phase           ENUM('Pending', 'Running', 'Succeeded', 'Failed') NOT NULL DEFAULT 'Pending',
+		source          TEXT NOT NULL CHECK (source IN ('smiles', 'sdf', 'chembl', 'enamine')),
+		phase           TEXT NOT NULL DEFAULT 'Pending' CHECK (phase IN ('Pending', 'Running', 'Succeeded', 'Failed')),
 		compound_count  INT NOT NULL DEFAULT 0,
 		filtered_count  INT NOT NULL DEFAULT 0,
 		s3_key          VARCHAR(512) NULL,
@@ -194,18 +194,24 @@ func EnsureLibraryPrepSchema(db *sql.DB) error {
 		error_output    TEXT NULL,
 		start_time      TIMESTAMP NULL,
 		completion_time TIMESTAMP NULL,
-		created_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-		INDEX idx_phase (phase),
-		INDEX idx_source (source),
-		INDEX idx_created_at (created_at)
-	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`
+		created_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+	)`
 
 	if _, err := db.Exec(resultsDDL); err != nil {
 		return fmt.Errorf("creating library_prep_results table: %w", err)
 	}
+	for _, idx := range []string{
+		`CREATE INDEX IF NOT EXISTS idx_library_prep_phase ON library_prep_results (phase)`,
+		`CREATE INDEX IF NOT EXISTS idx_library_prep_source ON library_prep_results (source)`,
+		`CREATE INDEX IF NOT EXISTS idx_library_prep_created_at ON library_prep_results (created_at)`,
+	} {
+		if _, err := db.Exec(idx); err != nil {
+			return fmt.Errorf("creating library_prep_results index: %w", err)
+		}
+	}
 
 	compoundsDDL := `CREATE TABLE IF NOT EXISTS library_compounds (
-		id               INT AUTO_INCREMENT PRIMARY KEY,
+		id               SERIAL PRIMARY KEY,
 		library_id       INT NOT NULL,
 		compound_id      VARCHAR(64) NOT NULL,
 		canonical_smiles TEXT NOT NULL,
@@ -217,23 +223,29 @@ func EnsureLibraryPrepSchema(db *sql.DB) error {
 		psa              FLOAT NULL,
 		rotatable_bonds  INT NULL,
 		qed              FLOAT NULL,
-		lipinski_pass    TINYINT(1) NULL,
-		veber_pass       TINYINT(1) NULL,
-		pains_pass       TINYINT(1) NULL,
-		brenk_pass       TINYINT(1) NULL,
-		reos_pass        TINYINT(1) NULL,
-		filtered         TINYINT(1) NOT NULL DEFAULT 0,
+		lipinski_pass    BOOLEAN NULL,
+		veber_pass       BOOLEAN NULL,
+		pains_pass       BOOLEAN NULL,
+		brenk_pass       BOOLEAN NULL,
+		reos_pass        BOOLEAN NULL,
+		filtered         BOOLEAN NOT NULL DEFAULT FALSE,
 		s3_conformer_key VARCHAR(512) NULL,
 		created_at       TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-		INDEX idx_library_id (library_id),
-		INDEX idx_compound_id (compound_id),
-		INDEX idx_inchikey (inchikey),
-		INDEX idx_filtered (filtered),
-		CONSTRAINT fk_library FOREIGN KEY (library_id) REFERENCES library_prep_results(id)
-	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`
+		CONSTRAINT fk_library_compound FOREIGN KEY (library_id) REFERENCES library_prep_results(id)
+	)`
 
 	if _, err := db.Exec(compoundsDDL); err != nil {
 		return fmt.Errorf("creating library_compounds table: %w", err)
+	}
+	for _, idx := range []string{
+		`CREATE INDEX IF NOT EXISTS idx_library_compounds_library_id ON library_compounds (library_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_library_compounds_compound_id ON library_compounds (compound_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_library_compounds_inchikey ON library_compounds (inchikey)`,
+		`CREATE INDEX IF NOT EXISTS idx_library_compounds_filtered ON library_compounds (filtered)`,
+	} {
+		if _, err := db.Exec(idx); err != nil {
+			return fmt.Errorf("creating library_compounds index: %w", err)
+		}
 	}
 
 	return nil
@@ -859,7 +871,7 @@ func (h *APIHandler) resolveChEMBLWithInChIKeys(ctx context.Context, params *ChE
 // lookupCachedCompounds fetches the most recent library_compounds row (with a conformer)
 // for each compound_id in the input slice. Queries in chunks of 500 to stay within
 // MySQL's practical IN() limit. Returns a map from compound_id → cached data.
-func lookupCachedCompounds(ctx context.Context, db *sql.DB, compounds []resolvedChEMBLCompound) (map[string]cachedLibraryCompound, error) {
+func lookupCachedCompounds(ctx context.Context, db *DB, compounds []resolvedChEMBLCompound) (map[string]cachedLibraryCompound, error) {
 	result := make(map[string]cachedLibraryCompound)
 	const chunkSize = 500
 	for i := 0; i < len(compounds); i += chunkSize {
@@ -954,7 +966,7 @@ func computeFilteredFromCache(c *cachedLibraryCompound, filters LibraryPrepFilte
 // needReprocess) where needReprocess contains SMILES for compounds whose filter flags
 // were NULL and must go through the sidecar.
 func (h *APIHandler) insertCachedCompoundsIntoLibrary(
-	ctx context.Context, db *sql.DB, libraryID int, jobName string,
+	ctx context.Context, db *DB, libraryID int, jobName string,
 	resolved []resolvedChEMBLCompound, cache map[string]cachedLibraryCompound,
 	filters LibraryPrepFilters,
 ) (compoundCount, filteredCount int, needReprocess []string, err error) {
@@ -1121,7 +1133,7 @@ func (h *APIHandler) callLibraryPrepSidecar(ctx context.Context, req libraryPrep
 // For each compound that has PDBQTData, it uploads the PDBQT to S3 and stores
 // the resulting key in s3_conformer_key. The sidecar returns raw PDBQT bytes;
 // the handler is responsible for the S3 upload.
-func (h *APIHandler) insertLibraryCompounds(ctx context.Context, db *sql.DB, libraryID int, jobName string, resp *libraryPrepSidecarResponse) (int, int, error) {
+func (h *APIHandler) insertLibraryCompounds(ctx context.Context, db *DB, libraryID int, jobName string, resp *libraryPrepSidecarResponse) (int, int, error) {
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, 0, fmt.Errorf("beginning compound insert transaction: %w", err)
@@ -1241,7 +1253,7 @@ func (h *APIHandler) createLibraryPrepCRD(ctx context.Context, jobName string, r
 // --- Helpers ---
 
 // failLibraryPrep marks a library prep job as Failed in MySQL with the given error message.
-func (h *APIHandler) failLibraryPrep(ctx context.Context, db *sql.DB, jobName string, errMsg string) {
+func (h *APIHandler) failLibraryPrep(ctx context.Context, db *DB, jobName string, errMsg string) {
 	log.Printf("[library-prep] %s: FAILED: %s", jobName, errMsg)
 	if _, err := db.ExecContext(ctx,
 		`UPDATE library_prep_results SET phase = 'Failed', error_output = ?, completion_time = NOW() WHERE name = ?`,

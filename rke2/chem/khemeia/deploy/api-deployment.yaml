@@ -33,14 +33,24 @@ spec:
               value: "chem"
             - name: PLUGINS_DIR
               value: "/app/plugins"
-            - name: MYSQL_HOST
-              value: "docking-mysql.chem.svc.cluster.local"
-            - name: MYSQL_PORT
-              value: "3306"
+            - name: POSTGRES_HOST
+              value: "khemeia-postgres.chem.svc.cluster.local"
+            - name: POSTGRES_PORT
+              value: "5432"
+            - name: POSTGRES_DB
+              value: "khemeia"
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: khemeia-postgres-secret
+                  key: username
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: khemeia-postgres-secret
+                  key: password
             - name: MYSQL_USER
               value: "root"
-            - name: MYSQL_DATABASE
-              value: "docking"
             - name: MYSQL_PASSWORD
               valueFrom:
                 secretKeyRef:

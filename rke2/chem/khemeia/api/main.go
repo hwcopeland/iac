@@ -21,6 +21,7 @@ import (
 	"time"
 
 	_ "github.com/go-sql-driver/mysql"
+	_ "github.com/lib/pq"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/dynamic"
@@ -31,28 +32,23 @@ import (
 )
 
 // Controller handles the lifecycle of plugin-driven compute jobs.
-// State is persisted in MySQL; no in-memory maps.
+// State is persisted in PostgreSQL; no in-memory maps.
 type Controller struct {
 	client        *kubernetes.Clientset
 	dynamicClient dynamic.Interface
 	namespace     string
 	jobClient     typed.JobInterface
 	plugins       []Plugin
-	pluginDBs     map[string]*sql.DB
+	pluginDBs     map[string]*DB
 	stopCh        chan struct{}
 
-	// MySQL connection parameters (reused when creating per-plugin databases).
-	mysqlHost     string
-	mysqlPort     string
-	mysqlUser     string
-	mysqlPassword string
-
-	// sharedDB is a stable reference to a single database used for shared tables
-	// (basis_sets, api_tokens). Set once during init to avoid Go map iteration randomness.
-	sharedDB *sql.DB
+	// sharedDB is the single PostgreSQL connection shared by all plugins and
+	// all tables. All pluginDBs entries point to the same underlying *DB.
+	sharedDB *DB
 
 	// chemblDB is an optional read-only connection to the ChEMBL compound database.
-	// Used for ligand search/filtering. Nil if ChEMBL is not available.
+	// Used for ligand search/filtering. Stays on MySQL permanently (external DB).
+	// Nil if ChEMBL is not available.
 	chemblDB *sql.DB
 
 	// s3Client provides S3 operations against Garage for artifact storage.
@@ -65,7 +61,7 @@ type Controller struct {
 	crdController *CRDController
 }
 
-// NewController creates a new Controller, initializing K8s client, MySQL connections,
+// NewController creates a new Controller, initializing K8s client, PostgreSQL connection,
 // and loading plugins from the plugins directory.
 func NewController() (*Controller, error) {
 	config, err := getConfig()
@@ -88,13 +84,17 @@ func NewController() (*Controller, error) {
 		namespace = "chem"
 	}
 
-	// Read MySQL connection parameters from environment.
-	mysqlHost := os.Getenv("MYSQL_HOST")
-	mysqlPort := os.Getenv("MYSQL_PORT")
-	mysqlUser := os.Getenv("MYSQL_USER")
-	mysqlPassword := os.Getenv("MYSQL_PASSWORD")
-	if mysqlPort == "" {
-		mysqlPort = "3306"
+	// Read PostgreSQL connection parameters from environment.
+	pgHost := os.Getenv("POSTGRES_HOST")
+	pgPort := os.Getenv("POSTGRES_PORT")
+	pgUser := os.Getenv("POSTGRES_USER")
+	pgPassword := os.Getenv("POSTGRES_PASSWORD")
+	pgDBName := os.Getenv("POSTGRES_DB")
+	if pgPort == "" {
+		pgPort = "5432"
+	}
+	if pgDBName == "" {
+		pgDBName = "khemeia"
 	}
 
 	// Load plugins from the plugins directory.
@@ -109,8 +109,24 @@ func NewController() (*Controller, error) {
 	}
 	log.Printf("Loaded %d plugin(s)", len(plugins))
 	for _, p := range plugins {
-		log.Printf("  - %s (slug=%s, type=%s, database=%s)", p.Name, p.Slug, p.Type, p.Database)
+		log.Printf("  - %s (slug=%s, type=%s)", p.Name, p.Slug, p.Type)
 	}
+
+	// Open a single shared PostgreSQL connection used by all plugins.
+	pgDSN := fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=disable",
+		pgHost, pgPort, pgUser, pgPassword, pgDBName)
+	rawDB, err := sql.Open("postgres", pgDSN)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open PostgreSQL: %w", err)
+	}
+	rawDB.SetMaxOpenConns(20)
+	rawDB.SetConnMaxLifetime(5 * time.Minute)
+	if err := rawDB.Ping(); err != nil {
+		rawDB.Close()
+		return nil, fmt.Errorf("failed to ping PostgreSQL: %w", err)
+	}
+	sharedDB := &DB{DB: rawDB}
+	log.Printf("PostgreSQL connection established to %s/%s", pgHost, pgDBName)
 
 	controller := &Controller{
 		client:        client,
@@ -118,34 +134,35 @@ func NewController() (*Controller, error) {
 		namespace:     namespace,
 		jobClient:     client.BatchV1().Jobs(namespace),
 		plugins:       plugins,
-		pluginDBs:     make(map[string]*sql.DB),
+		pluginDBs:     make(map[string]*DB),
 		stopCh:        make(chan struct{}),
-		mysqlHost:     mysqlHost,
-		mysqlPort:     mysqlPort,
-		mysqlUser:     mysqlUser,
-		mysqlPassword: mysqlPassword,
+		sharedDB:      sharedDB,
 	}
 
-	// Create databases and tables for each plugin.
-	for _, p := range plugins {
-		if err := controller.initPluginDB(p); err != nil {
-			controller.closeAllDBs()
-			return nil, fmt.Errorf("failed to initialize database for plugin %s: %v", p.Name, err)
-		}
+	// Point every plugin slug at the shared DB and initialize all tables.
+	if err := controller.initPluginDB(plugins); err != nil {
+		rawDB.Close()
+		return nil, fmt.Errorf("failed to initialize plugin tables: %w", err)
 	}
-	log.Println("All plugin databases initialized")
+	log.Println("All plugin tables initialized")
 
-	// Connect to ChEMBL database (optional — used for ligand search).
+	// Connect to ChEMBL database (optional — stays on MySQL permanently).
 	chemblHost := os.Getenv("CHEMBL_MYSQL_HOST")
 	if chemblHost == "" {
 		chemblHost = "chembl-mysql.chem.svc.cluster.local"
 	}
-	chemblDB := os.Getenv("CHEMBL_DATABASE")
-	if chemblDB == "" {
-		chemblDB = "chembl_36"
+	chemblDBName := os.Getenv("CHEMBL_DATABASE")
+	if chemblDBName == "" {
+		chemblDBName = "chembl_36"
+	}
+	chemblUser := os.Getenv("MYSQL_USER")
+	chemblPassword := os.Getenv("MYSQL_PASSWORD")
+	chemblPort := os.Getenv("MYSQL_PORT")
+	if chemblPort == "" {
+		chemblPort = "3306"
 	}
 	chemblDSN := fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?parseTime=true",
-		mysqlUser, mysqlPassword, chemblHost, mysqlPort, chemblDB)
+		chemblUser, chemblPassword, chemblHost, chemblPort, chemblDBName)
 	cdb, err := sql.Open("mysql", chemblDSN)
 	if err == nil {
 		cdb.SetMaxOpenConns(5)
@@ -164,14 +181,12 @@ func NewController() (*Controller, error) {
 	// Initialize S3 client for Garage artifact storage.
 	s3Client, err := NewS3ClientFromEnv()
 	if err != nil {
-		controller.closeAllDBs()
+		rawDB.Close()
 		return nil, fmt.Errorf("failed to initialize S3 client: %w", err)
 	}
 	controller.s3Client = s3Client
 
 	// Initialize CRD controller for CRD-based job lifecycle management.
-	// Uses sharedDB for provenance queries. Falls back gracefully if sharedDB
-	// is nil (provenance queries will return empty results).
 	controller.crdController = NewCRDController(
 		client, dynClient, namespace, controller.sharedDB, s3Client)
 	log.Println("CRD controller initialized")
@@ -179,170 +194,135 @@ func NewController() (*Controller, error) {
 	return controller, nil
 }
 
-// validDBName matches only safe SQL identifiers (alphanumeric + underscore).
-var validDBName = regexp.MustCompile(`^[a-zA-Z0-9_]+$`)
+// validTableName matches only safe SQL identifiers (alphanumeric + underscore).
+var validTableName = regexp.MustCompile(`^[a-zA-Z0-9_]+$`)
 
-// initPluginDB creates the database and tables for a single plugin.
-func (c *Controller) initPluginDB(p Plugin) error {
-	// Validate the database name to prevent SQL injection — it is interpolated
-	// into a CREATE DATABASE statement that cannot use parameterized queries.
-	if !validDBName.MatchString(p.Database) {
-		return fmt.Errorf("invalid database name %q: must match [a-zA-Z0-9_]+", p.Database)
-	}
+// initPluginDB creates all tables in the shared PostgreSQL database.
+// Every plugin slug is mapped to the same *DB instance; there are no
+// per-plugin databases in the PostgreSQL layout.
+func (c *Controller) initPluginDB(plugins []Plugin) error {
+	db := c.sharedDB
 
-	// Connect to MySQL without a specific database to create the plugin's database.
-	adminDSN := fmt.Sprintf("%s:%s@tcp(%s:%s)/?parseTime=true",
-		c.mysqlUser, c.mysqlPassword, c.mysqlHost, c.mysqlPort)
-	adminDB, err := sql.Open("mysql", adminDSN)
-	if err != nil {
-		return fmt.Errorf("failed to connect to MySQL: %w", err)
-	}
-	defer adminDB.Close()
-
-	if _, err := adminDB.Exec(fmt.Sprintf("CREATE DATABASE IF NOT EXISTS %s", p.Database)); err != nil {
-		return fmt.Errorf("failed to create database %s: %w", p.Database, err)
-	}
-
-	// Connect to the plugin's specific database.
-	dsn := fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?parseTime=true",
-		c.mysqlUser, c.mysqlPassword, c.mysqlHost, c.mysqlPort, p.Database)
-	db, err := sql.Open("mysql", dsn)
-	if err != nil {
-		return fmt.Errorf("failed to open %s database: %w", p.Database, err)
-	}
-	db.SetMaxOpenConns(10)
-	db.SetConnMaxLifetime(5 * time.Minute)
-
-	if err := db.Ping(); err != nil {
-		db.Close()
-		return fmt.Errorf("failed to ping %s database: %w", p.Database, err)
-	}
-	log.Printf("MySQL %s connection established", p.Database)
-
-	// Create the jobs table.
-	if _, err := db.Exec(p.GenerateTableDDL()); err != nil {
-		db.Close()
-		return fmt.Errorf("failed to create table %s: %w", p.TableName(), err)
-	}
-
-	// Create the job_artifacts table for storing output files from completed jobs.
-	if err := EnsureArtifactSchema(db); err != nil {
-		db.Close()
-		return fmt.Errorf("failed to create job_artifacts table in %s: %w", p.Database, err)
-	}
-
-	// For QE plugin, also create the pseudopotentials table.
-	if p.Slug == "qe" {
-		if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS pseudopotentials (
-			id          INT AUTO_INCREMENT PRIMARY KEY,
-			filename    VARCHAR(255) NOT NULL UNIQUE,
-			content     MEDIUMBLOB NOT NULL,
-			element     VARCHAR(4) NOT NULL,
-			functional  VARCHAR(32) NULL,
-			source_url  TEXT NULL,
-			created_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-			INDEX idx_element (element)
-		)`); err != nil {
-			db.Close()
-			return fmt.Errorf("failed to create pseudopotentials table: %w", err)
+	// Create the per-plugin jobs table and job_artifacts table for each plugin.
+	for _, p := range plugins {
+		if !validTableName.MatchString(p.TableName()) {
+			return fmt.Errorf("invalid table name %q: must match [a-zA-Z0-9_]+", p.TableName())
 		}
+
+		if _, err := db.Exec(p.GenerateTableDDL()); err != nil {
+			return fmt.Errorf("failed to create table %s: %w", p.TableName(), err)
+		}
+		if err := EnsureArtifactSchema(db); err != nil {
+			return fmt.Errorf("failed to create job_artifacts table: %w", err)
+		}
+
+		c.pluginDBs[p.Slug] = db
 	}
 
-	// For docking plugin, create infrastructure tables (ligands, results, staging).
-	if p.Slug == "docking" {
-		dockingTables := []string{
-			`CREATE TABLE IF NOT EXISTS ligands (
-				id            INT AUTO_INCREMENT PRIMARY KEY,
-				compound_id   VARCHAR(255) NOT NULL,
-				smiles        TEXT         NOT NULL,
-				pdbqt         MEDIUMBLOB   NULL,
-				source_db     VARCHAR(255) NOT NULL,
-				created_at    TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
-				INDEX idx_source_db (source_db),
-				UNIQUE INDEX idx_compound_source (compound_id, source_db)
-			)`,
-			`CREATE TABLE IF NOT EXISTS docking_results (
-				id                INT AUTO_INCREMENT PRIMARY KEY,
-				workflow_name     VARCHAR(255) NOT NULL,
-				pdb_id            VARCHAR(10)  NOT NULL,
-				ligand_id         INT          NOT NULL,
-				compound_id       VARCHAR(255) NOT NULL,
-				affinity_kcal_mol FLOAT        NOT NULL,
-				docked_pdbqt      MEDIUMBLOB   NULL,
-				created_at        TIMESTAMP    DEFAULT CURRENT_TIMESTAMP,
-				INDEX idx_workflow (workflow_name),
-				INDEX idx_pdbid    (pdb_id),
-				INDEX idx_affinity (affinity_kcal_mol),
-				INDEX idx_ligand   (ligand_id)
-			)`,
-			`CREATE TABLE IF NOT EXISTS staging (
-				id         INT AUTO_INCREMENT PRIMARY KEY,
-				job_type   ENUM('prep', 'dock') NOT NULL,
-				payload    JSON NOT NULL,
-				created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-			)`,
-		}
-		for _, ddl := range dockingTables {
-			if _, err := db.Exec(ddl); err != nil {
-				db.Close()
-				return fmt.Errorf("failed to create docking infrastructure table: %w", err)
-			}
+	// QE plugin: pseudopotentials table.
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS pseudopotentials (
+		id          SERIAL PRIMARY KEY,
+		filename    VARCHAR(255) NOT NULL UNIQUE,
+		content     BYTEA NOT NULL,
+		element     VARCHAR(4) NOT NULL,
+		functional  VARCHAR(32) NULL,
+		source_url  TEXT NULL,
+		created_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+	)`); err != nil {
+		return fmt.Errorf("failed to create pseudopotentials table: %w", err)
+	}
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_pseudopotentials_element ON pseudopotentials (element)`); err != nil {
+		return fmt.Errorf("failed to create pseudopotentials index: %w", err)
+	}
+
+	// Docking plugin: infrastructure tables.
+	dockingDDLs := []string{
+		`CREATE TABLE IF NOT EXISTS ligands (
+			id            SERIAL PRIMARY KEY,
+			compound_id   VARCHAR(255) NOT NULL,
+			smiles        TEXT         NOT NULL,
+			pdbqt         BYTEA        NULL,
+			source_db     VARCHAR(255) NOT NULL,
+			s3_pdbqt_key  VARCHAR(512) NULL,
+			created_at    TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_ligands_source_db ON ligands (source_db)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_ligands_compound_source ON ligands (compound_id, source_db)`,
+		`CREATE TABLE IF NOT EXISTS docking_results (
+			id                SERIAL PRIMARY KEY,
+			workflow_name     VARCHAR(255) NOT NULL,
+			pdb_id            VARCHAR(10)  NOT NULL,
+			ligand_id         INT          NOT NULL,
+			compound_id       VARCHAR(255) NOT NULL,
+			affinity_kcal_mol FLOAT        NOT NULL,
+			docked_pdbqt      BYTEA        NULL,
+			s3_pose_key       VARCHAR(512) NULL,
+			created_at        TIMESTAMP    DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_docking_results_workflow ON docking_results (workflow_name)`,
+		`CREATE INDEX IF NOT EXISTS idx_docking_results_pdbid ON docking_results (pdb_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_docking_results_affinity ON docking_results (affinity_kcal_mol)`,
+		`CREATE INDEX IF NOT EXISTS idx_docking_results_ligand ON docking_results (ligand_id)`,
+		`CREATE TABLE IF NOT EXISTS staging (
+			id         SERIAL PRIMARY KEY,
+			job_type   TEXT NOT NULL CHECK (job_type IN ('prep', 'dock')),
+			payload    JSON NOT NULL,
+			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+		)`,
+	}
+	for _, ddl := range dockingDDLs {
+		if _, err := db.Exec(ddl); err != nil {
+			return fmt.Errorf("failed to create docking infrastructure table: %w", err)
 		}
 	}
 
-	c.pluginDBs[p.Slug] = db
-
-	// Set the shared DB to the first successfully connected database.
-	// This is used for shared tables (basis_sets, api_tokens) to avoid
-	// Go map iteration randomness in firstDB().
-	if c.sharedDB == nil {
-		c.sharedDB = db
-		if err := EnsureAPITokenSchema(db); err != nil {
-			log.Printf("Warning: failed to create api_tokens table in %s: %v", p.Database, err)
-		}
-		if err := EnsureBasisSetSchema(db); err != nil {
-			log.Printf("Warning: failed to create basis_sets table in %s: %v", p.Database, err)
-		}
-		if err := EnsureProvenanceSchema(db); err != nil {
-			log.Printf("Warning: failed to create provenance tables in %s: %v", p.Database, err)
-		}
-		if err := EnsureTargetPrepSchema(db); err != nil {
-			log.Printf("Warning: failed to create target_prep_results table in %s: %v", p.Database, err)
-		}
-		if err := EnsureLibraryPrepSchema(db); err != nil {
-			log.Printf("Warning: failed to create library_prep tables in %s: %v", p.Database, err)
-		}
-		if err := EnsureDockingV2Schema(db); err != nil {
-			log.Printf("Warning: failed to create docking_v2 tables in %s: %v", p.Database, err)
-		}
-		if err := EnsureADMETSchema(db); err != nil {
-			log.Printf("Warning: failed to create admet tables in %s: %v", p.Database, err)
-		}
-		if err := EnsureMDSchema(db); err != nil {
-			log.Printf("Warning: failed to create md tables in %s: %v", p.Database, err)
-		}
-		log.Printf("Shared tables (api_tokens, basis_sets, provenance, target_prep_results, library_prep, docking_v2, admet, md) created in %s database", p.Database)
+	// Shared tables (all plugins).
+	if err := EnsureAPITokenSchema(db); err != nil {
+		log.Printf("Warning: failed to create api_tokens table: %v", err)
 	}
+	if err := EnsureBasisSetSchema(db); err != nil {
+		log.Printf("Warning: failed to create basis_sets table: %v", err)
+	}
+	if err := EnsureProvenanceSchema(db); err != nil {
+		log.Printf("Warning: failed to create provenance tables: %v", err)
+	}
+	if err := EnsureTargetPrepSchema(db); err != nil {
+		log.Printf("Warning: failed to create target_prep_results table: %v", err)
+	}
+	if err := EnsureLibraryPrepSchema(db); err != nil {
+		log.Printf("Warning: failed to create library_prep tables: %v", err)
+	}
+	if err := EnsureDockingV2Schema(db); err != nil {
+		log.Printf("Warning: failed to create docking_v2 tables: %v", err)
+	}
+	if err := EnsureADMETSchema(db); err != nil {
+		log.Printf("Warning: failed to create admet tables: %v", err)
+	}
+	if err := EnsureMDSchema(db); err != nil {
+		log.Printf("Warning: failed to create md tables: %v", err)
+	}
+	log.Println("Shared tables initialized (api_tokens, basis_sets, provenance, target_prep_results, library_prep, docking_v2, admet, md)")
 
 	return nil
 }
 
-// pluginDB returns the database for a specific plugin slug.
-func (c *Controller) pluginDB(slug string) *sql.DB {
+// pluginDB returns the shared database for the given plugin slug.
+// Since all plugins share one PostgreSQL connection, this always returns sharedDB.
+func (c *Controller) pluginDB(slug string) *DB {
 	return c.pluginDBs[slug]
 }
 
-// closeAllDBs closes all plugin database connections.
+// closeAllDBs closes the shared PostgreSQL connection.
 func (c *Controller) closeAllDBs() {
-	for slug, db := range c.pluginDBs {
-		if err := db.Close(); err != nil {
-			log.Printf("Warning: failed to close %s database: %v", slug, err)
+	if c.sharedDB != nil {
+		if err := c.sharedDB.Close(); err != nil {
+			log.Printf("Warning: failed to close PostgreSQL connection: %v", err)
 		}
 	}
 }
 
 // firstDB returns the shared database used for cross-plugin tables (basis_sets, api_tokens).
-func (c *Controller) firstDB() *sql.DB {
+func (c *Controller) firstDB() *DB {
 	return c.sharedDB
 }
 
@@ -838,14 +818,13 @@ func main() {
 	// If --migrate-blobs is set, run the BLOB migration and exit.
 	if *migrateBlobs {
 		log.Println("Running BLOB-to-S3 migration...")
-		if err := RunBlobMigrationAllDBs(ctx, controller.pluginDBs, controller.s3Client); err != nil {
+		if err := RunBlobMigrationAllDBs(ctx, controller.sharedDB, controller.s3Client); err != nil {
 			log.Fatalf("BLOB migration failed: %v", err)
 		}
 
-		// Verify migration completeness.
-		dockingDB := controller.pluginDB("docking")
-		if dockingDB != nil {
-			unmigrated, err := VerifyMigration(ctx, dockingDB)
+		// Verify migration completeness against the shared DB.
+		if controller.sharedDB != nil {
+			unmigrated, err := VerifyMigration(ctx, controller.sharedDB)
 			if err != nil {
 				log.Printf("Warning: migration verification failed: %v", err)
 			} else {

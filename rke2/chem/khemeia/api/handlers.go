@@ -26,13 +26,13 @@ type APIHandler struct {
 	client     *kubernetes.Clientset
 	namespace  string
 	controller *Controller
-	pluginDBs  map[string]*sql.DB
+	pluginDBs  map[string]*DB
 	chemblDB   *sql.DB
 	s3Client   S3Client
 }
 
 // NewAPIHandler creates a new API handler.
-func NewAPIHandler(client *kubernetes.Clientset, namespace string, controller *Controller, pluginDBs map[string]*sql.DB) *APIHandler {
+func NewAPIHandler(client *kubernetes.Clientset, namespace string, controller *Controller, pluginDBs map[string]*DB) *APIHandler {
 	return &APIHandler{
 		client:     client,
 		namespace:  namespace,
@@ -161,7 +161,7 @@ func (h *APIHandler) ImportLigands(w http.ResponseWriter, r *http.Request) {
 		_, err := db.ExecContext(r.Context(),
 			`INSERT INTO ligands (compound_id, smiles, pdbqt, source_db)
 			 VALUES (?, ?, ?, ?)
-			 ON DUPLICATE KEY UPDATE smiles = VALUES(smiles), pdbqt = VALUES(pdbqt)`,
+			 ON CONFLICT (compound_id, source_db) DO UPDATE SET smiles = EXCLUDED.smiles, pdbqt = EXCLUDED.pdbqt`,
 			lig.CompoundID, lig.Smiles, pdbqt, lig.SourceDb)
 		if err != nil {
 			log.Printf("[ImportLigands] failed to upsert %s: %v", lig.CompoundID, err)
@@ -381,7 +381,7 @@ func (h *APIHandler) UploadPseudopotential(w http.ResponseWriter, r *http.Reques
 	_, err = db.ExecContext(r.Context(),
 		`INSERT INTO pseudopotentials (filename, content, element, functional, source_url)
 		 VALUES (?, ?, ?, ?, ?)
-		 ON DUPLICATE KEY UPDATE content = VALUES(content), functional = VALUES(functional)`,
+		 ON CONFLICT (filename) DO UPDATE SET content = EXCLUDED.content, functional = EXCLUDED.functional`,
 		req.Filename, content, req.Element, req.Functional, req.SourceURL)
 	if err != nil {
 		writeError(w, fmt.Sprintf("failed to store pseudopotential: %v", err), http.StatusInternalServerError)
@@ -404,7 +404,7 @@ func (h *APIHandler) ListPseudopotentials(w http.ResponseWriter, r *http.Request
 	}
 
 	rows, err := db.QueryContext(r.Context(),
-		`SELECT filename, element, functional, LENGTH(content) as size, created_at FROM pseudopotentials ORDER BY element, filename`)
+		`SELECT filename, element, functional, octet_length(content) as size, created_at FROM pseudopotentials ORDER BY element, filename`)
 	if err != nil {
 		writeError(w, fmt.Sprintf("query error: %v", err), http.StatusInternalServerError)
 		return
@@ -448,15 +448,15 @@ func (h *APIHandler) CreateAPIToken(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		Username       string `json:"username"`
+		Label          string `json:"label"`
 		ExpiresInHours int    `json:"expires_in_hours"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, "invalid JSON body", http.StatusBadRequest)
 		return
 	}
-	if req.Username == "" {
-		writeError(w, "username is required", http.StatusBadRequest)
+	if req.Label == "" {
+		writeError(w, "label is required", http.StatusBadRequest)
 		return
 	}
 	if req.ExpiresInHours <= 0 {
@@ -471,8 +471,8 @@ func (h *APIHandler) CreateAPIToken(w http.ResponseWriter, r *http.Request) {
 
 	expiresAt := time.Now().Add(time.Duration(req.ExpiresInHours) * time.Hour)
 	_, err = db.Exec(
-		"INSERT INTO api_tokens (token, username, expires_at) VALUES (?, ?, ?)",
-		token, req.Username, expiresAt,
+		"INSERT INTO api_tokens (token, label, expires_at) VALUES (?, ?, ?)",
+		token, req.Label, expiresAt,
 	)
 	if err != nil {
 		log.Printf("[CreateAPIToken] DB error: %v", err)
@@ -484,7 +484,7 @@ func (h *APIHandler) CreateAPIToken(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"token":      token,
-		"username":   req.Username,
+		"label":      req.Label,
 		"expires_at": expiresAt.UTC().Format(time.RFC3339),
 	})
 }
@@ -498,7 +498,7 @@ func (h *APIHandler) ListAPITokens(w http.ResponseWriter, r *http.Request) {
 	}
 
 	rows, err := db.Query(
-		"SELECT id, username, created_at, expires_at FROM api_tokens WHERE expires_at > NOW() ORDER BY created_at DESC",
+		"SELECT id, label, created_at, expires_at FROM api_tokens WHERE (expires_at IS NULL OR expires_at > NOW()) AND revoked = FALSE ORDER BY created_at DESC",
 	)
 	if err != nil {
 		writeError(w, "failed to list tokens", http.StatusInternalServerError)
@@ -508,19 +508,22 @@ func (h *APIHandler) ListAPITokens(w http.ResponseWriter, r *http.Request) {
 
 	type tokenEntry struct {
 		ID        int    `json:"id"`
-		Username  string `json:"username"`
+		Label     string `json:"label"`
 		CreatedAt string `json:"created_at"`
-		ExpiresAt string `json:"expires_at"`
+		ExpiresAt string `json:"expires_at,omitempty"`
 	}
 	var tokens []tokenEntry
 	for rows.Next() {
 		var t tokenEntry
-		var createdAt, expiresAt time.Time
-		if err := rows.Scan(&t.ID, &t.Username, &createdAt, &expiresAt); err != nil {
+		var createdAt time.Time
+		var expiresAt sql.NullTime
+		if err := rows.Scan(&t.ID, &t.Label, &createdAt, &expiresAt); err != nil {
 			continue
 		}
 		t.CreatedAt = createdAt.UTC().Format(time.RFC3339)
-		t.ExpiresAt = expiresAt.UTC().Format(time.RFC3339)
+		if expiresAt.Valid {
+			t.ExpiresAt = expiresAt.Time.UTC().Format(time.RFC3339)
+		}
 		tokens = append(tokens, t)
 	}
 	if tokens == nil {
@@ -545,7 +548,7 @@ func (h *APIHandler) RevokeAPIToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := db.Exec("DELETE FROM api_tokens WHERE id = ?", path)
+	result, err := db.Exec("UPDATE api_tokens SET revoked = TRUE WHERE id = ?", path)
 	if err != nil {
 		writeError(w, "failed to revoke token", http.StatusInternalServerError)
 		return

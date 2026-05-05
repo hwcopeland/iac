@@ -7,7 +7,6 @@
 package main
 
 import (
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -50,12 +49,12 @@ type JobStatusResponse struct {
 // CRDHandlers holds the dependencies needed by CRD-related HTTP handlers.
 type CRDHandlers struct {
 	dynamicClient dynamic.Interface
-	db            *sql.DB
+	db            *DB
 	namespace     string
 }
 
 // NewCRDHandlers creates a handler set for CRD endpoints.
-func NewCRDHandlers(dynamicClient dynamic.Interface, db *sql.DB, namespace string) *CRDHandlers {
+func NewCRDHandlers(dynamicClient dynamic.Interface, db *DB, namespace string) *CRDHandlers {
 	return &CRDHandlers{
 		dynamicClient: dynamicClient,
 		db:            db,

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -77,9 +76,9 @@ func TestPluginSubmitValidation(t *testing.T) {
 
 	handler := &APIHandler{
 		controller: &Controller{
-			pluginDBs: map[string]*sql.DB{},
+			pluginDBs: map[string]*DB{},
 		},
-		pluginDBs: map[string]*sql.DB{},
+		pluginDBs: map[string]*DB{},
 	}
 
 	// Missing required field.
@@ -132,7 +131,7 @@ func TestPluginListNoDB(t *testing.T) {
 	}
 
 	handler := &APIHandler{
-		pluginDBs: map[string]*sql.DB{}, // no "test" database
+		pluginDBs: map[string]*DB{}, // no "test" database
 	}
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/test/jobs", nil)
@@ -153,7 +152,7 @@ func TestPluginGetNoDB(t *testing.T) {
 	}
 
 	handler := &APIHandler{
-		pluginDBs: map[string]*sql.DB{}, // no "test" database
+		pluginDBs: map[string]*DB{}, // no "test" database
 	}
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/test/jobs/test-123", nil)
@@ -174,7 +173,7 @@ func TestPluginDeleteNoDB(t *testing.T) {
 	}
 
 	handler := &APIHandler{
-		pluginDBs: map[string]*sql.DB{}, // no "test" database
+		pluginDBs: map[string]*DB{}, // no "test" database
 	}
 
 	req := httptest.NewRequest(http.MethodDelete, "/api/v1/test/jobs/test-123", nil)

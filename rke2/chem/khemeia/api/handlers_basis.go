@@ -80,19 +80,23 @@ type BasisSetImportRequest struct {
 }
 
 // EnsureBasisSetSchema creates the basis_sets table if it does not exist.
-func EnsureBasisSetSchema(db *sql.DB) error {
-	_, err := db.Exec(`CREATE TABLE IF NOT EXISTS basis_sets (
-		id          INT AUTO_INCREMENT PRIMARY KEY,
+func EnsureBasisSetSchema(db *DB) error {
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS basis_sets (
+		id          SERIAL PRIMARY KEY,
 		name        VARCHAR(255) NOT NULL,
 		elements    VARCHAR(512) NOT NULL,
 		format      VARCHAR(64) NOT NULL,
 		source      VARCHAR(64) NOT NULL,
 		description TEXT,
-		content     LONGTEXT NOT NULL,
-		created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-		UNIQUE KEY uq_basis (name, elements(255), format)
-	)`)
-	return err
+		content     TEXT NOT NULL,
+		created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+	)`); err != nil {
+		return err
+	}
+	if _, err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS uq_basis ON basis_sets (name, elements, format)`); err != nil {
+		return err
+	}
+	return nil
 }
 
 // ListBasisSets handles GET /api/v1/basis-sets.
@@ -201,7 +205,7 @@ func (h *APIHandler) SearchBasisSets(w http.ResponseWriter, r *http.Request) {
 	}
 	if element := r.URL.Query().Get("element"); element != "" {
 		// Match element in comma-separated list or wildcard "*".
-		query += ` AND (elements = '*' OR FIND_IN_SET(?, elements) > 0)`
+		query += ` AND (elements = '*' OR ? = ANY(string_to_array(elements, ',')))`
 		args = append(args, element)
 	}
 	if format := r.URL.Query().Get("format"); format != "" {
@@ -268,12 +272,13 @@ func (h *APIHandler) UploadBasisSet(w http.ResponseWriter, r *http.Request) {
 		description = &req.Description
 	}
 
-	result, err := db.ExecContext(r.Context(),
+	var id int64
+	if err := db.QueryRowContext(r.Context(),
 		`INSERT INTO basis_sets (name, elements, format, source, description, content)
-		 VALUES (?, ?, ?, 'user', ?, ?)`,
-		req.Name, req.Elements, req.Format, description, req.Content)
-	if err != nil {
-		if strings.Contains(err.Error(), "Duplicate entry") {
+		 VALUES (?, ?, ?, 'user', ?, ?)
+		 RETURNING id`,
+		req.Name, req.Elements, req.Format, description, req.Content).Scan(&id); err != nil {
+		if strings.Contains(err.Error(), "unique") || strings.Contains(err.Error(), "duplicate") {
 			writeError(w, fmt.Sprintf("basis set %q with elements %q in format %q already exists",
 				req.Name, req.Elements, req.Format), http.StatusConflict)
 			return
@@ -281,8 +286,6 @@ func (h *APIHandler) UploadBasisSet(w http.ResponseWriter, r *http.Request) {
 		writeError(w, fmt.Sprintf("failed to store basis set: %v", err), http.StatusInternalServerError)
 		return
 	}
-
-	id, _ := result.LastInsertId()
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
@@ -397,23 +400,19 @@ func (h *APIHandler) ImportBasisSet(w http.ResponseWriter, r *http.Request) {
 	elementsCSV := strings.Join(req.Elements, ",")
 	description := fmt.Sprintf("Imported from BSE (%s)", req.Name)
 
-	result, insertErr := db.ExecContext(r.Context(),
+	var id int64
+	insertErr := db.QueryRowContext(r.Context(),
 		`INSERT INTO basis_sets (name, elements, format, source, description, content)
 		 VALUES (?, ?, ?, 'bse', ?, ?)
-		 ON DUPLICATE KEY UPDATE content = VALUES(content), description = VALUES(description), source = 'bse'`,
-		req.Name, elementsCSV, req.Format, description, string(content))
+		 ON CONFLICT (name, elements, format) DO UPDATE SET
+		   content = EXCLUDED.content,
+		   description = EXCLUDED.description,
+		   source = 'bse'
+		 RETURNING id`,
+		req.Name, elementsCSV, req.Format, description, string(content)).Scan(&id)
 	if insertErr != nil {
 		writeError(w, fmt.Sprintf("failed to store imported basis set: %v", insertErr), http.StatusInternalServerError)
 		return
-	}
-
-	id, _ := result.LastInsertId()
-
-	// If ON DUPLICATE KEY UPDATE fired, LastInsertId may be 0. Look it up.
-	if id == 0 {
-		_ = db.QueryRowContext(r.Context(),
-			`SELECT id FROM basis_sets WHERE name = ? AND elements = ? AND format = ?`,
-			req.Name, elementsCSV, req.Format).Scan(&id)
 	}
 
 	w.Header().Set("Content-Type", "application/json")

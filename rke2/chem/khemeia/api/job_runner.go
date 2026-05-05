@@ -5,7 +5,6 @@ package main
 
 import (
 	"context"
-	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -187,7 +186,7 @@ func (c *Controller) RunPluginJob(plugin Plugin, jobName string, input map[strin
 
 // processCompletedJob reads pod logs, extracts artifacts, parses output, and
 // marks the job as Completed. Used by both RunPluginJob and reconciliation.
-func (c *Controller) processCompletedJob(plugin Plugin, jobName string, db *sql.DB) {
+func (c *Controller) processCompletedJob(plugin Plugin, jobName string, db *DB) {
 	ctx := context.Background()
 
 	output, err := c.readPodLogs(jobName)
@@ -203,7 +202,8 @@ func (c *Controller) processCompletedJob(plugin Plugin, jobName string, db *sql.
 			contentType := guessContentType(filename)
 			_, err := db.ExecContext(ctx,
 				`INSERT INTO job_artifacts (job_name, filename, content_type, size_bytes, content)
-				 VALUES (?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE content = VALUES(content), size_bytes = VALUES(size_bytes)`,
+				 VALUES (?, ?, ?, ?, ?)
+				 ON CONFLICT (job_name, filename) DO UPDATE SET content = EXCLUDED.content, size_bytes = EXCLUDED.size_bytes`,
 				jobName, filename, contentType, len(data), data)
 			if err != nil {
 				log.Printf("[%s] Warning: failed to store artifact %s: %v", jobName, filename, err)
@@ -420,7 +420,7 @@ func (c *Controller) waitForPluginJobCompletion(jobName string, timeout time.Dur
 }
 
 // failPluginJob marks a plugin job as Failed and stores the error output.
-func failPluginJob(db *sql.DB, plugin Plugin, jobName, message string) {
+func failPluginJob(db *DB, plugin Plugin, jobName, message string) {
 	log.Printf("[%s] Job failed: %s", jobName, message)
 	if _, err := db.Exec(
 		fmt.Sprintf(`UPDATE %s SET status='Failed', error_output=?, completed_at=NOW() WHERE name=?`, plugin.TableName()),
@@ -465,7 +465,7 @@ func buildJobEnv(plugin Plugin, jobName string, input map[string]interface{}) []
 
 // loadPseudopotentials finds .UPF references in a QE input file and loads them
 // from the database into the ConfigMap's BinaryData.
-func loadPseudopotentials(db *sql.DB, jobName, inputFile string, cmBinary map[string][]byte) {
+func loadPseudopotentials(db *DB, jobName, inputFile string, cmBinary map[string][]byte) {
 	for _, line := range strings.Split(inputFile, "\n") {
 		line = strings.TrimSpace(line)
 		fields := strings.Fields(line)

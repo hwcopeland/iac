@@ -1,7 +1,6 @@
 package main
 
 import (
-	"database/sql"
 	"encoding/json"
 	"math"
 	"net/http"
@@ -251,7 +250,7 @@ func TestAnalysisDispatchUnknownEndpoint(t *testing.T) {
 }
 
 func TestReceptorContactsNoDB(t *testing.T) {
-	h := &APIHandler{pluginDBs: map[string]*sql.DB{}}
+	h := &APIHandler{pluginDBs: map[string]*DB{}}
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/docking/analysis/receptor-contacts/job1", nil)
 	rr := httptest.NewRecorder()
 	h.AnalysisDispatch(rr, req)
@@ -262,7 +261,7 @@ func TestReceptorContactsNoDB(t *testing.T) {
 }
 
 func TestFingerprintsNoDB(t *testing.T) {
-	h := &APIHandler{pluginDBs: map[string]*sql.DB{}}
+	h := &APIHandler{pluginDBs: map[string]*DB{}}
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/docking/analysis/fingerprints/job1", nil)
 	rr := httptest.NewRecorder()
 	h.AnalysisDispatch(rr, req)
@@ -273,7 +272,7 @@ func TestFingerprintsNoDB(t *testing.T) {
 }
 
 func TestReceptorContactsBadTopParam(t *testing.T) {
-	h := &APIHandler{pluginDBs: map[string]*sql.DB{}}
+	h := &APIHandler{pluginDBs: map[string]*DB{}}
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/docking/analysis/receptor-contacts/job1?top=abc", nil)
 	rr := httptest.NewRecorder()
 	h.AnalysisDispatch(rr, req)
@@ -284,7 +283,7 @@ func TestReceptorContactsBadTopParam(t *testing.T) {
 }
 
 func TestReceptorContactsTopTooLarge(t *testing.T) {
-	h := &APIHandler{pluginDBs: map[string]*sql.DB{}}
+	h := &APIHandler{pluginDBs: map[string]*DB{}}
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/docking/analysis/receptor-contacts/job1?top=999", nil)
 	rr := httptest.NewRecorder()
 	h.AnalysisDispatch(rr, req)
@@ -295,7 +294,7 @@ func TestReceptorContactsTopTooLarge(t *testing.T) {
 }
 
 func TestFingerprintsBadTopParam(t *testing.T) {
-	h := &APIHandler{pluginDBs: map[string]*sql.DB{}}
+	h := &APIHandler{pluginDBs: map[string]*DB{}}
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/docking/analysis/fingerprints/job1?top=abc", nil)
 	rr := httptest.NewRecorder()
 	h.AnalysisDispatch(rr, req)
@@ -306,7 +305,7 @@ func TestFingerprintsBadTopParam(t *testing.T) {
 }
 
 func TestFingerprintsTopTooLarge(t *testing.T) {
-	h := &APIHandler{pluginDBs: map[string]*sql.DB{}}
+	h := &APIHandler{pluginDBs: map[string]*DB{}}
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/docking/analysis/fingerprints/job1?top=5000", nil)
 	rr := httptest.NewRecorder()
 	h.AnalysisDispatch(rr, req)

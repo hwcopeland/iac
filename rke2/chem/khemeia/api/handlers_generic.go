@@ -473,7 +473,7 @@ func (h *APIHandler) PluginDownloadArtifact(plugin Plugin) http.HandlerFunc {
 }
 
 // pluginDB returns the database connection for the given plugin slug.
-func (h *APIHandler) pluginDB(slug string) *sql.DB {
+func (h *APIHandler) pluginDB(slug string) *DB {
 	if h.pluginDBs == nil {
 		return nil
 	}

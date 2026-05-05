@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	_ "github.com/go-sql-driver/mysql"
+	_ "github.com/lib/pq"
 	"gopkg.in/yaml.v3"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -24,62 +24,67 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// Test database helper — matches existing codebase pattern of using real MySQL
-// when available, skipping otherwise.
+// Test database helper — connects to a real PostgreSQL instance when available,
+// skips otherwise. Uses per-test schemas for isolation.
 // ---------------------------------------------------------------------------
 
-// testDB returns a *sql.DB connected to the test MySQL instance.
-// Skips the test if MYSQL_TEST_DSN is not set or the connection fails.
-// The DSN should be something like "root:password@tcp(127.0.0.1:3306)/".
-func testDB(t *testing.T) *sql.DB {
+// testDB returns a *DB connected to the test PostgreSQL instance.
+// Skips the test if POSTGRES_TEST_DSN is not set or the connection fails.
+// The DSN should be a libpq connection string, e.g.:
+//
+//	postgres://postgres:password@127.0.0.1:5432/postgres?sslmode=disable
+func testDB(t *testing.T) *DB {
 	t.Helper()
 
-	dsn := "root:@tcp(127.0.0.1:3306)/"
+	dsn := "postgres://postgres:@127.0.0.1:5432/postgres?sslmode=disable"
 	// Allow override via environment variable for CI.
-	if envDSN := envOr("MYSQL_TEST_DSN", ""); envDSN != "" {
+	if envDSN := envOr("POSTGRES_TEST_DSN", ""); envDSN != "" {
 		dsn = envDSN
 	}
 
-	db, err := sql.Open("mysql", dsn+"?parseTime=true&multiStatements=true")
+	rawDB, err := sql.Open("postgres", dsn)
 	if err != nil {
-		t.Skipf("MySQL not available (open): %v", err)
+		t.Skipf("PostgreSQL not available (open): %v", err)
 	}
 
-	if err := db.Ping(); err != nil {
-		db.Close()
-		t.Skipf("MySQL not available (ping): %v", err)
+	if err := rawDB.Ping(); err != nil {
+		rawDB.Close()
+		t.Skipf("PostgreSQL not available (ping): %v", err)
 	}
 
-	// Create a per-test database to avoid cross-test contamination.
-	dbName := fmt.Sprintf("wp9_test_%d", uniqueCounter())
-	if _, err := db.Exec("CREATE DATABASE " + dbName); err != nil {
-		db.Close()
-		t.Skipf("MySQL cannot create test database: %v", err)
+	// Use a per-test schema for isolation instead of a separate database.
+	schemaName := fmt.Sprintf("wp9_test_%d", uniqueCounter())
+	if _, err := rawDB.Exec("CREATE SCHEMA " + schemaName); err != nil {
+		rawDB.Close()
+		t.Skipf("PostgreSQL cannot create test schema: %v", err)
 	}
 
-	// Reconnect to the test database.
-	db.Close()
-	testDB, err := sql.Open("mysql", dsn+dbName+"?parseTime=true&multiStatements=true")
-	if err != nil {
-		t.Fatalf("failed to open test database: %v", err)
+	// Set the search_path so all DDL and queries land in the test schema.
+	if _, err := rawDB.Exec("SET search_path TO " + schemaName); err != nil {
+		rawDB.Exec("DROP SCHEMA IF EXISTS " + schemaName + " CASCADE")
+		rawDB.Close()
+		t.Fatalf("failed to set search_path: %v", err)
 	}
+
+	db := &DB{DB: rawDB}
 
 	// Ensure provenance schema exists.
-	if err := EnsureProvenanceSchema(testDB); err != nil {
-		testDB.Close()
+	if err := EnsureProvenanceSchema(db); err != nil {
+		db.Close()
 		t.Fatalf("failed to create provenance schema: %v", err)
 	}
 
 	t.Cleanup(func() {
-		testDB.Close()
-		cleanupDB, _ := sql.Open("mysql", dsn+"?parseTime=true")
+		// Drop the test schema; reconnect without search_path to do it safely.
+		cleanupDB, _ := sql.Open("postgres", dsn)
 		if cleanupDB != nil {
-			cleanupDB.Exec("DROP DATABASE IF EXISTS " + dbName)
+			cleanupDB.Exec("DROP SCHEMA IF EXISTS " + schemaName + " CASCADE")
 			cleanupDB.Close()
 		}
+		db.Close()
 	})
 
-	return testDB
+	return db
 }
 
 // envOr returns the environment variable value or a fallback.

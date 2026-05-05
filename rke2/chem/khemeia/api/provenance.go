@@ -55,15 +55,15 @@ func newUUIDv7() string {
 // EnsureProvenanceSchema creates the provenance and provenance_edges tables.
 // Called once during startup on the shared database, following the same
 // pattern as EnsureAPITokenSchema and EnsureBasisSetSchema.
-func EnsureProvenanceSchema(db *sql.DB) error {
+func EnsureProvenanceSchema(db *DB) error {
 	provenanceDDL := `CREATE TABLE IF NOT EXISTS provenance (
-		id              BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+		id              BIGSERIAL PRIMARY KEY,
 		artifact_id     CHAR(36) NOT NULL,
-		artifact_type   ENUM(
+		artifact_type   TEXT NOT NULL CHECK (artifact_type IN (
 			'receptor', 'library', 'compound', 'docked_pose', 'refined_pose',
 			'admet_result', 'generated_compound', 'linked_compound', 'report',
 			'selectivity_matrix', 'fep_result'
-		) NOT NULL,
+		)),
 		s3_bucket       VARCHAR(64) NULL,
 		s3_key          VARCHAR(512) NULL,
 		checksum_sha256 CHAR(64) NULL,
@@ -72,33 +72,45 @@ func EnsureProvenanceSchema(db *sql.DB) error {
 		job_namespace   VARCHAR(64) NOT NULL DEFAULT 'chem',
 		parameters      JSON NULL,
 		tool_versions   JSON NULL,
-		created_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-
-		UNIQUE KEY uq_artifact_id (artifact_id),
-		INDEX idx_artifact_type (artifact_type),
-		INDEX idx_created_by_job (created_by_job),
-		INDEX idx_created_at (created_at),
-		INDEX idx_s3_key (s3_bucket, s3_key)
-	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`
+		created_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+	)`
 
 	if _, err := db.Exec(provenanceDDL); err != nil {
 		return fmt.Errorf("creating provenance table: %w", err)
 	}
 
-	edgesDDL := `CREATE TABLE IF NOT EXISTS provenance_edges (
-		id              BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-		parent_id       CHAR(36) NOT NULL,
-		child_id        CHAR(36) NOT NULL,
+	for _, ddl := range []string{
+		`CREATE UNIQUE INDEX IF NOT EXISTS uq_provenance_artifact_id ON provenance (artifact_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_provenance_artifact_type ON provenance (artifact_type)`,
+		`CREATE INDEX IF NOT EXISTS idx_provenance_created_by_job ON provenance (created_by_job)`,
+		`CREATE INDEX IF NOT EXISTS idx_provenance_created_at ON provenance (created_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_provenance_s3_key ON provenance (s3_bucket, s3_key)`,
+	} {
+		if _, err := db.Exec(ddl); err != nil {
+			return fmt.Errorf("creating provenance index: %w", err)
+		}
+	}
 
-		UNIQUE KEY uq_edge (parent_id, child_id),
-		INDEX idx_parent (parent_id),
-		INDEX idx_child (child_id),
-		CONSTRAINT fk_parent FOREIGN KEY (parent_id) REFERENCES provenance(artifact_id),
-		CONSTRAINT fk_child FOREIGN KEY (child_id) REFERENCES provenance(artifact_id)
-	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`
+	edgesDDL := `CREATE TABLE IF NOT EXISTS provenance_edges (
+		id        BIGSERIAL PRIMARY KEY,
+		parent_id CHAR(36) NOT NULL,
+		child_id  CHAR(36) NOT NULL,
+		CONSTRAINT fk_prov_parent FOREIGN KEY (parent_id) REFERENCES provenance(artifact_id),
+		CONSTRAINT fk_prov_child  FOREIGN KEY (child_id)  REFERENCES provenance(artifact_id)
+	)`
 
 	if _, err := db.Exec(edgesDDL); err != nil {
 		return fmt.Errorf("creating provenance_edges table: %w", err)
+	}
+
+	for _, ddl := range []string{
+		`CREATE UNIQUE INDEX IF NOT EXISTS uq_provenance_edges ON provenance_edges (parent_id, child_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_provenance_edges_parent ON provenance_edges (parent_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_provenance_edges_child ON provenance_edges (child_id)`,
+	} {
+		if _, err := db.Exec(ddl); err != nil {
+			return fmt.Errorf("creating provenance_edges index: %w", err)
+		}
 	}
 
 	return nil
@@ -135,7 +147,7 @@ type ProvenanceEdge struct {
 // RecordProvenance inserts a provenance record and optional parent edges in a
 // single transaction. If record.ArtifactID is empty, a UUID v7 is generated
 // and assigned to the record.
-func RecordProvenance(ctx context.Context, db *sql.DB, record *ProvenanceRecord, parentIDs []string) error {
+func RecordProvenance(ctx context.Context, db *DB, record *ProvenanceRecord, parentIDs []string) error {
 	if record.ArtifactID == "" {
 		record.ArtifactID = newUUIDv7()
 	}
@@ -161,18 +173,11 @@ func RecordProvenance(ctx context.Context, db *sql.DB, record *ProvenanceRecord,
 	}
 
 	// Insert parent edges.
-	if len(parentIDs) > 0 {
-		stmt, err := tx.PrepareContext(ctx,
-			`INSERT INTO provenance_edges (parent_id, child_id) VALUES (?, ?)`)
-		if err != nil {
-			return fmt.Errorf("preparing edge insert: %w", err)
-		}
-		defer stmt.Close()
-
-		for _, parentID := range parentIDs {
-			if _, err := stmt.ExecContext(ctx, parentID, record.ArtifactID); err != nil {
-				return fmt.Errorf("inserting edge from %s to %s: %w", parentID, record.ArtifactID, err)
-			}
+	for _, parentID := range parentIDs {
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO provenance_edges (parent_id, child_id) VALUES (?, ?)`,
+			parentID, record.ArtifactID); err != nil {
+			return fmt.Errorf("inserting edge from %s to %s: %w", parentID, record.ArtifactID, err)
 		}
 	}
 
@@ -183,7 +188,7 @@ func RecordProvenance(ctx context.Context, db *sql.DB, record *ProvenanceRecord,
 }
 
 // GetProvenance retrieves a single provenance record by artifact ID.
-func GetProvenance(ctx context.Context, db *sql.DB, artifactID string) (*ProvenanceRecord, error) {
+func GetProvenance(ctx context.Context, db *DB, artifactID string) (*ProvenanceRecord, error) {
 	row := db.QueryRowContext(ctx,
 		`SELECT id, artifact_id, artifact_type, s3_bucket, s3_key, checksum_sha256,
 		        created_by_job, job_kind, job_namespace, parameters, tool_versions, created_at
@@ -207,7 +212,7 @@ func GetProvenance(ctx context.Context, db *sql.DB, artifactID string) (*Provena
 // GetAncestors returns all ancestor artifacts of the given artifact ID using a
 // recursive CTE that walks parent edges upstream. maxDepth limits traversal
 // depth (capped at 50).
-func GetAncestors(ctx context.Context, db *sql.DB, artifactID string, maxDepth int) ([]ProvenanceRecord, error) {
+func GetAncestors(ctx context.Context, db *DB, artifactID string, maxDepth int) ([]ProvenanceRecord, error) {
 	if maxDepth <= 0 || maxDepth > 50 {
 		maxDepth = 50
 	}
@@ -242,7 +247,7 @@ func GetAncestors(ctx context.Context, db *sql.DB, artifactID string, maxDepth i
 // GetDescendants returns all descendant artifacts of the given artifact ID
 // using a recursive CTE that walks child edges downstream. maxDepth limits
 // traversal depth (capped at 50).
-func GetDescendants(ctx context.Context, db *sql.DB, artifactID string, maxDepth int) ([]ProvenanceRecord, error) {
+func GetDescendants(ctx context.Context, db *DB, artifactID string, maxDepth int) ([]ProvenanceRecord, error) {
 	if maxDepth <= 0 || maxDepth > 50 {
 		maxDepth = 50
 	}
@@ -275,7 +280,7 @@ func GetDescendants(ctx context.Context, db *sql.DB, artifactID string, maxDepth
 }
 
 // GetJobArtifacts returns all provenance records created by a specific job.
-func GetJobArtifacts(ctx context.Context, db *sql.DB, jobName string) ([]ProvenanceRecord, error) {
+func GetJobArtifacts(ctx context.Context, db *DB, jobName string) ([]ProvenanceRecord, error) {
 	rows, err := db.QueryContext(ctx,
 		`SELECT id, artifact_id, artifact_type, s3_bucket, s3_key, checksum_sha256,
 		        created_by_job, job_kind, job_namespace, parameters, tool_versions, created_at
@@ -308,7 +313,7 @@ func GetJobArtifacts(ctx context.Context, db *sql.DB, jobName string) ([]Provena
 
 // queryProvenanceWithDepth executes a recursive CTE query that returns
 // provenance records with a depth column.
-func queryProvenanceWithDepth(ctx context.Context, db *sql.DB, query, artifactID string, maxDepth int) ([]ProvenanceRecord, error) {
+func queryProvenanceWithDepth(ctx context.Context, db *DB, query, artifactID string, maxDepth int) ([]ProvenanceRecord, error) {
 	rows, err := db.QueryContext(ctx, query, artifactID, maxDepth)
 	if err != nil {
 		return nil, fmt.Errorf("querying provenance graph for %s: %w", artifactID, err)

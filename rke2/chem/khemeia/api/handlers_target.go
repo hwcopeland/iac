@@ -112,13 +112,13 @@ var validBindingSiteModes = map[string]bool{
 // EnsureTargetPrepSchema creates the target_prep_results table if it doesn't exist.
 // Called during startup on the shared database following the same pattern as
 // EnsureProvenanceSchema and EnsureAPITokenSchema.
-func EnsureTargetPrepSchema(db *sql.DB) error {
+func EnsureTargetPrepSchema(db *DB) error {
 	ddl := `CREATE TABLE IF NOT EXISTS target_prep_results (
-		id                INT AUTO_INCREMENT PRIMARY KEY,
+		id                SERIAL PRIMARY KEY,
 		name              VARCHAR(255) NOT NULL UNIQUE,
 		pdb_id            VARCHAR(10)  NOT NULL,
-		binding_site_mode ENUM('native-ligand', 'custom-box', 'pocket-detection') NOT NULL,
-		phase             ENUM('Pending', 'Running', 'Succeeded', 'Failed') NOT NULL DEFAULT 'Pending',
+		binding_site_mode TEXT NOT NULL CHECK (binding_site_mode IN ('native-ligand', 'custom-box', 'pocket-detection')),
+		phase             TEXT NOT NULL DEFAULT 'Pending' CHECK (phase IN ('Pending', 'Running', 'Succeeded', 'Failed')),
 		native_ligand_id  VARCHAR(64)  NULL,
 		padding           FLOAT        NOT NULL DEFAULT 10.0,
 		ph                FLOAT        NOT NULL DEFAULT 7.4,
@@ -131,14 +131,20 @@ func EnsureTargetPrepSchema(db *sql.DB) error {
 		error_message     TEXT         NULL,
 		start_time        TIMESTAMP    NULL,
 		completion_time   TIMESTAMP    NULL,
-		created_at        TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
-		INDEX idx_phase (phase),
-		INDEX idx_pdb_id (pdb_id),
-		INDEX idx_created_at (created_at)
-	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`
+		created_at        TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP
+	)`
 
 	if _, err := db.Exec(ddl); err != nil {
 		return fmt.Errorf("creating target_prep_results table: %w", err)
+	}
+	for _, idx := range []string{
+		`CREATE INDEX IF NOT EXISTS idx_target_prep_phase ON target_prep_results (phase)`,
+		`CREATE INDEX IF NOT EXISTS idx_target_prep_pdb_id ON target_prep_results (pdb_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_target_prep_created_at ON target_prep_results (created_at)`,
+	} {
+		if _, err := db.Exec(idx); err != nil {
+			return fmt.Errorf("creating target_prep_results index: %w", err)
+		}
 	}
 	return nil
 }
@@ -744,7 +750,7 @@ func (h *APIHandler) runTargetPrepPipeline(jobName string, req TargetPrepRequest
 
 // processNativeLigandMode extracts the binding site from the native ligand
 // coordinates via the target-prep sidecar.
-func (h *APIHandler) processNativeLigandMode(ctx context.Context, db *sql.DB, jobName string, req TargetPrepRequest, cleanedPDB string) error {
+func (h *APIHandler) processNativeLigandMode(ctx context.Context, db *DB, jobName string, req TargetPrepRequest, cleanedPDB string) error {
 	// The target-prep sidecar returns binding site coordinates when
 	// given the native ligand ID and padding.
 	client := &http.Client{Timeout: 60 * time.Second}
@@ -794,7 +800,7 @@ func (h *APIHandler) processNativeLigandMode(ctx context.Context, db *sql.DB, jo
 }
 
 // processCustomBoxMode stores the user-specified custom box as the binding site.
-func (h *APIHandler) processCustomBoxMode(ctx context.Context, db *sql.DB, jobName string, req TargetPrepRequest) error {
+func (h *APIHandler) processCustomBoxMode(ctx context.Context, db *DB, jobName string, req TargetPrepRequest) error {
 	if req.CustomBox == nil {
 		return fmt.Errorf("custom_box is nil")
 	}
@@ -813,7 +819,7 @@ func (h *APIHandler) processCustomBoxMode(ctx context.Context, db *sql.DB, jobNa
 
 // processPocketDetectionMode runs fpocket and P2Rank in parallel, then
 // computes consensus pocket rankings.
-func (h *APIHandler) processPocketDetectionMode(ctx context.Context, db *sql.DB, jobName string, cleanedPDB string) error {
+func (h *APIHandler) processPocketDetectionMode(ctx context.Context, db *DB, jobName string, cleanedPDB string) error {
 	type sidecarResult struct {
 		pockets []DetectedPocket
 		err     error
@@ -1118,7 +1124,7 @@ func (h *APIHandler) updateTargetPrepCRDBindingSite(name string, bindingSite Box
 // --- Helper functions ---
 
 // failTargetPrep marks a target prep job as Failed in MySQL with the given error message.
-func (h *APIHandler) failTargetPrep(ctx context.Context, db *sql.DB, jobName string, errMsg string) {
+func (h *APIHandler) failTargetPrep(ctx context.Context, db *DB, jobName string, errMsg string) {
 	log.Printf("[target-prep] %s: FAILED: %s", jobName, errMsg)
 	if _, err := db.ExecContext(ctx,
 		`UPDATE target_prep_results SET phase = 'Failed', error_message = ?, completion_time = NOW() WHERE name = ?`,

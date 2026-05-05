@@ -11,7 +11,6 @@ package main
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"log"
 	"os"
@@ -182,7 +181,7 @@ type CRDController struct {
 	kubeClient     kubernetes.Interface
 	jobClient      typed.JobInterface
 	s3Client       S3Client
-	db             *sql.DB
+	db             *DB
 	namespace      string
 	computeClasses map[string]ComputeClass
 	stopCh         chan struct{}
@@ -191,7 +190,7 @@ type CRDController struct {
 
 // NewCRDController creates a CRD controller using the given clients.
 // The db parameter is used for provenance queries; s3 is for artifact storage.
-func NewCRDController(kubeClient kubernetes.Interface, dynamicClient dynamic.Interface, namespace string, db *sql.DB, s3 S3Client) *CRDController {
+func NewCRDController(kubeClient kubernetes.Interface, dynamicClient dynamic.Interface, namespace string, db *DB, s3 S3Client) *CRDController {
 	return &CRDController{
 		dynamicClient:  dynamicClient,
 		kubeClient:     kubeClient,
@@ -583,11 +582,12 @@ func (c *CRDController) buildCRDJobEnv(kind, name string, spec map[string]interf
 		{Name: "JOB_NAME", Value: name},
 		{Name: "JOB_KIND", Value: kind},
 		{Name: "NAMESPACE", Value: c.namespace},
-		// MySQL credentials for provenance recording.
-		{Name: "MYSQL_HOST", Value: os.Getenv("MYSQL_HOST")},
-		{Name: "MYSQL_PORT", Value: os.Getenv("MYSQL_PORT")},
-		{Name: "MYSQL_USER", Value: os.Getenv("MYSQL_USER")},
-		{Name: "MYSQL_PASSWORD", Value: os.Getenv("MYSQL_PASSWORD")},
+		// PostgreSQL credentials for provenance recording.
+		{Name: "POSTGRES_HOST", Value: os.Getenv("POSTGRES_HOST")},
+		{Name: "POSTGRES_PORT", Value: os.Getenv("POSTGRES_PORT")},
+		{Name: "POSTGRES_USER", Value: os.Getenv("POSTGRES_USER")},
+		{Name: "POSTGRES_PASSWORD", Value: os.Getenv("POSTGRES_PASSWORD")},
+		{Name: "POSTGRES_DB", Value: os.Getenv("POSTGRES_DB")},
 	}
 
 	// Garage credentials for artifact storage.

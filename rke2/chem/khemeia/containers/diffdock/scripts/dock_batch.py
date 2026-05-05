@@ -22,10 +22,10 @@ All configuration via environment variables:
   DIFFDOCK_INFERENCE_STEPS  - diffusion steps (default 20; fewer = faster)
   DIFFDOCK_SAMPLES          - poses per ligand (default 10)
   DIFFDOCK_BATCH_SIZE       - GPU batch size for DiffDock inference (default 10)
-  MYSQL_HOST                - MySQL hostname
-  MYSQL_PORT                - MySQL port (default 3306)
-  MYSQL_USER                - MySQL user
-  MYSQL_PASSWORD            - MySQL password
+  POSTGRES_HOST                - PostgreSQL hostname
+  POSTGRES_PORT                - PostgreSQL port (default 3306)
+  POSTGRES_USER                - PostgreSQL user
+  POSTGRES_PASSWORD            - PostgreSQL password
   GARAGE_ENABLED            - "true" to use S3 artifact storage
   GARAGE_ENDPOINT           - S3 endpoint URL
   GARAGE_ACCESS_KEY         - S3 access key
@@ -43,7 +43,7 @@ import threading
 import time as _time
 from pathlib import Path
 
-import mysql.connector
+import psycopg2
 
 try:
     import boto3
@@ -92,24 +92,24 @@ def get_config():
         "inference_steps": int(os.environ.get("DIFFDOCK_INFERENCE_STEPS", "20")),
         "samples": int(os.environ.get("DIFFDOCK_SAMPLES", "10")),
         "batch_size": int(os.environ.get("DIFFDOCK_BATCH_SIZE", "10")),
-        "mysql_host": os.environ.get("MYSQL_HOST", "localhost"),
-        "mysql_port": int(os.environ.get("MYSQL_PORT", "3306")),
-        "mysql_user": os.environ.get("MYSQL_USER", "root"),
-        "mysql_password": require_env("MYSQL_PASSWORD"),
+        "pg_host": os.environ.get("POSTGRES_HOST", "localhost"),
+        "pg_port": int(os.environ.get("POSTGRES_PORT", ("5432"))),
+        "pg_user": os.environ.get("POSTGRES_USER", "root"),
+        "pg_password": require_env("POSTGRES_PASSWORD"),
     }
 
 
 def connect_db(cfg):
     try:
-        return mysql.connector.connect(
-            host=cfg["mysql_host"],
-            port=cfg["mysql_port"],
-            user=cfg["mysql_user"],
-            password=cfg["mysql_password"],
+        return psycopg2.connect(
+            host=cfg["pg_host"],
+            port=cfg["pg_port"],
+            user=cfg["pg_user"],
+            password=cfg["pg_password"],
             database="docking",
         )
-    except mysql.connector.Error as exc:
-        print(f"FATAL: MySQL connection failed: {exc}", flush=True)
+    except psycopg2.Error as exc:
+        print(f"FATAL: PostgreSQL connection failed: {exc}", flush=True)
         sys.exit(1)
 
 

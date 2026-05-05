@@ -13,7 +13,7 @@ import tempfile
 from pathlib import Path
 
 import boto3
-import mysql.connector
+import psycopg2
 
 # NGC GROMACS image: binary is at this path (not on subprocess PATH by default)
 _GMX_CANDIDATES = [
@@ -64,11 +64,11 @@ def main():
     s3 = s3_client()
     bucket = "khemeia-trajectories"
 
-    conn = mysql.connector.connect(
-        host=os.environ.get("MYSQL_HOST", "docking-mysql.chem.svc.cluster.local"),
-        port=int(os.environ.get("MYSQL_PORT", "3306")),
-        user=os.environ.get("MYSQL_USER", "root"),
-        password=os.environ.get("MYSQL_PASSWORD", ""),
+    conn = psycopg2.connect(
+        host=os.environ.get("POSTGRES_HOST", "docking-mysql.chem.svc.cluster.local"),
+        port=int(os.environ.get("POSTGRES_PORT", ("5432"))),
+        user=os.environ.get("POSTGRES_USER", "root"),
+        password=os.environ.get("POSTGRES_PASSWORD", ""),
         database=os.environ.get("MYSQL_DB", "docking"),
     )
     cursor = conn.cursor()

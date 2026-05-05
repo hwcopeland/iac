@@ -31,42 +31,20 @@ const migrationBatchSize = 100
 // Schema migration — add nullable S3 key columns
 // ---------------------------------------------------------------------------
 
-// columnExists checks whether a column exists in a table.
-func columnExists(ctx context.Context, db *sql.DB, database, table, column string) (bool, error) {
-	var count int
-	err := db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM information_schema.COLUMNS
-		 WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? AND COLUMN_NAME = ?`,
-		database, table, column,
-	).Scan(&count)
-	if err != nil {
-		return false, fmt.Errorf("checking column %s.%s.%s: %w", database, table, column, err)
-	}
-	return count > 0, nil
-}
-
 // addColumnIfNotExists adds a nullable VARCHAR(512) column to a table if it
-// does not already exist. This makes the ALTER TABLE idempotent.
-func addColumnIfNotExists(ctx context.Context, db *sql.DB, database, table, column string) error {
-	exists, err := columnExists(ctx, db, database, table, column)
-	if err != nil {
-		return err
-	}
-	if exists {
-		log.Printf("[migration] Column %s.%s already exists, skipping ALTER TABLE", table, column)
-		return nil
-	}
-	ddl := fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s VARCHAR(512) NULL", table, column)
+// does not already exist. Uses PostgreSQL's ADD COLUMN IF NOT EXISTS for idempotency.
+func addColumnIfNotExists(ctx context.Context, db *DB, table, column string) error {
+	ddl := fmt.Sprintf("ALTER TABLE %s ADD COLUMN IF NOT EXISTS %s VARCHAR(512) NULL", table, column)
 	if _, err := db.ExecContext(ctx, ddl); err != nil {
 		return fmt.Errorf("adding column %s to %s: %w", column, table, err)
 	}
-	log.Printf("[migration] Added column %s.%s", table, column)
+	log.Printf("[migration] Ensured column %s.%s", table, column)
 	return nil
 }
 
 // ApplySchemaChanges adds the S3 key columns to all BLOB-containing tables.
 // Safe to call multiple times (idempotent).
-func ApplySchemaChanges(ctx context.Context, db *sql.DB, database string) error {
+func ApplySchemaChanges(ctx context.Context, db *DB) error {
 	columns := []struct {
 		table  string
 		column string
@@ -78,12 +56,12 @@ func ApplySchemaChanges(ctx context.Context, db *sql.DB, database string) error 
 	}
 
 	for _, c := range columns {
-		if err := addColumnIfNotExists(ctx, db, database, c.table, c.column); err != nil {
+		if err := addColumnIfNotExists(ctx, db, c.table, c.column); err != nil {
 			return fmt.Errorf("schema migration failed: %w", err)
 		}
 	}
 
-	log.Printf("[migration] Schema changes complete for database %s", database)
+	log.Println("[migration] Schema changes complete")
 	return nil
 }
 
@@ -98,7 +76,7 @@ func sha256Hex(data []byte) string {
 }
 
 // RunBlobMigration performs the full BLOB-to-S3 migration across all tables
-// in the docking database. It:
+// in the shared PostgreSQL database. It:
 //  1. Applies schema changes (add s3_*_key columns).
 //  2. Migrates docking_workflows.receptor_pdbqt -> khemeia-receptors.
 //  3. Migrates docking_results.docked_pdbqt -> khemeia-poses.
@@ -107,11 +85,11 @@ func sha256Hex(data []byte) string {
 //
 // Each step is idempotent: rows with a non-NULL S3 key are skipped.
 // Provenance records are created for each migrated artifact.
-func RunBlobMigration(ctx context.Context, db *sql.DB, s3 S3Client, database string) error {
+func RunBlobMigration(ctx context.Context, db *DB, s3 S3Client) error {
 	log.Println("[migration] Starting BLOB migration...")
 
 	// Step 1: Apply schema changes.
-	if err := ApplySchemaChanges(ctx, db, database); err != nil {
+	if err := ApplySchemaChanges(ctx, db); err != nil {
 		return fmt.Errorf("schema changes failed: %w", err)
 	}
 
@@ -141,7 +119,7 @@ func RunBlobMigration(ctx context.Context, db *sql.DB, s3 S3Client, database str
 
 // migrateReceptors migrates docking_workflows.receptor_pdbqt to S3.
 // S3 key pattern: {pdbid}/{name}.pdbqt in khemeia-receptors bucket.
-func migrateReceptors(ctx context.Context, db *sql.DB, s3 S3Client) error {
+func migrateReceptors(ctx context.Context, db *DB, s3 S3Client) error {
 	log.Println("[migration] Migrating receptors (docking_workflows.receptor_pdbqt)...")
 	migrated := 0
 
@@ -179,7 +157,7 @@ func migrateReceptors(ctx context.Context, db *sql.DB, s3 S3Client) error {
 				return fmt.Errorf("uploading receptor %s: %w", name, err)
 			}
 
-			// Update MySQL: set S3 key (keep BLOB for now — cleanup is a separate step).
+			// Update row: set S3 key (keep BLOB for now — cleanup is a separate step).
 			if _, err := db.ExecContext(ctx,
 				`UPDATE docking_workflows SET s3_receptor_key = ? WHERE name = ?`,
 				s3Key, name); err != nil {
@@ -222,7 +200,7 @@ func migrateReceptors(ctx context.Context, db *sql.DB, s3 S3Client) error {
 
 // migrateDockingResults migrates docking_results.docked_pdbqt to S3.
 // S3 key pattern: DockJob/{workflow_name}/{compound_id}.pdbqt in khemeia-poses bucket.
-func migrateDockingResults(ctx context.Context, db *sql.DB, s3 S3Client) error {
+func migrateDockingResults(ctx context.Context, db *DB, s3 S3Client) error {
 	log.Println("[migration] Migrating docking results (docking_results.docked_pdbqt)...")
 	migrated := 0
 
@@ -302,7 +280,7 @@ func migrateDockingResults(ctx context.Context, db *sql.DB, s3 S3Client) error {
 
 // migrateLigands migrates ligands.pdbqt to S3.
 // S3 key pattern: {source_db}/{compound_id}.pdbqt in khemeia-libraries bucket.
-func migrateLigands(ctx context.Context, db *sql.DB, s3 S3Client) error {
+func migrateLigands(ctx context.Context, db *DB, s3 S3Client) error {
 	log.Println("[migration] Migrating ligands (ligands.pdbqt)...")
 	migrated := 0
 
@@ -382,9 +360,8 @@ func migrateLigands(ctx context.Context, db *sql.DB, s3 S3Client) error {
 
 // migrateJobArtifacts migrates job_artifacts.content to S3.
 // S3 key pattern: {job_name}/{filename} in khemeia-reports bucket.
-// This function migrates artifacts from ALL plugin databases (docking, qe,
-// nwchem, psi4, atomic) by being called per-database.
-func migrateJobArtifacts(ctx context.Context, db *sql.DB, s3 S3Client) error {
+// All plugin tables share the single PostgreSQL database so this runs once.
+func migrateJobArtifacts(ctx context.Context, db *DB, s3 S3Client) error {
 	log.Println("[migration] Migrating job artifacts (job_artifacts.content)...")
 	migrated := 0
 
@@ -462,40 +439,16 @@ func migrateJobArtifacts(ctx context.Context, db *sql.DB, s3 S3Client) error {
 	return nil
 }
 
-// RunBlobMigrationAllDBs runs the migration across all plugin databases.
-// Schema changes and job_artifacts migration run per-database. Docking-specific
-// tables (docking_workflows, docking_results, ligands) only exist in the docking DB.
-func RunBlobMigrationAllDBs(ctx context.Context, pluginDBs map[string]*sql.DB, s3 S3Client) error {
-	// Migrate docking-specific tables first (they only exist in the docking DB).
-	dockingDB, ok := pluginDBs["docking"]
-	if !ok {
-		return fmt.Errorf("docking database not found in plugin databases")
+// RunBlobMigrationAllDBs runs the full BLOB migration on the shared PostgreSQL
+// database. All plugin tables (docking, qe, nwchem, psi4, atomic) now live in
+// a single database, so this is a thin wrapper around RunBlobMigration that
+// retains the original call-site signature for backward compatibility.
+func RunBlobMigrationAllDBs(ctx context.Context, db *DB, s3 S3Client) error {
+	log.Println("[migration] === Starting full BLOB migration ===")
+	if err := RunBlobMigration(ctx, db, s3); err != nil {
+		return fmt.Errorf("BLOB migration failed: %w", err)
 	}
-
-	log.Println("[migration] === Phase 1: Docking database ===")
-	if err := RunBlobMigration(ctx, dockingDB, s3, "docking"); err != nil {
-		return fmt.Errorf("docking DB migration failed: %w", err)
-	}
-
-	// Migrate job_artifacts in all other plugin databases.
-	for slug, db := range pluginDBs {
-		if slug == "docking" {
-			continue // already handled
-		}
-
-		log.Printf("[migration] === Migrating job_artifacts in %s database ===", slug)
-
-		// Add s3_key column to job_artifacts in this database.
-		if err := addColumnIfNotExists(ctx, db, slug, "job_artifacts", "s3_key"); err != nil {
-			return fmt.Errorf("schema change for %s.job_artifacts failed: %w", slug, err)
-		}
-
-		if err := migrateJobArtifacts(ctx, db, s3); err != nil {
-			return fmt.Errorf("job_artifacts migration for %s failed: %w", slug, err)
-		}
-	}
-
-	log.Println("[migration] === All databases migrated ===")
+	log.Println("[migration] === BLOB migration complete ===")
 	return nil
 }
 
@@ -505,8 +458,8 @@ func RunBlobMigrationAllDBs(ctx context.Context, pluginDBs map[string]*sql.DB, s
 
 // GetReceptorPDBQT retrieves the receptor PDBQT for a docking workflow.
 // It reads from S3 if s3_receptor_key is set, otherwise falls back to the
-// MySQL BLOB column. This allows a seamless transition during migration.
-func GetReceptorPDBQT(ctx context.Context, db *sql.DB, s3 S3Client, workflowName string) (string, error) {
+// BYTEA column. This allows a seamless transition during migration.
+func GetReceptorPDBQT(ctx context.Context, db *DB, s3 S3Client, workflowName string) (string, error) {
 	var s3Key sql.NullString
 	var blobData []byte
 
@@ -533,7 +486,7 @@ func GetReceptorPDBQT(ctx context.Context, db *sql.DB, s3 S3Client, workflowName
 		}
 	}
 
-	// Fall back to MySQL BLOB.
+	// Fall back to BYTEA column.
 	if len(blobData) == 0 {
 		return "", fmt.Errorf("no receptor data available for workflow %q", workflowName)
 	}
@@ -541,8 +494,8 @@ func GetReceptorPDBQT(ctx context.Context, db *sql.DB, s3 S3Client, workflowName
 }
 
 // GetDockedPDBQT retrieves a docked pose PDBQT for a specific compound in a workflow.
-// It reads from S3 if s3_pose_key is set, otherwise falls back to the MySQL BLOB column.
-func GetDockedPDBQT(ctx context.Context, db *sql.DB, s3 S3Client, workflowName, compoundID string) (string, error) {
+// It reads from S3 if s3_pose_key is set, otherwise falls back to the BYTEA column.
+func GetDockedPDBQT(ctx context.Context, db *DB, s3 S3Client, workflowName, compoundID string) (string, error) {
 	var s3Key sql.NullString
 	var blobData []byte
 
@@ -570,7 +523,7 @@ func GetDockedPDBQT(ctx context.Context, db *sql.DB, s3 S3Client, workflowName, 
 		}
 	}
 
-	// Fall back to MySQL BLOB.
+	// Fall back to BYTEA column.
 	if len(blobData) == 0 {
 		return "", fmt.Errorf("no pose data available for %s/%s", workflowName, compoundID)
 	}
@@ -578,8 +531,8 @@ func GetDockedPDBQT(ctx context.Context, db *sql.DB, s3 S3Client, workflowName, 
 }
 
 // GetArtifactContent retrieves a job artifact's binary content.
-// It reads from S3 if s3_key is set, otherwise falls back to the MySQL BLOB column.
-func GetArtifactContent(ctx context.Context, db *sql.DB, s3 S3Client, jobName, filename string) ([]byte, string, error) {
+// It reads from S3 if s3_key is set, otherwise falls back to the BYTEA column.
+func GetArtifactContent(ctx context.Context, db *DB, s3 S3Client, jobName, filename string) ([]byte, string, error) {
 	var s3Key sql.NullString
 	var contentType string
 	var content []byte
@@ -607,7 +560,7 @@ func GetArtifactContent(ctx context.Context, db *sql.DB, s3 S3Client, jobName, f
 		}
 	}
 
-	// Fall back to MySQL BLOB.
+	// Fall back to BYTEA column.
 	if len(content) == 0 {
 		return nil, "", fmt.Errorf("no content available for artifact %s/%s", jobName, filename)
 	}
@@ -648,7 +601,7 @@ func readS3Bytes(ctx context.Context, s3 S3Client, bucket, key string) ([]byte, 
 
 // VerifyMigration checks that no BLOB rows remain without corresponding S3 keys.
 // Returns a summary of unmigrated row counts per table.
-func VerifyMigration(ctx context.Context, db *sql.DB) (map[string]int, error) {
+func VerifyMigration(ctx context.Context, db *DB) (map[string]int, error) {
 	queries := map[string]string{
 		"docking_workflows.receptor_pdbqt": `SELECT COUNT(*) FROM docking_workflows WHERE receptor_pdbqt IS NOT NULL AND s3_receptor_key IS NULL`,
 		"docking_results.docked_pdbqt":     `SELECT COUNT(*) FROM docking_results WHERE docked_pdbqt IS NOT NULL AND s3_pose_key IS NULL`,
@@ -660,8 +613,8 @@ func VerifyMigration(ctx context.Context, db *sql.DB) (map[string]int, error) {
 	for label, query := range queries {
 		var count int
 		if err := db.QueryRowContext(ctx, query).Scan(&count); err != nil {
-			// Table might not exist in this database — skip.
-			if strings.Contains(err.Error(), "doesn't exist") {
+			// Table might not exist — PostgreSQL reports "does not exist".
+			if strings.Contains(err.Error(), "does not exist") {
 				continue
 			}
 			return nil, fmt.Errorf("verifying %s: %w", label, err)
