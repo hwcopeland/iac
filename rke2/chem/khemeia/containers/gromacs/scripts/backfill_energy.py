@@ -65,11 +65,11 @@ def main():
     bucket = "khemeia-trajectories"
 
     conn = psycopg2.connect(
-        host=os.environ.get("POSTGRES_HOST", "docking-mysql.chem.svc.cluster.local"),
+        host=os.environ.get("POSTGRES_HOST", "khemeia-postgres.chem.svc.cluster.local"),
         port=int(os.environ.get("POSTGRES_PORT", ("5432"))),
-        user=os.environ.get("POSTGRES_USER", "root"),
+        user=os.environ.get("POSTGRES_USER", "postgres"),
         password=os.environ.get("POSTGRES_PASSWORD", ""),
-        database=os.environ.get("MYSQL_DB", "docking"),
+        database=os.environ.get("POSTGRES_DB", "khemeia"),
     )
     cursor = conn.cursor()
 

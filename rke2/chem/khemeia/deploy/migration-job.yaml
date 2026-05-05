@@ -1,6 +1,6 @@
 # K8s Job to run the BLOB-to-S3 migration.
 #
-# Reads all MySQL BLOB data from docking_workflows, docking_results, ligands,
+# Reads all BLOB data from docking_workflows, docking_results, ligands,
 # and job_artifacts tables, uploads to Garage (S3), and records S3 keys + provenance.
 #
 # Idempotent: safe to re-run. Rows already migrated (s3_*_key IS NOT NULL) are skipped.
@@ -8,7 +8,7 @@
 # Prerequisites:
 #   - Garage is deployed and running (garage-s3.chem.svc.cluster.local)
 #   - All 7 buckets exist (khemeia-receptors, khemeia-poses, etc.)
-#   - docking-mysql is accessible
+#   - khemeia-postgres is accessible
 #   - GARAGE_ENABLED=true in the env below
 #
 # Usage:
@@ -42,24 +42,26 @@ spec:
           command: ["/app/khemeia-controller"]
           args: ["--migrate-blobs"]
           env:
-            # MySQL connection
             - name: NAMESPACE
               value: "chem"
             - name: PLUGINS_DIR
               value: "/app/plugins"
-            - name: MYSQL_HOST
-              value: "docking-mysql.chem.svc.cluster.local"
-            - name: MYSQL_PORT
-              value: "3306"
-            - name: MYSQL_USER
-              value: "root"
-            - name: MYSQL_DATABASE
-              value: "docking"
-            - name: MYSQL_PASSWORD
+            - name: POSTGRES_HOST
+              value: "khemeia-postgres.chem.svc.cluster.local"
+            - name: POSTGRES_PORT
+              value: "5432"
+            - name: POSTGRES_DB
+              value: "khemeia"
+            - name: POSTGRES_USER
               valueFrom:
                 secretKeyRef:
-                  name: docking-mysql-secret
-                  key: root-password
+                  name: khemeia-postgres-secret
+                  key: username
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: khemeia-postgres-secret
+                  key: password
             # Garage S3 connection
             - name: GARAGE_ENABLED
               value: "true"

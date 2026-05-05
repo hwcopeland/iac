@@ -27,7 +27,7 @@ type APIHandler struct {
 	namespace  string
 	controller *Controller
 	pluginDBs  map[string]*DB
-	chemblDB   *sql.DB
+	chemblDB   *DB
 	s3Client   S3Client
 }
 
@@ -319,19 +319,11 @@ func (c *Controller) createPrepBatchJob(sourceDb, image string, batchIndex, offs
 								{Name: "SOURCE_DB", Value: sourceDb},
 								{Name: "BATCH_OFFSET", Value: fmt.Sprintf("%d", offset)},
 								{Name: "BATCH_LIMIT", Value: fmt.Sprintf("%d", chunkSize)},
-								{Name: "MYSQL_HOST", Value: os.Getenv("MYSQL_HOST")},
-								{Name: "MYSQL_PORT", Value: os.Getenv("MYSQL_PORT")},
-								{Name: "MYSQL_USER", Value: os.Getenv("MYSQL_USER")},
-								{Name: "MYSQL_DATABASE", Value: "docking"},
-								{
-									Name: "MYSQL_PASSWORD",
-									ValueFrom: &corev1.EnvVarSource{
-										SecretKeyRef: &corev1.SecretKeySelector{
-											LocalObjectReference: corev1.LocalObjectReference{Name: "docking-mysql-secret"},
-											Key:                  "root-password",
-										},
-									},
-								},
+								{Name: "POSTGRES_HOST", Value: os.Getenv("POSTGRES_HOST")},
+								{Name: "POSTGRES_PORT", Value: os.Getenv("POSTGRES_PORT")},
+								{Name: "POSTGRES_USER", Value: os.Getenv("POSTGRES_USER")},
+								{Name: "POSTGRES_PASSWORD", Value: os.Getenv("POSTGRES_PASSWORD")},
+								{Name: "POSTGRES_DB", Value: "khemeia"},
 							},
 							VolumeMounts: []corev1.VolumeMount{emptyDirMount("scratch", workDir)},
 						},
