@@ -20,7 +20,7 @@ spec:
         - name: zot-pull-secret
       containers:
         - name: result-writer
-          image: zot.hwcopeland.net/chem/khemeia-result-writer:build-000048-abd6886 # {"$imagepolicy": "chem:khemeia-result-writer"}
+          image: zot.hwcopeland.net/chem/khemeia-result-writer:build-000363-ef9edf8 # {"$imagepolicy": "chem:khemeia-result-writer"}
           imagePullPolicy: Always
           ports:
             - containerPort: 8081
