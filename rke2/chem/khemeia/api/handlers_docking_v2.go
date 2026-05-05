@@ -1070,10 +1070,11 @@ func (c *Controller) buildDockingV2WorkerEnv(
 		{Name: "SCORING", Value: req.Scoring},
 		{Name: "BATCH_OFFSET", Value: fmt.Sprintf("%d", offset)},
 		{Name: "BATCH_LIMIT", Value: fmt.Sprintf("%d", limit)},
-		{Name: "MYSQL_HOST", Value: os.Getenv("MYSQL_HOST")},
-		{Name: "MYSQL_PORT", Value: os.Getenv("MYSQL_PORT")},
-		{Name: "MYSQL_USER", Value: os.Getenv("MYSQL_USER")},
-		{Name: "MYSQL_PASSWORD", Value: os.Getenv("MYSQL_PASSWORD")},
+		{Name: "POSTGRES_HOST", Value: os.Getenv("POSTGRES_HOST")},
+		{Name: "POSTGRES_PORT", Value: os.Getenv("POSTGRES_PORT")},
+		{Name: "POSTGRES_USER", Value: os.Getenv("POSTGRES_USER")},
+		{Name: "POSTGRES_PASSWORD", Value: os.Getenv("POSTGRES_PASSWORD")},
+		{Name: "POSTGRES_DB", Value: "khemeia"},
 		{Name: "NAMESPACE", Value: c.namespace},
 	}
 

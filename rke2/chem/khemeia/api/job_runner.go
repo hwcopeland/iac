@@ -437,11 +437,11 @@ func buildJobEnv(plugin Plugin, jobName string, input map[string]interface{}) []
 		{Name: "JOB_NAME", Value: jobName},
 		{Name: "WORKFLOW_NAME", Value: jobName},
 		{Name: "NUM_CPUS", Value: cpuStr},
-		{Name: "MYSQL_HOST", Value: os.Getenv("MYSQL_HOST")},
-		{Name: "MYSQL_PORT", Value: os.Getenv("MYSQL_PORT")},
-		{Name: "MYSQL_USER", Value: os.Getenv("MYSQL_USER")},
-		{Name: "MYSQL_PASSWORD", Value: os.Getenv("MYSQL_PASSWORD")},
-		{Name: "MYSQL_DATABASE", Value: plugin.Database},
+		{Name: "POSTGRES_HOST", Value: os.Getenv("POSTGRES_HOST")},
+		{Name: "POSTGRES_PORT", Value: os.Getenv("POSTGRES_PORT")},
+		{Name: "POSTGRES_USER", Value: os.Getenv("POSTGRES_USER")},
+		{Name: "POSTGRES_PASSWORD", Value: os.Getenv("POSTGRES_PASSWORD")},
+		{Name: "POSTGRES_DB", Value: "khemeia"},
 	}
 
 	// Pass input fields as env vars (uppercase names).

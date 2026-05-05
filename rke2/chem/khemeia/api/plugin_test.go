@@ -1309,8 +1309,8 @@ func TestBuildJobEnvBasic(t *testing.T) {
 	if envMap["WORKFLOW_NAME"] != "test-job-1" {
 		t.Errorf("WORKFLOW_NAME: expected %q, got %q", "test-job-1", envMap["WORKFLOW_NAME"])
 	}
-	if envMap["MYSQL_DATABASE"] != "qe" {
-		t.Errorf("MYSQL_DATABASE: expected %q, got %q", "qe", envMap["MYSQL_DATABASE"])
+	if envMap["POSTGRES_DB"] != "khemeia" {
+		t.Errorf("POSTGRES_DB: expected %q, got %q", "khemeia", envMap["POSTGRES_DB"])
 	}
 
 	// Non-text input fields should be passed as uppercase env vars.
@@ -1426,7 +1426,7 @@ func TestBuildJobEnvNoInputFields(t *testing.T) {
 		envMap[e.Name] = e.Value
 	}
 
-	for _, required := range []string{"JOB_NAME", "WORKFLOW_NAME", "MYSQL_HOST", "MYSQL_PORT", "MYSQL_USER", "MYSQL_PASSWORD", "MYSQL_DATABASE"} {
+	for _, required := range []string{"JOB_NAME", "WORKFLOW_NAME", "POSTGRES_HOST", "POSTGRES_PORT", "POSTGRES_USER", "POSTGRES_PASSWORD", "POSTGRES_DB"} {
 		if _, exists := envMap[required]; !exists {
 			t.Errorf("missing required env var %s", required)
 		}

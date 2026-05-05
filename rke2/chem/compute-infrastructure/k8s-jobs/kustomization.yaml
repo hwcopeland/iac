@@ -3,6 +3,5 @@ kind: Kustomization
 resources:
   - config/rbac.yaml
   - config/deployment.yaml
-  - config/mysql.yaml
   - config/result-writer-deployment.yaml
   - zot-pull-secret.yaml

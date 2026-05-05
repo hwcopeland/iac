@@ -20,7 +20,6 @@ import (
 	"syscall"
 	"time"
 
-	_ "github.com/go-sql-driver/mysql"
 	_ "github.com/lib/pq"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -47,9 +46,9 @@ type Controller struct {
 	sharedDB *DB
 
 	// chemblDB is an optional read-only connection to the ChEMBL compound database.
-	// Used for ligand search/filtering. Stays on MySQL permanently (external DB).
+	// Uses the same PostgreSQL instance as khemeia but connects to the chembl_36 database.
 	// Nil if ChEMBL is not available.
-	chemblDB *sql.DB
+	chemblDB *DB
 
 	// s3Client provides S3 operations against Garage for artifact storage.
 	// Initialized from GARAGE_* env vars; returns a no-op client when
@@ -146,33 +145,23 @@ func NewController() (*Controller, error) {
 	}
 	log.Println("All plugin tables initialized")
 
-	// Connect to ChEMBL database (optional — stays on MySQL permanently).
-	chemblHost := os.Getenv("CHEMBL_MYSQL_HOST")
-	if chemblHost == "" {
-		chemblHost = "chembl-mysql.chem.svc.cluster.local"
-	}
-	chemblDBName := os.Getenv("CHEMBL_DATABASE")
+	// Connect to ChEMBL database on the same PostgreSQL instance (optional).
+	chemblDBName := os.Getenv("CHEMBL_POSTGRES_DB")
 	if chemblDBName == "" {
 		chemblDBName = "chembl_36"
 	}
-	chemblUser := os.Getenv("MYSQL_USER")
-	chemblPassword := os.Getenv("MYSQL_PASSWORD")
-	chemblPort := os.Getenv("MYSQL_PORT")
-	if chemblPort == "" {
-		chemblPort = "3306"
-	}
-	chemblDSN := fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?parseTime=true",
-		chemblUser, chemblPassword, chemblHost, chemblPort, chemblDBName)
-	cdb, err := sql.Open("mysql", chemblDSN)
+	chemblDSN := fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=disable",
+		pgHost, pgPort, pgUser, pgPassword, chemblDBName)
+	cRawDB, err := sql.Open("postgres", chemblDSN)
 	if err == nil {
-		cdb.SetMaxOpenConns(5)
-		cdb.SetConnMaxLifetime(5 * time.Minute)
-		if err := cdb.Ping(); err != nil {
+		cRawDB.SetMaxOpenConns(5)
+		cRawDB.SetConnMaxLifetime(5 * time.Minute)
+		if err := cRawDB.Ping(); err != nil {
 			log.Printf("Warning: ChEMBL database not reachable (%v) — ligand search disabled", err)
-			cdb.Close()
+			cRawDB.Close()
 		} else {
-			controller.chemblDB = cdb
-			log.Println("ChEMBL database connection established")
+			controller.chemblDB = &DB{DB: cRawDB}
+			log.Println("ChEMBL PostgreSQL database connection established")
 		}
 	} else {
 		log.Printf("Warning: failed to open ChEMBL database (%v) — ligand search disabled", err)

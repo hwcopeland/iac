@@ -20,26 +20,29 @@ spec:
         - name: zot-pull-secret
       containers:
         - name: result-writer
-          image: zot.hwcopeland.net/chem/result-writer:build-000048-abd6886 # {"$imagepolicy": "chem:result-writer"}
+          image: zot.hwcopeland.net/chem/khemeia-result-writer:build-000048-abd6886 # {"$imagepolicy": "chem:khemeia-result-writer"}
           imagePullPolicy: Always
           ports:
             - containerPort: 8081
               name: http
               protocol: TCP
           env:
-            - name: MYSQL_HOST
-              value: "docking-mysql.chem.svc.cluster.local"
-            - name: MYSQL_PORT
-              value: "3306"
-            - name: MYSQL_USER
-              value: "root"
-            - name: MYSQL_DATABASE
-              value: "docking"
-            - name: MYSQL_PASSWORD
+            - name: POSTGRES_HOST
+              value: "khemeia-postgres.chem.svc.cluster.local"
+            - name: POSTGRES_PORT
+              value: "5432"
+            - name: POSTGRES_DB
+              value: "khemeia"
+            - name: POSTGRES_USER
               valueFrom:
                 secretKeyRef:
-                  name: docking-mysql-secret
-                  key: root-password
+                  name: khemeia-postgres-secret
+                  key: username
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: khemeia-postgres-secret
+                  key: password
           resources:
             requests:
               cpu: 50m
