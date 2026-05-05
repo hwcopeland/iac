@@ -114,32 +114,36 @@
     </div>
   {/if}
 
-  <!-- Pipeline header -->
-  <div class="pl-header">
-    <span class="pl-title">SBDD Workflow</span>
-    <div class="pl-actions">
-      <button class="action-btn" onclick={() => pipeline.loadRecentJobs()}>
-        {pipeline.recentOpen ? 'Hide runs' : 'Load previous'}
-      </button>
-      <button class="action-btn danger" onclick={() => pipeline.clearPipeline()}>New</button>
+  <!-- Workgroup selector -->
+  <div class="wg-section">
+    <div class="wg-row">
+      {#if pipeline.wgRenaming}
+        <input
+          class="wg-name-input"
+          bind:value={pipeline.wgRenameValue}
+          onblur={() => pipeline.commitRename()}
+          onkeydown={(e) => { if (e.key === 'Enter') pipeline.commitRename(); if (e.key === 'Escape') pipeline.cancelRename(); }}
+        />
+      {:else}
+        <select
+          class="wg-select"
+          value={pipeline.activeWorkgroupId}
+          onchange={(e) => pipeline.switchWorkgroup((e.target as HTMLSelectElement).value)}
+        >
+          {#each pipeline.workgroups as wg}
+            <option value={wg.id}>{wg.name}</option>
+          {/each}
+        </select>
+      {/if}
+      <div class="wg-btns">
+        <button class="wg-btn" title="Rename workgroup" onclick={() => pipeline.startRename()}>✎</button>
+        <button class="wg-btn" title="New workgroup" onclick={() => pipeline.newWorkgroup()}>+</button>
+        {#if pipeline.workgroups.length > 1}
+          <button class="wg-btn danger" title="Delete workgroup" onclick={() => pipeline.deleteWorkgroup(pipeline.activeWorkgroupId)}>✕</button>
+        {/if}
+      </div>
     </div>
   </div>
-
-  {#if pipeline.recentOpen}
-    <div class="recent-runs">
-      {#if pipeline.recentJobs.length === 0}
-        <span class="recent-empty">No previous runs found.</span>
-      {:else}
-        {#each pipeline.recentJobs as job}
-          <button class="recent-row" onclick={() => pipeline.restorePipeline(job)}>
-            <span class="recent-name">{job.name}</span>
-            <span class="recent-badge {job.status.toLowerCase()}">{job.status}</span>
-            <span class="recent-meta">{new Date(job.created_at).toLocaleString()}</span>
-          </button>
-        {/each}
-      {/if}
-    </div>
-  {/if}
 
   <!-- Stage 1: Target Preparation -->
   <div id="stage-target">
@@ -262,9 +266,6 @@
               {/each}
             </div>
           {/if}
-          <div class="advance-row">
-            <button class="advance-btn" onclick={() => pipeline.handleAdvance('target')}>Next: Library Prep</button>
-          </div>
         {/if}
       {/snippet}
     </Panel>
@@ -390,10 +391,6 @@
               </div>
             {/if}
           </div>
-          <div class="advance-row">
-            <span class="done-label">Library: {pipeline.stages.library.jobName}</span>
-            <button class="advance-btn" onclick={() => pipeline.handleAdvance('library')}>Next: Docking</button>
-          </div>
         {/if}
       {/snippet}
     </Panel>
@@ -503,40 +500,52 @@
     margin-top: 6px;
   }
 
-  /* Pipeline sections */
-  .pl-header {
+  /* Workgroup selector */
+  .wg-section { padding: 10px 0 4px; }
+  .wg-row { display: flex; align-items: center; gap: 6px; }
+  .wg-select {
+    flex: 1;
+    background: rgba(0,0,0,0.3);
+    border: 1px solid rgba(48,54,61,0.6);
+    color: var(--text-primary, #e6edf3);
+    font-size: 12px;
+    font-family: var(--font-sans);
+    padding: 4px 6px;
+    border-radius: 4px;
+    outline: none;
+    cursor: pointer;
+  }
+  .wg-select:focus { border-color: var(--accent, #58a6ff); }
+  .wg-name-input {
+    flex: 1;
+    background: rgba(0,0,0,0.3);
+    border: 1px solid var(--accent, #58a6ff);
+    color: var(--text-primary, #e6edf3);
+    font-size: 12px;
+    font-family: var(--font-sans);
+    padding: 4px 6px;
+    border-radius: 4px;
+    outline: none;
+  }
+  .wg-btns { display: flex; gap: 3px; }
+  .wg-btn {
+    background: rgba(48,54,61,0.3);
+    border: 1px solid rgba(48,54,61,0.5);
+    color: var(--text-secondary, #8b949e);
+    font-size: 12px;
+    width: 24px;
+    height: 24px;
+    border-radius: 3px;
+    cursor: pointer;
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    padding: 12px 0 4px;
+    justify-content: center;
+    padding: 0;
+    line-height: 1;
   }
-  .pl-title { font-size: 12px; font-weight: 700; color: var(--text-secondary, #8b949e); text-transform: uppercase; letter-spacing: 0.5px; }
-  .pl-actions { display: flex; gap: 6px; }
-
-  .action-btn {
-    background: var(--accent-subtle);
-    border: 1px solid transparent;
-    color: var(--accent);
-    font-size: 11px;
-    font-weight: 500;
-    padding: 3px 10px;
-    border-radius: var(--radius-sm);
-    cursor: pointer;
-    font-family: var(--font-sans);
-  }
-  .action-btn.danger { background: rgba(248,81,73,0.1); color: #f85149; }
-  .action-btn:hover { opacity: 0.85; }
-
-  .recent-runs { display: flex; flex-direction: column; gap: 2px; margin-bottom: 8px; }
-  .recent-empty { font-size: 11px; color: var(--text-muted, #484f58); padding: 4px 0; }
-  .recent-row { display: flex; align-items: center; gap: 8px; padding: 4px 6px; background: none; border: 1px solid var(--border-default); border-radius: 3px; cursor: pointer; text-align: left; }
-  .recent-row:hover { border-color: var(--accent); }
-  .recent-name { font-size: 11px; font-family: 'SF Mono', monospace; color: var(--text-primary, #e6edf3); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .recent-badge { font-size: 9px; padding: 1px 5px; border-radius: 3px; text-transform: uppercase; font-weight: 600; }
-  .recent-badge.succeeded, .recent-badge.completed { background: rgba(63,185,80,0.15); color: #3fb950; }
-  .recent-badge.failed { background: rgba(248,81,73,0.15); color: #f85149; }
-  .recent-badge.running { background: rgba(210,153,34,0.15); color: #d29922; }
-  .recent-meta { font-size: 10px; color: var(--text-muted, #484f58); white-space: nowrap; }
+  .wg-btn:hover { color: var(--text-primary, #e6edf3); border-color: rgba(88,166,255,0.4); }
+  .wg-btn.danger { color: #f85149; }
+  .wg-btn.danger:hover { background: rgba(248,81,73,0.1); }
 
   .stage-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; cursor: pointer; }
   .stage-label { font-size: 12px; font-weight: 600; color: var(--text-primary, #e6edf3); }
@@ -637,9 +646,6 @@
   .compound-chip-mw { font-size: 10px; color: var(--text-muted, #484f58); white-space: nowrap; margin-left: 8px; }
 
   .done-label { font-size: 11px; color: #3fb950; font-family: 'SF Mono', monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 160px; }
-  .advance-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 0; flex-wrap: wrap; }
-  .advance-btn { background: rgba(63,185,80,0.15); border: 1px solid rgba(63,185,80,0.4); color: #3fb950; font-size: 11px; font-weight: 600; padding: 4px 12px; border-radius: 4px; cursor: pointer; white-space: nowrap; }
-  .advance-btn:hover { background: rgba(63,185,80,0.25); }
 
   .session-banner { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px; background: rgba(210,153,34,0.1); border: 1px solid rgba(210,153,34,0.3); border-radius: 4px; margin-bottom: 8px; }
   .session-msg { font-size: 11px; color: #d29922; }

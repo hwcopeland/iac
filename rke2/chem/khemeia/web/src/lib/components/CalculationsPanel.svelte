@@ -306,10 +306,6 @@
               <span class="empty-msg">No results loaded.</span>
             {/if}
           </div>
-          <div class="advance-row">
-            <span class="done-label">Docking: {pipeline.stages.docking.jobName}</span>
-            <button class="advance-btn" onclick={() => pipeline.handleAdvance('docking')}>Next: MD Simulation</button>
-          </div>
         {/if}
       {/snippet}
     </Panel>
@@ -450,12 +446,6 @@
           </div>
         {/if}
 
-        {#if pipeline.canAdvance('md')}
-          <div class="advance-row">
-            <span class="done-label">MD: {pipeline.stages.md.jobName}</span>
-            <button class="advance-btn" onclick={() => pipeline.handleAdvance('md')}>Next: ADMET</button>
-          </div>
-        {/if}
       {/snippet}
     </Panel>
   </div>

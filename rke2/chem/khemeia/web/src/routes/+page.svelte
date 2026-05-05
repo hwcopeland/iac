@@ -73,6 +73,8 @@
       authReady = true;
       if (isAuthenticated()) {
         initApp();
+      } else {
+        login();
       }
     });
   });
