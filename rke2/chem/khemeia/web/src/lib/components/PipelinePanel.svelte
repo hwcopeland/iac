@@ -995,13 +995,21 @@
         {#if stages.library.status === 'running'}
           <div class="running-indicator">
             <span class="pulse-dot"></span>
-            <span class="running-text">
-              {#if libraryStatus?.compound_count > 0}
-                {libraryStatus.compound_count} compounds found — standardizing &amp; filtering...
-              {:else}
-                Resolving compounds from source...
-              {/if}
-            </span>
+            {#if libraryStatus?.total_count > 0 && libraryStatus?.processed_count > 0}
+              {@const pct = Math.min(100, Math.round(libraryStatus.processed_count / libraryStatus.total_count * 100))}
+              <div class="lib-progress-wrap">
+                <div class="lib-progress-bar">
+                  <div class="lib-progress-fill" style="width: {pct}%"></div>
+                </div>
+                <span class="running-text">
+                  {libraryStatus.processed_count.toLocaleString()} / {libraryStatus.total_count.toLocaleString()} compounds ({pct}%)
+                </span>
+              </div>
+            {:else if libraryStatus?.total_count > 0}
+              <span class="running-text">{libraryStatus.total_count.toLocaleString()} compounds found — preparing...</span>
+            {:else}
+              <span class="running-text">Resolving compounds from source...</span>
+            {/if}
           </div>
         {/if}
 
@@ -1712,6 +1720,27 @@
   .running-text {
     font-size: 12px;
     color: #d29922;
+  }
+
+  .lib-progress-wrap {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    flex: 1;
+  }
+
+  .lib-progress-bar {
+    height: 6px;
+    background: #30363d;
+    border-radius: 3px;
+    overflow: hidden;
+  }
+
+  .lib-progress-fill {
+    height: 100%;
+    background: #d29922;
+    border-radius: 3px;
+    transition: width 0.8s ease;
   }
 
   /* Error */
