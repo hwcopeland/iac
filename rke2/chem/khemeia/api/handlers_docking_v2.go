@@ -436,7 +436,11 @@ func (h *APIHandler) DockingV2Submit(w http.ResponseWriter, r *http.Request) {
 		req.TopNRefine = 100
 	}
 	if req.ChunkSize == 0 {
-		req.ChunkSize = 10000
+		if len(req.Engines) == 1 && req.Engines[0] == "vina-gpu" {
+			req.ChunkSize = 20000
+		} else {
+			req.ChunkSize = 10000
+		}
 	}
 
 	// Validate required fields.
