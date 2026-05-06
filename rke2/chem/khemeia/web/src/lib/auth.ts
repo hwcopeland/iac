@@ -5,7 +5,7 @@ const AUTHORIZE_URL = 'https://auth.hwcopeland.net/application/o/authorize/';
 const TOKEN_URL = 'https://auth.hwcopeland.net/application/o/token/';
 const USERINFO_URL = 'https://auth.hwcopeland.net/application/o/userinfo/';
 const CLIENT_ID = 'khemeia';
-const SCOPES = 'openid email profile';
+const SCOPES = 'openid email profile offline_access';
 
 // Derive redirect URI from the current origin
 function getRedirectUri(): string {
