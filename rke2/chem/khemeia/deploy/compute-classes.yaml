@@ -74,8 +74,8 @@ data:
       gpu:
         description: "GPU workloads on NixOS node (nixos-gpu, RTX 3070)"
         resources:
-          cpu: "4"
-          memory: "16Gi"
+          cpu: "2"
+          memory: "4Gi"
           nvidia.com/gpu: "1"
         nodeSelector:
           gpu: "rtx3070"

@@ -134,7 +134,7 @@ class PipelineStore {
   libraryCompoundSample = $state<any[]>([]);
 
   // Docking form
-  engVina = $state(true); engGnina = $state(false); engVinaGpu = $state(false);
+  engVina = $state(false); engGnina = $state(false); engVinaGpu = $state(true);
   exhaustiveness = $state(8);
   dockSubmitting = $state(false);
   dockingSummary = $state<any | null>(null);

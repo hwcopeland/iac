@@ -214,9 +214,9 @@
               <div class="form-field">
                 <label class="form-label">Engines</label>
                 <div class="engine-checks">
-                  <label class="toggle-label"><input type="checkbox" bind:checked={pipeline.engVina} /><span>Vina 1.2</span></label>
+                  <label class="toggle-label"><input type="checkbox" bind:checked={pipeline.engVina} /><span>Vina 1.2 (CPU)</span></label>
                   <label class="toggle-label"><input type="checkbox" bind:checked={pipeline.engGnina} /><span>GNINA</span></label>
-                  <label class="toggle-label"><input type="checkbox" bind:checked={pipeline.engVinaGpu} /><span>Vina GPU</span></label>
+                  <label class="toggle-label"><input type="checkbox" bind:checked={pipeline.engVinaGpu} /><span>Vina-GPU 2.1</span></label>
                 </div>
               </div>
               <div class="form-field">
