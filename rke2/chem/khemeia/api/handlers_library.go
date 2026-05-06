@@ -1054,7 +1054,7 @@ type libraryPrepSidecarResponse struct {
 type resolvedChEMBLCompound struct {
 	CanonicalSMILES string
 	InChIKey        string
-	CompoundID      string // KHM-{first14ofInChIKey}
+	CompoundID      string // full InChIKey (27 chars, uppercase)
 }
 
 // cachedLibraryCompound is a compound row fetched from a previous library_compounds entry.
@@ -1321,16 +1321,9 @@ func (h *APIHandler) failLibraryPrep(ctx context.Context, db *DB, jobName string
 	}
 }
 
-// generateStableCompoundID produces a stable ID in the form KHM-{first14ofInChIKey}.
-// The first 14 characters of an InChIKey are the connectivity layer hash,
-// which is unique per molecular skeleton (e.g., KHM-BSYNRYMUTXBXSQ).
-// If the InChIKey is shorter than 14 characters, the full key is used.
+// generateStableCompoundID returns the full InChIKey (27 chars, uppercase) as the compound ID.
 func generateStableCompoundID(inchiKey string) string {
-	key := inchiKey
-	if len(key) > 14 {
-		key = key[:14]
-	}
-	return "KHM-" + strings.ToUpper(key)
+	return strings.ToUpper(inchiKey)
 }
 
 // sanitizeName replaces characters unsuitable for job names with hyphens.
