@@ -1130,7 +1130,7 @@ func (h *APIHandler) callLibraryPrepSidecar(ctx context.Context, req libraryPrep
 
 const (
 	sidecarBatchSize    = 1_000
-	sidecarBatchWorkers = 3 // concurrent requests across sidecar pods
+	sidecarBatchWorkers = 10 // concurrent requests — one per KEDA-scaled sidecar pod
 )
 
 // callLibraryPrepSidecarBatched splits smiles into chunks of sidecarBatchSize

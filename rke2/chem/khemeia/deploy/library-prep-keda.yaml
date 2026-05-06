@@ -28,8 +28,8 @@ spec:
   triggers:
     - type: postgresql
       metadata:
-        # 1 replica per active job; jobs beyond 3 queue behind existing workers
-        targetQueryValue: "1"
+        # 0.1 = 10 replicas per active job (ceil(1/0.1)=10); capped by maxReplicaCount
+        targetQueryValue: "0.1"
         query: >-
           SELECT COUNT(*) FROM library_prep_results
           WHERE phase IN ('Pending', 'Running')
