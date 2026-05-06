@@ -261,6 +261,14 @@ func EnsureLibraryPrepSchema(db *DB) error {
 		}
 	}
 
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS prep_blacklist (
+		smiles   TEXT PRIMARY KEY,
+		error    TEXT NOT NULL,
+		added_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+	)`); err != nil {
+		return fmt.Errorf("creating prep_blacklist table: %w", err)
+	}
+
 	return nil
 }
 
@@ -582,6 +590,26 @@ func (h *APIHandler) LibraryDispatch(w http.ResponseWriter, r *http.Request) {
 
 // --- Async pipeline ---
 
+// loadPrepBlacklist returns the set of SMILES strings currently in prep_blacklist.
+// On query error it logs a warning and returns an empty map so callers degrade
+// gracefully rather than skipping nothing or aborting.
+func loadPrepBlacklist(ctx context.Context, db *DB) map[string]bool {
+	rows, err := db.QueryContext(ctx, `SELECT smiles FROM prep_blacklist`)
+	if err != nil {
+		log.Printf("[library-prep] warning: could not load prep_blacklist: %v", err)
+		return map[string]bool{}
+	}
+	defer rows.Close()
+	bl := map[string]bool{}
+	for rows.Next() {
+		var smi string
+		if err := rows.Scan(&smi); err == nil {
+			bl[smi] = true
+		}
+	}
+	return bl
+}
+
 // runLibraryPrepPipeline orchestrates the full library preparation workflow:
 // 1. Update status to Running
 // 2. Resolve input compounds from source (SMILES, SDF, ChEMBL, Enamine)
@@ -652,18 +680,25 @@ func (h *APIHandler) runLibraryPrepPipeline(jobName string, req LibraryPrepReque
 		for id := range cache {
 			cachedIDs[id] = true
 		}
+
+		blacklist := loadPrepBlacklist(ctx, db)
+
 		var uncachedSMILES []string
 		for _, r := range resolved {
-			if !cachedIDs[r.CompoundID] {
+			if !cachedIDs[r.CompoundID] && !blacklist[r.CanonicalSMILES] {
 				uncachedSMILES = append(uncachedSMILES, r.CanonicalSMILES)
 			}
 		}
-		uncachedSMILES = append(uncachedSMILES, needReprocess...)
+		for _, smi := range needReprocess {
+			if !blacklist[smi] {
+				uncachedSMILES = append(uncachedSMILES, smi)
+			}
+		}
 
 		if len(uncachedSMILES) > 0 {
 			log.Printf("[library-prep] %s: sending %d uncached compound(s) to sidecar", jobName, len(uncachedSMILES))
 			var newCount, newFiltered, newProcessed int
-			err := h.callLibraryPrepSidecarBatched(ctx, uncachedSMILES, req.Filters, jobName, func(resp *libraryPrepSidecarResponse) error {
+			err := h.callLibraryPrepSidecarBatched(ctx, db, uncachedSMILES, req.Filters, jobName, func(resp *libraryPrepSidecarResponse) error {
 				cnt, flt, err := h.insertLibraryCompounds(ctx, db, libraryID, jobName, resp)
 				if err != nil {
 					return err
@@ -698,7 +733,7 @@ func (h *APIHandler) runLibraryPrepPipeline(jobName string, req LibraryPrepReque
 		db.ExecContext(ctx, `UPDATE library_prep_results SET compound_count = ?, total_count = ? WHERE name = ?`, len(smilesList), len(smilesList), jobName) //nolint:errcheck
 
 		var processedCount int
-		err = h.callLibraryPrepSidecarBatched(ctx, smilesList, req.Filters, jobName, func(resp *libraryPrepSidecarResponse) error {
+		err = h.callLibraryPrepSidecarBatched(ctx, db, smilesList, req.Filters, jobName, func(resp *libraryPrepSidecarResponse) error {
 			cnt, flt, err := h.insertLibraryCompounds(ctx, db, libraryID, jobName, resp)
 			if err != nil {
 				return err
@@ -1106,14 +1141,14 @@ type cachedLibraryCompound struct {
 
 // callLibraryPrepSidecar sends compounds to the library-prep sidecar for
 // standardization, filtering, and conformer generation.
-func (h *APIHandler) callLibraryPrepSidecar(ctx context.Context, req libraryPrepSidecarRequest) (*libraryPrepSidecarResponse, error) {
+func (h *APIHandler) callLibraryPrepSidecar(ctx context.Context, req libraryPrepSidecarRequest, timeout time.Duration) (*libraryPrepSidecarResponse, error) {
 	reqBody, err := json.Marshal(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal sidecar request: %w", err)
 	}
 
 	client := &http.Client{
-		Timeout: 10 * time.Minute,
+		Timeout: timeout,
 		Transport: &http.Transport{
 			DisableKeepAlives: true, // force new TCP connection per request so kube-proxy distributes across all pods
 		},
@@ -1154,7 +1189,9 @@ func (h *APIHandler) callLibraryPrepSidecar(ctx context.Context, req libraryPrep
 
 const (
 	sidecarBatchSize    = 1_000
-	sidecarBatchWorkers = 10 // concurrent requests — one per KEDA-scaled sidecar pod
+	sidecarBatchWorkers = 10            // concurrent requests — one per KEDA-scaled sidecar pod
+	sidecarMaxRetries   = 3             // attempts per batch before blacklisting
+	sidecarRetryTimeout = 2 * time.Minute // per-attempt timeout on retries
 )
 
 // callLibraryPrepSidecarBatched splits smiles into chunks of sidecarBatchSize
@@ -1163,10 +1200,16 @@ const (
 // so results are committed to the database immediately rather than accumulated
 // in memory — this bounds Go heap usage to one batch at a time regardless of
 // total library size.
-func (h *APIHandler) callLibraryPrepSidecarBatched(ctx context.Context, smiles []string, filters LibraryPrepFilters, jobName string, onBatch func(*libraryPrepSidecarResponse) error) error {
+//
+// A batch that fails (e.g. sidecar timeout) is retried up to sidecarMaxRetries
+// times with sidecarRetryTimeout. If all retries are exhausted the SMILES are
+// written to prep_blacklist and the batch is skipped — the job continues rather
+// than aborting.
+func (h *APIHandler) callLibraryPrepSidecarBatched(ctx context.Context, db *DB, smiles []string, filters LibraryPrepFilters, jobName string, onBatch func(*libraryPrepSidecarResponse) error) error {
 	type batchResult struct {
-		resp *libraryPrepSidecarResponse
-		err  error
+		resp    *libraryPrepSidecarResponse
+		err     error
+		skipped bool // batch was blacklisted after exhausting retries
 	}
 	type batch struct {
 		idx   int
@@ -1206,11 +1249,39 @@ func (h *APIHandler) callLibraryPrepSidecarBatched(ctx context.Context, smiles [
 				start := b.idx*sidecarBatchSize + 1
 				end := start + len(b.chunk) - 1
 				log.Printf("[library-prep] %s: sidecar batch %d-%d / %d", jobName, start, end, len(smiles))
-				resp, err := h.callLibraryPrepSidecar(ctx, libraryPrepSidecarRequest{
-					SMILES: b.chunk, Filters: filters, JobName: jobName,
-				})
+
+				var resp *libraryPrepSidecarResponse
+				var lastErr error
+				for attempt := 1; attempt <= sidecarMaxRetries; attempt++ {
+					resp, lastErr = h.callLibraryPrepSidecar(ctx, libraryPrepSidecarRequest{
+						SMILES: b.chunk, Filters: filters, JobName: jobName,
+					}, sidecarRetryTimeout)
+					if lastErr == nil {
+						break
+					}
+					log.Printf("[library-prep] %s: batch %d-%d attempt %d/%d failed: %v",
+						jobName, start, end, attempt, sidecarMaxRetries, lastErr)
+				}
+				if lastErr != nil {
+					log.Printf("[library-prep] %s: batch %d-%d permanently failed — blacklisting %d SMILES",
+						jobName, start, end, len(b.chunk))
+					for _, smi := range b.chunk {
+						if _, dbErr := db.ExecContext(ctx,
+							`INSERT INTO prep_blacklist (smiles, error) VALUES ($1, $2) ON CONFLICT (smiles) DO NOTHING`,
+							smi, lastErr.Error(),
+						); dbErr != nil {
+							log.Printf("[library-prep] %s: warning: failed to blacklist %q: %v", jobName, smi, dbErr)
+						}
+					}
+					// skip this batch — do not propagate the error
+					select {
+					case resultCh <- batchResult{resp: nil, err: nil, skipped: true}:
+					case <-done:
+					}
+					continue
+				}
 				select {
-				case resultCh <- batchResult{resp: resp, err: err}:
+				case resultCh <- batchResult{resp: resp, err: nil}:
 				case <-done:
 					return
 				}
@@ -1227,6 +1298,9 @@ func (h *APIHandler) callLibraryPrepSidecarBatched(ctx context.Context, smiles [
 	for r := range resultCh {
 		if r.err != nil {
 			return r.err
+		}
+		if r.skipped {
+			continue
 		}
 		if err := onBatch(r.resp); err != nil {
 			return err
