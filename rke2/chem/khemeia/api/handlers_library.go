@@ -1253,21 +1253,12 @@ func (h *APIHandler) insertLibraryCompounds(ctx context.Context, db *DB, library
 			continue
 		}
 
-		// Generate stable compound ID: KHM-{first 8 chars of InChIKey}.
 		compoundID := generateStableCompoundID(c.InChIKey)
 
-		// Upload PDBQT conformer to S3 if the sidecar returned one.
-		// The sidecar returns raw PDBQT bytes in PDBQTData; we upload and store the key.
+		// Conformer S3 upload is deferred to docking time — uploading per-compound
+		// during library prep saturates Garage's rate limiter at scale (2M+ compounds).
 		var conformerKey sql.NullString
-		if c.PDBQTData != "" && h.s3Client != nil {
-			s3Key := fmt.Sprintf("LibraryPrep/%s/%s.pdbqt", jobName, compoundID)
-			if err := h.s3Client.PutArtifact(ctx, BucketLibraries, s3Key,
-				strings.NewReader(c.PDBQTData), "chemical/x-pdbqt"); err != nil {
-				log.Printf("[library-prep] %s: warning: failed to upload conformer for %s: %v", jobName, compoundID, err)
-			} else {
-				conformerKey = sql.NullString{String: s3Key, Valid: true}
-			}
-		} else if c.ConformerS3Key != "" {
+		if c.ConformerS3Key != "" {
 			conformerKey = sql.NullString{String: c.ConformerS3Key, Valid: true}
 		}
 
