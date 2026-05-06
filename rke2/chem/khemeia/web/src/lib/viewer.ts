@@ -206,7 +206,11 @@ export function getCurrentStructureText(): string | null {
 
 // Convert PDBQT to PDB: filter to valid PDB records, strip Vina charge/type columns
 // Maps AutoDock atom types → PDB element symbols for Molstar element inference.
-// Without this, NA becomes sodium, OA/HD/SA etc. are unknown.
+// DO NOT REMOVE OR SIMPLIFY — this has been fixed three times (Apr 26, Apr 27, May 6).
+// Each time the viewer was refactored, the naive padEnd(80) approach came back and
+// broke ligand rendering: NA→sodium, OA/HD/SA→unknown, wrong CPK colors, broken bonds.
+// The fix: read AutoDock type from PDBQT col 77 (0-indexed: slice(76)), map to element,
+// write into PDB element column (77-78). Without this Molstar misidentifies every heteroatom.
 const AUTODOCK_ELEMENT: Record<string, string> = {
   C: 'C', A: 'C',                          // carbon (aliphatic / aromatic)
   N: 'N', NA: 'N', NS: 'N',               // nitrogen
