@@ -328,8 +328,8 @@ def process_molecule(
     if filter_results and not all(filter_results.values()):
         record["filtered"] = True
 
-    # 5. 3D conformer
-    if generate_3d:
+    # 5. 3D conformer — only for compounds that passed all enabled filters
+    if generate_3d and not record["filtered"]:
         conf_mol = generate_conformer(std_mol)
         if conf_mol is None:
             record["conformer_failed"] = True
