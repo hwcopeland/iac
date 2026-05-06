@@ -128,6 +128,8 @@ class PipelineStore {
   chemblHbaMax = $state(''); chemblHbdMax = $state('');
   filterLipinski = $state(true); filterVeber = $state(true); filterPAINS = $state(true);
   libSubmitting = $state(false);
+  libAttachName = $state('');
+  libAttaching = $state(false);
   libraryStatus = $state<any | null>(null);
   libraryCompoundSample = $state<any[]>([]);
 
@@ -603,6 +605,25 @@ class PipelineStore {
         !!this.chemblLogpMin || !!this.chemblLogpMax || !!this.chemblHbaMax || !!this.chemblHbdMax;
     }
     return true;
+  }
+
+  async handleLibraryAttach() {
+    const name = this.libAttachName.trim();
+    if (!name) return;
+    this.libAttaching = true;
+    try {
+      const res = await getLibraryPrep(name);
+      const phase = (res.phase || res.status || '').toLowerCase();
+      const status: StageStatus =
+        phase === 'completed' || phase === 'succeeded' ? 'succeeded' :
+        phase === 'failed' ? 'failed' : 'running';
+      this.updateStage('library', { jobName: name, status, error: '' });
+      this.libraryStatus = res;
+      if (status === 'running') this.startPoll('library', getLibraryPrep);
+      if (status === 'succeeded') this.loadLibrarySample(name);
+    } catch (e: any) {
+      this.updateStage('library', { error: e.message || 'Job not found' });
+    } finally { this.libAttaching = false; }
   }
 
   async handleLibrarySubmit() {
