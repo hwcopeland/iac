@@ -18,8 +18,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 # satisfied by requirements.txt above.
 RUN pip install --no-cache-dir --no-deps meeko
 
-COPY app.py ./
+COPY app.py gunicorn.conf.py ./
 
-EXPOSE 8000
+EXPOSE 8000 8001
 
-CMD ["gunicorn", "-w", "4", "-b", "0.0.0.0:8000", "--timeout", "600", "--max-requests", "25", "--max-requests-jitter", "5", "app:app"]
+CMD ["gunicorn", "-c", "gunicorn.conf.py", "-w", "4", "-b", "0.0.0.0:8000", "--timeout", "600", "--max-requests", "25", "--max-requests-jitter", "5", "app:app"]
