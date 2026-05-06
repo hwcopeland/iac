@@ -236,10 +236,19 @@
         {/if}
 
         {#if pipeline.stages.docking.status === 'running'}
-          <div class="running-indicator">
-            <span class="pulse-dot"></span>
-            <span class="running-text">Docking {pipeline.stages.docking.jobName ?? ''}...</span>
-          </div>
+          {#if pipeline.dockingJobStatus?.total_batches > 0}
+            {@const pct = Math.min(100, Math.round((pipeline.dockingJobStatus.completed_batches / pipeline.dockingJobStatus.total_batches) * 100))}
+            <div class="running-indicator">
+              <span class="pulse-dot"></span>
+              <span class="running-text">{pipeline.dockingJobStatus.completed_batches} / {pipeline.dockingJobStatus.total_batches} batches ({pct}%)</span>
+            </div>
+            <div class="lib-progress"><div class="lib-progress-bar" style="width: {pct}%"></div></div>
+          {:else}
+            <div class="running-indicator">
+              <span class="pulse-dot"></span>
+              <span class="running-text">Docking {pipeline.stages.docking.jobName ?? ''}...</span>
+            </div>
+          {/if}
         {/if}
         {#if pipeline.stages.docking.error}<p class="error-msg">{pipeline.stages.docking.error}</p>{/if}
 
