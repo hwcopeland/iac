@@ -647,9 +647,7 @@ func (h *APIHandler) runLibraryPrepPipeline(jobName string, req LibraryPrepReque
 
 		if len(uncachedSMILES) > 0 {
 			log.Printf("[library-prep] %s: sending %d uncached compound(s) to sidecar", jobName, len(uncachedSMILES))
-			sidecarResp, err := h.callLibraryPrepSidecar(ctx, libraryPrepSidecarRequest{
-				SMILES: uncachedSMILES, Filters: req.Filters, JobName: jobName,
-			})
+			sidecarResp, err := h.callLibraryPrepSidecarBatched(ctx, uncachedSMILES, req.Filters, jobName)
 			if err != nil {
 				h.failLibraryPrep(ctx, db, jobName, fmt.Sprintf("sidecar processing failed: %v", err))
 				return
@@ -678,9 +676,7 @@ func (h *APIHandler) runLibraryPrepPipeline(jobName string, req LibraryPrepReque
 		log.Printf("[library-prep] %s: resolved %d input compound(s) from source=%s", jobName, len(smilesList), req.Source)
 		db.ExecContext(ctx, `UPDATE library_prep_results SET compound_count = ? WHERE name = ?`, len(smilesList), jobName) //nolint:errcheck
 
-		sidecarResp, err := h.callLibraryPrepSidecar(ctx, libraryPrepSidecarRequest{
-			SMILES: smilesList, Filters: req.Filters, JobName: jobName,
-		})
+		sidecarResp, err := h.callLibraryPrepSidecarBatched(ctx, smilesList, req.Filters, jobName)
 		if err != nil {
 			h.failLibraryPrep(ctx, db, jobName, fmt.Sprintf("sidecar processing failed: %v", err))
 			return
@@ -1122,6 +1118,31 @@ func (h *APIHandler) callLibraryPrepSidecar(ctx context.Context, req libraryPrep
 	}
 
 	return &sidecarResp, nil
+}
+
+const sidecarBatchSize = 10_000
+
+// callLibraryPrepSidecarBatched splits smiles into chunks of sidecarBatchSize,
+// calls the sidecar for each chunk, and merges the results. This prevents OOM
+// in the sidecar when processing large libraries (>100k compounds).
+func (h *APIHandler) callLibraryPrepSidecarBatched(ctx context.Context, smiles []string, filters map[string]bool, jobName string) (*libraryPrepSidecarResponse, error) {
+	merged := &libraryPrepSidecarResponse{}
+	for i := 0; i < len(smiles); i += sidecarBatchSize {
+		end := i + sidecarBatchSize
+		if end > len(smiles) {
+			end = len(smiles)
+		}
+		batch := smiles[i:end]
+		log.Printf("[library-prep] %s: sidecar batch %d-%d / %d", jobName, i+1, end, len(smiles))
+		resp, err := h.callLibraryPrepSidecar(ctx, libraryPrepSidecarRequest{
+			SMILES: batch, Filters: filters, JobName: jobName,
+		})
+		if err != nil {
+			return nil, err
+		}
+		merged.Compounds = append(merged.Compounds, resp.Compounds...)
+	}
+	return merged, nil
 }
 
 // --- Compound insertion ---
