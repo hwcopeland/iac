@@ -4,9 +4,10 @@
 
   type Tab = 'explorer' | 'analysis' | 'calculations';
 
-  let { activeTab = $bindable('explorer'), onCommandPalette, authReady = false }: {
+  let { activeTab = $bindable('explorer'), onCommandPalette, onDocs, authReady = false }: {
     activeTab: Tab;
     onCommandPalette?: () => void;
+    onDocs?: () => void;
     authReady?: boolean;
   } = $props();
 
@@ -42,6 +43,7 @@
   </nav>
 
   <div class="toolbar-right">
+    <button class="docs-btn" onclick={() => onDocs?.()}>API Docs</button>
     <button class="cmd-hint" onclick={() => onCommandPalette?.()}>
       {modKey}+K
     </button>
@@ -129,7 +131,24 @@
     margin-left: auto;
     display: flex;
     align-items: center;
-    gap: 0;
+    gap: 8px;
+  }
+
+  .docs-btn {
+    background: none;
+    border: 1px solid var(--border-default);
+    color: var(--text-secondary);
+    font-family: var(--font-sans);
+    font-size: 12px;
+    padding: 4px 12px;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition: all var(--transition-fast);
+  }
+
+  .docs-btn:hover {
+    color: var(--text-primary);
+    border-color: var(--text-muted);
   }
 
   .cmd-hint {
@@ -152,7 +171,6 @@
   .user-display {
     color: var(--text-secondary);
     font-size: 13px;
-    margin-left: 12px;
   }
 
   .auth-btn {
