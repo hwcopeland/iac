@@ -101,6 +101,7 @@ def get_config():
         "pg_port": int(os.environ.get("POSTGRES_PORT", ("5432"))),
         "pg_user": os.environ.get("POSTGRES_USER", "root"),
         "pg_password": require_env("POSTGRES_PASSWORD"),
+        "pg_db": os.environ.get("POSTGRES_DB", "khemeia"),
     }
 
 
@@ -111,7 +112,7 @@ def connect_db(cfg):
             port=cfg["pg_port"],
             user=cfg["pg_user"],
             password=cfg["pg_password"],
-            database="docking",
+            database=cfg["pg_db"],
         )
     except psycopg2.Error as exc:
         print(f"FATAL: PostgreSQL connection failed: {exc}", flush=True)
