@@ -356,19 +356,37 @@
               {pipeline.libSubmitting ? 'Submitting...' : 'Prepare Library'}
             </button>
           </form>
+          <div class="attach-sep-row"><span class="attach-sep">or attach to existing job</span></div>
+          <div class="input-row">
+            <input type="text" class="form-input" placeholder="Job name (e.g. pipeline-lib-…)" bind:value={pipeline.libAttachName} />
+            <button type="button" class="action-icon-btn"
+              disabled={!pipeline.libAttachName.trim() || pipeline.libAttaching}
+              onclick={() => pipeline.handleLibraryAttach()}>
+              {pipeline.libAttaching ? '…' : 'Attach'}
+            </button>
+          </div>
         {/if}
 
         {#if pipeline.stages.library.status === 'running'}
-          <div class="running-indicator">
-            <span class="pulse-dot"></span>
-            <span class="running-text">
-              {#if pipeline.libraryStatus?.compound_count > 0}
-                {pipeline.libraryStatus.compound_count} compounds found — standardizing &amp; filtering...
-              {:else}
-                Resolving compounds from source...
-              {/if}
-            </span>
-          </div>
+          {#if pipeline.libraryStatus?.total_count > 0}
+            {@const pct = Math.min(100, Math.round((pipeline.libraryStatus.processed_count / pipeline.libraryStatus.total_count) * 100))}
+            <div class="running-indicator">
+              <span class="pulse-dot"></span>
+              <span class="running-text">{pipeline.libraryStatus.processed_count.toLocaleString()} / {pipeline.libraryStatus.total_count.toLocaleString()} ({pct}%)</span>
+            </div>
+            <div class="lib-progress"><div class="lib-progress-bar" style="width: {pct}%"></div></div>
+          {:else}
+            <div class="running-indicator">
+              <span class="pulse-dot"></span>
+              <span class="running-text">
+                {#if pipeline.libraryStatus?.compound_count > 0}
+                  {pipeline.libraryStatus.compound_count.toLocaleString()} compounds found — standardizing &amp; filtering...
+                {:else}
+                  Resolving compounds from source...
+                {/if}
+              </span>
+            </div>
+          {/if}
         {/if}
 
         {#if pipeline.stages.library.error}
@@ -611,6 +629,10 @@
   .pulse-dot { width: 8px; height: 8px; border-radius: 50%; background: #d29922; animation: pulse 1.5s ease-in-out infinite; flex-shrink: 0; }
   @keyframes pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.5; transform: scale(0.8); } }
   .running-text { font-size: 12px; color: #d29922; }
+  .lib-progress { height: 4px; background: rgba(88,166,255,0.1); border-radius: 2px; overflow: hidden; margin: 0 0 4px; }
+  .lib-progress-bar { height: 100%; background: #58a6ff; border-radius: 2px; transition: width 0.5s ease; }
+  .attach-sep-row { display: flex; align-items: center; margin: 8px 0 4px; }
+  .attach-sep { font-size: 11px; color: var(--text-muted, #484f58); }
 
   .result-info { display: flex; flex-direction: column; gap: 4px; padding: 8px 0; border-top: 1px solid rgba(48,54,61,0.4); }
   .result-row-actions { display: flex; align-items: center; justify-content: space-between; }
