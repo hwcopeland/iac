@@ -138,6 +138,7 @@ class PipelineStore {
   exhaustiveness = $state(8);
   dockSubmitting = $state(false);
   dockingSummary = $state<any | null>(null);
+  dockingJobStatus = $state<any | null>(null);
   dockResults = $state<any[]>([]);
   dockResultsPage = $state(1);
   dockResultsTotal = $state(0);
@@ -292,6 +293,7 @@ class PipelineStore {
     this.libraryStatus = null;
     this.libraryCompoundSample = [];
     this.dockingSummary = null;
+    this.dockingJobStatus = null;
     this.dockResults = [];
     this.dockResultsTotal = 0;
     this.dockResultsPage = 1;
@@ -343,6 +345,7 @@ class PipelineStore {
         this.pollFailures[stageKey] = 0;
         const phase = (res.phase || res.status || '').toLowerCase();
         if (stageKey === 'library') this.libraryStatus = res;
+        if (stageKey === 'docking') this.dockingJobStatus = res;
         if (stageKey === 'md') this.mdJobStatus = res;
 
         if (phase === 'completed' || phase === 'succeeded') {

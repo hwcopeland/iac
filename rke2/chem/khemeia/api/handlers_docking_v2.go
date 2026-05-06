@@ -74,20 +74,23 @@ type DockingV2SubmitResponse struct {
 
 // DockingV2JobStatus is the response for GET /api/v1/docking/v2/jobs/{name}.
 type DockingV2JobStatus struct {
-	Name            string                `json:"name"`
-	Status          string                `json:"status"`
-	Engines         []string              `json:"engines"`
-	Consensus       bool                  `json:"consensus"`
-	EngineProgress  []EngineProgressEntry `json:"engine_progress"`
-	TotalLigands    int                   `json:"total_ligands"`
-	DockedLigands   int                   `json:"docked_ligands"`
-	BestAffinity    *float64              `json:"best_affinity,omitempty"`
-	ConsensusReady  bool                  `json:"consensus_ready"`
-	SubmittedBy     *string               `json:"submitted_by,omitempty"`
-	CreatedAt       time.Time             `json:"created_at"`
-	StartedAt       *time.Time            `json:"started_at,omitempty"`
-	CompletedAt     *time.Time            `json:"completed_at,omitempty"`
-	Error           *string               `json:"error,omitempty"`
+	Name             string                `json:"name"`
+	Status           string                `json:"status"`
+	Engines          []string              `json:"engines"`
+	Consensus        bool                  `json:"consensus"`
+	EngineProgress   []EngineProgressEntry `json:"engine_progress"`
+	TotalLigands     int                   `json:"total_ligands"`
+	DockedLigands    int                   `json:"docked_ligands"`
+	ChunkSize        int                   `json:"chunk_size"`
+	TotalBatches     int                   `json:"total_batches"`
+	CompletedBatches int                   `json:"completed_batches"`
+	BestAffinity     *float64              `json:"best_affinity,omitempty"`
+	ConsensusReady   bool                  `json:"consensus_ready"`
+	SubmittedBy      *string               `json:"submitted_by,omitempty"`
+	CreatedAt        time.Time             `json:"created_at"`
+	StartedAt        *time.Time            `json:"started_at,omitempty"`
+	CompletedAt      *time.Time            `json:"completed_at,omitempty"`
+	Error            *string               `json:"error,omitempty"`
 }
 
 // EngineProgressEntry tracks progress for a single engine within a v2 docking job.
@@ -436,11 +439,7 @@ func (h *APIHandler) DockingV2Submit(w http.ResponseWriter, r *http.Request) {
 		req.TopNRefine = 100
 	}
 	if req.ChunkSize == 0 {
-		if len(req.Engines) == 1 && req.Engines[0] == "vina-gpu" {
-			req.ChunkSize = 20000
-		} else {
-			req.ChunkSize = 10000
-		}
+		req.ChunkSize = 1000
 	}
 
 	// Validate required fields.
@@ -578,10 +577,11 @@ func (h *APIHandler) DockingV2JobStatus(w http.ResponseWriter, r *http.Request) 
 
 	err := db.QueryRowContext(r.Context(),
 		`SELECT name, status, engines, consensus, submitted_by, error_output,
-		        created_at, started_at, completed_at
+		        created_at, started_at, completed_at, chunk_size
 		 FROM docking_v2_jobs WHERE name = ?`, jobName).Scan(
 		&status.Name, &status.Status, &enginesJSON, &status.Consensus,
-		&submittedBy, &errorOutput, &status.CreatedAt, &startedAt, &completedAt)
+		&submittedBy, &errorOutput, &status.CreatedAt, &startedAt, &completedAt,
+		&status.ChunkSize)
 	if err == sql.ErrNoRows {
 		writeError(w, "job not found", http.StatusNotFound)
 		return
@@ -635,6 +635,10 @@ func (h *APIHandler) DockingV2JobStatus(w http.ResponseWriter, r *http.Request) 
 		 JOIN docking_v2_jobs dj ON dj.library_ref = lp.name
 		 WHERE dj.name = ?`, jobName).Scan(&totalLigands)
 	status.TotalLigands = totalLigands
+	if status.ChunkSize > 0 {
+		status.TotalBatches = int(math.Ceil(float64(totalLigands) / float64(status.ChunkSize)))
+		status.CompletedBatches = status.DockedLigands / status.ChunkSize
+	}
 
 	// Best affinity across all engines.
 	var bestAff sql.NullFloat64
