@@ -18,6 +18,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -825,7 +826,40 @@ func (h *APIHandler) DockingV2PoseHandler(w http.ResponseWriter, r *http.Request
 
 	w.Header().Set("Content-Type", "chemical/x-pdbqt")
 	w.Header().Set("Cache-Control", "public, max-age=3600")
-	w.Write(pdbqt) //nolint:errcheck
+	w.Write(firstModelPDBQT(pdbqt)) //nolint:errcheck
+}
+
+// firstModelPDBQT extracts only the first MODEL block from a Vina multi-pose PDBQT.
+// If no MODEL records are present the full content is returned unchanged.
+func firstModelPDBQT(pdbqt []byte) []byte {
+	lines := bytes.Split(pdbqt, []byte("\n"))
+	var out []byte
+	inFirst := false
+	seenModel := false
+	for _, line := range lines {
+		trimmed := bytes.TrimSpace(line)
+		if bytes.HasPrefix(trimmed, []byte("MODEL")) {
+			if seenModel {
+				break // second MODEL — stop
+			}
+			seenModel = true
+			inFirst = true
+		}
+		if !seenModel || inFirst {
+			out = append(out, line...)
+			out = append(out, '\n')
+		}
+		if bytes.HasPrefix(trimmed, []byte("ENDMDL")) {
+			inFirst = false
+			if seenModel {
+				break
+			}
+		}
+	}
+	if len(bytes.TrimSpace(out)) == 0 {
+		return pdbqt
+	}
+	return out
 }
 
 // --- Multi-engine orchestration ---
