@@ -200,7 +200,7 @@ def fetch_ligands(cursor, s3, library_ref, batch_limit, batch_offset):
 
     cursor.execute(
         "SELECT id, compound_id, s3_conformer_key FROM library_compounds "
-        "WHERE library_id = %s AND filtered = 0 AND s3_conformer_key IS NOT NULL "
+        "WHERE library_id = %s AND filtered = false AND s3_conformer_key IS NOT NULL "
         "ORDER BY id LIMIT %s OFFSET %s",
         (library_id, batch_limit, batch_offset),
     )
