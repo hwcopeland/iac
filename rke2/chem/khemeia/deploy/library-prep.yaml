@@ -11,7 +11,7 @@ metadata:
     app: library-prep
     khemeia.io/component: library-prep
 spec:
-  replicas: 1
+  replicas: 1  # managed by KEDA ScaledObject — do not set manually
   revisionHistoryLimit: 3
   selector:
     matchLabels:
@@ -34,10 +34,10 @@ spec:
               protocol: TCP
           resources:
             requests:
-              cpu: "1"
+              cpu: "1200m"
               memory: 2Gi
             limits:
-              cpu: "4"
+              cpu: "1200m"
               memory: 8Gi
           livenessProbe:
             httpGet:

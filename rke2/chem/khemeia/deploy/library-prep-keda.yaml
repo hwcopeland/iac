@@ -1,0 +1,41 @@
+---
+apiVersion: keda.sh/v1alpha1
+kind: TriggerAuthentication
+metadata:
+  name: library-prep-pg-auth
+  namespace: chem
+spec:
+  secretTargetRef:
+    - parameter: userName
+      name: khemeia-postgres-secret
+      key: username
+    - parameter: password
+      name: khemeia-postgres-secret
+      key: password
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: library-prep-scaler
+  namespace: chem
+spec:
+  scaleTargetRef:
+    name: library-prep
+  minReplicaCount: 1
+  maxReplicaCount: 3
+  pollingInterval: 15
+  cooldownPeriod: 60
+  triggers:
+    - type: postgresql
+      metadata:
+        # 1 replica per active job; jobs beyond 3 queue behind existing workers
+        targetQueryValue: "1"
+        query: >-
+          SELECT COUNT(*) FROM library_prep_results
+          WHERE phase IN ('Pending', 'Running')
+        host: khemeia-postgres.chem.svc.cluster.local
+        port: "5432"
+        dbName: khemeia
+        sslmode: disable
+      authenticationRef:
+        name: library-prep-pg-auth

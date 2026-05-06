@@ -12,6 +12,7 @@ resources:
   - result-writer.yaml
   - prolif-runner.yaml
   - library-prep.yaml
+  - library-prep-keda.yaml
   - admet.yaml
   - postgres.yaml
   - postgres-secret.yaml
