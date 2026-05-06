@@ -78,8 +78,9 @@ def standardize_molecule(mol: Chem.Mol) -> Chem.Mol | None:
         uncharger = rdMolStandardize.Uncharger()
         mol = uncharger.uncharge(mol)
 
-        # Canonical tautomer
+        # Canonical tautomer — cap at 100 to prevent memory explosion on complex molecules
         enumerator = rdMolStandardize.TautomerEnumerator()
+        enumerator.SetMaxTautomers(100)
         mol = enumerator.Canonicalize(mol)
 
         # Optional ChEMBL pipeline (extra salt stripping, standardization)
