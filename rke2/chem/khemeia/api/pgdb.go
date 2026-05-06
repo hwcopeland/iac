@@ -121,6 +121,16 @@ func (d *DB) BeginTx(ctx context.Context, opts *sql.TxOptions) (*Tx, error) {
 	return &Tx{Tx: tx}, nil
 }
 
+// PrepareContext rewrites placeholders and calls the underlying PrepareContext.
+func (d *DB) PrepareContext(ctx context.Context, query string) (*sql.Stmt, error) {
+	return d.DB.PrepareContext(ctx, rebind(query))
+}
+
+// Prepare rewrites placeholders and calls the underlying Prepare.
+func (d *DB) Prepare(query string) (*sql.Stmt, error) {
+	return d.DB.Prepare(rebind(query))
+}
+
 // --- Tx methods ---
 
 // ExecContext rewrites placeholders and calls the underlying ExecContext.
@@ -151,4 +161,14 @@ func (t *Tx) QueryRowContext(ctx context.Context, query string, args ...interfac
 // QueryRow rewrites placeholders and calls the underlying QueryRow.
 func (t *Tx) QueryRow(query string, args ...interface{}) *sql.Row {
 	return t.Tx.QueryRow(rebind(query), args...)
+}
+
+// PrepareContext rewrites placeholders and calls the underlying PrepareContext.
+func (t *Tx) PrepareContext(ctx context.Context, query string) (*sql.Stmt, error) {
+	return t.Tx.PrepareContext(ctx, rebind(query))
+}
+
+// Prepare rewrites placeholders and calls the underlying Prepare.
+func (t *Tx) Prepare(query string) (*sql.Stmt, error) {
+	return t.Tx.Prepare(rebind(query))
 }

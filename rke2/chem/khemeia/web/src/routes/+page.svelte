@@ -16,6 +16,7 @@
   import StatusBar from '$lib/components/StatusBar.svelte';
   import CommandPalette from '$lib/components/CommandPalette.svelte';
   import Toast from '$lib/components/Toast.svelte';
+  import ApiDocs from '$lib/components/ApiDocs.svelte';
 
   type Tab = 'explorer' | 'analysis' | 'calculations';
 
@@ -38,6 +39,7 @@
   let mdTrajEnergy = $state<{ time: number[]; potential: number[]; temperature: number[] } | null>(null);
   let mdTrajCompound = $state('');
   let currentRepr = $state('cartoon');
+  let apiDocsOpen = $state(false);
 
   const SURFACE_LEGENDS: Record<string, { label: string; items: { color: string; text: string }[] }> = {
     'residue-charge': {
@@ -123,6 +125,7 @@
       }
       if (e.key === 'Escape') {
         commandPaletteOpen = false;
+        apiDocsOpen = false;
       }
       // Tab switching: 1/2/3 (only when not typing in an input/textarea/select)
       const tag = (e.target as HTMLElement)?.tagName;
@@ -185,7 +188,7 @@
   </div>
 {:else}
   <div class="app">
-    <Toolbar bind:activeTab onCommandPalette={() => (commandPaletteOpen = true)} {authReady} />
+    <Toolbar bind:activeTab onCommandPalette={() => (commandPaletteOpen = true)} {authReady} onDocs={() => (apiDocsOpen = true)} />
 
     <div class="main">
       <div class="viewer-area">
@@ -286,6 +289,7 @@
     <StatusBar {hoverInfo} />
     <CommandPalette bind:open={commandPaletteOpen} />
     <Toast />
+    <ApiDocs bind:open={apiDocsOpen} />
   </div>
 {/if}
 
