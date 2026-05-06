@@ -15,6 +15,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -1120,27 +1121,66 @@ func (h *APIHandler) callLibraryPrepSidecar(ctx context.Context, req libraryPrep
 	return &sidecarResp, nil
 }
 
-const sidecarBatchSize = 5_000
+const (
+	sidecarBatchSize    = 5_000
+	sidecarBatchWorkers = 3 // concurrent requests across sidecar pods
+)
 
-// callLibraryPrepSidecarBatched splits smiles into chunks of sidecarBatchSize,
-// calls the sidecar for each chunk, and merges the results. This prevents OOM
-// in the sidecar when processing large libraries (>100k compounds).
+// callLibraryPrepSidecarBatched splits smiles into chunks of sidecarBatchSize
+// and dispatches them concurrently across sidecarBatchWorkers goroutines so all
+// scaled sidecar pods receive work. Results are merged in original order.
 func (h *APIHandler) callLibraryPrepSidecarBatched(ctx context.Context, smiles []string, filters LibraryPrepFilters, jobName string) (*libraryPrepSidecarResponse, error) {
-	merged := &libraryPrepSidecarResponse{}
+	type batchResult struct {
+		idx  int
+		resp *libraryPrepSidecarResponse
+		err  error
+	}
+
+	// Build batch index list
+	type batch struct {
+		idx   int
+		chunk []string
+	}
+	var batches []batch
 	for i := 0; i < len(smiles); i += sidecarBatchSize {
 		end := i + sidecarBatchSize
 		if end > len(smiles) {
 			end = len(smiles)
 		}
-		batch := smiles[i:end]
-		log.Printf("[library-prep] %s: sidecar batch %d-%d / %d", jobName, i+1, end, len(smiles))
-		resp, err := h.callLibraryPrepSidecar(ctx, libraryPrepSidecarRequest{
-			SMILES: batch, Filters: filters, JobName: jobName,
-		})
-		if err != nil {
-			return nil, err
+		batches = append(batches, batch{idx: len(batches), chunk: smiles[i:end]})
+	}
+
+	results := make([]batchResult, len(batches))
+	work := make(chan batch, len(batches))
+	for _, b := range batches {
+		work <- b
+	}
+	close(work)
+
+	var wg sync.WaitGroup
+	for w := 0; w < sidecarBatchWorkers; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for b := range work {
+				start := b.idx*sidecarBatchSize + 1
+				end := start + len(b.chunk) - 1
+				log.Printf("[library-prep] %s: sidecar batch %d-%d / %d", jobName, start, end, len(smiles))
+				resp, err := h.callLibraryPrepSidecar(ctx, libraryPrepSidecarRequest{
+					SMILES: b.chunk, Filters: filters, JobName: jobName,
+				})
+				results[b.idx] = batchResult{idx: b.idx, resp: resp, err: err}
+			}
+		}()
+	}
+	wg.Wait()
+
+	merged := &libraryPrepSidecarResponse{}
+	for _, r := range results {
+		if r.err != nil {
+			return nil, r.err
 		}
-		merged.Compounds = append(merged.Compounds, resp.Compounds...)
+		merged.Compounds = append(merged.Compounds, r.resp.Compounds...)
 	}
 	return merged, nil
 }
