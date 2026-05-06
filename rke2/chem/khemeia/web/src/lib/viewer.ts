@@ -205,17 +205,43 @@ export function getCurrentStructureText(): string | null {
 // ─── Helpers ───
 
 // Convert PDBQT to PDB: filter to valid PDB records, strip Vina charge/type columns
+// Maps AutoDock atom types → PDB element symbols for Molstar element inference.
+// Without this, NA becomes sodium, OA/HD/SA etc. are unknown.
+const AUTODOCK_ELEMENT: Record<string, string> = {
+  C: 'C', A: 'C',                          // carbon (aliphatic / aromatic)
+  N: 'N', NA: 'N', NS: 'N',               // nitrogen
+  O: 'O', OA: 'O', OS: 'O',              // oxygen
+  S: 'S', SA: 'S',                          // sulfur
+  H: 'H', HD: 'H', HS: 'H',             // hydrogen
+  P: 'P', F: 'F',
+  Cl: 'Cl', CL: 'Cl', Br: 'Br', BR: 'Br', I: 'I',
+  Fe: 'Fe', FE: 'Fe', Zn: 'Zn', ZN: 'Zn',
+  Mg: 'Mg', MG: 'Mg', Ca: 'Ca', Mn: 'Mn', Cu: 'Cu',
+  Na: 'Na', K: 'K', W: 'O',
+  // GAFF2 / exotic types that slip through meeko
+  CG0: 'C', CG1: 'C', CG2: 'C', CG3: 'C',
+  B: 'B', Si: 'Si',
+};
+
 function pdbqtToPdb(pdbqt: string): string {
   return pdbqt
     .split('\n')
-    .filter(line =>
-      line.startsWith('ATOM') || line.startsWith('HETATM') ||
-      line.startsWith('TER') || line.startsWith('END') ||
-      line.startsWith('REMARK') || line.startsWith('CONECT')
-    )
+    .filter(line => {
+      if (line.startsWith('ATOM') || line.startsWith('HETATM')) return true;
+      if (line.startsWith('TER') || line.startsWith('REMARK') || line.startsWith('CONECT')) return true;
+      // Only pass END / ENDMDL — not ENDROOT, ENDBRANCH (PDBQT-only, corrupt PDB output)
+      if (line === 'END' || line.startsWith('ENDMDL')) return true;
+      return false;
+    })
     .map((line) => {
       if (line.startsWith('ATOM') || line.startsWith('HETATM')) {
-        return line.substring(0, 66).padEnd(80);
+        // Extract AutoDock type from col 77+ and map to real element symbol.
+        // PDBQT col layout: standard PDB 1-66, then charge 67-76, then type 77-end.
+        const adType = line.slice(76).trim();
+        const element = AUTODOCK_ELEMENT[adType] ?? adType.charAt(0).toUpperCase();
+        // Write 80-col PDB: base coords (1-66), pad to 76, right-justify element in 77-78.
+        const base = line.substring(0, 66).padEnd(76);
+        return base + element.padStart(2).substring(0, 2) + '  ';
       }
       return line;
     })
