@@ -1120,7 +1120,7 @@ func (h *APIHandler) callLibraryPrepSidecar(ctx context.Context, req libraryPrep
 	return &sidecarResp, nil
 }
 
-const sidecarBatchSize = 10_000
+const sidecarBatchSize = 5_000
 
 // callLibraryPrepSidecarBatched splits smiles into chunks of sidecarBatchSize,
 // calls the sidecar for each chunk, and merges the results. This prevents OOM
