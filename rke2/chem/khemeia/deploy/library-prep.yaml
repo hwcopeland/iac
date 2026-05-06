@@ -42,18 +42,18 @@ spec:
           livenessProbe:
             httpGet:
               path: /health
-              port: 8000
-            initialDelaySeconds: 30
-            periodSeconds: 30
-            timeoutSeconds: 25
+              port: 8001
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            timeoutSeconds: 5
             failureThreshold: 3
           readinessProbe:
             httpGet:
-              path: /readyz
-              port: 8000
-            initialDelaySeconds: 20
-            periodSeconds: 10
-            timeoutSeconds: 10
+              path: /health
+              port: 8001
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
             failureThreshold: 3
 ---
 # Service for the library-prep sidecar
