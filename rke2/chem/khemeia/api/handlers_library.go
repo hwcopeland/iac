@@ -1125,7 +1125,7 @@ const sidecarBatchSize = 5_000
 // callLibraryPrepSidecarBatched splits smiles into chunks of sidecarBatchSize,
 // calls the sidecar for each chunk, and merges the results. This prevents OOM
 // in the sidecar when processing large libraries (>100k compounds).
-func (h *APIHandler) callLibraryPrepSidecarBatched(ctx context.Context, smiles []string, filters map[string]bool, jobName string) (*libraryPrepSidecarResponse, error) {
+func (h *APIHandler) callLibraryPrepSidecarBatched(ctx context.Context, smiles []string, filters LibraryPrepFilters, jobName string) (*libraryPrepSidecarResponse, error) {
 	merged := &libraryPrepSidecarResponse{}
 	for i := 0; i < len(smiles); i += sidecarBatchSize {
 		end := i + sidecarBatchSize
