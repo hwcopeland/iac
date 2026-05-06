@@ -202,7 +202,7 @@ func ValidateEngineSelection(engines []string) error {
 func EngineComputeClass(engine string) string {
 	switch engine {
 	case "vina-gpu", "vina-gpu-batch":
-		return "gpu"
+		return "gpu-half"
 	case "gnina":
 		return "gpu-parallel"
 	case "diffdock":
