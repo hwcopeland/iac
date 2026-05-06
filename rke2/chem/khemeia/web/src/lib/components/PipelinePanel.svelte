@@ -82,6 +82,8 @@
   let filterVeber = $state(true);
   let filterPAINS = $state(true);
   let libSubmitting = $state(false);
+  let libAttachName = $state('');
+  let libAttaching = $state(false);
 
   // Example drug molecules for SMILES input
   const EXAMPLE_SMILES = [
@@ -573,6 +575,27 @@
     }
   }
 
+  async function handleLibraryAttach() {
+    const name = libAttachName.trim();
+    if (!name) return;
+    libAttaching = true;
+    try {
+      const res = await getLibraryPrep(name);
+      const phase = (res.phase || res.status || '').toLowerCase();
+      const status: StageStatus =
+        phase === 'succeeded' || phase === 'completed' ? 'succeeded' :
+        phase === 'failed' ? 'failed' : 'running';
+      updateStage('library', { jobName: name, status, error: '', collapsed: false });
+      libraryStatus = res;
+      if (status === 'running') startPoll('library', getLibraryPrep);
+      if (status === 'succeeded') loadLibrarySample(name);
+    } catch (e: any) {
+      updateStage('library', { status: 'failed', error: `Job not found: ${name}` });
+    } finally {
+      libAttaching = false;
+    }
+  }
+
   async function handleDockingSubmit() {
     dockSubmitting = true;
     updateStage('docking', { error: '', status: 'running' });
@@ -990,6 +1013,13 @@
               {libSubmitting ? 'Submitting...' : 'Prepare Library'}
             </button>
           </form>
+          <div class="attach-row">
+            <span class="attach-label">or attach to existing job</span>
+            <input type="text" class="form-input attach-input" placeholder="job name" bind:value={libAttachName} />
+            <button class="attach-btn" disabled={libAttaching || !libAttachName.trim()} onclick={handleLibraryAttach}>
+              {libAttaching ? '...' : 'Attach'}
+            </button>
+          </div>
         {/if}
 
         {#if stages.library.status === 'running'}
@@ -1673,6 +1703,29 @@
 
   .submit-btn:hover:not(:disabled) { opacity: 0.9; }
   .submit-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  .attach-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px solid rgba(255,255,255,0.07);
+  }
+  .attach-label { font-size: 0.75rem; color: #888; white-space: nowrap; }
+  .attach-input { flex: 1; font-size: 0.8rem; padding: 5px 8px; }
+  .attach-btn {
+    padding: 5px 12px;
+    font-size: 0.8rem;
+    background: rgba(255,255,255,0.08);
+    color: #ccc;
+    border: 1px solid rgba(255,255,255,0.15);
+    border-radius: 4px;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .attach-btn:hover:not(:disabled) { background: rgba(255,255,255,0.14); }
+  .attach-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
   /* Filter toggles */
   .filter-toggles, .engine-checks {
