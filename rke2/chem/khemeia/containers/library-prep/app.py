@@ -315,7 +315,7 @@ def process_molecule(
     record["canonical_smiles"] = canonical
     record["inchikey"] = inchikey
     if inchikey:
-        record["stable_id"] = f"KHM-{inchikey[:14]}"
+        record["stable_id"] = inchikey
 
     # 3. Descriptors
     desc = compute_descriptors(std_mol)

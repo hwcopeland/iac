@@ -602,20 +602,18 @@ func TestWP2_LibraryValidation_EnamineMissingInput(t *testing.T) {
 	}
 }
 
-// TestWP2_GenerateStableCompoundID verifies the KHM-{InChIKey_first14} format.
+// TestWP2_GenerateStableCompoundID verifies compound IDs are full uppercase InChIKeys.
 func TestWP2_GenerateStableCompoundID(t *testing.T) {
 	tests := []struct {
 		inchiKey string
 		want     string
 	}{
-		{"LFQSCWFLJHTTHZ-UHFFFAOYSA-N", "KHM-LFQSCWFLJHTTHZ"},
-		{"BSYNRYMUTXBXSQ-UHFFFAOYSA-N", "KHM-BSYNRYMUTXBXSQ"},
-		// Short key (less than 14 chars) — use full key.
-		{"ABCDEF", "KHM-ABCDEF"},
-		// Exactly 14 chars.
-		{"12345678901234", "KHM-12345678901234"},
+		{"LFQSCWFLJHTTHZ-UHFFFAOYSA-N", "LFQSCWFLJHTTHZ-UHFFFAOYSA-N"},
+		{"BSYNRYMUTXBXSQ-UHFFFAOYSA-N", "BSYNRYMUTXBXSQ-UHFFFAOYSA-N"},
+		{"ABCDEF", "ABCDEF"},
+		{"12345678901234", "12345678901234"},
 		// Lowercase gets uppercased.
-		{"lfqscwfljhtthz-uhfffaoysa-n", "KHM-LFQSCWFLJHTTHZ"},
+		{"lfqscwfljhtthz-uhfffaoysa-n", "LFQSCWFLJHTTHZ-UHFFFAOYSA-N"},
 	}
 
 	for _, tt := range tests {
@@ -636,18 +634,6 @@ func TestWP2_GenerateStableCompoundID_Deterministic(t *testing.T) {
 	id2 := generateStableCompoundID(key)
 	if id1 != id2 {
 		t.Errorf("expected deterministic output: %q != %q", id1, id2)
-	}
-}
-
-// TestWP2_GenerateStableCompoundID_Prefix verifies all compound IDs
-// start with the KHM- prefix.
-func TestWP2_GenerateStableCompoundID_Prefix(t *testing.T) {
-	keys := []string{"ABC", "ABCDEFGHIJKLMNOP", "xyz"}
-	for _, k := range keys {
-		id := generateStableCompoundID(k)
-		if !strings.HasPrefix(id, "KHM-") {
-			t.Errorf("expected KHM- prefix, got %q", id)
-		}
 	}
 }
 
@@ -1450,9 +1436,9 @@ func TestCross_ArtifactKey_WPSpecific(t *testing.T) {
 			name:         "WP3_docked_pose",
 			jobKind:      "DockV2",
 			jobName:      "dockv2-789",
-			artifactName: "KHM-LFQSCWFLJHTTHZ-pose1",
+			artifactName: "LFQSCWFLJHTTHZ-UHFFFAOYSA-N-pose1",
 			ext:          "pdbqt",
-			want:         "DockV2/dockv2-789/KHM-LFQSCWFLJHTTHZ-pose1.pdbqt",
+			want:         "DockV2/dockv2-789/LFQSCWFLJHTTHZ-UHFFFAOYSA-N-pose1.pdbqt",
 		},
 		{
 			name:         "WP4_admet_report",
@@ -1630,7 +1616,7 @@ func TestWP1_DetectedPocketJSON(t *testing.T) {
 // TestWP4_ADMETCompoundResultJSON verifies ADMET result JSON fields.
 func TestWP4_ADMETCompoundResultJSON(t *testing.T) {
 	result := ADMETCompoundResult{
-		CompoundID: "KHM-LFQSCWFLJHTTHZ",
+		CompoundID: "LFQSCWFLJHTTHZ-UHFFFAOYSA-N",
 		SMILES:     "CCO",
 		MPOScore:   0.75,
 		MPOProfile: "oral",
@@ -1650,8 +1636,8 @@ func TestWP4_ADMETCompoundResultJSON(t *testing.T) {
 		t.Fatalf("unmarshal failed: %v", err)
 	}
 
-	if decoded["compound_id"] != "KHM-LFQSCWFLJHTTHZ" {
-		t.Errorf("compound_id: want KHM-LFQSCWFLJHTTHZ, got %v", decoded["compound_id"])
+	if decoded["compound_id"] != "LFQSCWFLJHTTHZ-UHFFFAOYSA-N" {
+		t.Errorf("compound_id: want LFQSCWFLJHTTHZ-UHFFFAOYSA-N, got %v", decoded["compound_id"])
 	}
 	if decoded["mpo_score"] != 0.75 {
 		t.Errorf("mpo_score: want 0.75, got %v", decoded["mpo_score"])
