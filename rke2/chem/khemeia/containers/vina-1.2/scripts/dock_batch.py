@@ -95,6 +95,7 @@ def get_config():
         "pg_port": int(os.environ.get("POSTGRES_PORT", ("5432"))),
         "pg_user": os.environ.get("POSTGRES_USER", "root"),
         "pg_password": require_env("POSTGRES_PASSWORD"),
+        "pg_db": os.environ.get("POSTGRES_DB", "khemeia"),
     }
 
 
@@ -106,7 +107,7 @@ def connect_db(cfg):
             port=cfg["pg_port"],
             user=cfg["pg_user"],
             password=cfg["pg_password"],
-            database="docking",
+            database=cfg["pg_db"],
         )
     except psycopg2.Error as exc:
         print(f"FATAL: PostgreSQL connection failed: {exc}", flush=True)
@@ -167,7 +168,9 @@ def fetch_receptor(cursor, s3, receptor_ref):
         print(f"FATAL: binding_site is NULL for '{receptor_ref}'", flush=True)
         sys.exit(1)
 
-    if isinstance(binding_site_json, str):
+    if isinstance(binding_site_json, dict):
+        bs = binding_site_json
+    elif isinstance(binding_site_json, str):
         bs = json.loads(binding_site_json)
     else:
         bs = json.loads(binding_site_json.decode("utf-8"))
@@ -208,7 +211,7 @@ def fetch_ligands(cursor, s3, library_ref, batch_limit, batch_offset):
     # Fetch compound batch
     cursor.execute(
         "SELECT id, compound_id, s3_conformer_key FROM library_compounds "
-        "WHERE library_id = %s AND filtered = 0 AND s3_conformer_key IS NOT NULL "
+        "WHERE library_id = %s AND filtered = false AND s3_conformer_key IS NOT NULL "
         "ORDER BY id LIMIT %s OFFSET %s",
         (library_id, batch_limit, batch_offset),
     )

@@ -184,7 +184,7 @@ def fetch_ligands(cursor, library_ref, batch_limit, batch_offset):
 
     cursor.execute(
         "SELECT id, compound_id, canonical_smiles FROM library_compounds "
-        "WHERE library_id = %s AND filtered = 0 AND canonical_smiles IS NOT NULL "
+        "WHERE library_id = %s AND filtered = false AND canonical_smiles IS NOT NULL "
         "ORDER BY id LIMIT %s OFFSET %s",
         (library_id, batch_limit, batch_offset),
     )
