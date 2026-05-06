@@ -804,8 +804,7 @@ func (h *APIHandler) resolveChEMBLSource(ctx context.Context, params *ChEMBLSour
 		JOIN compound_structures cs ON md.molregno = cs.molregno
 		LEFT JOIN compound_properties cp ON md.molregno = cp.molregno
 		%s
-		ORDER BY md.chembl_id
-		LIMIT 50000`, whereClause)
+		ORDER BY md.chembl_id`, whereClause)
 
 	rows, err := h.chemblDB.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -844,8 +843,7 @@ func (h *APIHandler) resolveChEMBLWithInChIKeys(ctx context.Context, params *ChE
 		JOIN compound_structures cs ON md.molregno = cs.molregno
 		LEFT JOIN compound_properties cp ON md.molregno = cp.molregno
 		%s
-		ORDER BY md.chembl_id
-		LIMIT 50000`, whereClause)
+		ORDER BY md.chembl_id`, whereClause)
 
 	rows, err := h.chemblDB.QueryContext(ctx, query, args...)
 	if err != nil {
