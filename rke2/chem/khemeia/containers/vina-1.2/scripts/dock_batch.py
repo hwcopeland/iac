@@ -28,6 +28,7 @@ All configuration via environment variables:
 
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import time as _time
@@ -50,6 +51,27 @@ except ImportError:
 
 DATA_DIR = "/data"
 RECEPTOR_PATH = os.path.join(DATA_DIR, "receptor.pdbqt")
+
+
+def ensure_pdbqt(pdb_bytes: bytes, pdbqt_path: str) -> None:
+    """Convert a cleaned PDB to PDBQT via obabel (strips CRYST1 and adds AutoDock atom types)."""
+    pdb_path = pdbqt_path + ".pdb"
+    try:
+        with open(pdb_path, "wb") as fh:
+            fh.write(pdb_bytes)
+        result = subprocess.run(
+            ["obabel", pdb_path, "-O", pdbqt_path, "-xr", "-xn"],
+            capture_output=True, text=True, timeout=120,
+        )
+        if result.returncode != 0 or not os.path.exists(pdbqt_path):
+            raise RuntimeError(f"obabel failed (exit {result.returncode}): {result.stderr.strip()}")
+        size = os.path.getsize(pdbqt_path)
+        if size == 0:
+            raise RuntimeError("obabel produced an empty PDBQT file")
+        print(f"Receptor converted PDB→PDBQT via obabel ({size} bytes)", flush=True)
+    finally:
+        if os.path.exists(pdb_path):
+            os.unlink(pdb_path)
 
 # Valid scoring functions for Vina 1.2
 _VALID_SCORING = {"vina", "vinardo", "ad4"}
@@ -279,14 +301,12 @@ def main():
     cursor = conn.cursor()
     s3 = get_s3_client()
 
-    # Fetch receptor and write to disk
+    # Fetch receptor and convert PDB→PDBQT (target-prep stores cleaned PDB, not PDBQT)
     receptor_pdbqt, cx, cy, cz, sx, sy, sz = fetch_receptor(cursor, s3, cfg["receptor_ref"])
     os.makedirs(DATA_DIR, exist_ok=True)
-    with open(RECEPTOR_PATH, "wb") as fh:
-        if isinstance(receptor_pdbqt, str):
-            fh.write(receptor_pdbqt.encode("utf-8"))
-        else:
-            fh.write(receptor_pdbqt)
+    if isinstance(receptor_pdbqt, str):
+        receptor_pdbqt = receptor_pdbqt.encode("utf-8")
+    ensure_pdbqt(receptor_pdbqt, RECEPTOR_PATH)
 
     print(
         f"Receptor loaded: center=({cx}, {cy}, {cz}), size=({sx}, {sy}, {sz})",
