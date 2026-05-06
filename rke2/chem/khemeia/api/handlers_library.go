@@ -648,14 +648,18 @@ func (h *APIHandler) runLibraryPrepPipeline(jobName string, req LibraryPrepReque
 
 		if len(uncachedSMILES) > 0 {
 			log.Printf("[library-prep] %s: sending %d uncached compound(s) to sidecar", jobName, len(uncachedSMILES))
-			sidecarResp, err := h.callLibraryPrepSidecarBatched(ctx, uncachedSMILES, req.Filters, jobName)
+			var newCount, newFiltered int
+			err := h.callLibraryPrepSidecarBatched(ctx, uncachedSMILES, req.Filters, jobName, func(resp *libraryPrepSidecarResponse) error {
+				cnt, flt, err := h.insertLibraryCompounds(ctx, db, libraryID, jobName, resp)
+				if err != nil {
+					return err
+				}
+				newCount += cnt
+				newFiltered += flt
+				return nil
+			})
 			if err != nil {
 				h.failLibraryPrep(ctx, db, jobName, fmt.Sprintf("sidecar processing failed: %v", err))
-				return
-			}
-			newCount, newFiltered, err := h.insertLibraryCompounds(ctx, db, libraryID, jobName, sidecarResp)
-			if err != nil {
-				h.failLibraryPrep(ctx, db, jobName, fmt.Sprintf("failed to insert new compounds: %v", err))
 				return
 			}
 			compoundCount += newCount
@@ -677,14 +681,17 @@ func (h *APIHandler) runLibraryPrepPipeline(jobName string, req LibraryPrepReque
 		log.Printf("[library-prep] %s: resolved %d input compound(s) from source=%s", jobName, len(smilesList), req.Source)
 		db.ExecContext(ctx, `UPDATE library_prep_results SET compound_count = ? WHERE name = ?`, len(smilesList), jobName) //nolint:errcheck
 
-		sidecarResp, err := h.callLibraryPrepSidecarBatched(ctx, smilesList, req.Filters, jobName)
+		err = h.callLibraryPrepSidecarBatched(ctx, smilesList, req.Filters, jobName, func(resp *libraryPrepSidecarResponse) error {
+			cnt, flt, err := h.insertLibraryCompounds(ctx, db, libraryID, jobName, resp)
+			if err != nil {
+				return err
+			}
+			compoundCount += cnt
+			filteredCount += flt
+			return nil
+		})
 		if err != nil {
 			h.failLibraryPrep(ctx, db, jobName, fmt.Sprintf("sidecar processing failed: %v", err))
-			return
-		}
-		compoundCount, filteredCount, err = h.insertLibraryCompounds(ctx, db, libraryID, jobName, sidecarResp)
-		if err != nil {
-			h.failLibraryPrep(ctx, db, jobName, fmt.Sprintf("failed to insert compounds: %v", err))
 			return
 		}
 	}
@@ -1128,19 +1135,20 @@ const (
 
 // callLibraryPrepSidecarBatched splits smiles into chunks of sidecarBatchSize
 // and dispatches them concurrently across sidecarBatchWorkers goroutines so all
-// scaled sidecar pods receive work. Results are merged in original order.
-func (h *APIHandler) callLibraryPrepSidecarBatched(ctx context.Context, smiles []string, filters LibraryPrepFilters, jobName string) (*libraryPrepSidecarResponse, error) {
+// scaled sidecar pods receive work. onBatch is called for each completed batch
+// so results are committed to the database immediately rather than accumulated
+// in memory — this bounds Go heap usage to one batch at a time regardless of
+// total library size.
+func (h *APIHandler) callLibraryPrepSidecarBatched(ctx context.Context, smiles []string, filters LibraryPrepFilters, jobName string, onBatch func(*libraryPrepSidecarResponse) error) error {
 	type batchResult struct {
-		idx  int
 		resp *libraryPrepSidecarResponse
 		err  error
 	}
-
-	// Build batch index list
 	type batch struct {
 		idx   int
 		chunk []string
 	}
+
 	var batches []batch
 	for i := 0; i < len(smiles); i += sidecarBatchSize {
 		end := i + sidecarBatchSize
@@ -1150,7 +1158,10 @@ func (h *APIHandler) callLibraryPrepSidecarBatched(ctx context.Context, smiles [
 		batches = append(batches, batch{idx: len(batches), chunk: smiles[i:end]})
 	}
 
-	results := make([]batchResult, len(batches))
+	resultCh := make(chan batchResult, sidecarBatchWorkers*2)
+	done := make(chan struct{})
+	defer close(done)
+
 	work := make(chan batch, len(batches))
 	for _, b := range batches {
 		work <- b
@@ -1163,26 +1174,43 @@ func (h *APIHandler) callLibraryPrepSidecarBatched(ctx context.Context, smiles [
 		go func() {
 			defer wg.Done()
 			for b := range work {
+				select {
+				case <-done:
+					return
+				default:
+				}
 				start := b.idx*sidecarBatchSize + 1
 				end := start + len(b.chunk) - 1
 				log.Printf("[library-prep] %s: sidecar batch %d-%d / %d", jobName, start, end, len(smiles))
 				resp, err := h.callLibraryPrepSidecar(ctx, libraryPrepSidecarRequest{
 					SMILES: b.chunk, Filters: filters, JobName: jobName,
 				})
-				results[b.idx] = batchResult{idx: b.idx, resp: resp, err: err}
+				select {
+				case resultCh <- batchResult{resp: resp, err: err}:
+				case <-done:
+					return
+				}
 			}
 		}()
 	}
-	wg.Wait()
 
-	merged := &libraryPrepSidecarResponse{}
-	for _, r := range results {
+	go func() {
+		wg.Wait()
+		close(resultCh)
+	}()
+
+	var inserted int
+	for r := range resultCh {
 		if r.err != nil {
-			return nil, r.err
+			return r.err
 		}
-		merged.Compounds = append(merged.Compounds, r.resp.Compounds...)
+		if err := onBatch(r.resp); err != nil {
+			return err
+		}
+		inserted += len(r.resp.Compounds)
+		log.Printf("[library-prep] %s: committed batch (%d/%d processed)", jobName, inserted, len(smiles))
 	}
-	return merged, nil
+	return nil
 }
 
 // --- Compound insertion ---
