@@ -899,7 +899,7 @@ func lookupCachedCompounds(ctx context.Context, db *DB, compounds []resolvedChEM
 			INNER JOIN (
 				SELECT compound_id, MAX(id) AS max_id
 				FROM library_compounds
-				WHERE compound_id IN (%s) AND s3_conformer_key IS NOT NULL
+				WHERE compound_id IN (%s)
 				GROUP BY compound_id
 			) latest ON lc.id = latest.max_id`,
 			strings.Join(placeholders, ","))
