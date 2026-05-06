@@ -10,6 +10,7 @@ converts to PDBQT via Meeko when available.
 
 import io
 import logging
+import signal
 import traceback
 from typing import Any
 
@@ -421,6 +422,15 @@ def standardize():
             else:
                 mol_inputs.append((None, ""))  # type: ignore[arg-type]
 
+    # Per-molecule timeout — RDKit EmbedMolecule/MMFFOptimize can hang
+    # indefinitely on pathological ring systems. SIGALRM works because gunicorn
+    # sync workers are single-threaded processes.
+    class _MolTimeout(Exception):
+        pass
+
+    def _alarm(signum, frame):
+        raise _MolTimeout()
+
     # Process each molecule
     compounds: list[dict[str, Any]] = []
     n_processed = 0
@@ -428,6 +438,7 @@ def standardize():
     n_filtered = 0
     n_failed = 0
 
+    signal.signal(signal.SIGALRM, _alarm)
     for mol, source_smiles in mol_inputs:
         n_processed += 1
         if mol is None:
@@ -448,10 +459,32 @@ def standardize():
             continue
 
         try:
+            signal.alarm(30)
             record = process_molecule(
                 mol, source_smiles, enabled_filters, generate_3d,
             )
+            signal.alarm(0)
+        except _MolTimeout:
+            signal.alarm(0)
+            app.logger.warning("Molecule timed out (>30s), skipping: %s", source_smiles)
+            record = {
+                "input_smiles": source_smiles,
+                "canonical_smiles": None,
+                "inchikey": None,
+                "stable_id": None,
+                "descriptors": None,
+                "filters": None,
+                "filtered": False,
+                "conformer_failed": True,
+                "sdf_data": None,
+                "pdbqt_data": None,
+                "error": "timed out after 30s",
+            }
+            n_failed += 1
+            compounds.append(record)
+            continue
         except Exception as exc:
+            signal.alarm(0)
             app.logger.warning(
                 "Unexpected error processing %s: %s",
                 source_smiles, traceback.format_exc(),
