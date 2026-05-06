@@ -6,7 +6,7 @@ import {
   submitMD, getMDJob, listMDJobs, getMDResults, getMDTrajectory, getMDEnergy,
   AuthError,
 } from '$lib/api';
-import { loadFile, overlayStructure, showPocketMarkers, showBindingBox, focusPocketCenter } from '$lib/viewer';
+import { loadFile, overlayStructure, clearOverlays, showPocketMarkers, showBindingBox, focusPocketCenter } from '$lib/viewer';
 
 export type StageStatus = 'pending' | 'running' | 'succeeded' | 'failed';
 
@@ -401,6 +401,7 @@ class PipelineStore {
     if (!this.stages.docking.jobName) return;
     this.loadingPoseId = compoundId;
     try {
+      await clearOverlays();
       const pdbqt = await getDockingPose(this.stages.docking.jobName, compoundId);
       await overlayStructure(pdbqt, 'pdbqt');
     } catch (e) {

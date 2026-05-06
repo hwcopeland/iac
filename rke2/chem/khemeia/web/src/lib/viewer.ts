@@ -389,31 +389,12 @@ export async function overlayStructure(data: string, format: string): Promise<vo
     await viewerInstance.loadStructureFromUrl(url, fmt, false);
     applyCanvasProps();
 
-    const { StateTransforms } = getLib().plugin;
     const structures = plugin.managers?.structure?.hierarchy?.current?.structures ?? [];
     if (structures.length > 0) {
       const last = structures[structures.length - 1];
       if (last?.cell?.transform?.ref) {
         const label = `overlay-${Date.now()}`;
         _structureRefs.set(label, last.cell.transform.ref);
-      }
-
-      // Switch ligand to spacefill so Molstar draws no bonds to the receptor
-      for (const comp of (last?.components ?? [])) {
-        for (const repr of (comp.representations ?? [])) {
-          if (repr.cell?.transform?.ref) {
-            try {
-              await plugin.build().to(repr.cell.transform.ref).update(
-                StateTransforms.Representation.StructureRepresentation3D,
-                (old: any) => ({
-                  ...old,
-                  type: { name: 'spacefill', params: { sizeFactor: 1 } },
-                  colorTheme: { name: 'element-symbol', params: {} },
-                })
-              ).commit();
-            } catch { /* ignore if repr not found */ }
-          }
-        }
       }
 
       // Focus camera on ligand
