@@ -341,22 +341,24 @@ func (c *Controller) reconcileOrphanedJobs() {
 		return
 	}
 	type orphanTable struct {
-		table     string
-		phaseCol  string
+		table      string
+		stateCol   string
+		errorCol   string
+		tsCol      string
 		runningVal string
 		failedVal  string
 	}
 	orphanTables := []orphanTable{
-		{"library_prep_results", "phase", "Running", "Failed"},
-		{"target_prep_results", "phase", "Running", "Failed"},
-		{"docking_v2_jobs", "phase", "Running", "Failed"},
-		{"admet_jobs", "phase", "Running", "Failed"},
-		{"md_jobs", "phase", "Running", "Failed"},
+		{"library_prep_results", "phase", "error_output", "completion_time", "Running", "Failed"},
+		{"target_prep_results", "phase", "error_message", "completion_time", "Running", "Failed"},
+		{"docking_v2_jobs", "status", "error_output", "completed_at", "Running", "Failed"},
+		{"admet_jobs", "phase", "error_output", "completion_time", "Running", "Failed"},
+		{"md_jobs", "status", "error_output", "completed_at", "Running", "Failed"},
 	}
 	for _, t := range orphanTables {
 		res, err := db.ExecContext(ctx, fmt.Sprintf(
-			`UPDATE %s SET %s = ?, error_output = ?, completion_time = NOW()
-			 WHERE %s = ?`, t.table, t.phaseCol, t.phaseCol),
+			`UPDATE %s SET %s = ?, %s = ?, %s = NOW() WHERE %s = ?`,
+			t.table, t.stateCol, t.errorCol, t.tsCol, t.stateCol),
 			t.failedVal, "controller restarted — goroutine lost, resubmit job", t.runningVal)
 		if err != nil {
 			log.Printf("[reconcile] warning: could not check %s for orphans: %v", t.table, err)
