@@ -1093,7 +1093,12 @@ func (h *APIHandler) callLibraryPrepSidecar(ctx context.Context, req libraryPrep
 		return nil, fmt.Errorf("failed to marshal sidecar request: %w", err)
 	}
 
-	client := &http.Client{Timeout: 10 * time.Minute}
+	client := &http.Client{
+		Timeout: 10 * time.Minute,
+		Transport: &http.Transport{
+			DisableKeepAlives: true, // force new TCP connection per request so kube-proxy distributes across all pods
+		},
+	}
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost,
 		libraryPrepServiceURL+"/standardize", strings.NewReader(string(reqBody)))
