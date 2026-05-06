@@ -397,6 +397,38 @@ export async function overlayStructure(data: string, format: string): Promise<vo
         const label = `overlay-${Date.now()}`;
         _structureRefs.set(label, last.cell.transform.ref);
       }
+
+      // Apply spacefill (CPK spheres, no bond inference) to the loaded ligand.
+      // DO NOT CHANGE TO BALL-AND-STICK — Molstar infers bonds by distance and
+      // produces spaghetti on PDBQT ligands. Fixed Apr 16, lost in refactor, fixed again.
+      try {
+        const { StateTransforms } = getLib().plugin;
+        const last = structures[structures.length - 1];
+        const components = last?.components ?? [];
+        for (const comp of components) {
+          for (const repr of comp.representations ?? []) {
+            await plugin.build().delete(repr.cell).commit();
+          }
+        }
+        if (last?.cell) {
+          await plugin.build()
+            .to(last.cell)
+            .apply(StateTransforms.Model.StructureCompleteComponent, { label: 'Ligand' })
+            .apply(StateTransforms.Representation.StructureRepresentation3D, {
+              type: { name: 'spacefill', params: { sizeFactor: 1 } },
+              colorTheme: { name: 'element-symbol', params: {} },
+              sizeTheme: { name: 'physical', params: {} },
+            })
+            .commit();
+        }
+        // Focus camera on ligand
+        if (last?.cell?.obj?.data) {
+          const loci = getLib().structure.Structure.Loci(last.cell.obj.data);
+          plugin.managers.camera.focusLoci(loci, { durationMs: 250 });
+        }
+      } catch (e) {
+        console.warn('spacefill application failed, leaving default repr:', e);
+      }
     }
   } finally {
     setTimeout(() => URL.revokeObjectURL(url), 5000);
