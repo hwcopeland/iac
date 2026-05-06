@@ -1122,7 +1122,7 @@ func (h *APIHandler) callLibraryPrepSidecar(ctx context.Context, req libraryPrep
 }
 
 const (
-	sidecarBatchSize    = 5_000
+	sidecarBatchSize    = 1_000
 	sidecarBatchWorkers = 3 // concurrent requests across sidecar pods
 )
 
