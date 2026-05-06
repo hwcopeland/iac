@@ -1,24 +1,20 @@
 import { setToken } from './api';
 
-// Authentik OIDC endpoints
 const AUTHORIZE_URL = 'https://auth.hwcopeland.net/application/o/authorize/';
 const TOKEN_URL = 'https://auth.hwcopeland.net/application/o/token/';
 const USERINFO_URL = 'https://auth.hwcopeland.net/application/o/userinfo/';
 const CLIENT_ID = 'khemeia';
 const SCOPES = 'openid email profile offline_access';
 
-// Derive redirect URI from the current origin
 function getRedirectUri(): string {
   return `${window.location.origin}/auth/callback`;
 }
 
-// PKCE verifier is tab-scoped (sessionStorage) — only needed during the callback redirect.
-// Refresh token persists across reloads/restarts (localStorage) so sessions survive navigation.
 const VERIFIER_KEY = 'khemeia_pkce_verifier';
 const REFRESH_KEY = 'khemeia_refresh_token';
 
-// In-memory state
 let accessToken: string | null = null;
+let tokenExpiresAt = 0; // epoch ms
 let user: UserInfo | null = null;
 let refreshTimerId: ReturnType<typeof setTimeout> | null = null;
 
@@ -46,42 +42,27 @@ async function sha256(plain: string): Promise<ArrayBuffer> {
 function base64UrlEncode(buffer: ArrayBuffer): string {
   const bytes = new Uint8Array(buffer);
   let binary = '';
-  for (const b of bytes) {
-    binary += String.fromCharCode(b);
-  }
+  for (const b of bytes) binary += String.fromCharCode(b);
   return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
 async function createCodeChallenge(verifier: string): Promise<string> {
-  const hash = await sha256(verifier);
-  return base64UrlEncode(hash);
+  return base64UrlEncode(await sha256(verifier));
 }
 
-// --- Token Refresh ---
+// --- Token refresh ---
 
-/**
- * Schedule a token refresh to run 5 minutes before the access token expires.
- * If expires_in is not available or too short, defaults to refreshing in 55 minutes.
- */
 function scheduleTokenRefresh(expiresIn?: number): void {
-  // Clear any existing timer
   if (refreshTimerId !== null) {
     clearTimeout(refreshTimerId);
     refreshTimerId = null;
   }
-
-  // Default to 3600s (1 hour) if not provided
   const ttl = expiresIn ?? 3600;
-  // Refresh 5 minutes (300s) before expiry, minimum 30s from now
+  tokenExpiresAt = Date.now() + ttl * 1000;
   const delaySeconds = Math.max(30, ttl - 300);
-
   refreshTimerId = setTimeout(refreshToken, delaySeconds * 1000);
 }
 
-/**
- * Silently refresh the access token using the stored refresh_token.
- * On success, schedules the next refresh. On failure, clears auth state.
- */
 export async function refreshToken(): Promise<boolean> {
   const storedRefresh = localStorage.getItem(REFRESH_KEY);
   if (!storedRefresh) return false;
@@ -100,37 +81,53 @@ export async function refreshToken(): Promise<boolean> {
     });
 
     if (!res.ok) {
-      logout();
+      if (res.status === 400) {
+        const errBody = await res.json().catch(() => ({}));
+        if (errBody.error === 'invalid_grant') {
+          // Refresh token is genuinely expired or revoked — must re-login
+          logout();
+        }
+        // Any other 400: leave session intact
+      }
+      // 5xx or anything else: leave session intact, visibility handler will retry
       return false;
     }
 
     const data = await res.json();
     accessToken = data.access_token;
-    if (data.refresh_token) {
-      localStorage.setItem(REFRESH_KEY, data.refresh_token);
-    }
+    if (data.refresh_token) localStorage.setItem(REFRESH_KEY, data.refresh_token);
 
     setToken(accessToken!);
     scheduleTokenRefresh(data.expires_in);
     await fetchUserInfo();
     return true;
   } catch {
-    logout();
+    // Network error — don't destroy the session, retry in 60s
+    if (refreshTimerId !== null) clearTimeout(refreshTimerId);
+    refreshTimerId = setTimeout(refreshToken, 60_000);
     return false;
   }
 }
 
+// When the tab becomes visible, refresh if the access token is missing or near expiry.
+// Handles the case where the laptop slept through a scheduled timer.
+function handleVisibilityChange(): void {
+  if (document.visibilityState !== 'visible') return;
+  if (!localStorage.getItem(REFRESH_KEY)) return;
+  if (!accessToken || Date.now() >= tokenExpiresAt - 300_000) {
+    refreshToken();
+  }
+}
+
+if (typeof document !== 'undefined') {
+  document.addEventListener('visibilitychange', handleVisibilityChange);
+}
+
 // --- Public API ---
 
-/**
- * Start the OIDC login flow.
- * Generates a PKCE code_verifier, stores it in sessionStorage,
- * and redirects the browser to the Authentik authorize endpoint.
- */
 export async function login(): Promise<void> {
   const verifier = generateRandomString(64);
   const challenge = await createCodeChallenge(verifier);
-
   sessionStorage.setItem(VERIFIER_KEY, verifier);
 
   const params = new URLSearchParams({
@@ -145,18 +142,10 @@ export async function login(): Promise<void> {
   window.location.href = `${AUTHORIZE_URL}?${params.toString()}`;
 }
 
-/**
- * Handle the authorization callback.
- * Extracts the code from the URL, exchanges it for tokens using the stored
- * code_verifier, and fetches user info.
- */
 export async function handleCallback(code: string): Promise<void> {
   const verifier = sessionStorage.getItem(VERIFIER_KEY);
-  if (!verifier) {
-    throw new Error('Missing PKCE code_verifier in session storage');
-  }
+  if (!verifier) throw new Error('Missing PKCE code_verifier in session storage');
 
-  // Exchange code for tokens
   const body = new URLSearchParams({
     grant_type: 'authorization_code',
     client_id: CLIENT_ID,
@@ -177,46 +166,25 @@ export async function handleCallback(code: string): Promise<void> {
   }
 
   const data = await res.json();
-
-  // Store tokens
   accessToken = data.access_token;
-  if (data.refresh_token) {
-    localStorage.setItem(REFRESH_KEY, data.refresh_token);
-  }
-
-  // Clean up verifier -- no longer needed
+  if (data.refresh_token) localStorage.setItem(REFRESH_KEY, data.refresh_token);
   sessionStorage.removeItem(VERIFIER_KEY);
-
-  // Wire token to the API client
   setToken(accessToken!);
-
-  // Schedule proactive refresh before expiry
   scheduleTokenRefresh(data.expires_in);
-
-  // Fetch user info
   await fetchUserInfo();
 }
 
-/**
- * Fetch user info from the OIDC userinfo endpoint using the current access token.
- */
 async function fetchUserInfo(): Promise<void> {
   if (!accessToken) return;
-
   const res = await fetch(USERINFO_URL, {
     headers: { Authorization: `Bearer ${accessToken}` },
   });
-
-  if (res.ok) {
-    user = await res.json();
-  }
+  if (res.ok) user = await res.json();
 }
 
-/**
- * Log out: clear all auth state.
- */
 export function logout(): void {
   accessToken = null;
+  tokenExpiresAt = 0;
   user = null;
   if (refreshTimerId !== null) {
     clearTimeout(refreshTimerId);
@@ -227,61 +195,9 @@ export function logout(): void {
   setToken('');
 }
 
-/**
- * Get the cached user info, or null if not authenticated.
- */
-export function getUser(): UserInfo | null {
-  return user;
-}
+export function getUser(): UserInfo | null { return user; }
+export function isAuthenticated(): boolean { return accessToken !== null; }
 
-/**
- * Check whether the user has an active access token.
- */
-export function isAuthenticated(): boolean {
-  return accessToken !== null;
-}
-
-/**
- * Attempt to restore a session from sessionStorage.
- * Called once on app load. If a refresh_token exists, we attempt to use it
- * to get a new access_token. For now (no refresh flow), this is a no-op
- * stub that clears stale state.
- */
 export async function restoreSession(): Promise<void> {
-  const refreshToken = localStorage.getItem(REFRESH_KEY);
-  if (!refreshToken) return;
-
-  // Attempt token refresh using the stored refresh_token
-  try {
-    const body = new URLSearchParams({
-      grant_type: 'refresh_token',
-      client_id: CLIENT_ID,
-      refresh_token: refreshToken,
-    });
-
-    const res = await fetch(TOKEN_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body,
-    });
-
-    if (!res.ok) {
-      // Refresh failed -- clear stale state, user needs to log in again
-      logout();
-      return;
-    }
-
-    const data = await res.json();
-    accessToken = data.access_token;
-    if (data.refresh_token) {
-      localStorage.setItem(REFRESH_KEY, data.refresh_token);
-    }
-
-    setToken(accessToken!);
-    scheduleTokenRefresh(data.expires_in);
-    await fetchUserInfo();
-  } catch {
-    // Network error or other failure -- clear state
-    logout();
-  }
+  await refreshToken();
 }
