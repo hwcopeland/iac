@@ -2,8 +2,9 @@
 """Vina 1.2 batch docking worker for v2 multi-engine pipeline.
 
 Fetches receptor PDBQT from S3 (via target-prep ref), fetches ligand
-conformer PDBQTs from S3 (via library-prep ref), runs Vina 1.2 Python
-bindings in parallel across all CPUs, and writes results to docking_v2_results.
+conformer PDBQTs from S3 (via library-prep ref), runs Vina 1.2 CLI in
+--batch mode (one subprocess for all ligands), and writes results to
+docking_v2_results.
 
 All configuration via environment variables:
   JOB_NAME       - v2 docking job name
@@ -15,7 +16,7 @@ All configuration via environment variables:
   SCORING        - scoring function: vina, vinardo, ad4 (default vina)
   BATCH_OFFSET   - starting row offset in library_compounds
   BATCH_LIMIT    - number of compounds to process
-  VINA_WORKERS   - parallel CPU workers (default: all cores)
+  VINA_CPU       - CPU threads to pass to vina --cpu (default: auto-detect)
   POSTGRES_HOST     - PostgreSQL hostname
   POSTGRES_PORT     - PostgreSQL port (default 5432)
   POSTGRES_USER     - PostgreSQL user
@@ -28,20 +29,15 @@ All configuration via environment variables:
   GARAGE_REGION     - S3 region
 """
 
+import glob
 import json
-import multiprocessing
 import os
 import subprocess
 import sys
+import tempfile
 import time as _time
 
 import psycopg2
-
-try:
-    from vina import Vina
-except ImportError:
-    print("FATAL: vina Python bindings not installed", flush=True)
-    sys.exit(1)
 
 try:
     import boto3
@@ -96,6 +92,7 @@ def get_config():
     if scoring not in _VALID_SCORING:
         print(f"FATAL: invalid scoring function '{scoring}', must be one of: {sorted(_VALID_SCORING)}", flush=True)
         sys.exit(1)
+    vina_cpu = os.environ.get("VINA_CPU")
     return {
         "job_name": require_env("JOB_NAME"),
         "worker_name": require_env("WORKER_NAME"),
@@ -106,7 +103,7 @@ def get_config():
         "scoring": scoring,
         "batch_offset": int(require_env("BATCH_OFFSET")),
         "batch_limit": int(require_env("BATCH_LIMIT")),
-        "n_workers": int(os.environ.get("VINA_WORKERS", str(os.cpu_count() or 4))),
+        "vina_cpu": int(vina_cpu) if vina_cpu else None,
         "pg_host": os.environ.get("POSTGRES_HOST", "localhost"),
         "pg_port": int(os.environ.get("POSTGRES_PORT", "5432")),
         "pg_user": os.environ.get("POSTGRES_USER", "root"),
@@ -237,41 +234,80 @@ def fetch_already_docked(cursor, job_name, engine):
     return {row[0] for row in cursor.fetchall()}
 
 
-def run_vina_docking(receptor_path, ligand_pdbqt, center, size, exhaustiveness, scoring, n_poses=9):
-    v = Vina(sf_name=scoring)
-    v.set_receptor(receptor_path)
-    v.set_ligand_from_string(
-        ligand_pdbqt.decode("utf-8") if isinstance(ligand_pdbqt, bytes) else ligand_pdbqt
-    )
-    v.compute_vina_maps(center=list(center), box_size=list(size))
-    v.dock(exhaustiveness=exhaustiveness, n_poses=n_poses)
-    energies = v.energies()
-    poses_pdbqt = v.poses()
-    results = []
-    for i, row in enumerate(energies):
-        results.append((float(row[0]), poses_pdbqt if i == 0 else None))
+def parse_best_affinity(pdbqt_path: str):
+    """Return the best affinity from a Vina output PDBQT (first REMARK VINA RESULT line)."""
+    with open(pdbqt_path) as fh:
+        for line in fh:
+            if line.startswith("REMARK VINA RESULT:"):
+                parts = line.split()
+                if len(parts) >= 4:
+                    return float(parts[3])
+    return None
+
+
+def run_vina_batch(receptor_path, ligands, center, size, exhaustiveness, scoring, vina_cpu, tmpdir):
+    """Run vina CLI --batch mode. Returns dict of ligand_db_id (str) -> (affinity, pose_bytes)."""
+    ligand_dir = os.path.join(tmpdir, "ligands")
+    out_dir = os.path.join(tmpdir, "out")
+    os.makedirs(ligand_dir, exist_ok=True)
+    os.makedirs(out_dir, exist_ok=True)
+
+    # Write ligand files named by db_id so we can match output back
+    ligand_files = []
+    for ligand_db_id, compound_id, pdbqt_bytes in ligands:
+        fname = os.path.join(ligand_dir, f"{ligand_db_id}.pdbqt")
+        with open(fname, "wb") as fh:
+            fh.write(pdbqt_bytes if isinstance(pdbqt_bytes, bytes) else pdbqt_bytes.encode())
+        ligand_files.append(fname)
+
+    cx, cy, cz = center
+    sx, sy, sz = size
+
+    cmd = [
+        "vina",
+        "--receptor", receptor_path,
+        "--batch", *ligand_files,
+        "--out_dir", out_dir,
+        "--center_x", str(cx),
+        "--center_y", str(cy),
+        "--center_z", str(cz),
+        "--size_x", str(sx),
+        "--size_y", str(sy),
+        "--size_z", str(sz),
+        "--exhaustiveness", str(exhaustiveness),
+        "--scoring", scoring,
+    ]
+    if vina_cpu is not None:
+        cmd += ["--cpu", str(vina_cpu)]
+
+    print(f"Running: {' '.join(cmd[:6])} ... ({len(ligand_files)} ligands)", flush=True)
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=86400)
+    if result.stdout:
+        print(result.stdout, flush=True)
+    if result.returncode != 0:
+        print(f"vina stderr: {result.stderr.strip()}", flush=True)
+        raise RuntimeError(f"vina --batch exited with code {result.returncode}")
+
+    # Parse output: vina writes {stem}_out.pdbqt per input file
+    results = {}
+    for out_file in glob.glob(os.path.join(out_dir, "*_out.pdbqt")):
+        stem = os.path.basename(out_file)[: -len("_out.pdbqt")]
+        affinity = parse_best_affinity(out_file)
+        if affinity is not None:
+            with open(out_file, "rb") as fh:
+                pose_bytes = fh.read()
+            results[stem] = (affinity, pose_bytes)
+        else:
+            print(f"WARNING: no affinity found in {out_file}", flush=True)
+
     return results
-
-
-def _dock_worker(args):
-    """Top-level worker function (module-level for multiprocessing pickling)."""
-    ligand_db_id, compound_id, pdbqt_bytes, receptor_path, center, size, exhaustiveness, scoring = args
-    try:
-        results = run_vina_docking(receptor_path, pdbqt_bytes, center, size, exhaustiveness, scoring)
-        if not results:
-            return (ligand_db_id, compound_id, None, None, "no results")
-        affinity, pose_pdbqt = results[0]
-        return (ligand_db_id, compound_id, affinity, pose_pdbqt, None)
-    except Exception as exc:
-        return (ligand_db_id, compound_id, None, None, str(exc))
 
 
 def main():
     cfg = get_config()
     print(
         f"Vina 1.2 batch worker starting: job={cfg['job_name']} worker={cfg['worker_name']} "
-        f"offset={cfg['batch_offset']} limit={cfg['batch_limit']} scoring={cfg['scoring']} "
-        f"parallel_workers={cfg['n_workers']}",
+        f"offset={cfg['batch_offset']} limit={cfg['batch_limit']} scoring={cfg['scoring']}",
         flush=True,
     )
 
@@ -308,55 +344,61 @@ def main():
         conn.close()
         return
 
-    print(f"Docking {total} ligands across {cfg['n_workers']} parallel workers (offset={cfg['batch_offset']})", flush=True)
+    print(f"Submitting {total} ligands to vina --batch (offset={cfg['batch_offset']})", flush=True)
     t0 = _time.time()
     _jlog("worker_start", job=cfg["job_name"], engine=cfg["engine"],
-          worker=cfg["worker_name"], total=total, offset=cfg["batch_offset"],
-          n_workers=cfg["n_workers"])
+          worker=cfg["worker_name"], total=total, offset=cfg["batch_offset"])
 
-    center = (cx, cy, cz)
-    size = (sx, sy, sz)
-    args_list = [
-        (lid, cid, pdbqt, RECEPTOR_PATH, center, size, cfg["exhaustiveness"], cfg["scoring"])
-        for lid, cid, pdbqt in ligands
-    ]
+    # Build lookup by db_id string for matching output files
+    ligand_map = {str(lid): (lid, cid) for lid, cid, _ in ligands}
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        try:
+            batch_results = run_vina_batch(
+                RECEPTOR_PATH, ligands,
+                center=(cx, cy, cz),
+                size=(sx, sy, sz),
+                exhaustiveness=cfg["exhaustiveness"],
+                scoring=cfg["scoring"],
+                vina_cpu=cfg["vina_cpu"],
+                tmpdir=tmpdir,
+            )
+        except Exception as exc:
+            print(f"FATAL: vina --batch failed: {exc}", flush=True)
+            cursor.close()
+            conn.close()
+            sys.exit(1)
+
+    elapsed = _time.time() - t0
+    print(f"Vina batch complete in {elapsed:.1f}s — {len(batch_results)}/{total} results", flush=True)
 
     docked = 0
-    failed = 0
-    processed = 0
+    failed = total - len(batch_results)
     best_affinity = None
 
-    with multiprocessing.Pool(processes=cfg["n_workers"]) as pool:
-        for result in pool.imap_unordered(_dock_worker, args_list, chunksize=4):
-            ligand_db_id, compound_id, affinity, pose_pdbqt, error = result
-            processed += 1
+    for i, (db_id_str, (affinity, pose_bytes)) in enumerate(batch_results.items(), start=1):
+        if db_id_str not in ligand_map:
+            print(f"WARNING: unrecognised output key {db_id_str}", flush=True)
+            continue
 
-            if error is not None:
-                print(f"WARNING: docking failed for {compound_id}: {error}", flush=True)
-                failed += 1
-                continue
+        ligand_db_id, compound_id = ligand_map[db_id_str]
 
-            docked_blob = None
-            if pose_pdbqt is not None and affinity <= -5.0:
-                docked_blob = pose_pdbqt.encode("utf-8") if isinstance(pose_pdbqt, str) else pose_pdbqt
+        docked_blob = None
+        if affinity <= -5.0:
+            docked_blob = pose_bytes
 
-            cursor.execute(
-                "INSERT INTO docking_v2_results "
-                "(job_name, engine, compound_id, ligand_id, affinity_kcal_mol, docked_pdbqt) "
-                "VALUES (%s, %s, %s, %s, %s, %s)",
-                (cfg["job_name"], cfg["engine"], compound_id, ligand_db_id, affinity, docked_blob),
-            )
-            conn.commit()
-            docked += 1
-            if best_affinity is None or affinity < best_affinity:
-                best_affinity = affinity
+        cursor.execute(
+            "INSERT INTO docking_v2_results "
+            "(job_name, engine, compound_id, ligand_id, affinity_kcal_mol, docked_pdbqt) "
+            "VALUES (%s, %s, %s, %s, %s, %s)",
+            (cfg["job_name"], cfg["engine"], compound_id, ligand_db_id, affinity, docked_blob),
+        )
+        conn.commit()
+        docked += 1
+        if best_affinity is None or affinity < best_affinity:
+            best_affinity = affinity
 
-            elapsed = _time.time() - t0
-            print(f"[{processed}/{total}] {compound_id} affinity={affinity:.2f} elapsed={elapsed:.1f}s", flush=True)
-            _jlog("progress", job=cfg["job_name"], engine=cfg["engine"],
-                  worker=cfg["worker_name"], processed=processed, total=total,
-                  docked=docked, failed=failed, elapsed_s=round(elapsed, 1),
-                  compound_id=compound_id, affinity=affinity)
+        print(f"[{i}/{len(batch_results)}] {compound_id} affinity={affinity:.2f}", flush=True)
 
     cursor.close()
     conn.close()
