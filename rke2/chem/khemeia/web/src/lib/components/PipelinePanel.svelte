@@ -995,8 +995,8 @@
         {#if stages.library.status === 'running'}
           <div class="running-indicator">
             <span class="pulse-dot"></span>
-            {#if libraryStatus?.total_count > 0 && libraryStatus?.processed_count > 0}
-              {@const pct = Math.min(100, Math.round(libraryStatus.processed_count / libraryStatus.total_count * 100))}
+            {#if libraryStatus?.total_count > 0}
+              {@const pct = Math.min(100, Math.round((libraryStatus.processed_count ?? 0) / libraryStatus.total_count * 100))}
               <div class="lib-progress-wrap">
                 <div class="lib-progress-bar">
                   <div class="lib-progress-fill" style="width: {pct}%"></div>
@@ -1005,8 +1005,6 @@
                   {libraryStatus.processed_count.toLocaleString()} / {libraryStatus.total_count.toLocaleString()} compounds ({pct}%)
                 </span>
               </div>
-            {:else if libraryStatus?.total_count > 0}
-              <span class="running-text">{libraryStatus.total_count.toLocaleString()} compounds found — preparing...</span>
             {:else}
               <span class="running-text">Resolving compounds from source...</span>
             {/if}
