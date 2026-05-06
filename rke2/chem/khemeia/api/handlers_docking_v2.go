@@ -757,7 +757,7 @@ func (h *APIHandler) DockingV2Results(w http.ResponseWriter, r *http.Request) {
 		resp.Results = []ConsensusResult{}
 	}
 
-	// Enrich page results with SMILES from the ligands table.
+	// Enrich page results with SMILES from library_compounds.
 	if len(resp.Results) > 0 {
 		placeholders := make([]string, len(resp.Results))
 		ids := make([]interface{}, len(resp.Results))
@@ -766,7 +766,7 @@ func (h *APIHandler) DockingV2Results(w http.ResponseWriter, r *http.Request) {
 			ids[i] = res.CompoundID
 		}
 		smilesRows, sErr := db.QueryContext(r.Context(),
-			"SELECT compound_id, smiles FROM ligands WHERE compound_id IN ("+strings.Join(placeholders, ",")+")", ids...)
+			"SELECT compound_id, canonical_smiles FROM library_compounds WHERE compound_id IN ("+strings.Join(placeholders, ",")+")", ids...)
 		if sErr == nil {
 			smilesMap := make(map[string]string)
 			for smilesRows.Next() {
