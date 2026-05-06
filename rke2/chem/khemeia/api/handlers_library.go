@@ -137,6 +137,8 @@ type LibraryPrepStatus struct {
 	Name           string  `json:"name"`
 	Source         string  `json:"source"`
 	Phase          string  `json:"phase"`
+	TotalCount     int     `json:"total_count"`
+	ProcessedCount int     `json:"processed_count"`
 	CompoundCount  int     `json:"compound_count"`
 	FilteredCount  int     `json:"filtered_count"`
 	S3Key          *string `json:"s3_key,omitempty"`
@@ -187,6 +189,8 @@ func EnsureLibraryPrepSchema(db *DB) error {
 		name            VARCHAR(255) NOT NULL UNIQUE,
 		source          TEXT NOT NULL CHECK (source IN ('smiles', 'sdf', 'chembl', 'enamine')),
 		phase           TEXT NOT NULL DEFAULT 'Pending' CHECK (phase IN ('Pending', 'Running', 'Succeeded', 'Failed')),
+		total_count     INT NOT NULL DEFAULT 0,
+		processed_count INT NOT NULL DEFAULT 0,
 		compound_count  INT NOT NULL DEFAULT 0,
 		filtered_count  INT NOT NULL DEFAULT 0,
 		s3_key          VARCHAR(512) NULL,
@@ -200,6 +204,14 @@ func EnsureLibraryPrepSchema(db *DB) error {
 
 	if _, err := db.Exec(resultsDDL); err != nil {
 		return fmt.Errorf("creating library_prep_results table: %w", err)
+	}
+	for _, col := range []string{
+		`ALTER TABLE library_prep_results ADD COLUMN IF NOT EXISTS total_count INT NOT NULL DEFAULT 0`,
+		`ALTER TABLE library_prep_results ADD COLUMN IF NOT EXISTS processed_count INT NOT NULL DEFAULT 0`,
+	} {
+		if _, err := db.Exec(col); err != nil {
+			return fmt.Errorf("migrating library_prep_results column: %w", err)
+		}
 	}
 	for _, idx := range []string{
 		`CREATE INDEX IF NOT EXISTS idx_library_prep_phase ON library_prep_results (phase)`,
@@ -374,10 +386,11 @@ func (h *APIHandler) LibraryGetHandler(w http.ResponseWriter, r *http.Request) {
 	var createdAt time.Time
 
 	err := db.QueryRowContext(r.Context(),
-		`SELECT name, source, phase, compound_count, filtered_count,
+		`SELECT name, source, phase, total_count, processed_count, compound_count, filtered_count,
 			s3_key, error_output, completion_time, created_at
 		 FROM library_prep_results WHERE name = ?`, name).Scan(
 		&status.Name, &status.Source, &status.Phase,
+		&status.TotalCount, &status.ProcessedCount,
 		&status.CompoundCount, &status.FilteredCount,
 		&s3Key, &errorOutput, &completionTime, &createdAt)
 
@@ -615,7 +628,7 @@ func (h *APIHandler) runLibraryPrepPipeline(jobName string, req LibraryPrepReque
 			return
 		}
 		log.Printf("[library-prep] %s: resolved %d compound(s) from ChEMBL", jobName, len(resolved))
-		db.ExecContext(ctx, `UPDATE library_prep_results SET compound_count = ? WHERE name = ?`, len(resolved), jobName) //nolint:errcheck
+		db.ExecContext(ctx, `UPDATE library_prep_results SET compound_count = ?, total_count = ? WHERE name = ?`, len(resolved), len(resolved), jobName) //nolint:errcheck
 
 		cache, err := lookupCachedCompounds(ctx, db, resolved)
 		if err != nil {
@@ -632,6 +645,7 @@ func (h *APIHandler) runLibraryPrepPipeline(jobName string, req LibraryPrepReque
 		}
 		compoundCount += cachedCount
 		filteredCount += cachedFiltered
+		db.ExecContext(ctx, `UPDATE library_prep_results SET processed_count = ? WHERE name = ?`, cachedCount, jobName) //nolint:errcheck
 
 		// Collect uncached SMILES: compounds not in cache + any whose filter flags were NULL.
 		cachedIDs := make(map[string]bool, len(cache))
@@ -648,7 +662,7 @@ func (h *APIHandler) runLibraryPrepPipeline(jobName string, req LibraryPrepReque
 
 		if len(uncachedSMILES) > 0 {
 			log.Printf("[library-prep] %s: sending %d uncached compound(s) to sidecar", jobName, len(uncachedSMILES))
-			var newCount, newFiltered int
+			var newCount, newFiltered, newProcessed int
 			err := h.callLibraryPrepSidecarBatched(ctx, uncachedSMILES, req.Filters, jobName, func(resp *libraryPrepSidecarResponse) error {
 				cnt, flt, err := h.insertLibraryCompounds(ctx, db, libraryID, jobName, resp)
 				if err != nil {
@@ -656,6 +670,8 @@ func (h *APIHandler) runLibraryPrepPipeline(jobName string, req LibraryPrepReque
 				}
 				newCount += cnt
 				newFiltered += flt
+				newProcessed += len(resp.Compounds)
+				db.ExecContext(ctx, `UPDATE library_prep_results SET processed_count = ? WHERE name = ?`, cachedCount+newProcessed, jobName) //nolint:errcheck
 				return nil
 			})
 			if err != nil {
@@ -679,8 +695,9 @@ func (h *APIHandler) runLibraryPrepPipeline(jobName string, req LibraryPrepReque
 			return
 		}
 		log.Printf("[library-prep] %s: resolved %d input compound(s) from source=%s", jobName, len(smilesList), req.Source)
-		db.ExecContext(ctx, `UPDATE library_prep_results SET compound_count = ? WHERE name = ?`, len(smilesList), jobName) //nolint:errcheck
+		db.ExecContext(ctx, `UPDATE library_prep_results SET compound_count = ?, total_count = ? WHERE name = ?`, len(smilesList), len(smilesList), jobName) //nolint:errcheck
 
+		var processedCount int
 		err = h.callLibraryPrepSidecarBatched(ctx, smilesList, req.Filters, jobName, func(resp *libraryPrepSidecarResponse) error {
 			cnt, flt, err := h.insertLibraryCompounds(ctx, db, libraryID, jobName, resp)
 			if err != nil {
@@ -688,6 +705,8 @@ func (h *APIHandler) runLibraryPrepPipeline(jobName string, req LibraryPrepReque
 			}
 			compoundCount += cnt
 			filteredCount += flt
+			processedCount += len(resp.Compounds)
+			db.ExecContext(ctx, `UPDATE library_prep_results SET processed_count = ? WHERE name = ?`, processedCount, jobName) //nolint:errcheck
 			return nil
 		})
 		if err != nil {
