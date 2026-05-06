@@ -162,7 +162,9 @@ def fetch_receptor(cursor, s3, receptor_ref):
         print(f"FATAL: binding_site is NULL for '{receptor_ref}'", flush=True)
         sys.exit(1)
 
-    if isinstance(binding_site_json, str):
+    if isinstance(binding_site_json, dict):
+        bs = binding_site_json
+    elif isinstance(binding_site_json, str):
         bs = json.loads(binding_site_json)
     else:
         bs = json.loads(binding_site_json.decode("utf-8"))

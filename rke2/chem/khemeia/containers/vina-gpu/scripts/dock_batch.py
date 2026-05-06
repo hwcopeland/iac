@@ -58,7 +58,9 @@ def require_env(name):
 
 
 def parse_binding_site(binding_site_json):
-    if isinstance(binding_site_json, str):
+    if isinstance(binding_site_json, dict):
+        binding_site = binding_site_json
+    elif isinstance(binding_site_json, str):
         binding_site = json.loads(binding_site_json)
     else:
         binding_site = json.loads(binding_site_json.decode("utf-8"))
