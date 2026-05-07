@@ -1010,7 +1010,7 @@ func (c *Controller) runSingleEngineDocking(jobName, engine string, req DockingV
 	// Chunk and fan out worker pods.
 	chunkSize := req.ChunkSize
 	if chunkSize <= 0 {
-		chunkSize = 10000
+		chunkSize = 2500
 	}
 	workerCount := int(math.Ceil(float64(compoundCount) / float64(chunkSize)))
 
@@ -1023,13 +1023,20 @@ func (c *Controller) runSingleEngineDocking(jobName, engine string, req DockingV
 	log.Printf("[docking-v2] %s/%s: launching %d workers (compute=%s, image=%s)",
 		jobName, engine, workerCount, computeClass, image)
 
-	// Use the existing runParallelWorkers pattern from parallel_docking.go.
+	// gpu-serial workers execute one at a time (all 10 GPU slices required per pod),
+	// so the last worker doesn't start until the N-1 before it have finished.
+	// Budget 2h per worker; floor at 4h.
+	engineTimeout := time.Duration(workerCount) * 2 * time.Hour
+	if engineTimeout < 4*time.Hour {
+		engineTimeout = 4 * time.Hour
+	}
+
 	err := c.runParallelWorkers(jobName, workerCount, chunkSize, compoundCount,
 		fmt.Sprintf("dock-%s", strings.ReplaceAll(engine, ".", "-")),
 		func(workerName string, offset, limit int) error {
 			return c.createDockingV2Worker(jobName, workerName, engine, image, req, offset, limit, computeClass)
 		},
-		4*time.Hour) // timeout per engine
+		engineTimeout)
 
 	if err != nil {
 		return c.failEngine(db, jobName, engine, fmt.Sprintf("docking workers failed: %v", err))
