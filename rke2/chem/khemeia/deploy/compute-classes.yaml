@@ -168,7 +168,7 @@ data:
         description: "Serial GPU workloads (vina-gpu): requests all 10 time-slice replicas so only 1 pod runs at a time — avoids OpenCL context contention on shared GPU"
         resources:
           cpu: "2"
-          memory: "8Gi"
+          memory: "16Gi"
           nvidia.com/gpu: "10"
         nodeSelector:
           gpu: "rtx3070"
