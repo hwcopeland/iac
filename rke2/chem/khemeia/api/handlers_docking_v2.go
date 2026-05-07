@@ -990,16 +990,21 @@ func (c *Controller) runSingleEngineDocking(jobName, engine string, req DockingV
 		`UPDATE docking_v2_engine_status SET status='Running', started_at=NOW() WHERE job_name=? AND engine=?`,
 		jobName, engine)
 
-	// Resolve the library compound count.
+	// Count dockable ligands: rows in library_compounds that the worker will actually query
+	// (filtered=false AND s3_conformer_key IS NOT NULL). compound_count in library_prep_results
+	// includes all rows (filtered + not yet converted), so using it over-counts by ~10x.
 	var compoundCount int
 	if err := db.QueryRow(
-		`SELECT compound_count FROM library_prep_results WHERE name = ?`,
+		`SELECT COUNT(*) FROM library_compounds
+		 WHERE library_id = (SELECT id FROM library_prep_results WHERE name = $1)
+		   AND filtered = false
+		   AND s3_conformer_key IS NOT NULL`,
 		req.LibraryRef).Scan(&compoundCount); err != nil {
 		return c.failEngine(db, jobName, engine, fmt.Sprintf("library ref resolution failed: %v", err))
 	}
 
 	if compoundCount == 0 {
-		return c.failEngine(db, jobName, engine, "library has 0 compounds")
+		return c.failEngine(db, jobName, engine, "library has 0 dockable compounds (no conformers)")
 	}
 
 	// Chunk and fan out worker pods.
