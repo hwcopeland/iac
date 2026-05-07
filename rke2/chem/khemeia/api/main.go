@@ -21,6 +21,8 @@ import (
 	"time"
 
 	_ "github.com/lib/pq"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/dynamic"
@@ -326,6 +328,15 @@ func getConfig() (*rest.Config, error) {
 // Run starts the controller.
 func (c *Controller) Run(ctx context.Context) error {
 	log.Println("Starting Khemeia API Controller...")
+
+	if shutdown, err := initTracer(ctx); err != nil {
+		log.Printf("Warning: tracer init failed: %v", err)
+	} else {
+		defer shutdown()
+	}
+	if err := initMetrics(); err != nil {
+		log.Printf("Warning: metrics init failed: %v", err)
+	}
 
 	// Recover any jobs orphaned by a previous controller restart.
 	c.reconcileOrphanedJobs()
@@ -647,8 +658,12 @@ func (c *Controller) startAPIServer() error {
 	mux.HandleFunc("/health", handler.HealthCheck)
 	mux.HandleFunc("/readyz", handler.ReadinessCheck)
 
+	// Prometheus metrics — registered directly, excluded from OTEL tracing.
+	mux.Handle("/metrics", promhttp.Handler())
+
 	log.Println("API server listening on :8080")
-	return http.ListenAndServe(":8080", corsMiddleware(bodySizeMiddleware(mux)))
+	h := otelhttp.NewHandler(corsMiddleware(bodySizeMiddleware(mux)), "khemeia-api")
+	return http.ListenAndServe(":8080", h)
 }
 
 // allowedOrigins is the set of origins permitted by the CORS policy.
