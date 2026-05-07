@@ -439,7 +439,7 @@ func (h *APIHandler) DockingV2Submit(w http.ResponseWriter, r *http.Request) {
 		req.TopNRefine = 100
 	}
 	if req.ChunkSize == 0 {
-		req.ChunkSize = 1000
+		req.ChunkSize = 10000
 	}
 
 	// Validate required fields.
