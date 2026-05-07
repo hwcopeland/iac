@@ -202,7 +202,7 @@ func ValidateEngineSelection(engines []string) error {
 func EngineComputeClass(engine string) string {
 	switch engine {
 	case "vina-gpu", "vina-gpu-batch":
-		return "gpu-half"
+		return "gpu-serial"
 	case "gnina":
 		return "gpu-parallel"
 	case "diffdock":
@@ -217,7 +217,7 @@ func EngineComputeClass(engine string) string {
 // parallel/cpu for scheduling — K8s resource constraints handle concurrency.
 func IsGPUEngine(engine string) bool {
 	cc := EngineComputeClass(engine)
-	return cc == "gpu" || cc == "gpu-exclusive"
+	return cc == "gpu" || cc == "gpu-serial" || cc == "gpu-exclusive"
 }
 
 // SortEnginesForScheduling orders engines for scheduling.
