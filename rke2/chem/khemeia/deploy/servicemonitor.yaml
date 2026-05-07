@@ -1,0 +1,18 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: khemeia-controller
+  namespace: chem
+  labels:
+    release: kube-prometheus-stack
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: khemeia-controller
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 30s
+  namespaceSelector:
+    matchNames:
+      - chem

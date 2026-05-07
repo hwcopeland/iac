@@ -43,6 +43,12 @@ grafana:
           access: proxy
           isDefault: false
   sidecar:
+    dashboards:
+      enabled: true
+      label: grafana_dashboard
+      labelValue: "1"
+      searchNamespace: ALL
+      folderAnnotation: grafana_folder
     alerts:
       enabled: true
       label: grafana_alert
