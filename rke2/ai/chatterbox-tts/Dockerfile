@@ -1,20 +1,16 @@
 FROM python:3.11-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libsndfile1 ffmpeg git curl \
+    libsndfile1 ffmpeg git \
     && rm -rf /var/lib/apt/lists/*
 
-# Install PyTorch with CUDA 12.1 support first so chatterbox gets the right torch
-RUN pip install --no-cache-dir \
-    torch==2.3.0 torchvision==0.18.0 torchaudio==2.3.0 \
-    --index-url https://download.pytorch.org/whl/cu121
+# Let chatterbox pull its preferred torch version (currently 2.6.0+cu124).
+# The torch pip wheel bundles the CUDA runtime — no CUDA base image needed.
+RUN pip install --no-cache-dir chatterbox-tts soundfile fastapi "uvicorn[standard]"
 
-RUN pip install --no-cache-dir \
-    "transformers>=4.40.0" \
-    chatterbox-tts \
-    soundfile \
-    fastapi \
-    "uvicorn[standard]"
+# Install torchvision matching the torch version chatterbox pulled.
+RUN pip install --no-cache-dir torchvision \
+    --index-url https://download.pytorch.org/whl/cu124
 
 WORKDIR /app
 COPY server.py .
