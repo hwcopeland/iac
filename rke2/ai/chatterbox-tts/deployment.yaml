@@ -52,20 +52,24 @@ spec:
               mountPath: /nix/store
               readOnly: true
           readinessProbe:
-            httpGet:
-              path: /health
-              port: 8765
+            exec:
+              command:
+                - python3
+                - -c
+                - "import urllib.request; r=urllib.request.urlopen('http://localhost:8765/health',timeout=5); import json; d=json.loads(r.read()); exit(0 if d.get('model_loaded') else 1)"
             initialDelaySeconds: 30
             periodSeconds: 10
-            timeoutSeconds: 5
+            timeoutSeconds: 10
             failureThreshold: 6
           livenessProbe:
-            httpGet:
-              path: /health
-              port: 8765
+            exec:
+              command:
+                - python3
+                - -c
+                - "import urllib.request; urllib.request.urlopen('http://localhost:8765/health',timeout=5)"
             initialDelaySeconds: 60
             periodSeconds: 30
-            timeoutSeconds: 5
+            timeoutSeconds: 10
             failureThreshold: 3
       volumes:
         - name: models
