@@ -1,0 +1,13 @@
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: chatterbox-tts
+  namespace: ai
+spec:
+  type: LoadBalancer
+  selector:
+    app: chatterbox-tts
+  ports:
+    - port: 8765
+      targetPort: 8765
