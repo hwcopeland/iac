@@ -1,0 +1,37 @@
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: chatterbox-models
+spec:
+  capacity:
+    storage: 10Gi
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: local-chatterbox
+  hostPath:
+    path: /var/lib/chatterbox
+    type: DirectoryOrCreate
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: In
+              values:
+                - nixos-gpu
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: chatterbox-models
+  namespace: ai
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-chatterbox
+  volumeName: chatterbox-models
+  resources:
+    requests:
+      storage: 10Gi
