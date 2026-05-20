@@ -13,7 +13,7 @@ def _map_summary_rows() -> list[dict]:
           m.MapId, m.File, m.Tier, m.Stages, m.BasePot,
           (SELECT COUNT(DISTINCT SteamId) FROM surf_player_best_runs
              WHERE MapId = m.MapId AND RunType = 0 AND Track = 0) AS completions,
-          wr.SteamId AS wr_steam, wr.BestTime AS wr_time, wp.Name AS wr_name
+          rec.SteamId AS record_steam, rec.BestTime AS record_time, rp.Name AS record_name
         FROM surf_maps m
         LEFT JOIN (
           SELECT b.MapId, b.SteamId, b.BestTime
@@ -25,10 +25,10 @@ def _map_summary_rows() -> list[dict]:
             GROUP BY MapId
           ) t ON t.MapId = b.MapId AND t.best = b.BestTime
           WHERE b.RunType = 0 AND b.Track = 0 AND b.Style = 0
-        ) wr ON wr.MapId = m.MapId
-        LEFT JOIN surf_players wp ON wp.SteamId = wr.SteamId
+        ) rec ON rec.MapId = m.MapId
+        LEFT JOIN surf_players rp ON rp.SteamId = rec.SteamId
         GROUP BY m.MapId, m.File, m.Tier, m.Stages, m.BasePot,
-                 wr.SteamId, wr.BestTime, wp.Name
+                 rec.SteamId, rec.BestTime, rp.Name
         ORDER BY m.Tier, m.File
         """
     )
@@ -45,8 +45,8 @@ def list_maps():
             stages=r["Stages"],
             base_pot=r["BasePot"],
             completions=r["completions"] or 0,
-            wr_holder=r["wr_name"],
-            wr_time=r["wr_time"],
+            record_holder=r["record_name"],
+            record_time=r["record_time"],
         )
         for r in rows
     ]
@@ -135,8 +135,8 @@ async def map_detail(file: str):
             "WHERE MapId = %s AND RunType = 0 AND Track = 0",
             (map_id,),
         )["c"],
-        wr_holder=(main[0]["player_name"] if main else None),
-        wr_time=(main[0]["time"] if main else None),
+        record_holder=(main[0]["player_name"] if main else None),
+        record_time=(main[0]["time"] if main else None),
     )
 
     steam_ids = {str(r["steam_id"]) for r in main}

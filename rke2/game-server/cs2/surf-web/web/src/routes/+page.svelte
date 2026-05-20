@@ -5,13 +5,13 @@
   import RunRow from '$lib/components/RunRow.svelte';
 
   let players = $state<PlayerSummary[] | null>(null);
-  let wrs = $state<RunRecord[] | null>(null);
+  let records = $state<RunRecord[] | null>(null);
   let server = $state<ServerInfo | null>(null);
   let error = $state<string | null>(null);
 
   $effect(() => {
-    Promise.all([api.players({ limit: 25 }), api.wrs(15), api.server()])
-      .then(([p, w, s]) => { players = p; wrs = w; server = s; })
+    Promise.all([api.players({ limit: 25 }), api.records(15, 'all'), api.server()])
+      .then(([p, r, s]) => { players = p; records = r; server = s; })
       .catch((e) => { error = String(e); });
   });
 </script>
@@ -25,7 +25,7 @@
       <span class="value">{server?.counts.players ?? '—'}</span>
     </div>
     <div class="card stat">
-      <span class="label">Runs</span>
+      <span class="label">Total Runs</span>
       <span class="value">{server?.counts.runs ?? '—'}</span>
     </div>
     <div class="card stat">
@@ -42,7 +42,7 @@
       </div>
       <table class="lb">
         <thead>
-          <tr><th>#</th><th>Player</th><th>Points</th><th>Runs</th></tr>
+          <tr><th>#</th><th>Player</th><th>Points</th><th>Maps</th></tr>
         </thead>
         <tbody>
           {#if players}
@@ -51,7 +51,7 @@
                 <td class={rankClass(p.rank ?? 0)}>{p.rank}</td>
                 <td><PlayerCell steamId={p.steam_id} name={p.name} avatar={p.avatar} /></td>
                 <td class="mono">{p.points.toLocaleString()}</td>
-                <td class="mono dim">{p.runs}</td>
+                <td class="mono dim">{p.map_completions}</td>
               </tr>
             {/each}
           {:else}
@@ -64,14 +64,14 @@
     </section>
 
     <section class="card">
-      <div class="card-header"><span class="card-title">Recent WRs</span></div>
+      <div class="card-header"><span class="card-title">Recent Records</span></div>
       <table class="lb">
         <thead>
           <tr><th>Map</th><th>Track</th><th>Player</th><th>Time</th><th>Jmp</th><th>When</th></tr>
         </thead>
         <tbody>
-          {#if wrs}
-            {#each wrs as r}<RunRow run={r} />{/each}
+          {#if records}
+            {#each records as r}<RunRow run={r} />{/each}
           {:else}
             {#each Array(8) as _}
               <tr><td colspan="6"><div class="skeleton"></div></td></tr>

@@ -1,11 +1,14 @@
 <script lang="ts">
-  import { api, type PlayerSummary } from '$lib/api';
+  import { api, type PlayerSort, type PlayerSummary, type SortOrder } from '$lib/api';
   import { rankClass } from '$lib/format';
   import PlayerCell from '$lib/components/PlayerCell.svelte';
+  import SortHeader from '$lib/components/SortHeader.svelte';
 
   let players = $state<PlayerSummary[] | null>(null);
   let offset = $state(0);
   let search = $state('');
+  let sort = $state<PlayerSort>('points');
+  let order = $state<SortOrder>('desc');
   let error = $state<string | null>(null);
   const limit = 50;
 
@@ -13,7 +16,7 @@
 
   function reload() {
     players = null;
-    api.players({ limit, offset, search: search || undefined })
+    api.players({ limit, offset, search: search || undefined, sort, order })
       .then((p) => { players = p; })
       .catch((e) => { error = String(e); });
   }
@@ -23,6 +26,17 @@
     offset = 0;
     if (searchTimer) clearTimeout(searchTimer);
     searchTimer = setTimeout(reload, 250);
+  }
+
+  function onSort(key: string) {
+    if (sort === key) {
+      order = order === 'desc' ? 'asc' : 'desc';
+    } else {
+      sort = key as PlayerSort;
+      order = key === 'name' ? 'asc' : 'desc';
+    }
+    offset = 0;
+    reload();
   }
 
   $effect(() => { reload(); });
@@ -41,7 +55,12 @@
   </div>
   <table class="lb">
     <thead>
-      <tr><th>#</th><th>Player</th><th>Points</th><th>Runs</th></tr>
+      <tr>
+        <th>#</th>
+        <th><SortHeader label="Player" sortKey="name" activeSort={sort} {order} {onSort} /></th>
+        <th><SortHeader label="Points" sortKey="points" activeSort={sort} {order} {onSort} /></th>
+        <th><SortHeader label="Maps" sortKey="completions" activeSort={sort} {order} {onSort} /></th>
+      </tr>
     </thead>
     <tbody>
       {#if players && players.length === 0}
@@ -52,7 +71,7 @@
             <td class={rankClass(p.rank ?? 0)}>{p.rank}</td>
             <td><PlayerCell steamId={p.steam_id} name={p.name} avatar={p.avatar} /></td>
             <td class="mono">{p.points.toLocaleString()}</td>
-            <td class="mono dim">{p.runs}</td>
+            <td class="mono dim">{p.map_completions}</td>
           </tr>
         {/each}
       {:else}

@@ -2,7 +2,7 @@ export interface PlayerSummary {
   steam_id: string;
   name: string;
   points: number;
-  runs: number;
+  map_completions: number;
   rank: number | null;
   avatar: string | null;
   profile_url: string | null;
@@ -10,8 +10,7 @@ export interface PlayerSummary {
 
 export interface PlayerDetail extends PlayerSummary {
   updated_at: string;
-  map_count: number;
-  wr_count: number;
+  record_count: number;
 }
 
 export interface MapSummary {
@@ -21,8 +20,8 @@ export interface MapSummary {
   stages: number;
   base_pot: number;
   completions: number;
-  wr_holder: string | null;
-  wr_time: number | null;
+  record_holder: string | null;
+  record_time: number | null;
 }
 
 export interface RunRecord {
@@ -73,13 +72,25 @@ async function get<T>(path: string): Promise<T> {
   return r.json();
 }
 
+export type PlayerSort = 'points' | 'completions' | 'name';
+export type SortOrder = 'asc' | 'desc';
+export type RecordScope = 'all' | 'main' | 'stage' | 'bonus';
+
 export const api = {
   server: () => get<ServerInfo>('/api/server'),
-  players: (params: { limit?: number; offset?: number; search?: string } = {}) => {
+  players: (params: {
+    limit?: number;
+    offset?: number;
+    search?: string;
+    sort?: PlayerSort;
+    order?: SortOrder;
+  } = {}) => {
     const q = new URLSearchParams();
     if (params.limit) q.set('limit', String(params.limit));
     if (params.offset) q.set('offset', String(params.offset));
     if (params.search) q.set('search', params.search);
+    if (params.sort) q.set('sort', params.sort);
+    if (params.order) q.set('order', params.order);
     const qs = q.toString();
     return get<PlayerSummary[]>(`/api/players${qs ? '?' + qs : ''}`);
   },
@@ -87,5 +98,6 @@ export const api = {
   maps: () => get<MapSummary[]>('/api/maps'),
   map: (file: string) => get<MapDetail>(`/api/maps/${encodeURIComponent(file)}`),
   recent: (limit = 25) => get<RunRecord[]>(`/api/records/recent?limit=${limit}`),
-  wrs: (limit = 25) => get<RunRecord[]>(`/api/records/wr?limit=${limit}`),
+  records: (limit = 25, scope: RecordScope = 'all') =>
+    get<RunRecord[]>(`/api/records/best?limit=${limit}&scope=${scope}`),
 };

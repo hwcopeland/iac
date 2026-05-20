@@ -11,19 +11,36 @@ async def list_players(
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
     search: str | None = Query(None, min_length=1, max_length=64),
+    sort: str | None = Query(None, pattern="^(points|completions|name)$"),
+    order: str | None = Query("desc", pattern="^(asc|desc)$"),
 ):
     where = ""
     params: list = []
     if search:
-        where = "WHERE Name LIKE %s"
+        where = "WHERE p.Name LIKE %s"
         params.append(f"%{search}%")
+
+    sort_col = {
+        "points": "p.Points",
+        "completions": "map_completions",
+        "name": "p.Name",
+    }.get(sort or "points", "p.Points")
+    direction = "ASC" if order == "asc" else "DESC"
 
     rows = db.fetch_all(
         f"""
-        SELECT SteamId, Name, Points, Runs
-        FROM surf_players
+        SELECT
+          p.SteamId, p.Name, p.Points,
+          COALESCE(c.maps, 0) AS map_completions
+        FROM surf_players p
+        LEFT JOIN (
+          SELECT SteamId, COUNT(DISTINCT MapId) AS maps
+          FROM surf_player_best_runs
+          WHERE RunType = 0 AND Track = 0 AND Style = 0
+          GROUP BY SteamId
+        ) c ON c.SteamId = p.SteamId
         {where}
-        ORDER BY Points DESC, Runs DESC
+        ORDER BY {sort_col} {direction}, p.Points DESC
         LIMIT %s OFFSET %s
         """,
         tuple(params + [limit, offset]),
@@ -35,7 +52,7 @@ async def list_players(
             steam_id=str(r["SteamId"]),
             name=enriched.get(str(r["SteamId"]), {}).get("name") or r["Name"],
             points=r["Points"],
-            runs=r["Runs"],
+            map_completions=r["map_completions"],
             rank=offset + i + 1,
             avatar=enriched.get(str(r["SteamId"]), {}).get("avatar"),
             profile_url=enriched.get(str(r["SteamId"]), {}).get("profile_url"),
@@ -52,19 +69,21 @@ async def get_player(steam_id: str):
     player = db.fetch_one(
         """
         SELECT
-          p.SteamId, p.Name, p.Points, p.Runs, p.UpdatedAt,
+          p.SteamId, p.Name, p.Points, p.UpdatedAt,
           (SELECT COUNT(DISTINCT MapId) FROM surf_player_best_runs
-             WHERE SteamId = p.SteamId AND RunType = 0 AND Track = 0) AS map_count,
-          (SELECT COUNT(*) FROM (
-              SELECT MapId, Track, Stage, RunType, Style,
-                     MIN(Time) AS best_time
-              FROM surf_runs GROUP BY MapId, Track, Stage, RunType, Style
-            ) t
-            JOIN surf_runs me ON me.SteamId = p.SteamId
-              AND me.MapId = t.MapId AND me.Track = t.Track
-              AND me.Stage = t.Stage AND me.RunType = t.RunType
-              AND me.Style = t.Style AND me.Time = t.best_time
-          ) AS wr_count
+             WHERE SteamId = p.SteamId AND RunType = 0 AND Track = 0 AND Style = 0
+          ) AS map_completions,
+          (SELECT COUNT(*) FROM surf_player_best_runs b
+            INNER JOIN (
+              SELECT MapId, Track, Stage, RunType, MIN(BestTime) AS best
+              FROM surf_player_best_runs
+              WHERE Style = 0
+              GROUP BY MapId, Track, Stage, RunType
+            ) t ON t.MapId = b.MapId AND t.Track = b.Track
+               AND t.Stage = b.Stage AND t.RunType = b.RunType
+               AND t.best = b.BestTime
+            WHERE b.SteamId = p.SteamId AND b.Style = 0
+          ) AS record_count
         FROM surf_players p
         WHERE p.SteamId = %s
         """,
@@ -117,10 +136,9 @@ async def get_player(steam_id: str):
         steam_id=str(player["SteamId"]),
         name=info.get("name") or player["Name"],
         points=player["Points"],
-        runs=player["Runs"],
+        map_completions=player["map_completions"] or 0,
         updated_at=player["UpdatedAt"],
-        map_count=player["map_count"] or 0,
-        wr_count=player["wr_count"] or 0,
+        record_count=player["record_count"] or 0,
         avatar=info.get("avatar"),
         profile_url=info.get("profile_url"),
     )
