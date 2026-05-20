@@ -317,6 +317,13 @@ LAUNCH_ARGS=(
     +game_type "${GAME_TYPE:-0}"
     +game_mode "${GAME_MODE:-0}"
     +hostname "${SERVER_NAME:-CS2 Surf Server}"
+    # SourceTV demos — set at launch so the HLTV proxy exists before
+    # ModSharp loads. Source2Surf/Timer PlayerManager now guards against
+    # the HLTV proxy (commit 3c58ec2 in hwcopeland/Timer) so propagation
+    # to downstream modules (ReplayRecorder, etc.) is suppressed and the
+    # historical SIGSEGV is fixed.
+    +tv_enable 1
+    +tv_autorecord 1
 )
 
 if [ -n "${WORKSHOP_ADDON_ID:-}" ]; then
