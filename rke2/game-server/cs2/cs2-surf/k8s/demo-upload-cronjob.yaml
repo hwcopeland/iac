@@ -40,14 +40,18 @@ spec:
               command: ["/bin/sh", "-eu", "-c"]
               args:
                 - |
-                  DEMO_DIR=/home/steam/cs2/game/csgo
+                  # CS2 writes tv_record output relative to the active
+                  # workshop addon dir (cs2quakesounds here). Demos land at:
+                  #   <addon>/replays/auto-<ts>-<map>-<host>.dem   (tv_autorecord)
+                  #   <addon>/<filename>.dem                       (manual)
+                  ADDON_DIR=/home/steam/cs2/game/csgo_addons/cs2quakesounds
                   BUCKET=$BUCKET_DEMOS
                   NOW=$(date +%s)
                   uploaded=0
                   skipped=0
                   failed=0
 
-                  for f in "$DEMO_DIR"/auto-*.dem "$DEMO_DIR"/*.dem; do
+                  for f in "$ADDON_DIR"/replays/*.dem "$ADDON_DIR"/*.dem; do
                     [ -f "$f" ] || continue
                     base=$(basename "$f")
                     mt=$(stat -c %Y "$f")
