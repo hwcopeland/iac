@@ -18,7 +18,7 @@
   let liveTimer: ReturnType<typeof setInterval> | undefined;
 
   $effect(() => {
-    Promise.all([api.players({ limit: 25 }), api.records(15, 'all'), api.server()])
+    Promise.all([api.players({ limit: 25 }), api.records(15, 'main'), api.server()])
       .then(([p, r, s]) => { players = p; records = r; server = s; })
       .catch((e) => { error = String(e); });
     refreshLive();
@@ -100,7 +100,7 @@
     </section>
 
     <section class="card">
-      <div class="card-header"><span class="card-title">Recent Records</span></div>
+      <div class="card-header"><span class="card-title">Recent Map Records</span></div>
       <table class="lb">
         <thead>
           <tr><th>Map</th><th>Track</th><th>Player</th><th>Time</th><th>Jmp</th><th>When</th></tr>
