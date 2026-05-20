@@ -6,14 +6,18 @@ export function formatTime(seconds: number): string {
 }
 
 export function formatRelative(iso: string): string {
-  const then = new Date(iso).getTime();
+  // Accept naive strings as UTC as a defence-in-depth in case the server
+  // ever returns a timestamp without an offset.
+  const normalized = /[zZ]|[+-]\d{2}:?\d{2}$/.test(iso) ? iso : iso + 'Z';
+  const then = new Date(normalized).getTime();
   if (Number.isNaN(then)) return iso;
   const diff = (Date.now() - then) / 1000;
+  if (diff < 0) return new Date(normalized).toLocaleString();
   if (diff < 60) return 'just now';
   if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
   if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
   if (diff < 604800) return `${Math.floor(diff / 86400)}d ago`;
-  return new Date(iso).toLocaleDateString();
+  return new Date(normalized).toLocaleDateString();
 }
 
 export function mapDisplayName(file: string): string {
