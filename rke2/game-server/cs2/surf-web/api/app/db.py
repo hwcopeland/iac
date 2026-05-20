@@ -1,11 +1,32 @@
 from collections.abc import Iterator
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from typing import Any
 
 import mysql.connector
+from mysql.connector.conversion import MySQLConverter
 from mysql.connector.pooling import MySQLConnectionPool
 
 from .settings import settings
+
+
+class UTCConverter(MySQLConverter):
+    """Source2Surf.Timer stores DATETIME columns as naive UTC. Tag them so
+    Pydantic serializes with an offset and the browser doesn't reinterpret
+    them as local time (which would make recent records look like the future)."""
+
+    def _DATETIME_to_python(self, value, dsc=None):  # noqa: N802
+        dt = super()._DATETIME_to_python(value, dsc)
+        if isinstance(dt, datetime) and dt.tzinfo is None:
+            return dt.replace(tzinfo=timezone.utc)
+        return dt
+
+    def _TIMESTAMP_to_python(self, value, dsc=None):  # noqa: N802
+        dt = super()._TIMESTAMP_to_python(value, dsc)
+        if isinstance(dt, datetime) and dt.tzinfo is None:
+            return dt.replace(tzinfo=timezone.utc)
+        return dt
+
 
 _pool: MySQLConnectionPool | None = None
 
@@ -23,6 +44,7 @@ def init_pool() -> None:
         password=settings.mysql_password,
         autocommit=True,
         connection_timeout=5,
+        converter_class=UTCConverter,
     )
 
 
