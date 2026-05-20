@@ -1,0 +1,62 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: surf-web
+  namespace: game-server
+  labels:
+    app.kubernetes.io/name: surf-web
+    app.kubernetes.io/part-of: surf-web
+spec:
+  replicas: 1
+  revisionHistoryLimit: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: surf-web
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: surf-web
+        app.kubernetes.io/part-of: surf-web
+    spec:
+      imagePullSecrets:
+        - name: zot-pull-secret
+      containers:
+        - name: web
+          image: zot.hwcopeland.net/game-server/surf-web:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 80
+              name: http
+          resources:
+            requests: { cpu: 10m, memory: 32Mi }
+            limits:   { cpu: 200m, memory: 96Mi }
+          livenessProbe:
+            httpGet: { path: /healthz, port: 80 }
+            initialDelaySeconds: 5
+            periodSeconds: 30
+          readinessProbe:
+            httpGet: { path: /healthz, port: 80 }
+            initialDelaySeconds: 2
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: surf-web
+  namespace: game-server
+  labels:
+    app.kubernetes.io/name: surf-web
+spec:
+  selector:
+    app.kubernetes.io/name: surf-web
+  ports:
+    - name: http
+      port: 80
+      targetPort: 80
+  type: ClusterIP
