@@ -317,6 +317,15 @@ LAUNCH_ARGS=(
     +game_type "${GAME_TYPE:-0}"
     +game_mode "${GAME_MODE:-0}"
     +hostname "${SERVER_NAME:-CS2 Surf Server}"
+    # SourceTV at launch (NOT via server.cfg) — server.cfg execs after
+    # ModSharp loads, so the HLTV proxy fires OnClientPutInServer events
+    # that Source2Surf.Timer can't handle (compiled-only DLL, only filters
+    # IsFakeClient, doesn't check IsHltv) → SIGSEGV. As launch flags the
+    # HLTV proxy is created during engine init *before* ModSharp loads;
+    # ModSharp's plugin events should then only fire for clients
+    # connecting *after* init, skipping the pre-existing HLTV slot.
+    +tv_enable 1
+    +tv_autorecord 1
 )
 
 if [ -n "${WORKSHOP_ADDON_ID:-}" ]; then
