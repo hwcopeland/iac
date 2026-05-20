@@ -220,9 +220,16 @@ public sealed class SurfMapCommand : IModSharpModule, IClientListener, IGameList
 
     // ─── Chat ──────────────────────────────────────────────────────────
 
+    // SourceTV proxy connects with IsHltv=true and SteamId=0. Without this
+    // guard the plugin reached SetClanTag on a null/invalid PlayerController
+    // and the dedicated server SIGSEGV'd during ModSharp bootstrap right
+    // after the `CONNECT 0 ()` log line.
+    private static bool IsNonHumanClient(IGameClient client) =>
+        client.IsFakeClient || client.IsHltv || (ulong)client.SteamId == 0;
+
     public void OnClientPutInServer(IGameClient client)
     {
-        if (client.IsFakeClient) return;
+        if (IsNonHumanClient(client)) return;
         _logger.LogInformation("CONNECT {Id} ({Name})", client.SteamId, client.Name);
 
         // Set clan tag to rank title in tab menu / scoreboard.
@@ -258,15 +265,16 @@ public sealed class SurfMapCommand : IModSharpModule, IClientListener, IGameList
 
     public void OnClientDisconnecting(IGameClient client, NetworkDisconnectionReason reason)
     {
-        if (!client.IsFakeClient)
+        if (!IsNonHumanClient(client))
             _logger.LogInformation("DISCONNECT {Id} ({Name}) reason={R}", client.SteamId, client.Name, reason);
     }
 
     public ECommandAction OnClientSayCommand(IGameClient client, bool teamOnly, bool isCommand,
                                              string commandName, string message)
     {
+        if (IsNonHumanClient(client)) return ECommandAction.Skipped;
         var rawMsg = (message ?? "").TrimStart();
-        if (rawMsg.Length > 0 && !client.IsFakeClient)
+        if (rawMsg.Length > 0)
         {
             _logger.LogInformation("CHAT {Id} ({Name}): {Msg}", client.SteamId, client.Name, rawMsg);
 
