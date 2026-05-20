@@ -1,6 +1,16 @@
-from datetime import datetime
+from datetime import datetime, timezone
+from typing import Annotated
 
-from pydantic import BaseModel, Field
+from pydantic import AfterValidator, BaseModel, Field
+
+
+def _as_utc(dt: datetime) -> datetime:
+    """Stamp naive datetimes (from MySQL) as UTC so JSON output carries the
+    timezone offset and JS `new Date(iso)` doesn't misinterpret them as local."""
+    return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt
+
+
+UTCDatetime = Annotated[datetime, AfterValidator(_as_utc)]
 
 
 class PlayerSummary(BaseModel):
@@ -14,7 +24,7 @@ class PlayerSummary(BaseModel):
 
 
 class PlayerDetail(PlayerSummary):
-    updated_at: datetime
+    updated_at: UTCDatetime
     record_count: int
 
 
@@ -43,7 +53,7 @@ class RunRecord(BaseModel):
     jumps: int
     strafes: int
     sync: float
-    date: datetime
+    date: UTCDatetime
     avatar: str | None = None
 
 
