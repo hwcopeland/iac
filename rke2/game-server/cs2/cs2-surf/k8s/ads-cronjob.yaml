@@ -1,0 +1,123 @@
+---
+# Hourly in-game broadcast advertising surf.hwcopeland.net.
+#
+# RCON access: TCP 27015 is intentionally NOT exposed via cs2-modded-service
+# (see service-patch.yaml, post-2026-04-14 spam incident). Instead this job
+# `kubectl exec`s into the surf server pod, which already has RCON_PASSWORD
+# in-env and connects to its own pod IP — no new network exposure.
+#
+# Edit the rotation in the ads-config ConfigMap. Messages cycle deterministically
+# by hour-of-day so consecutive runs don't repeat.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cs2-surf-ads-config
+  namespace: game-server
+data:
+  messages.txt: |
+    [Stats] See your times & rank at surf.hwcopeland.net
+    [Stats] Live leaderboard + per-map records: surf.hwcopeland.net
+    [Stats] surf.hwcopeland.net — top players, recent records, your profile
+    [Stats] Compare PBs with the server WR holders: surf.hwcopeland.net
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: cs2-surf-ads
+  namespace: game-server
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: cs2-surf-ads
+  namespace: game-server
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: cs2-surf-ads
+  namespace: game-server
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: cs2-surf-ads
+subjects:
+  - kind: ServiceAccount
+    name: cs2-surf-ads
+    namespace: game-server
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: cs2-surf-ads
+  namespace: game-server
+  labels:
+    app.kubernetes.io/name: cs2-surf-ads
+    app.kubernetes.io/part-of: cs2-surf
+spec:
+  schedule: "0 * * * *"
+  timeZone: "America/Chicago"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 60
+      template:
+        spec:
+          serviceAccountName: cs2-surf-ads
+          restartPolicy: Never
+          containers:
+            - name: rcon
+              image: alpine/k8s:1.30.4
+              command: ["/bin/bash", "-eu", "-o", "pipefail", "-c"]
+              args:
+                - |
+                  POD=$(kubectl get pod -n game-server -l app=cs2-surf-server \
+                        -o jsonpath='{.items[?(@.status.phase=="Running")].metadata.name}' \
+                        | awk '{print $1}')
+                  if [ -z "$POD" ]; then
+                    echo "no running surf pod; skipping"; exit 0
+                  fi
+                  # Rotate through messages by hour-of-day for variety.
+                  mapfile -t MSGS < /etc/ads/messages.txt
+                  COUNT=${#MSGS[@]}
+                  HOUR=$(date +%-H)
+                  MSG="${MSGS[$((HOUR % COUNT))]}"
+                  echo "→ $POD: $MSG"
+                  # Run RCON from inside the pod against its own loopback —
+                  # no Service traversal, no external exposure. The pod's
+                  # RCON_PASSWORD env is consumed inline; never logged.
+                  kubectl exec -n game-server "$POD" -- python3 -c '
+                  import os, socket, struct, subprocess, sys
+                  pw  = os.environ["RCON_PASSWORD"]
+                  msg = sys.argv[1]
+                  port = int(os.environ.get("PORT", "27015"))
+                  # CS2 -usercon binds RCON to the pod IP, not loopback.
+                  host = subprocess.check_output(["hostname", "-i"]).split()[0].decode()
+                  s = socket.socket(); s.settimeout(5)
+                  s.connect((host, port))
+                  s.sendall(struct.pack("<iii", len(pw)+10, 0, 3) + pw.encode() + b"\x00\x00")
+                  s.recv(4096)
+                  cmd = f"say {msg}".encode()
+                  s.sendall(struct.pack("<iii", len(cmd)+10, 1, 2) + cmd + b"\x00\x00")
+                  s.close()
+                  ' "$MSG"
+              volumeMounts:
+                - name: ads
+                  mountPath: /etc/ads
+              resources:
+                requests: { cpu: 10m, memory: 32Mi }
+                limits:   { cpu: 200m, memory: 128Mi }
+          volumes:
+            - name: ads
+              configMap:
+                name: cs2-surf-ads-config
