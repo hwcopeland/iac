@@ -1,0 +1,43 @@
+---
+apiVersion: cloudflare-operator.io/v1
+kind: DNSRecord
+metadata:
+  name: surf-web
+  namespace: game-server
+spec:
+  name: surf.hwcopeland.net
+  type: CNAME
+  content: hwcopeland.net
+  proxied: true
+  ttl: 1
+  interval: 5m
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: surf-web
+  namespace: game-server
+  annotations:
+    cert-manager.io/cluster-issuer: cf-issuer
+spec:
+  hostnames:
+    - surf.hwcopeland.net
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: hwcopeland-gateway
+      namespace: kube-system
+      sectionName: https
+  rules:
+    # nginx in surf-web proxies /api → surf-api in-cluster, so a single
+    # backend ref keeps routing simple and avoids a CORS preflight round-trip.
+    - backendRefs:
+        - group: ""
+          kind: Service
+          name: surf-web
+          port: 80
+          weight: 1
+      matches:
+        - path:
+            type: PathPrefix
+            value: /
