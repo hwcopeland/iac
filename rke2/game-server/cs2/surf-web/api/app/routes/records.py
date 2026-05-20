@@ -67,6 +67,13 @@ async def best_records(
         "all":   "1 = 1",
     }[scope]
 
+    # Date strategy: surf_player_best_runs.UpdatedAt gets bumped by server
+    # touches (map load, points sync) even when no record was set. The reliable
+    # "when did this WR happen" timestamp lives in surf_player_track_scores —
+    # that table is only updated when the player actually earns/improves points
+    # on a (Map, Track). It covers Track=0 (main) and Track>0 (bonus) but has
+    # no Stage granularity, so for stage records (RunType=1) we fall back to
+    # b.UpdatedAt and accept some noise.
     rows = db.fetch_all(
         f"""
         SELECT
@@ -74,12 +81,16 @@ async def best_records(
           b.SteamId AS steam_id, p.Name AS player_name,
           b.RunType AS run_type, b.Track AS track, b.Stage AS stage,
           b.Style AS style, b.BestTime AS time,
-          COALESCE(r.Date, b.UpdatedAt) AS date,
+          CASE WHEN b.RunType = 0 THEN COALESCE(ts.UpdatedAt, b.UpdatedAt)
+               ELSE b.UpdatedAt END AS date,
           r.Jumps AS jumps, r.Strafes AS strafes, r.Sync AS sync
         FROM surf_player_best_runs b
         JOIN surf_maps m ON m.MapId = b.MapId
         JOIN surf_players p ON p.SteamId = b.SteamId
         LEFT JOIN surf_runs r ON r.Id = b.RunId
+        LEFT JOIN surf_player_track_scores ts
+          ON ts.SteamId = b.SteamId AND ts.MapId = b.MapId
+         AND ts.Track   = b.Track   AND ts.Style = b.Style
         INNER JOIN (
           SELECT MapId, Track, Stage, RunType, MIN(BestTime) AS best
           FROM surf_player_best_runs
@@ -89,7 +100,8 @@ async def best_records(
            AND t.Stage = b.Stage AND t.RunType = b.RunType
            AND t.best = b.BestTime
         WHERE b.Style = 0 AND {scope_filter}
-        ORDER BY COALESCE(r.Date, b.UpdatedAt) DESC
+        ORDER BY CASE WHEN b.RunType = 0 THEN COALESCE(ts.UpdatedAt, b.UpdatedAt)
+                      ELSE b.UpdatedAt END DESC
         LIMIT %s
         """,
         (limit,),
