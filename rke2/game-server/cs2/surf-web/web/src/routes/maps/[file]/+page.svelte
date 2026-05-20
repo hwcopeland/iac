@@ -32,8 +32,8 @@
       <div class="stat"><span class="label">Bonuses</span><span class="value">{detail.bonuses.length}</span></div>
       <div class="stat"><span class="label">Completions</span><span class="value">{m.completions}</span></div>
       <div class="stat">
-        <span class="label">World Record</span>
-        <span class="value">{m.wr_time ? formatTime(m.wr_time) : '—'}</span>
+        <span class="label">Map Record</span>
+        <span class="value">{m.record_time ? formatTime(m.record_time) : '—'}</span>
       </div>
     </div>
   </section>

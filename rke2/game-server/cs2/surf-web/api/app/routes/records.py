@@ -48,11 +48,27 @@ async def recent_records(limit: int = Query(25, ge=1, le=100)):
     return [_to_run(r, enriched.get(str(r["steam_id"]), {}).get("avatar")) for r in rows]
 
 
-@router.get("/wr", response_model=list[RunRecord])
-async def world_records(limit: int = Query(25, ge=1, le=100)):
-    """Most recently set map WRs (main track only)."""
+@router.get("/best", response_model=list[RunRecord])
+async def best_records(
+    limit: int = Query(25, ge=1, le=100),
+    scope: str = Query("all", pattern="^(all|main|stage|bonus)$"),
+):
+    """Most recently set server records.
+
+    `scope=main`  -> only main-track map records (RunType=0, Track=0).
+    `scope=stage` -> only stage records (RunType=1, Track=0).
+    `scope=bonus` -> only bonus records (Track > 0).
+    `scope=all`   -> any of the above, latest first.
+    """
+    scope_filter = {
+        "main":  "b.RunType = 0 AND b.Track = 0",
+        "stage": "b.RunType = 1 AND b.Track = 0",
+        "bonus": "b.Track > 0",
+        "all":   "1 = 1",
+    }[scope]
+
     rows = db.fetch_all(
-        """
+        f"""
         SELECT
           b.RunId AS run_id, b.MapId AS map_id, m.File AS map_file,
           b.SteamId AS steam_id, p.Name AS player_name,
@@ -64,12 +80,14 @@ async def world_records(limit: int = Query(25, ge=1, le=100)):
         JOIN surf_players p ON p.SteamId = b.SteamId
         LEFT JOIN surf_runs r ON r.Id = b.RunId
         INNER JOIN (
-          SELECT MapId, MIN(BestTime) AS best
+          SELECT MapId, Track, Stage, RunType, MIN(BestTime) AS best
           FROM surf_player_best_runs
-          WHERE RunType = 0 AND Track = 0 AND Style = 0
-          GROUP BY MapId
-        ) t ON t.MapId = b.MapId AND t.best = b.BestTime
-        WHERE b.RunType = 0 AND b.Track = 0 AND b.Style = 0
+          WHERE Style = 0
+          GROUP BY MapId, Track, Stage, RunType
+        ) t ON t.MapId = b.MapId AND t.Track = b.Track
+           AND t.Stage = b.Stage AND t.RunType = b.RunType
+           AND t.best = b.BestTime
+        WHERE b.Style = 0 AND {scope_filter}
         ORDER BY b.UpdatedAt DESC
         LIMIT %s
         """,

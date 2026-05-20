@@ -7,7 +7,7 @@ class PlayerSummary(BaseModel):
     steam_id: str
     name: str
     points: int
-    runs: int
+    map_completions: int
     rank: int | None = None
     avatar: str | None = None
     profile_url: str | None = None
@@ -15,8 +15,7 @@ class PlayerSummary(BaseModel):
 
 class PlayerDetail(PlayerSummary):
     updated_at: datetime
-    map_count: int
-    wr_count: int
+    record_count: int
 
 
 class MapSummary(BaseModel):
@@ -26,8 +25,8 @@ class MapSummary(BaseModel):
     stages: int
     base_pot: int
     completions: int
-    wr_holder: str | None = None
-    wr_time: float | None = None
+    record_holder: str | None = None
+    record_time: float | None = None
 
 
 class RunRecord(BaseModel):

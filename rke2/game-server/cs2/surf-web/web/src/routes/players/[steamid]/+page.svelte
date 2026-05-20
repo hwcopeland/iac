@@ -29,11 +29,10 @@
       <p class="dim mono" style="font-size: 0.85rem;">SteamID64: {pl.steam_id}</p>
       {#if pl.profile_url}<p><a href={pl.profile_url} target="_blank" rel="noopener">Steam profile ↗</a></p>{/if}
     </div>
-    <div class="stats-row" style="margin: 0; grid-template-columns: repeat(4, minmax(0, 1fr)); flex: 1;">
+    <div class="stats-row" style="margin: 0; grid-template-columns: repeat(3, minmax(0, 1fr)); flex: 1;">
       <div class="stat"><span class="label">Points</span><span class="value">{pl.points.toLocaleString()}</span></div>
-      <div class="stat"><span class="label">Runs</span><span class="value">{pl.runs}</span></div>
-      <div class="stat"><span class="label">Maps</span><span class="value">{pl.map_count}</span></div>
-      <div class="stat"><span class="label">WRs</span><span class="value">{pl.wr_count}</span></div>
+      <div class="stat"><span class="label">Maps</span><span class="value">{pl.map_completions}</span></div>
+      <div class="stat"><span class="label">Records</span><span class="value">{pl.record_count}</span></div>
     </div>
   </section>
 
