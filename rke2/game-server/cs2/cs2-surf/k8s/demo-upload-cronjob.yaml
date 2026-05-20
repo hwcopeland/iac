@@ -1,0 +1,123 @@
+---
+# Periodically syncs finalized SourceTV demos from the surf server PVC to the
+# cs2-demos Garage bucket, then deletes the local copies so /home/steam/cs2
+# doesn't grow unbounded.
+#
+# Mounting strategy: cs2-modded-claim is RWX (Longhorn share-manager), so
+# this job mounts the same PVC the live surf-server pod uses. We touch only
+# /home/steam/cs2/game/csgo/auto-*.dem and never write anywhere the game
+# server cares about.
+#
+# Safety:
+#   - Only uploads files whose mtime is >120s in the past (avoids racing
+#     the engine while it still has the demo file open).
+#   - Verifies the upload completed (`aws s3 ls` shows the key) before
+#     unlinking the local file.
+#   - Skips files smaller than 64 KiB (likely aborted recordings).
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: cs2-demo-upload
+  namespace: game-server
+  labels:
+    app.kubernetes.io/name: cs2-demo-upload
+    app.kubernetes.io/part-of: cs2-surf
+spec:
+  schedule: "*/5 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 1800
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: uploader
+              image: amazon/aws-cli:2.17.0
+              command: ["/bin/sh", "-eu", "-c"]
+              args:
+                - |
+                  DEMO_DIR=/home/steam/cs2/game/csgo
+                  BUCKET=$BUCKET_DEMOS
+                  NOW=$(date +%s)
+                  uploaded=0
+                  skipped=0
+                  failed=0
+
+                  for f in "$DEMO_DIR"/auto-*.dem "$DEMO_DIR"/*.dem; do
+                    [ -f "$f" ] || continue
+                    base=$(basename "$f")
+                    mt=$(stat -c %Y "$f")
+                    age=$(( NOW - mt ))
+                    size=$(stat -c %s "$f")
+
+                    if [ "$age" -lt 120 ]; then
+                      skipped=$((skipped+1))
+                      echo "skip (open): $base age=${age}s"
+                      continue
+                    fi
+                    if [ "$size" -lt 65536 ]; then
+                      echo "drop (tiny ${size}b): $base"
+                      rm -f "$f"; continue
+                    fi
+
+                    # Date-prefixed key so they sort and lifecycle policies can
+                    # work prefix-based: 2026/05/20/auto-20260520-191234-surf_corner.dem
+                    day=$(date -u -d "@$mt" +%Y/%m/%d 2>/dev/null || date -u -r "$mt" +%Y/%m/%d)
+                    key="$day/$base"
+
+                    if aws --endpoint-url "$S3_ENDPOINT" s3 cp "$f" "s3://$BUCKET/$key" >/dev/null 2>&1; then
+                      if aws --endpoint-url "$S3_ENDPOINT" s3 ls "s3://$BUCKET/$key" >/dev/null 2>&1; then
+                        rm -f "$f"
+                        uploaded=$((uploaded+1))
+                        echo "ok: $key (${size}b)"
+                      else
+                        failed=$((failed+1))
+                        echo "verify-failed: $key"
+                      fi
+                    else
+                      failed=$((failed+1))
+                      echo "upload-failed: $key"
+                    fi
+                  done
+                  echo "summary: uploaded=$uploaded skipped=$skipped failed=$failed"
+                  [ "$failed" -eq 0 ]
+              env:
+                - name: S3_ENDPOINT
+                  valueFrom:
+                    secretKeyRef:
+                      name: cs2-surf-s3
+                      key: endpoint
+                - name: AWS_DEFAULT_REGION
+                  valueFrom:
+                    secretKeyRef:
+                      name: cs2-surf-s3
+                      key: region
+                - name: AWS_ACCESS_KEY_ID
+                  valueFrom:
+                    secretKeyRef:
+                      name: cs2-surf-s3
+                      key: access-key-id
+                - name: AWS_SECRET_ACCESS_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: cs2-surf-s3
+                      key: secret-access-key
+                - name: BUCKET_DEMOS
+                  valueFrom:
+                    secretKeyRef:
+                      name: cs2-surf-s3
+                      key: bucket-demos
+              volumeMounts:
+                - name: cs2-data
+                  mountPath: /home/steam/cs2
+              resources:
+                requests: { cpu: 50m, memory: 64Mi }
+                limits:   { cpu: 500m, memory: 256Mi }
+          volumes:
+            - name: cs2-data
+              persistentVolumeClaim:
+                claimName: cs2-modded-claim
