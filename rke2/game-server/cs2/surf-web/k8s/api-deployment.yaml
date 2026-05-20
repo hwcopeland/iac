@@ -48,6 +48,10 @@ spec:
               valueFrom: { secretKeyRef: { name: surf-web-steam, key: api_key } }
             - name: SURFWEB_CORS_ORIGINS
               value: "https://surf.hwcopeland.net"
+            - name: SURFWEB_GAMESERVER_HOST
+              value: "cs2-modded-service.game-server.svc.cluster.local"
+            - name: SURFWEB_GAMESERVER_PORT
+              value: "27015"
           resources:
             requests: { cpu: 50m, memory: 128Mi }
             limits:   { cpu: 500m, memory: 384Mi }
