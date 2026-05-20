@@ -73,7 +73,8 @@ async def best_records(
           b.RunId AS run_id, b.MapId AS map_id, m.File AS map_file,
           b.SteamId AS steam_id, p.Name AS player_name,
           b.RunType AS run_type, b.Track AS track, b.Stage AS stage,
-          b.Style AS style, b.BestTime AS time, b.UpdatedAt AS date,
+          b.Style AS style, b.BestTime AS time,
+          COALESCE(r.Date, b.UpdatedAt) AS date,
           r.Jumps AS jumps, r.Strafes AS strafes, r.Sync AS sync
         FROM surf_player_best_runs b
         JOIN surf_maps m ON m.MapId = b.MapId
@@ -88,7 +89,7 @@ async def best_records(
            AND t.Stage = b.Stage AND t.RunType = b.RunType
            AND t.best = b.BestTime
         WHERE b.Style = 0 AND {scope_filter}
-        ORDER BY b.UpdatedAt DESC
+        ORDER BY COALESCE(r.Date, b.UpdatedAt) DESC
         LIMIT %s
         """,
         (limit,),

@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from . import db
+from . import a2s, db
 from .routes import maps, players, records
 from .settings import settings
 
@@ -43,6 +43,15 @@ def server_info() -> dict:
         "(SELECT COUNT(*) FROM surf_maps) AS maps"
     )
     return {"counts": counts}
+
+
+@app.get("/api/server/live")
+def server_live() -> dict:
+    return a2s.fetch_cached(
+        settings.gameserver_host,
+        settings.gameserver_port,
+        settings.gameserver_cache_ttl_seconds,
+    )
 
 
 app.include_router(players.router)

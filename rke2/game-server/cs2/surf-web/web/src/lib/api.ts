@@ -66,6 +66,27 @@ export interface ServerInfo {
   counts: { players: number; runs: number; maps: number };
 }
 
+export interface LiveServerInfo {
+  name: string;
+  map: string;
+  folder: string;
+  game: string;
+  players: number;
+  max_players: number;
+  bots: number;
+  visibility: number;
+  vac: number;
+  version: string;
+  keywords: string | null;
+  fetched_at: number;
+}
+
+export interface LiveServer {
+  online: boolean;
+  error: string | null;
+  info: LiveServerInfo | null;
+}
+
 async function get<T>(path: string): Promise<T> {
   const r = await fetch(path, { headers: { Accept: 'application/json' } });
   if (!r.ok) throw new Error(`${path}: ${r.status} ${r.statusText}`);
@@ -78,6 +99,7 @@ export type RecordScope = 'all' | 'main' | 'stage' | 'bonus';
 
 export const api = {
   server: () => get<ServerInfo>('/api/server'),
+  live: () => get<LiveServer>('/api/server/live'),
   players: (params: {
     limit?: number;
     offset?: number;
