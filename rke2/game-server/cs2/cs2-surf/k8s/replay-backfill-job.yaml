@@ -1,0 +1,62 @@
+---
+# One-shot backfill: copies every existing Source2Surf replay JSON from the
+# surf-server PVC into the cs2-replays Garage bucket.
+#
+# After this Job completes once, the surf-server keeps writing new replays
+# locally to /home/steam/cs2/game/sharp/data/surftimer/replays/ (S2S plugin
+# behavior, can't be redirected without forking the plugin). If we want
+# ongoing sync, a CronJob mirroring the dir to s3 would do it — but since
+# S2S replays are now legacy (we record .dem demos going forward), a single
+# backfill captures the historical archive and that's enough.
+#
+# Idempotent: aws s3 sync only uploads new/changed objects.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: cs2-replay-backfill
+  namespace: game-server
+  labels:
+    app.kubernetes.io/name: cs2-replay-backfill
+    app.kubernetes.io/part-of: cs2-surf
+spec:
+  ttlSecondsAfterFinished: 86400
+  backoffLimit: 2
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: sync
+          image: amazon/aws-cli:2.17.0
+          command: ["/bin/sh", "-eu", "-c"]
+          args:
+            - |
+              SRC=/home/steam/cs2/game/sharp/data/surftimer/replays
+              echo "Counting source files..."
+              find "$SRC" -type f -name '*.replay' | wc -l
+              echo "Syncing to s3://$BUCKET_REPLAYS/legacy/ ..."
+              aws --endpoint-url "$S3_ENDPOINT" s3 sync "$SRC" "s3://$BUCKET_REPLAYS/legacy/" \
+                --exclude '*' --include '*.replay' --only-show-errors
+              echo "Done."
+              aws --endpoint-url "$S3_ENDPOINT" s3 ls "s3://$BUCKET_REPLAYS/legacy/" --recursive --summarize | tail -5
+          env:
+            - name: S3_ENDPOINT
+              valueFrom: { secretKeyRef: { name: cs2-surf-s3, key: endpoint } }
+            - name: AWS_DEFAULT_REGION
+              valueFrom: { secretKeyRef: { name: cs2-surf-s3, key: region } }
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom: { secretKeyRef: { name: cs2-surf-s3, key: access-key-id } }
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom: { secretKeyRef: { name: cs2-surf-s3, key: secret-access-key } }
+            - name: BUCKET_REPLAYS
+              valueFrom: { secretKeyRef: { name: cs2-surf-s3, key: bucket-replays } }
+          volumeMounts:
+            - name: cs2-data
+              mountPath: /home/steam/cs2
+              readOnly: true
+          resources:
+            requests: { cpu: 100m, memory: 128Mi }
+            limits:   { cpu: 1000m, memory: 512Mi }
+      volumes:
+        - name: cs2-data
+          persistentVolumeClaim:
+            claimName: cs2-modded-claim
