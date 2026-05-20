@@ -38,7 +38,7 @@ WORKDIR /build
 # --- Source2Surf/Timer (hwcopeland fork with surf patches) ---
 # TIMER_COMMIT is bumped whenever the fork is updated to bust Docker's
 # layer cache (git clone is cached by instruction text, not remote state).
-ARG TIMER_COMMIT="a5d08df-ms121"
+ARG TIMER_COMMIT="3c58ec2-hltv-fix"
 RUN echo "timer:${TIMER_COMMIT}" && git clone --branch "${SOURCE2SURF_TIMER_REF}" \
         https://github.com/hwcopeland/Timer.git /build/timer
 WORKDIR /build/timer
