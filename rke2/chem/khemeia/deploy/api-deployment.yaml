@@ -53,6 +53,26 @@ spec:
               value: "true"
             - name: OIDC_ISSUER_URL
               value: "https://auth.hwcopeland.net/application/o/khemeia/"
+            # Garage S3 — endpoint points at the shared garage-system namespace
+            # (migrated from chem on 2026-05-20). Credentials are loaded from
+            # the local copy of garage-secret in this namespace so we don't
+            # depend on cross-namespace secret resolution.
+            - name: GARAGE_ENABLED
+              value: "true"
+            - name: GARAGE_ENDPOINT
+              value: "http://garage.garage-system.svc.cluster.local:3900"
+            - name: GARAGE_REGION
+              value: "garage"
+            - name: GARAGE_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: garage-secret
+                  key: access-key-id
+            - name: GARAGE_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: garage-secret
+                  key: secret-access-key
           volumeMounts:
             - name: plugins
               mountPath: /app/plugins

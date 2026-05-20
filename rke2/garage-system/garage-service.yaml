@@ -1,12 +1,11 @@
 ---
 # ClusterIP service for the Garage S3-compatible object store.
-# Exposes S3 API (3900) and admin API (3902) within the cluster.
-# Endpoint: garage.chem.svc.cluster.local
+# Endpoint: garage.garage-system.svc.cluster.local
 apiVersion: v1
 kind: Service
 metadata:
   name: garage
-  namespace: chem
+  namespace: garage-system
   labels:
     app.kubernetes.io/name: garage
 spec:

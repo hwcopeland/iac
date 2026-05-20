@@ -5,7 +5,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: garage-config
-  namespace: chem
+  namespace: garage-system
   labels:
     app.kubernetes.io/name: garage
 data:
