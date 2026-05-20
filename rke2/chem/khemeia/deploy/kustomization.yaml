@@ -21,4 +21,7 @@ resources:
   - flux-webhook-receiver.yaml
   - servicemonitor.yaml
   - grafana-dashboard-khemeia.yaml
-  - infra/
+  # Garage moved to rke2/garage-system/ on 2026-05-20 — see that kustomization.
+  # Only the local Secret holding S3 credentials stays in chem so the
+  # khemeia-controller can resolve them via secretKeyRef.
+  - garage-secret.yaml

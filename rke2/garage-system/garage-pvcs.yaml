@@ -1,0 +1,42 @@
+---
+# Pre-created PVCs in garage-system namespace, pinned via volumeName to the
+# existing PVs that previously held chem/data-garage-0 and chem/meta-garage-0.
+#
+# The StatefulSet (replicas=1) will look up PVCs named data-garage-0 /
+# meta-garage-0 before falling back to volumeClaimTemplates — by pre-creating
+# these here we adopt the existing 200 GB of object data without copying.
+#
+# Migration prep that MUST happen before applying this manifest:
+#   1. Patch each PV's reclaimPolicy to Retain.
+#   2. Scale chem/garage-0 to 0 and delete data-garage-0 + meta-garage-0 PVCs
+#      in the chem namespace (PVs survive due to Retain).
+#   3. Clear `spec.claimRef` on each PV so it becomes Available again.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: data-garage-0
+  namespace: garage-system
+  labels:
+    app.kubernetes.io/name: garage
+spec:
+  accessModes: ["ReadWriteOnce"]
+  storageClassName: longhorn
+  resources:
+    requests:
+      storage: 200Gi
+  volumeName: pvc-d377505e-feb0-4a5f-b9ac-270cfcec8442
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: meta-garage-0
+  namespace: garage-system
+  labels:
+    app.kubernetes.io/name: garage
+spec:
+  accessModes: ["ReadWriteOnce"]
+  storageClassName: longhorn
+  resources:
+    requests:
+      storage: 1Gi
+  volumeName: pvc-5eadc985-ba01-4d87-bd9f-f702d7d7cbf2
