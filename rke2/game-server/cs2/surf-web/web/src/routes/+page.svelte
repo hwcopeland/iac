@@ -47,8 +47,10 @@
       <div class="live-stat">
         <span class="label">Players</span>
         <span class="value mono">
-          {live?.info ? `${live.info.players}/${live.info.max_players}` : '—'}
-          {#if live?.info?.bots}<span class="dim"> (+{live.info.bots} bot{live.info.bots > 1 ? 's' : ''})</span>{/if}
+          {#if live?.info}
+            {Math.max(0, live.info.players - live.info.bots)}/{live.info.max_players}
+            {#if live.info.bots > 0}<span class="dim"> ({live.info.bots} bot{live.info.bots > 1 ? 's' : ''})</span>{/if}
+          {:else}—{/if}
         </span>
       </div>
       <a class="live-join" href="steam://connect/surf.hwcopeland.net:27015">Connect</a>
