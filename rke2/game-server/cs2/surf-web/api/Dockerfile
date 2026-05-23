@@ -20,4 +20,7 @@ RUN pip install --no-cache-dir \
 COPY app/ ./app/
 
 EXPOSE 8080
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080", "--proxy-headers"]
+# opentelemetry-instrument auto-configures the TracerProvider + OTLP
+# exporter from OTEL_* env vars (set in k8s/api-deployment.yaml). With
+# no OTEL env, it's a near-noop and uvicorn runs normally.
+CMD ["opentelemetry-instrument", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080", "--proxy-headers"]
