@@ -22,6 +22,11 @@ resources:
   - servicemonitor.yaml
   - grafana-dashboard-khemeia.yaml
   # Garage moved to rke2/garage-system/ on 2026-05-20 — see that kustomization.
-  # Only the local Secret holding S3 credentials stays in chem so the
-  # khemeia-controller can resolve them via secretKeyRef.
+  # The S3 credentials are ExternalSecret-managed (sourced from Bitwarden
+  # item 'garage-khemeia') and rendered into a `garage-secret` Secret in
+  # the chem namespace. The plain garage-secret.yaml file is retained for
+  # bootstrap / disaster recovery only — the runtime path is the
+  # ExternalSecret. If both are applied, ESO's creationPolicy: Owner
+  # takes ownership of the Secret object on first sync.
+  - garage-externalsecret.yaml
   - garage-secret.yaml
