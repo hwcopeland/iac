@@ -1,0 +1,334 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kubetest-power-dashboard
+  namespace: monitor
+  labels:
+    grafana_dashboard: "1"
+data:
+  kubetest-power.json: |
+    {
+      "title": "Kubetest - Homelab Power",
+      "uid": "homelab-power",
+      "schemaVersion": 38,
+      "version": 1,
+      "refresh": "30s",
+      "time": { "from": "now-1h", "to": "now" },
+      "panels": [
+        {
+          "id": 1,
+          "title": "Total Node CPU Power (RAPL)",
+          "type": "stat",
+          "gridPos": { "x": 0, "y": 0, "w": 4, "h": 4 },
+          "options": {
+            "colorMode": "background",
+            "graphMode": "area",
+            "reduceOptions": { "calcs": ["lastNotNull"] }
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "watt",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "green", "value": null },
+                  { "color": "yellow", "value": 150 },
+                  { "color": "red", "value": 300 }
+                ]
+              }
+            }
+          },
+          "targets": [
+            {
+              "datasource": { "type": "prometheus", "uid": "prometheus" },
+              "expr": "sum(rate(node_rapl_package_joules_total{job=\"node-exporter\",path!~\".*mmio.*\"}[2m]))",
+              "legendFormat": "Total"
+            }
+          ]
+        },
+        {
+          "id": 2,
+          "title": "CCR-2004 PSU1",
+          "type": "stat",
+          "gridPos": { "x": 4, "y": 0, "w": 2, "h": 2 },
+          "options": {
+            "colorMode": "background",
+            "reduceOptions": { "calcs": ["lastNotNull"] }
+          },
+          "fieldConfig": {
+            "defaults": {
+              "mappings": [
+                { "type": "value", "options": { "1": { "text": "OK", "color": "green" }, "0": { "text": "FAIL", "color": "red" } } }
+              ],
+              "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "green", "value": 1 }] }
+            }
+          },
+          "targets": [
+            {
+              "datasource": { "type": "prometheus", "uid": "prometheus" },
+              "expr": "mktxp_system_psu1_state{routerboard_name=\"CCR-2004\"}",
+              "legendFormat": "PSU1"
+            }
+          ]
+        },
+        {
+          "id": 3,
+          "title": "CCR-2004 PSU2",
+          "type": "stat",
+          "gridPos": { "x": 6, "y": 0, "w": 2, "h": 2 },
+          "options": {
+            "colorMode": "background",
+            "reduceOptions": { "calcs": ["lastNotNull"] }
+          },
+          "fieldConfig": {
+            "defaults": {
+              "mappings": [
+                { "type": "value", "options": { "1": { "text": "OK", "color": "green" }, "0": { "text": "FAIL", "color": "red" } } }
+              ],
+              "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "green", "value": 1 }] }
+            }
+          },
+          "targets": [
+            {
+              "datasource": { "type": "prometheus", "uid": "prometheus" },
+              "expr": "mktxp_system_psu2_state{routerboard_name=\"CCR-2004\"}",
+              "legendFormat": "PSU2"
+            }
+          ]
+        },
+        {
+          "id": 4,
+          "title": "Synology Power Status",
+          "type": "stat",
+          "gridPos": { "x": 8, "y": 0, "w": 2, "h": 2 },
+          "options": {
+            "colorMode": "background",
+            "reduceOptions": { "calcs": ["lastNotNull"] }
+          },
+          "fieldConfig": {
+            "defaults": {
+              "mappings": [
+                { "type": "value", "options": { "1": { "text": "Normal", "color": "green" }, "2": { "text": "FAILED", "color": "red" } } }
+              ],
+              "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "green", "value": 1 }] }
+            }
+          },
+          "targets": [
+            {
+              "datasource": { "type": "prometheus", "uid": "prometheus" },
+              "expr": "syno_system_power_status{instance=\"10.41.0.200\"}",
+              "legendFormat": "NAS Power"
+            }
+          ]
+        },
+        {
+          "id": 5,
+          "title": "No Live Watts Available",
+          "type": "text",
+          "gridPos": { "x": 10, "y": 0, "w": 14, "h": 4 },
+          "options": {
+            "mode": "markdown",
+            "content": "### CCR-2004, cAP, Synology: No Internal Power Sensor\n\nThese devices report **PSU status (on/off)** only — not watts. RouterOS `/system/health` and Synology SNMP both confirm no power consumption OID exists on this hardware.\n\n**To get live watts:** add a smart plug (Shelly Plug S, TP-Link KP115) on each outlet and deploy the matching Prometheus exporter.\n\n**Reference TDPs:** CCR-2004 ~32W typical | cAP ~6W | Synology DS918+ ~30W loaded"
+          }
+        },
+        {
+          "id": 10,
+          "title": "Per-Node RAPL Package Power",
+          "type": "timeseries",
+          "gridPos": { "x": 0, "y": 4, "w": 24, "h": 8 },
+          "options": {
+            "tooltip": { "mode": "multi" },
+            "legend": { "displayMode": "table", "placement": "right", "calcs": ["lastNotNull", "mean", "max"] }
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "watt",
+              "custom": { "lineWidth": 2, "fillOpacity": 10 }
+            }
+          },
+          "targets": [
+            {
+              "datasource": { "type": "prometheus", "uid": "prometheus" },
+              "expr": "sum by (nodename) (\n  rate(node_rapl_package_joules_total{job=\"node-exporter\",path!~\".*mmio.*\"}[2m])\n  * on(instance) group_left(nodename) node_uname_info\n)",
+              "legendFormat": "{{ nodename }}"
+            }
+          ]
+        },
+        {
+          "id": 11,
+          "title": "Node Power Now",
+          "type": "bargauge",
+          "gridPos": { "x": 0, "y": 12, "w": 8, "h": 6 },
+          "options": {
+            "orientation": "horizontal",
+            "displayMode": "gradient",
+            "reduceOptions": { "calcs": ["lastNotNull"] }
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "watt",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "green", "value": null },
+                  { "color": "yellow", "value": 20 },
+                  { "color": "red", "value": 60 }
+                ]
+              }
+            }
+          },
+          "targets": [
+            {
+              "datasource": { "type": "prometheus", "uid": "prometheus" },
+              "expr": "sum by (nodename) (\n  rate(node_rapl_package_joules_total{job=\"node-exporter\",path!~\".*mmio.*\"}[2m])\n  * on(instance) group_left(nodename) node_uname_info\n)",
+              "legendFormat": "{{ nodename }}"
+            }
+          ]
+        },
+        {
+          "id": 12,
+          "title": "CCR-2004 Temperatures",
+          "type": "timeseries",
+          "gridPos": { "x": 8, "y": 12, "w": 8, "h": 6 },
+          "options": { "legend": { "displayMode": "list" } },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "celsius",
+              "custom": { "lineWidth": 2 }
+            }
+          },
+          "targets": [
+            {
+              "datasource": { "type": "prometheus", "uid": "prometheus" },
+              "expr": "mktxp_system_cpu_temperature{routerboard_name=\"CCR-2004\"}",
+              "legendFormat": "CPU"
+            },
+            {
+              "datasource": { "type": "prometheus", "uid": "prometheus" },
+              "expr": "mktxp_system_board_temperature1{routerboard_name=\"CCR-2004\"}",
+              "legendFormat": "Board 1"
+            },
+            {
+              "datasource": { "type": "prometheus", "uid": "prometheus" },
+              "expr": "mktxp_system_board_temperature2{routerboard_name=\"CCR-2004\"}",
+              "legendFormat": "Board 2"
+            }
+          ]
+        },
+        {
+          "id": 13,
+          "title": "CCR-2004 Fan Speeds",
+          "type": "timeseries",
+          "gridPos": { "x": 16, "y": 12, "w": 8, "h": 6 },
+          "options": { "legend": { "displayMode": "list" } },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "rotrpm",
+              "custom": { "lineWidth": 2 }
+            }
+          },
+          "targets": [
+            {
+              "datasource": { "type": "prometheus", "uid": "prometheus" },
+              "expr": "mktxp_system_fan_one_speed{routerboard_name=\"CCR-2004\"}",
+              "legendFormat": "Fan 1"
+            },
+            {
+              "datasource": { "type": "prometheus", "uid": "prometheus" },
+              "expr": "mktxp_system_fan_two_speed{routerboard_name=\"CCR-2004\"}",
+              "legendFormat": "Fan 2"
+            }
+          ]
+        },
+        {
+          "id": 20,
+          "title": "Synology System Temperature",
+          "type": "timeseries",
+          "gridPos": { "x": 0, "y": 18, "w": 8, "h": 6 },
+          "options": { "legend": { "displayMode": "list" } },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "celsius",
+              "custom": { "lineWidth": 2 }
+            }
+          },
+          "targets": [
+            {
+              "datasource": { "type": "prometheus", "uid": "prometheus" },
+              "expr": "syno_system_temperature{instance=\"10.41.0.200\"}",
+              "legendFormat": "NAS"
+            }
+          ]
+        },
+        {
+          "id": 21,
+          "title": "Synology Disk Temperatures",
+          "type": "timeseries",
+          "gridPos": { "x": 8, "y": 18, "w": 8, "h": 6 },
+          "options": { "legend": { "displayMode": "list" } },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "celsius",
+              "custom": { "lineWidth": 2 }
+            }
+          },
+          "targets": [
+            {
+              "datasource": { "type": "prometheus", "uid": "prometheus" },
+              "expr": "syno_disk_temperature{instance=\"10.41.0.200\"}",
+              "legendFormat": "Disk {{ disk_index }}"
+            }
+          ]
+        },
+        {
+          "id": 22,
+          "title": "Synology RAID Status",
+          "type": "stat",
+          "gridPos": { "x": 16, "y": 18, "w": 4, "h": 3 },
+          "options": {
+            "colorMode": "background",
+            "reduceOptions": { "calcs": ["lastNotNull"] }
+          },
+          "fieldConfig": {
+            "defaults": {
+              "mappings": [
+                { "type": "value", "options": { "1": { "text": "Normal", "color": "green" }, "2": { "text": "Repairing", "color": "yellow" }, "3": { "text": "Migrating", "color": "yellow" }, "11": { "text": "DEGRADED", "color": "red" }, "12": { "text": "CRASHED", "color": "red" } } }
+              ],
+              "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "green", "value": 1 }] }
+            }
+          },
+          "targets": [
+            {
+              "datasource": { "type": "prometheus", "uid": "prometheus" },
+              "expr": "syno_raid_status{instance=\"10.41.0.200\"}",
+              "legendFormat": "RAID {{ raid_index }}"
+            }
+          ]
+        },
+        {
+          "id": 23,
+          "title": "Synology Fan Status",
+          "type": "stat",
+          "gridPos": { "x": 20, "y": 18, "w": 4, "h": 3 },
+          "options": {
+            "colorMode": "background",
+            "reduceOptions": { "calcs": ["lastNotNull"] }
+          },
+          "fieldConfig": {
+            "defaults": {
+              "mappings": [
+                { "type": "value", "options": { "1": { "text": "Normal", "color": "green" }, "2": { "text": "FAILED", "color": "red" } } }
+              ],
+              "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "green", "value": 1 }] }
+            }
+          },
+          "targets": [
+            {
+              "datasource": { "type": "prometheus", "uid": "prometheus" },
+              "expr": "syno_system_fan_status{instance=\"10.41.0.200\"}",
+              "legendFormat": "System Fan"
+            }
+          ]
+        }
+      ]
+    }

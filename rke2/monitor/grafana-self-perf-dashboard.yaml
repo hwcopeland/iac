@@ -1,0 +1,236 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-self-perf-dashboard
+  namespace: monitor
+  labels:
+    grafana_dashboard: "1"
+data:
+  grafana-self-perf.json: |
+    {
+      "uid": "grafana-self-perf",
+      "title": "Grafana Self Performance",
+      "schemaVersion": 38,
+      "version": 1,
+      "refresh": "30s",
+      "time": { "from": "now-3h", "to": "now" },
+      "timepicker": {},
+      "tags": ["grafana", "performance", "monitor"],
+      "panels": [
+        {
+          "id": 1, "type": "stat", "title": "Loki Error Rate (5m)",
+          "description": "% of Loki plugin queries returning errors — the primary driver of slow dashboard loads",
+          "gridPos": { "x": 0, "y": 0, "w": 6, "h": 4 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percent",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "green", "value": null },
+                  { "color": "yellow", "value": 10 },
+                  { "color": "red", "value": 30 }
+                ]
+              }
+            }
+          },
+          "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background" },
+          "targets": [{
+            "expr": "100 * sum(increase(grafana_plugin_request_duration_seconds_count{plugin_id=\"loki\",status=\"error\"}[5m])) / clamp_min(sum(increase(grafana_plugin_request_duration_seconds_count{plugin_id=\"loki\"}[5m])), 1)",
+            "instant": true, "legendFormat": "Loki error %"
+          }]
+        },
+        {
+          "id": 2, "type": "stat", "title": "Avg Loki Error Wait (5m)",
+          "description": "Mean time Grafana blocks waiting for a Loki query that ultimately fails",
+          "gridPos": { "x": 6, "y": 0, "w": 6, "h": 4 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "s",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "green", "value": null },
+                  { "color": "yellow", "value": 5 },
+                  { "color": "red", "value": 15 }
+                ]
+              }
+            }
+          },
+          "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background" },
+          "targets": [{
+            "expr": "increase(grafana_plugin_request_duration_seconds_sum{plugin_id=\"loki\",status=\"error\"}[5m]) / clamp_min(increase(grafana_plugin_request_duration_seconds_count{plugin_id=\"loki\",status=\"error\"}[5m]), 1)",
+            "instant": true, "legendFormat": "avg error wait"
+          }]
+        },
+        {
+          "id": 3, "type": "stat", "title": "Prometheus p95 Query (5m)",
+          "description": "95th percentile Prometheus query duration — healthy baseline for comparison",
+          "gridPos": { "x": 12, "y": 0, "w": 6, "h": 4 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "s",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "green", "value": null },
+                  { "color": "yellow", "value": 1 },
+                  { "color": "red", "value": 5 }
+                ]
+              }
+            }
+          },
+          "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background" },
+          "targets": [{
+            "expr": "histogram_quantile(0.95, sum by (le) (rate(grafana_plugin_request_duration_seconds_bucket{plugin_id=\"prometheus\"}[5m])))",
+            "instant": true, "legendFormat": "p95"
+          }]
+        },
+        {
+          "id": 4, "type": "stat", "title": "In-Flight Datasource Requests",
+          "description": "Current number of outbound datasource requests — spikes indicate Grafana is blocked waiting",
+          "gridPos": { "x": 18, "y": 0, "w": 6, "h": 4 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "none",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "green", "value": null },
+                  { "color": "yellow", "value": 5 },
+                  { "color": "red", "value": 15 }
+                ]
+              }
+            }
+          },
+          "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background" },
+          "targets": [{
+            "expr": "sum(grafana_datasource_request_in_flight)",
+            "instant": true, "legendFormat": "in-flight"
+          }]
+        },
+
+        {
+          "id": 5, "type": "timeseries", "title": "Plugin Query Rate — by Plugin & Status",
+          "description": "Rate of Grafana plugin queries split by plugin and success/error. Loki errors spike when dashboards hang.",
+          "gridPos": { "x": 0, "y": 4, "w": 12, "h": 8 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": {
+            "defaults": { "unit": "reqps", "custom": { "lineWidth": 2 } },
+            "overrides": [
+              { "matcher": { "id": "byRegexp", "options": ".*error.*" }, "properties": [{ "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } }] },
+              { "matcher": { "id": "byRegexp", "options": ".*ok.*" }, "properties": [{ "id": "color", "value": { "fixedColor": "green", "mode": "fixed" } }] }
+            ]
+          },
+          "options": { "tooltip": { "mode": "multi" }, "legend": { "displayMode": "table", "placement": "bottom" } },
+          "targets": [{
+            "expr": "sum by (plugin_id, status) (rate(grafana_plugin_request_duration_seconds_count[$__rate_interval]))",
+            "legendFormat": "{{plugin_id}} / {{status}}"
+          }]
+        },
+        {
+          "id": 6, "type": "timeseries", "title": "Plugin Query p95 Duration — by Plugin & Status",
+          "description": "95th percentile latency per plugin query type. Error series shows how long Grafana blocks before the failure is returned.",
+          "gridPos": { "x": 12, "y": 4, "w": 12, "h": 8 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": {
+            "defaults": { "unit": "s", "custom": { "lineWidth": 2 } },
+            "overrides": [
+              { "matcher": { "id": "byRegexp", "options": ".*error.*" }, "properties": [{ "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } }] }
+            ]
+          },
+          "options": { "tooltip": { "mode": "multi" }, "legend": { "displayMode": "table", "placement": "bottom" } },
+          "targets": [{
+            "expr": "histogram_quantile(0.95, sum by (plugin_id, status, le) (rate(grafana_plugin_request_duration_seconds_bucket[$__rate_interval])))",
+            "legendFormat": "{{plugin_id}} / {{status}}"
+          }]
+        },
+
+        {
+          "id": 7, "type": "timeseries", "title": "/api/ds/query Latency — p50 / p95 / p99",
+          "description": "Grafana's query proxy endpoint. 400s (status_source=downstream) indicate datasource is returning errors after a long wait.",
+          "gridPos": { "x": 0, "y": 12, "w": 12, "h": 8 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": {
+            "defaults": { "unit": "s", "custom": { "lineWidth": 2 } },
+            "overrides": [
+              { "matcher": { "id": "byRegexp", "options": ".*400.*" }, "properties": [{ "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } }] },
+              { "matcher": { "id": "byRegexp", "options": ".*200.*" }, "properties": [{ "id": "color", "value": { "fixedColor": "green", "mode": "fixed" } }] }
+            ]
+          },
+          "options": { "tooltip": { "mode": "multi" }, "legend": { "displayMode": "table", "placement": "bottom" } },
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.50, sum by (status_code, le) (rate(grafana_http_request_duration_seconds_bucket{handler=\"/api/ds/query\"}[$__rate_interval])))",
+              "legendFormat": "p50 {{status_code}}"
+            },
+            {
+              "expr": "histogram_quantile(0.95, sum by (status_code, le) (rate(grafana_http_request_duration_seconds_bucket{handler=\"/api/ds/query\"}[$__rate_interval])))",
+              "legendFormat": "p95 {{status_code}}"
+            },
+            {
+              "expr": "histogram_quantile(0.99, sum by (status_code, le) (rate(grafana_http_request_duration_seconds_bucket{handler=\"/api/ds/query\"}[$__rate_interval])))",
+              "legendFormat": "p99 {{status_code}}"
+            }
+          ]
+        },
+        {
+          "id": 8, "type": "timeseries", "title": "HTTP Handler Rate — by Status",
+          "description": "Rate of requests hitting Grafana's main handlers, split by HTTP status. 4xx spikes from /api/ds/query = datasource failures.",
+          "gridPos": { "x": 12, "y": 12, "w": 12, "h": 8 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": {
+            "defaults": { "unit": "reqps", "custom": { "lineWidth": 2 } },
+            "overrides": [
+              { "matcher": { "id": "byRegexp", "options": ".*4\\d\\d.*" }, "properties": [{ "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } }] },
+              { "matcher": { "id": "byRegexp", "options": ".*2\\d\\d.*" }, "properties": [{ "id": "color", "value": { "fixedColor": "green", "mode": "fixed" } }] }
+            ]
+          },
+          "options": { "tooltip": { "mode": "multi" }, "legend": { "displayMode": "table", "placement": "bottom" } },
+          "targets": [{
+            "expr": "sum by (handler, status_code) (rate(grafana_http_request_duration_seconds_count{handler=~\"/api/ds/query|/api/datasources/uid/:uid/resources/.*\"}[$__rate_interval]))",
+            "legendFormat": "{{handler}} {{status_code}}"
+          }]
+        },
+
+        {
+          "id": 9, "type": "timeseries", "title": "Datasource Backend p95 Latency",
+          "description": "Time Grafana spends waiting on the upstream datasource (Prometheus, Loki, Tempo). High Loki values → Loki is slow or overloaded.",
+          "gridPos": { "x": 0, "y": 20, "w": 12, "h": 8 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": {
+            "defaults": { "unit": "s", "custom": { "lineWidth": 2 } },
+            "overrides": [
+              { "matcher": { "id": "byName", "options": "Loki" }, "properties": [{ "id": "color", "value": { "fixedColor": "orange", "mode": "fixed" } }] },
+              { "matcher": { "id": "byName", "options": "Prometheus" }, "properties": [{ "id": "color", "value": { "fixedColor": "green", "mode": "fixed" } }] }
+            ]
+          },
+          "options": { "tooltip": { "mode": "multi" }, "legend": { "displayMode": "table", "placement": "bottom" } },
+          "targets": [{
+            "expr": "histogram_quantile(0.95, sum by (datasource, le) (rate(grafana_datasource_request_duration_seconds_bucket[$__rate_interval])))",
+            "legendFormat": "{{datasource}}"
+          }]
+        },
+        {
+          "id": 10, "type": "timeseries", "title": "Datasource Backend Request Rate — by Status Code",
+          "description": "Rate of outbound requests from Grafana to each datasource, by HTTP status. Non-200 codes mean the datasource is returning errors.",
+          "gridPos": { "x": 12, "y": 20, "w": 12, "h": 8 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": {
+            "defaults": { "unit": "reqps", "custom": { "lineWidth": 2 } },
+            "overrides": [
+              { "matcher": { "id": "byRegexp", "options": ".*4\\d\\d.*|.*5\\d\\d.*" }, "properties": [{ "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } }] }
+            ]
+          },
+          "options": { "tooltip": { "mode": "multi" }, "legend": { "displayMode": "table", "placement": "bottom" } },
+          "targets": [{
+            "expr": "sum by (datasource, code) (rate(grafana_datasource_request_total[$__rate_interval]))",
+            "legendFormat": "{{datasource}} {{code}}"
+          }]
+        }
+      ]
+    }

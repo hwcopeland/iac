@@ -1,0 +1,74 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: snmp-exporter-synology
+  namespace: monitor
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: snmp-exporter-synology
+  template:
+    metadata:
+      labels:
+        app: snmp-exporter-synology
+    spec:
+      containers:
+      - name: snmp-exporter
+        image: quay.io/prometheus/snmp-exporter:v0.26.0
+        args:
+          - --config.file=/etc/snmp_exporter/snmp.yml
+        ports:
+          - containerPort: 9116
+            name: http-metrics
+        volumeMounts:
+          - name: config
+            mountPath: /etc/snmp_exporter
+        resources:
+          limits:
+            memory: 128Mi
+            cpu: "250m"
+      volumes:
+        - name: config
+          configMap:
+            name: snmp-exporter-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: snmp-exporter-synology
+  namespace: monitor
+  labels:
+    app: snmp-exporter-synology
+spec:
+  selector:
+    app: snmp-exporter-synology
+  ports:
+  - name: http-metrics
+    port: 9116
+    targetPort: 9116
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: snmp-exporter-synology
+  namespace: monitor
+  labels:
+    release: kube-prometheus-stack
+spec:
+  selector:
+    matchLabels:
+      app: snmp-exporter-synology
+  endpoints:
+  - port: http-metrics
+    interval: 60s
+    path: /snmp
+    params:
+      module: [synology]
+      auth: [synology_v2]
+      target: [10.41.0.200]
+    relabelings:
+      - sourceLabels: [__param_target]
+        targetLabel: instance
+      - targetLabel: __address__
+        replacement: snmp-exporter-synology.monitor.svc.cluster.local:9116
