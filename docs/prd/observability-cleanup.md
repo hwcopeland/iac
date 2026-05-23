@@ -1,6 +1,6 @@
 ---
 project: "iac"
-maturity: "draft"
+maturity: "ready-for-tdd"
 last_updated: "2026-05-23"
 updated_by: "@product-owner"
 scope: "Audit, repair, and reconcile the home-cluster observability stack (Grafana + kube-prometheus-stack Prometheus + Loki + Alloy + Tempo) so every dashboard, alert, and scrape target reflects truthful cluster state, and so git matches what is running."
@@ -320,15 +320,60 @@ optimization, cost tuning.
    curate from scratch, or `defaultRules.create: true` with explicit per-rule silences?
    This is a maintenance-burden trade-off.
 
+## Operator Decisions (2026-05-23)
+
+The six open questions above were answered by the operator. The TDD should treat
+these as committed direction, not suggestions to re-litigate.
+
+1. **Tempo: KEEP and wire up.** Instrument both khemeia API and surf-web API to
+   emit OTLP. Additionally, **discover and list every other in-cluster API that
+   could benefit from tracing** as a sub-task — candidates include (verify
+   against running workloads): authentik, longhorn proxy, plex-system ARR stack,
+   chem compute-infrastructure result-writer, any FastAPI/Flask services. TDD
+   should pick a minimal first instrumentation (one service) to prove the
+   pipeline end-to-end before fanning out.
+2. **Loki canary: KEEP, fix it up.** There is an existing pipeline tying the
+   canary to Mikrotik metrics ingestion (mktxp exporter at
+   `rke2/monitor/mikrotik-exporter/` — untracked, never committed) that has
+   broken. TDD should:
+   - inventory the current Mikrotik exporter state (Deployment? raw pod?
+     standalone container? scrape working?),
+   - fix whatever's wrong with the canary itself (the 502s on tail queries
+     traced to gateway DNS — may resolve when loki-gateway is removed, see #4),
+   - commit the mktxp manifests to git.
+3. **Loki chart-bundled alerts: ENABLE FULL SET.**
+   `monitoring.rules.enabled: true`, all five rules
+   (`LokiRequestErrors`, `LokiRequestPanics`, `LokiRequestLatency`,
+   `LokiTooManyCompactorsRunning`, `LokiCanaryLatency`). Tune thresholds only
+   if a specific alert proves noisy in operation.
+4. **loki-gateway: REMOVE.** Disable via chart values, repoint Alloy
+   (`alloy-values.yaml`) and the Grafana Loki datasource at `loki:3100`
+   directly. TDD must include the repoint steps and confirm no other consumer
+   (canary? external scraper? curl-based runbooks?) depends on the gateway
+   before deletion.
+5. **Alert destination: EMAIL (interim).** Route Alertmanager to email
+   (`hampton888@gmail.com`) as the only receiver for now. **Explicit follow-up
+   noted by operator:** when a Mac joins the cluster, switch to push
+   notifications via that host. TDD should configure the email receiver
+   cleanly (SMTP creds via ExternalSecret, not inline) so swapping receivers
+   later is a one-line change.
+6. **Default kube-prometheus-stack rules: KEEP ON, CURATE SILENCES.**
+   `defaultRules.create: true`. TDD should produce an inventory of every
+   currently-firing default alert and either (a) confirm it's signal we want,
+   or (b) add a named silence with a documented justification. Silences live
+   in-repo (Alertmanager config), not as ad-hoc Alertmanager UI silences.
+
 ## Handoff
 
 This PRD is the start of a chain:
 
-1. **Operator review** — answer the open questions above. Without #1, #3, #4, and #6,
-   the TDD cannot make concrete keep/kill calls.
+1. **Operator review** — ✅ done 2026-05-23. Decisions captured above.
 2. **@staff-engineer** — produce a TDD covering: the exact list of dashboards to keep /
-   delete / fix; the alert tree decision (defaults vs curated); the Loki S3 migration
-   plan with rollback steps; the keep/kill matrix for Tempo, loki-gateway, and the canary;
+   delete / fix; alert curation (silences for defaults + the five enabled Loki rules);
+   the Loki S3 migration plan with rollback steps; the loki-gateway removal sequence
+   (Alloy + Grafana repoint, then disable); the Tempo instrumentation rollout plan
+   (which API first, then the discovery-driven fan-out); the Mikrotik exporter
+   recovery + commit-to-git workstream; the email Alertmanager receiver wiring;
    the helm reconciliation procedure for each release.
 3. **@project-manager** — decompose the approved TDD into Docket issues. Likely shape:
    one "discovery / inventory" issue, one issue per chart reconciliation, one issue per
