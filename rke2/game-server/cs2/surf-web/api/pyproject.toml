@@ -10,6 +10,11 @@ dependencies = [
     "httpx>=0.27",
     "pydantic>=2.9",
     "pydantic-settings>=2.6",
+    # OpenTelemetry traces → Tempo. Auto-loaded by app/main.py when
+    # OTEL_EXPORTER_OTLP_ENDPOINT is set in the env (see k8s/api-deployment.yaml).
+    "opentelemetry-distro>=0.50b0",
+    "opentelemetry-exporter-otlp-proto-http>=1.30.0",
+    "opentelemetry-instrumentation-fastapi>=0.50b0",
 ]
 
 [build-system]

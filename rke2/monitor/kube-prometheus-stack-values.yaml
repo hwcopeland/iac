@@ -60,6 +60,11 @@ grafana:
 prometheus:
   service:
     type: ClusterIP
+  prometheusSpec:
+    # Accept remote-write from in-cluster Tempo (metrics-generator emits
+    # traces_spanmetrics_* + traces_service_graph_* here). Endpoint becomes
+    # http://prometheus-operated.monitor.svc.cluster.local:9090/api/v1/write
+    enableRemoteWriteReceiver: true
 
 # Phase 1d/1e (#33, #34): Alertmanager email receiver via Gmail SMTP.
 # Creds come from the alertmanager-smtp Secret (rendered from Bitwarden

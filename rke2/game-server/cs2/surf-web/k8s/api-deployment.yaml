@@ -52,6 +52,20 @@ spec:
               value: "cs2-modded-service.game-server.svc.cluster.local"
             - name: SURFWEB_GAMESERVER_PORT
               value: "27015"
+            # OpenTelemetry — auto-instrumented by FastAPIInstrumentor in
+            # app/main.py when OTEL_EXPORTER_OTLP_ENDPOINT is set.
+            # HTTP/protobuf to Tempo's 4318 port (gRPC requires a separate
+            # client lib; HTTP is simpler for a small FastAPI service).
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: "http://tempo.monitor.svc.cluster.local:4318"
+            - name: OTEL_EXPORTER_OTLP_PROTOCOL
+              value: "http/protobuf"
+            - name: OTEL_SERVICE_NAME
+              value: "surf-api"
+            - name: OTEL_TRACES_SAMPLER
+              value: "parentbased_traceidratio"
+            - name: OTEL_TRACES_SAMPLER_ARG
+              value: "0.5"
           resources:
             requests: { cpu: 50m, memory: 128Mi }
             limits:   { cpu: 500m, memory: 384Mi }
