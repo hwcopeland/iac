@@ -371,16 +371,11 @@ opted out (2026-05-23) on the grounds that the password was never pushed to
 git, the user is read-only, and the routers are on a private LAN. Trade-off
 documented; revisit if threat model changes.
 
-- [ ] **Store the existing `mktxp_user` password in Bitwarden** as item
-  `mktxp-routers` (login username `mktxp_user`, login password the existing
-  RouterOS password). No router-side change needed.
-- [ ] **Fill the Bitwarden UUID** into
-  `rke2/monitor/mikrotik-exporter/external-secret-mktxp.yaml` (currently
-  untracked, contains `<BITWARDEN-UUID-MKTXP>` placeholder).
-- [ ] **Apply the ExternalSecret**, delete the manually-created
-  `mktxp-credentials` Secret so ESO recreates it from Bitwarden, then
-  `kubectl rollout restart deploy/mktxp-exporter -n monitor`.
-- [ ] **Commit** `external-secret-mktxp.yaml` once UUID is in place.
+- [x] ~~Store the existing `mktxp_user` password in Bitwarden as item `mktxp-routers`~~ — done 2026-05-23 via bitwarden-cli pod (UUID `7518356e-151c-4cc3-8970-e7c718a4dedd`).
+- [x] ~~Fill the Bitwarden UUID into `external-secret-mktxp.yaml`~~ — done in commit `d1f81030`.
+- [x] ~~Apply the ExternalSecret, restart Deployment~~ — done. ESO reconciles, Secret renders correctly, CCR-2004 scrape verified (20 active DHCP leases visible).
+- [x] ~~Commit `external-secret-mktxp.yaml`~~ — `d1f81030`.
+- [ ] **Investigate cAP (10.0.0.254) auth failure.** mktxp logs show `invalid user name or password (6)` on cAP only. CCR-2004 works with the same credentials. Possible causes: `mktxp_user` doesn't exist on cAP, cAP's `mktxp_user` has a different password, or cAP's API is disabled. Tracked as GH issue (Phase 4 follow-up).
 
 **Deferred (operator may revisit later):**
 - Rotation of the mktxp password.
