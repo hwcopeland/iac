@@ -8,6 +8,25 @@ owner: "@product-owner"
 dependencies: []
 ---
 
+## REVISED 2026-05-23: Loki object-store target is **Garage**, not MinIO
+
+The original PRD/TDD assumed MinIO at `10.41.0.200:9000` on the Synology was
+the intended Loki S3 backend. That was wrong — it was a stalled experiment
+from an earlier session and MinIO was never actually deployed. The cluster's
+real object store is **Garage** (Rust-based S3-compatible, in-cluster) running
+at `garage.garage-system.svc.cluster.local:3900`, deployed via
+`rke2/garage-system/`. Credentials follow the same plain-Secret-in-namespace
+pattern khemeia uses (`rke2/chem/khemeia/deploy/garage-secret.yaml`), not
+ExternalSecret-from-Bitwarden.
+
+Wherever this doc says "MinIO", read "Garage". Mechanism deltas:
+- No ExternalSecret needed — copy `garage-secret` Secret into the `monitor`
+  namespace following khemeia's pattern.
+- Endpoint is `http://garage.garage-system.svc.cluster.local:3900` (in-cluster,
+  not the Synology IP).
+- Bucket `loki-chunks` must be created via `garage bucket create` on the
+  garage-0 pod, with `garage bucket allow` for the access key.
+
 ## Problem Statement
 
 The observability stack in `rke2/monitor/` is the operator's primary signal for whether
