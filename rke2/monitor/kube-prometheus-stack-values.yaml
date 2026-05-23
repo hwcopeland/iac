@@ -59,6 +59,79 @@ prometheus:
   service:
     type: ClusterIP
 
+# Phase 1d/1e (#33, #34): Alertmanager email receiver via Gmail SMTP.
+# Creds come from the alertmanager-smtp Secret (rendered from Bitwarden
+# item "SMTP" by external-secret-mktxp-shape ExternalSecret in
+# alertmanager-smtp-secret.yaml). _file references keep the password off
+# the chart values surface.
+alertmanager:
+  alertmanagerSpec:
+    # Mount the alertmanager-smtp Secret at /etc/alertmanager/secrets/<name>/.
+    secrets:
+      - alertmanager-smtp
+  config:
+    global:
+      resolve_timeout: 5m
+      smtp_smarthost: smtp.gmail.com:587
+      smtp_from: hampton888@gmail.com
+      smtp_hello: hwcopeland.net
+      smtp_require_tls: true
+      # Username inline — it's the From: address, not a secret. Bundled
+      # Alertmanager version in this chart (0.27.x range) doesn't recognize
+      # smtp_auth_username_file even though Alertmanager main does.
+      smtp_auth_username: hampton888@gmail.com
+      smtp_auth_password_file: /etc/alertmanager/secrets/alertmanager-smtp/smtp_password
+    route:
+      # Default = null. New/unknown alerts do NOT email until they've been
+      # classified. This is the conservative posture after the 2026-05-23
+      # flood incident: the cluster has ~18 pre-existing firing alerts that
+      # the operator hasn't triaged yet (Phase 6 work). Only routes below
+      # opt-in to email.
+      receiver: "null"
+      group_by: ["alertname", "namespace", "severity"]
+      group_wait: 30s
+      group_interval: 5m
+      repeat_interval: 12h
+      routes:
+        # Null-route the always-on / inhibitor alerts up front.
+        - receiver: "null"
+          matchers:
+            - alertname = "Watchdog"
+        - receiver: "null"
+          matchers:
+            - alertname = "InfoInhibitor"
+        # Email-route only severity=critical (and only after Phase 6 silences
+        # have classified the existing critical noise). Override per-alert
+        # using continue:false child routes below if specific criticals are
+        # too noisy to email.
+        - receiver: email-operator
+          matchers:
+            - severity = "critical"
+          continue: false
+        # PHASE 6 INTAKE: any *new* alert without explicit routing falls
+        # through to "null" (the default receiver above). Once Phase 6
+        # silences land and the firing tail is trusted-and-small, broaden
+        # this routing (e.g. add severity=warning route) and re-evaluate
+        # the always-on critical route.
+    receivers:
+      - name: "null"
+      - name: email-operator
+        email_configs:
+          - to: hampton888@gmail.com
+            send_resolved: true
+            headers:
+              Subject: "[{{ .Status | toUpper }}{{ if eq .Status \"firing\" }}:{{ .Alerts.Firing | len }}{{ end }}] {{ .CommonLabels.alertname }}"
+    inhibit_rules:
+      - target_matchers: [severity =~ warning|info]
+        source_matchers: [severity = critical]
+        equal: [namespace, alertname]
+      - target_matchers: [severity = info]
+        source_matchers: [severity = warning]
+        equal: [namespace, alertname]
+      - target_matchers: [severity = info]
+        source_matchers: [alertname = InfoInhibitor]
+        equal: [namespace]
+
 # Phase 1a (#30): the chart's default ServiceMonitors for kube-proxy /
 # kube-scheduler / kube-controller-manager / kube-etcd don't apply to RKE2:
 # - kube-proxy is replaced by Cilium (no kube-proxy pods exist).
