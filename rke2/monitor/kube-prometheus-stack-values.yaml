@@ -58,3 +58,25 @@ grafana:
 prometheus:
   service:
     type: ClusterIP
+
+# node-exporter overrides — folded in from the formerly-untracked
+# rke2/monitor/node-exporter-values.yaml in Phase 0c (#28).
+#
+# runAsUser: 0 is required because /sys/devices/virtual/powercap/intel-rapl/.../
+# energy_uj is mode 0400 root:root. Without root, --collector.rapl produces
+# no metrics. This is documented upstream and is the standard pattern for
+# RAPL power collection.
+prometheus-node-exporter:
+  # extraArgs REPLACES chart defaults — must include the chart's filesystem
+  # excludes too, otherwise node-exporter scrapes every mount and floods
+  # the registry. Keep this list in sync with chart 82.14.1's defaults
+  # plus our RAPL collector.
+  extraArgs:
+    - "--collector.filesystem.mount-points-exclude=^/(dev|proc|sys|run/containerd/.+|var/lib/docker/.+|var/lib/kubelet/.+)($|/)"
+    - "--collector.filesystem.fs-types-exclude=^(autofs|binfmt_misc|bpf|cgroup2?|configfs|debugfs|devpts|devtmpfs|fusectl|hugetlbfs|iso9660|mqueue|nsfs|overlay|proc|procfs|pstore|rpc_pipefs|securityfs|selinuxfs|squashfs|sysfs|tracefs|erofs)$"
+    - "--collector.rapl"
+  securityContext:
+    fsGroup: 0
+    runAsGroup: 0
+    runAsNonRoot: false
+    runAsUser: 0
