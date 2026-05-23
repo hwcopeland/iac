@@ -15,8 +15,10 @@ data:
     modules:
       synology:
         walk:
-          - sysUpTime
-          - ifXTable
+          # MIB names don't resolve without the generator's MIB browser baked
+          # into the binary. Use numeric OIDs (snmp-exporter v0.26 requires this).
+          - 1.3.6.1.2.1.1.3       # sysUpTime
+          - 1.3.6.1.2.1.31.1.1    # ifXTable
           - 1.3.6.1.4.1.6574.1
           - 1.3.6.1.4.1.6574.2
           - 1.3.6.1.4.1.6574.3
