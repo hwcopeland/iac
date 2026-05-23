@@ -48,19 +48,24 @@
 [default]
     enabled = True
     hostname = localhost
-    port = 8729
+    port = 8728
     username = username
     password = password
     credentials_file = ""
 
-    # API SSL on (port 8729). plaintext_login disabled.
-    # no_ssl_certificate=True skips server cert validation — acceptable for
-    # home LAN where the routers use self-signed RouterOS certs.
-    use_ssl = True
-    no_ssl_certificate = True
+    # Plaintext API on port 8728. Acceptable here because:
+    # - mktxp_user is a read-only RouterOS user (group: read),
+    # - traffic is pod -> node -> router on a private LAN,
+    # - operator explicitly opted out of api-ssl to avoid router-side config.
+    # Switch to api-ssl later by running on each router:
+    #   /ip service enable api-ssl ; /ip service disable api
+    # and flipping use_ssl=True, no_ssl_certificate=True, plaintext_login=False
+    # and port=8729 here.
+    use_ssl = False
+    no_ssl_certificate = False
     ssl_certificate_verify = False
     ssl_ca_file = ""
-    plaintext_login = False
+    plaintext_login = True
 
     health = True
     installed_packages = True
