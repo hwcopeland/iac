@@ -334,13 +334,12 @@ these as committed direction, not suggestions to re-litigate.
    pipeline end-to-end before fanning out.
 2. **Loki canary: KEEP, fix it up.** There is an existing pipeline tying the
    canary to Mikrotik metrics ingestion (mktxp exporter at
-   `rke2/monitor/mikrotik-exporter/` — untracked, never committed) that has
-   broken. TDD should:
-   - inventory the current Mikrotik exporter state (Deployment? raw pod?
-     standalone container? scrape working?),
+   `rke2/monitor/mikrotik-exporter/`). The manifests have since been
+   committed and sanitized in `c49409b2` (see "Pending Operator Actions"
+   below for the rotation work that gates re-enablement). TDD should:
    - fix whatever's wrong with the canary itself (the 502s on tail queries
      traced to gateway DNS — may resolve when loki-gateway is removed, see #4),
-   - commit the mktxp manifests to git.
+   - verify mktxp scrape end-to-end once the password rotation lands.
 3. **Loki chart-bundled alerts: ENABLE FULL SET.**
    `monitoring.rules.enabled: true`, all five rules
    (`LokiRequestErrors`, `LokiRequestPanics`, `LokiRequestLatency`,
@@ -362,6 +361,29 @@ these as committed direction, not suggestions to re-litigate.
    currently-firing default alert and either (a) confirm it's signal we want,
    or (b) add a named silence with a documented justification. Silences live
    in-repo (Alertmanager config), not as ad-hoc Alertmanager UI silences.
+
+## Pending Operator Actions
+
+Tracked here so they don't get lost while the TDD is being written. None of
+these block the TDD itself — they block *execution* of the canary/mktxp
+workstream (decision #2).
+
+- [ ] **Rotate `mktxp_user` RouterOS password** on `10.0.0.1` (CCR-2004) and
+  `10.0.0.254` (cAP). The old password (`5Di...` — see chat transcript
+  2026-05-23) was on operator laptop and in cluster etcd; not in git, but
+  treated as compromised.
+- [ ] **Switch RouterOS API to SSL** on both devices:
+  `/ip service enable api-ssl` + `/ip service disable api`. SSH/WinBox
+  unaffected.
+- [ ] **Verify `mktxp_user` group is `read`**, not `full`:
+  `/user print where name=mktxp_user`.
+- [ ] **Store new password in Bitwarden** (item `mktxp-routers`, login
+  username `mktxp_user`).
+- [ ] **Fill the Bitwarden UUID** into `rke2/monitor/mikrotik-exporter/external-secret-mktxp.yaml`
+  (currently untracked, contains `<BITWARDEN-UUID-MKTXP>` placeholder),
+  apply it, delete the manually-created `mktxp-credentials` Secret so ESO
+  recreates it, then `kubectl rollout restart deploy/mktxp-exporter -n monitor`.
+- [ ] Commit `external-secret-mktxp.yaml` once UUID is in place.
 
 ## Handoff
 
