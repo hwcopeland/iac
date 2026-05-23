@@ -50,7 +50,19 @@ grafana:
       label: grafana_dashboard
       labelValue: "1"
       searchNamespace: ALL
+      # Sidecar reads the grafana_folder annotation on each ConfigMap and
+      # places the dashboard in that folder. ConfigMaps without the
+      # annotation fall back to defaultFolderName below.
       folderAnnotation: grafana_folder
+      provider:
+        # Allow the sidecar to write to subfolders (required when using
+        # folderAnnotation).
+        foldersFromFilesStructure: true
+      # Chart-default dashboards (kube-prometheus-stack-*) don't carry a
+      # grafana_folder annotation; this sends them to "Defaults" so they
+      # don't clutter "General". Operator-curated dashboards (Platform,
+      # Projects, Khemeia) set the annotation explicitly.
+      defaultFolderName: Defaults
     alerts:
       enabled: true
       label: grafana_alert
