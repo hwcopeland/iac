@@ -2,9 +2,10 @@
 #
 # Why this is hand-rolled instead of chart-generated:
 #   The Helm chart exposes monitoring.serviceMonitor.enabled, but loki-values.yaml
-#   is mid-migration (filesystem -> MinIO S3) and a `helm upgrade` today would
-#   either fail schema validation or orphan existing chunks. This manifest lets
-#   us restore metrics-scraping without touching the in-flight migration.
+#   was mid-migration when this was created and the chart-bundled route was
+#   unsafe. After the Garage S3 migration lands (Phase 2, revised target —
+#   was MinIO, now Garage), flip monitoring.serviceMonitor.enabled: true in
+#   loki-values.yaml and delete this file.
 #
 # Once the S3 migration lands and the chart is upgraded with
 # monitoring.serviceMonitor.enabled: true, delete this file.

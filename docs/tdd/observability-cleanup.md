@@ -179,7 +179,24 @@ From `git status --short`:
 
 ---
 
-## 3. Loki S3/MinIO migration plan
+## 3. Loki S3 migration plan
+
+> **REVISED 2026-05-23**: Target is **Garage**, not MinIO. The original plan
+> assumed MinIO at `10.41.0.200:9000` on the Synology — that infrastructure
+> was never deployed. Garage is the cluster's actual S3-compatible store,
+> running at `garage.garage-system.svc.cluster.local:3900`. Substitutions for
+> the rest of this section:
+> - `MinIO` → `Garage`
+> - `10.41.0.200:9000` → `garage.garage-system.svc.cluster.local:3900`
+> - `loki-minio-secret` ExternalSecret → `garage-secret` plain Secret copied
+>   into the `monitor` namespace (same data as `rke2/garage-system/garage-secret-dev.yaml`,
+>   following the cross-namespace copy pattern at
+>   `rke2/chem/khemeia/deploy/garage-secret.yaml`).
+> - `mc admin info localminio` → `kubectl -n garage-system exec garage-0 -- garage bucket list`
+> - Bucket prep: `kubectl -n garage-system exec garage-0 -- garage bucket create loki-chunks && garage bucket allow --key <loki-key-id> --read --write loki-chunks`
+> - No Bitwarden item needed for Loki creds.
+
+
 
 ### 3.1 Goal & constraints
 
