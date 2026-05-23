@@ -364,26 +364,30 @@ these as committed direction, not suggestions to re-litigate.
 
 ## Pending Operator Actions
 
-Tracked here so they don't get lost while the TDD is being written. None of
-these block the TDD itself — they block *execution* of the canary/mktxp
-workstream (decision #2).
+Tracked here so they don't get lost while the TDD is being written. These
+gate *execution* of the canary/mktxp workstream (decision #2). The original
+plan included a RouterOS password rotation + api-ssl switch; the operator
+opted out (2026-05-23) on the grounds that the password was never pushed to
+git, the user is read-only, and the routers are on a private LAN. Trade-off
+documented; revisit if threat model changes.
 
-- [ ] **Rotate `mktxp_user` RouterOS password** on `10.0.0.1` (CCR-2004) and
-  `10.0.0.254` (cAP). The old password (`5Di...` — see chat transcript
-  2026-05-23) was on operator laptop and in cluster etcd; not in git, but
-  treated as compromised.
-- [ ] **Switch RouterOS API to SSL** on both devices:
-  `/ip service enable api-ssl` + `/ip service disable api`. SSH/WinBox
-  unaffected.
-- [ ] **Verify `mktxp_user` group is `read`**, not `full`:
-  `/user print where name=mktxp_user`.
-- [ ] **Store new password in Bitwarden** (item `mktxp-routers`, login
-  username `mktxp_user`).
-- [ ] **Fill the Bitwarden UUID** into `rke2/monitor/mikrotik-exporter/external-secret-mktxp.yaml`
-  (currently untracked, contains `<BITWARDEN-UUID-MKTXP>` placeholder),
-  apply it, delete the manually-created `mktxp-credentials` Secret so ESO
-  recreates it, then `kubectl rollout restart deploy/mktxp-exporter -n monitor`.
-- [ ] Commit `external-secret-mktxp.yaml` once UUID is in place.
+- [ ] **Store the existing `mktxp_user` password in Bitwarden** as item
+  `mktxp-routers` (login username `mktxp_user`, login password the existing
+  RouterOS password). No router-side change needed.
+- [ ] **Fill the Bitwarden UUID** into
+  `rke2/monitor/mikrotik-exporter/external-secret-mktxp.yaml` (currently
+  untracked, contains `<BITWARDEN-UUID-MKTXP>` placeholder).
+- [ ] **Apply the ExternalSecret**, delete the manually-created
+  `mktxp-credentials` Secret so ESO recreates it from Bitwarden, then
+  `kubectl rollout restart deploy/mktxp-exporter -n monitor`.
+- [ ] **Commit** `external-secret-mktxp.yaml` once UUID is in place.
+
+**Deferred (operator may revisit later):**
+- Rotation of the mktxp password.
+- Switch RouterOS API to api-ssl (port 8729). Commands when ready:
+  `/ip service enable api-ssl` + `/ip service disable api` on each router.
+  Then flip `use_ssl=True`, `port=8729`, `plaintext_login=False` in
+  `mktxp.conf.example` AND `external-secret-mktxp.yaml`.
 
 ## Handoff
 
