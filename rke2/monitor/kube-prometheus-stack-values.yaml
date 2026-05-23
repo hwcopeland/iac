@@ -190,34 +190,35 @@ kubeScheduler:
 kubeControllerManager:
   enabled: false
 kubeEtcd:
-  # Re-enabled with correct port + cert mTLS in Phase 1b (#31). Disabled
-  # here to avoid double-config when both this and the new ServiceMonitor
-  # are committed.
-  enabled: false
+  # Enabled 2026-05-23 after operator added `etcd-expose-metrics: true`
+  # to /etc/rancher/rke2/config.yaml on ctlpln1/2/3 and rolling-restarted
+  # rke2-server (#31). Metrics endpoint binds 0.0.0.0:2381 (plaintext,
+  # unauthenticated) — acceptable for the home LAN; see TDD §10.1 Q2 for
+  # the trade-off and PRD for the threat model summary.
+  enabled: true
+  service:
+    enabled: true
+    port: 2381
+    targetPort: 2381
+  serviceMonitor:
+    enabled: true
+    scheme: http
 
 defaultRules:
   disabled:
     # absent()-style rules that fire even after SM removal — must disable
     # explicitly. etcd* rules get re-enabled in Phase 1b when there are
     # real targets to evaluate against.
+    # Cilium replaces kube-proxy; scheduler + controller-manager bind to
+    # localhost on RKE2 server nodes. These absent()-rules can't ever
+    # resolve and stay disabled permanently.
     KubeProxyDown: true
     KubeSchedulerDown: true
     KubeControllerManagerDown: true
-    etcdMembersDown: true
-    etcdInsufficientMembers: true
-    etcdNoLeader: true
-    etcdHighNumberOfLeaderChanges: true
-    etcdHighNumberOfFailedGRPCRequests: true
-    etcdGRPCRequestsSlow: true
-    etcdMemberCommunicationSlow: true
-    etcdHighNumberOfFailedProposals: true
-    etcdHighFsyncDurations: true
-    etcdHighCommitDurations: true
-    etcdHighNumberOfFailedHTTPRequests: true
-    etcdHTTPRequestsSlow: true
-    etcdBackendQuotaLowSpace: true
-    etcdExcessiveDatabaseGrowth: true
-    etcdDatabaseQuotaLowSpace: true
+    # etcd alerts re-enabled 2026-05-23 — kubeEtcd is now scraping
+    # ctlpln1/2/3 on port 2381 (see kubeEtcd block above). The full
+    # chart-default etcd alert set is back in play; trim individual ones
+    # here if any prove noisy.
 
 # node-exporter overrides — folded in from the formerly-untracked
 # rke2/monitor/node-exporter-values.yaml in Phase 0c (#28).
