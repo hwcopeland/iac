@@ -73,6 +73,20 @@ spec:
                 secretKeyRef:
                   name: garage-secret
                   key: secret-access-key
+            # OTEL → Tempo. telemetry.go is already instrumented; these
+            # env vars just point the exporter at the in-cluster Tempo
+            # OTLP gRPC endpoint. parentbased_traceidratio sampler with
+            # 0.1 keeps trace volume sane on a home cluster.
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: "tempo.monitor.svc.cluster.local:4317"
+            - name: OTEL_EXPORTER_OTLP_INSECURE
+              value: "true"
+            - name: OTEL_SERVICE_NAME
+              value: "khemeia-controller"
+            - name: OTEL_TRACES_SAMPLER
+              value: "parentbased_traceidratio"
+            - name: OTEL_TRACES_SAMPLER_ARG
+              value: "0.1"
           volumeMounts:
             - name: plugins
               mountPath: /app/plugins

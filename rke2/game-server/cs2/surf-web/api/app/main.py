@@ -20,6 +20,15 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# OpenTelemetry: auto-instrument all FastAPI routes when
+# OTEL_EXPORTER_OTLP_ENDPOINT is set. Env-driven so the same binary works
+# in/out of the cluster. The instrumentation is a no-op if the OTLP
+# exporter can't reach Tempo — endpoint unreachable just drops spans.
+import os
+if os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT"):
+    from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+    FastAPIInstrumentor.instrument_app(app)
+
 origins = [o.strip() for o in settings.cors_origins.split(",") if o.strip()]
 app.add_middleware(
     CORSMiddleware,
