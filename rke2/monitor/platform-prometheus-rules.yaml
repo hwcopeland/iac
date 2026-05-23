@@ -1,0 +1,78 @@
+# Platform-level PrometheusRule CRs — migrated from the legacy
+# Grafana-native ConfigMap `grafana-alert-rules-platform` (deleted in the
+# same change). See Phase 1c (#32) / TDD §10.1 Q3 — operator chose to
+# unify alert routing under Alertmanager so silences and email delivery
+# work uniformly across both chart-default rules and these custom ones.
+#
+# Severity labels are kept the same as the Grafana versions so the
+# kube-prometheus-stack inhibit rules (critical inhibits warning for
+# the same alertname) keep working.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: platform-rules
+  namespace: monitor
+  labels:
+    # kube-prometheus-stack Prometheus selects on this label to load the rules.
+    release: kube-prometheus-stack
+spec:
+  groups:
+    - name: platform-health
+      interval: 1m
+      rules:
+        - alert: PodCrashLooping
+          expr: rate(kube_pod_container_status_restarts_total[5m]) * 300 > 1
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "{{ $labels.namespace }}/{{ $labels.pod }} is crash looping"
+            description: |
+              Container {{ $labels.container }} in pod {{ $labels.namespace }}/{{ $labels.pod }}
+              has restarted >1 time in the last 5 minutes (rate of restarts averaged over 5m, scaled by 300s).
+
+        - alert: PodOOMKilled
+          # No `for:` — fire on the first scrape that observes the condition;
+          # OOM events are one-shot terminations and won't persist long.
+          expr: kube_pod_container_status_last_terminated_reason{reason="OOMKilled"} == 1
+          labels:
+            severity: critical
+          annotations:
+            summary: "{{ $labels.namespace }}/{{ $labels.pod }} was OOMKilled"
+            description: |
+              Container {{ $labels.container }} in pod {{ $labels.namespace }}/{{ $labels.pod }}
+              was killed by the OOM killer. Check memory limits and recent allocations.
+
+        - alert: NodeNotReady
+          expr: kube_node_status_condition{condition="Ready",status="true"} == 0
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Node {{ $labels.node }} is NotReady"
+            description: |
+              Node {{ $labels.node }} has been NotReady for >2 minutes. Check kubelet,
+              networking (Cilium), and node hardware (RAPL / dmesg).
+
+        - alert: PVCFillingUp
+          expr: kubelet_volume_stats_available_bytes / kubelet_volume_stats_capacity_bytes < 0.15
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "PVC {{ $labels.namespace }}/{{ $labels.persistentvolumeclaim }} is >85% full"
+            description: |
+              PVC {{ $labels.namespace }}/{{ $labels.persistentvolumeclaim }} has <15%
+              free space ({{ $value | humanizePercentage }}). Resize the PVC or clean up data.
+
+        - alert: DeploymentReplicasMismatch
+          expr: kube_deployment_spec_replicas - kube_deployment_status_replicas_available > 0
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "{{ $labels.namespace }}/{{ $labels.deployment }} has unavailable replicas"
+            description: |
+              Deployment {{ $labels.namespace }}/{{ $labels.deployment }} has
+              {{ $value }} fewer available replicas than desired for >5 minutes.
+              Check pod scheduling, image pulls, and readiness probes.

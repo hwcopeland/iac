@@ -59,6 +59,51 @@ prometheus:
   service:
     type: ClusterIP
 
+# Phase 1a (#30): the chart's default ServiceMonitors for kube-proxy /
+# kube-scheduler / kube-controller-manager / kube-etcd don't apply to RKE2:
+# - kube-proxy is replaced by Cilium (no kube-proxy pods exist).
+# - scheduler + controller-manager bind to localhost on RKE2 server nodes;
+#   the chart's default 0.0.0.0 scrape target is unreachable.
+# - etcd metrics live on a different port + require mTLS (re-enabled by
+#   Phase 1b below).
+# Disabling these SMs stops 3 permanent TargetDown alerts; absent-style
+# rules are killed explicitly in defaultRules.disabled.
+kubeProxy:
+  enabled: false
+kubeScheduler:
+  enabled: false
+kubeControllerManager:
+  enabled: false
+kubeEtcd:
+  # Re-enabled with correct port + cert mTLS in Phase 1b (#31). Disabled
+  # here to avoid double-config when both this and the new ServiceMonitor
+  # are committed.
+  enabled: false
+
+defaultRules:
+  disabled:
+    # absent()-style rules that fire even after SM removal — must disable
+    # explicitly. etcd* rules get re-enabled in Phase 1b when there are
+    # real targets to evaluate against.
+    KubeProxyDown: true
+    KubeSchedulerDown: true
+    KubeControllerManagerDown: true
+    etcdMembersDown: true
+    etcdInsufficientMembers: true
+    etcdNoLeader: true
+    etcdHighNumberOfLeaderChanges: true
+    etcdHighNumberOfFailedGRPCRequests: true
+    etcdGRPCRequestsSlow: true
+    etcdMemberCommunicationSlow: true
+    etcdHighNumberOfFailedProposals: true
+    etcdHighFsyncDurations: true
+    etcdHighCommitDurations: true
+    etcdHighNumberOfFailedHTTPRequests: true
+    etcdHTTPRequestsSlow: true
+    etcdBackendQuotaLowSpace: true
+    etcdExcessiveDatabaseGrowth: true
+    etcdDatabaseQuotaLowSpace: true
+
 # node-exporter overrides — folded in from the formerly-untracked
 # rke2/monitor/node-exporter-values.yaml in Phase 0c (#28).
 #
