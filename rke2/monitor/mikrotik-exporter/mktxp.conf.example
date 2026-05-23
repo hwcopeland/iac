@@ -23,27 +23,14 @@
     connections = True
     connection_stats = False
 
-[cAP]
-    hostname = 10.0.0.254
-    username = mktxp_user
-    password = <REDACTED-RENDERED-FROM-BITWARDEN>
-
-    dhcp = False
-    dhcp_lease = False
-    route = False
-    pool = False
-    firewall = False
-    neighbor = False
-    bgp = False
-    routing_stats = False
-    connections = False
-    connection_stats = False
-    poe = False
-    capsman = False
-    capsman_clients = False
-    health = True
-    wireless = True
-    wireless_clients = True
+# [cAP] section intentionally removed 2026-05-23.
+# The cAP at 10.0.0.254 is managed by CAPsMAN running on CCR-2004. CAPsMAN
+# already exposes everything we'd scrape directly (wireless clients, signal
+# strength, rx/tx bytes, per-radio registrations, cAP version + identity)
+# via mktxp_capsman_* metrics on the controller. Scraping the cAP directly
+# was architecturally wrong and burned auth attempts every 30s.
+# If a future cAP is ever standalone (no CAPsMAN), restore a [cAP-N] block
+# and ensure mktxp_user exists locally on that device.
 
 [default]
     enabled = True
