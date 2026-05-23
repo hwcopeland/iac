@@ -20,14 +20,10 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# OpenTelemetry: auto-instrument all FastAPI routes when
-# OTEL_EXPORTER_OTLP_ENDPOINT is set. Env-driven so the same binary works
-# in/out of the cluster. The instrumentation is a no-op if the OTLP
-# exporter can't reach Tempo — endpoint unreachable just drops spans.
-import os
-if os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT"):
-    from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
-    FastAPIInstrumentor.instrument_app(app)
+# OpenTelemetry: the container CMD wraps uvicorn with
+# `opentelemetry-instrument` (see Dockerfile), which auto-configures the
+# TracerProvider + OTLP exporter from OTEL_* env vars and auto-loads
+# FastAPI instrumentation. No code-level setup needed here.
 
 origins = [o.strip() for o in settings.cors_origins.split(",") if o.strip()]
 app.add_middleware(
