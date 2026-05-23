@@ -1,18 +1,37 @@
 FROM python:3.11-slim
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# Runtime libs are kept; build tools + dev headers are installed only for the
+# pip step and removed in the same layer to keep the image small.
+RUN set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends \
         ffmpeg \
         libcairo2 \
         libpango-1.0-0 \
         libpangocairo-1.0-0 \
         libgirepository-1.0-1 \
         ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
-
-RUN pip install --no-cache-dir \
+        build-essential \
+        pkg-config \
+        libcairo2-dev \
+        libpango1.0-dev \
+        meson \
+        ninja-build \
+    ; \
+    pip install --no-cache-dir \
         manim==0.18.* \
         numpy \
-        awscli
+        awscli \
+    ; \
+    apt-get purge -y --auto-remove \
+        build-essential \
+        pkg-config \
+        libcairo2-dev \
+        libpango1.0-dev \
+        meson \
+        ninja-build \
+    ; \
+    rm -rf /var/lib/apt/lists/* /root/.cache
 
 WORKDIR /work
 COPY laue.py /work/laue.py
