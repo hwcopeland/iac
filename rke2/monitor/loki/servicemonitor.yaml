@@ -1,0 +1,44 @@
+# Standalone ServiceMonitor for Loki's /metrics endpoint.
+#
+# Why this is hand-rolled instead of chart-generated:
+#   The Helm chart exposes monitoring.serviceMonitor.enabled, but loki-values.yaml
+#   is mid-migration (filesystem -> MinIO S3) and a `helm upgrade` today would
+#   either fail schema validation or orphan existing chunks. This manifest lets
+#   us restore metrics-scraping without touching the in-flight migration.
+#
+# Once the S3 migration lands and the chart is upgraded with
+# monitoring.serviceMonitor.enabled: true, delete this file.
+#
+# Tracked by: docs/spec/observability-cleanup.md
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: loki
+  namespace: monitor
+  labels:
+    app.kubernetes.io/name: loki
+    app.kubernetes.io/instance: loki
+    # kube-prometheus-stack's Prometheus selects on this label.
+    release: kube-prometheus-stack
+spec:
+  # Match labels on Services (not pods). The chart-generated `loki` svc has
+  # no `component` label; loki-gateway/loki-headless carry
+  # prometheus.io/service-monitor=false to opt out of scraping. We honor that.
+  # Result: scrapes `loki` (port 3100) and `loki-canary` (port 3500).
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: loki
+      app.kubernetes.io/instance: loki
+    matchExpressions:
+      - key: prometheus.io/service-monitor
+        operator: NotIn
+        values: ["false"]
+  namespaceSelector:
+    matchNames:
+      - monitor
+  endpoints:
+    - port: http-metrics
+      path: /metrics
+      interval: 30s
+      scrapeTimeout: 10s
+      scheme: http
