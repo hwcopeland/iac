@@ -75,9 +75,11 @@ alloy:
       }
 
       // ─── Loki write endpoint ────────────────────────────────────────
+      // Direct to loki:3100 — the chart's loki-gateway nginx was disabled
+      // as part of Phase 3 (#21). SingleBinary Loki doesn't need it.
       loki.write "local" {
         endpoint {
-          url = "http://loki-gateway.monitor.svc.cluster.local/loki/api/v1/push"
+          url = "http://loki.monitor.svc.cluster.local:3100/loki/api/v1/push"
         }
       }
   mounts:

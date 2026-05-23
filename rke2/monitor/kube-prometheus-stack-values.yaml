@@ -39,7 +39,9 @@ grafana:
       datasources:
         - name: Loki
           type: loki
-          url: http://loki-gateway.monitor.svc.cluster.local
+          # Direct to loki:3100 — chart's loki-gateway nginx was disabled
+          # as part of Phase 3 (#21). SingleBinary Loki doesn't need it.
+          url: http://loki.monitor.svc.cluster.local:3100
           access: proxy
           isDefault: false
   sidecar:
