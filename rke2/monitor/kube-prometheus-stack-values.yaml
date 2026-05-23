@@ -104,6 +104,29 @@ alertmanager:
         # have classified the existing critical noise). Override per-alert
         # using continue:false child routes below if specific criticals are
         # too noisy to email.
+        # Phase 6 silences — known firing tail that is not actionable from
+        # email. Each has a "what to do instead" comment so future-us
+        # remembers why these are null-routed.
+
+        # longhorn DaemonSets show numberMisscheduled=3 because legacy
+        # longhorn-manager / longhorn-csi-plugin / engine-image-ei-* pods
+        # are running on ctlpln1/2/3 from before the DS spec dropped
+        # control-plane tolerations. Pods are stable; controller marks
+        # them misscheduled. To resolve permanently: either restore
+        # tolerations in the longhorn helm release OR `kubectl delete pod`
+        # the 3 ctlpln longhorn-manager pods. Tracked in #N (TODO).
+        - receiver: "null"
+          matchers:
+            - alertname =~ "KubeDaemonSetMisScheduled|KubeDaemonSetRolloutStuck"
+            - namespace = "longhorn-system"
+
+        # nixos-gpu runs RKE2 v1.33.7 while the rest are v1.34.3 — drift
+        # is known and tracked by [[project_gpu_node]] (NixOS-specific
+        # upgrade path). Re-evaluate after the gpu node is upgraded.
+        - receiver: "null"
+          matchers:
+            - alertname = "KubeVersionMismatch"
+
         - receiver: email-operator
           matchers:
             - severity = "critical"
