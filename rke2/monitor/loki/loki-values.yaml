@@ -4,6 +4,7 @@ global:
   dnsService: "rke2-coredns-rke2-coredns"
   dnsNamespace: "kube-system"
 
+# All other deployment modes disabled — singleBinary is the only one in use.
 backend:
   replicas: 0
 read:
@@ -15,22 +16,66 @@ singleBinary:
   replicas: 1
   persistence:
     enabled: true
-    storageClass: longhorn
-    size: 20Gi
+    # Reuse the existing 20Gi PVC — preserves WAL + filesystem chunks from
+    # before the Garage migration (still readable via the pre-2026-05-24
+    # schema_config entry below).
+    existingClaim: storage-loki-0
+  # Inject Garage S3 creds. Keys named for AWS SDK auto-discovery:
+  # AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY. See loki-garage-secret.yaml.
+  extraEnvFrom:
+    - secretRef:
+        name: loki-garage-secret
 
 loki:
   auth_enabled: false
   commonConfig:
     replication_factor: 1
   storage:
-    type: 'filesystem'
-  # Important: Loki 3.0+ requires a schema config
+    type: 's3'
+    bucketNames:
+      chunks: loki-chunks
+      # Chart 6.51.0 requires bucketNames.ruler even when ruler is unused.
+      # Point at the same bucket — no rules are loaded, nothing's written.
+      ruler: loki-chunks
+    s3:
+      endpoint: garage.garage-system.svc.cluster.local:3900
+      region: garage  # arbitrary string — Garage doesn't enforce regions.
+      s3ForcePathStyle: true
+      insecure: true  # in-cluster HTTP; no TLS on the Garage service.
   schemaConfig:
     configs:
+      # Single schema: Garage S3 from 2024-04-01 onward. Old filesystem
+      # chunks still on storage-loki-0 PVC are orphaned but recoverable —
+      # the chart's storage.type=s3 doesn't render a storage_config.filesystem
+      # block, so the mixed-schema (filesystem + s3) approach fails with
+      # "mkdir fake: read-only file system" when Loki tries to flush to a
+      # nonexistent filesystem path. Single-store from the original
+      # backdated 'from' time makes Loki use S3 for all reads and writes.
+      # If history matters, mount the old PVC on a sidecar and re-extract.
       - from: "2024-04-01"
         store: tsdb
-        object_store: filesystem
+        object_store: s3
         schema: v13
         index:
           prefix: index_
           period: 24h
+
+# Chart-native ServiceMonitor — supersedes the band-aid at
+# rke2/monitor/loki/servicemonitor.yaml. Delete that file after this
+# helm upgrade succeeds.
+monitoring:
+  serviceMonitor:
+    enabled: true
+    labels:
+      release: kube-prometheus-stack
+
+# Phase 3: drop the nginx gateway. SingleBinary doesn't need it; Alloy
+# and the Grafana datasource get repointed at loki:3100 directly.
+gateway:
+  enabled: false
+
+# Loki canary scrapes synthetic writes/reads to detect ingest path issues.
+# Keep enabled per the operator's Q2 decision; the chart auto-points its
+# probe URL at loki:3100 when gateway.enabled is false.
+lokiCanary:
+  enabled: true
