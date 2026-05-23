@@ -1,0 +1,6 @@
+# Defense-in-depth: prevent a real (credential-bearing) mktxp.conf from
+# being committed. The git-tracked structure lives in mktxp.conf.example;
+# the runtime config is rendered by external-secret-mktxp.yaml into the
+# `mktxp-credentials` Secret. Any raw mktxp.conf in this directory is by
+# definition local/scratch and should not be tracked.
+mktxp.conf

@@ -1,0 +1,124 @@
+# mktxp per-router config — EXAMPLE / DOCUMENTATION ONLY.
+#
+# The runtime config is rendered by external-secret-mktxp.yaml into the
+# Secret `mktxp-credentials` (key: mktxp.conf), with the real password
+# pulled from Bitwarden. This .example file exists so the structure of
+# the config is reviewable in git without leaking secrets.
+#
+# To change the structure (add a router, toggle a metric):
+#   1. Edit this file.
+#   2. Mirror the change in the `template` block of
+#      external-secret-mktxp.yaml.
+#   3. kubectl rollout restart deploy/mktxp-exporter -n monitor
+
+[CCR-2004]
+    hostname = 10.0.0.1
+    username = mktxp_user
+    password = <REDACTED-RENDERED-FROM-BITWARDEN>
+
+    bgp = True
+    poe = False
+    dns = True
+    routing_stats = True
+    connections = True
+    connection_stats = False
+
+[cAP]
+    hostname = 10.0.0.254
+    username = mktxp_user
+    password = <REDACTED-RENDERED-FROM-BITWARDEN>
+
+    dhcp = False
+    dhcp_lease = False
+    route = False
+    pool = False
+    firewall = False
+    neighbor = False
+    bgp = False
+    routing_stats = False
+    connections = False
+    connection_stats = False
+    poe = False
+    capsman = False
+    capsman_clients = False
+    health = True
+    wireless = True
+    wireless_clients = True
+
+[default]
+    enabled = True
+    hostname = localhost
+    port = 8729
+    username = username
+    password = password
+    credentials_file = ""
+
+    # API SSL on (port 8729). plaintext_login disabled.
+    # no_ssl_certificate=True skips server cert validation — acceptable for
+    # home LAN where the routers use self-signed RouterOS certs.
+    use_ssl = True
+    no_ssl_certificate = True
+    ssl_certificate_verify = False
+    ssl_ca_file = ""
+    plaintext_login = False
+
+    health = True
+    installed_packages = True
+    dhcp = True
+    dhcp_lease = True
+
+    connections = True
+    connection_stats = False
+
+    interface = True
+
+    route = True
+    pool = True
+    firewall = True
+    neighbor = True
+    dns = False
+
+    ipv6_route = False
+    ipv6_pool = False
+    ipv6_firewall = False
+    ipv6_neighbor = False
+
+    poe = True
+    monitor = True
+    netwatch = True
+    public_ip = True
+    wireless = True
+    wireless_clients = True
+    capsman = True
+    capsman_clients = True
+
+    eoip = False
+    gre = False
+    ipip = False
+    lte = False
+    ipsec = False
+    switch_port = False
+    container = False
+    module_only = False
+    ssl_check_hostname = False
+    w60g = False
+    address_list = False
+    ipv6_address_list = False
+    custom_labels = {}
+
+    kid_control_assigned = False
+    kid_control_dynamic = False
+
+    user = True
+    queue = True
+
+    bfd = False
+    bgp = False
+    routing_stats = False
+    certificate = False
+
+    remote_dhcp_entry = None
+    remote_capsman_entry = None
+
+    interface_name_format = 'comment'
+    check_for_updates = False

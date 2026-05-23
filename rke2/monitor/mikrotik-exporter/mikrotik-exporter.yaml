@@ -24,14 +24,17 @@ spec:
             memory: "1024Mi"
             cpu: "1"
         volumeMounts:
-          - name: mktxp-credentials # Mount the secret read-only for credentials
-            mountPath: /mktxp_config # A new path for credentials only
-            readOnly: false
+          - name: mktxp-credentials
+            mountPath: /mktxp_config
+            readOnly: true
         ports:
           - containerPort: 49090
       volumes:
-        - name: mktxp-credentials # Define the secret volume
+        - name: mktxp-credentials
           secret:
+            # Populated by external-secret-mktxp.yaml from Bitwarden.
+            # Contains a single key `mktxp.conf` rendered by ExternalSecret
+            # template; never edit this Secret directly.
             secretName: mktxp-credentials
 ---
 apiVersion: v1
