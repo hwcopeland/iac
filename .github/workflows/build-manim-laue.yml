@@ -1,0 +1,60 @@
+---
+# Build the manim-laue image (NaCl Cu-Kα Laue diffraction animation).
+# Manually triggered; one-shot artifact.
+#
+# Runner: self-hosted arc-chem (on-cluster, can reach zot.hwcopeland.net).
+
+name: Build manim-laue
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - 'rke2/manim-laue/**'
+      - '.github/workflows/build-manim-laue.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-push:
+    name: Build manim-laue
+    runs-on: [self-hosted, arc-chem]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@b5ca514318bd6ebac0fb2aedd5d36ec1b5c232a2  # v3.10.0
+
+      - name: Log in to Zot registry
+        uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772  # v3.4.0
+        with:
+          registry: zot.hwcopeland.net
+          username: ${{ secrets.ZOT_USERNAME }}
+          password: ${{ secrets.ZOT_PASSWORD }}
+
+      - name: Compute image tags
+        id: tags
+        run: |
+          SHORT_SHA="${GITHUB_SHA::7}"
+          RUN_NUM=$(printf '%06d' "${{ github.run_number }}")
+          echo "build_tag=build-${RUN_NUM}-${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push manim-laue
+        uses: docker/build-push-action@14487ce63c7a62a4a324b0bfb37086795e31c6c1  # v6.16.0
+        with:
+          context: rke2/manim-laue/
+          file: rke2/manim-laue/Dockerfile
+          platforms: linux/amd64
+          push: false
+          provenance: false
+          sbom: false
+          outputs: type=image,push=true,oci-mediatypes=true
+          tags: |
+            zot.hwcopeland.net/sci/manim-laue:${{ steps.tags.outputs.build_tag }}
+            zot.hwcopeland.net/sci/manim-laue:latest
+          cache-from: type=registry,ref=zot.hwcopeland.net/sci/manim-laue:buildcache
+          cache-to: type=registry,ref=zot.hwcopeland.net/sci/manim-laue:buildcache,mode=max
