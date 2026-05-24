@@ -1,0 +1,19 @@
+FROM python:3.11-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libsndfile1 ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
+# faster-whisper bundles a small CUDA runtime via its CTranslate2 dep.
+# At deploy time we also mount /run/opengl-driver + /nix/store so the
+# container can find the NixOS nvidia driver — same trick chatterbox uses.
+RUN pip install --no-cache-dir \
+    faster-whisper==1.0.3 \
+    fastapi "uvicorn[standard]" \
+    numpy scipy soundfile
+
+# Pre-cached HF + CTranslate2 model dirs target /models (PVC).
+ENV HF_HOME=/models \
+    CT2_VERBOSE=0
+
+WORKDIR /app
