@@ -1,0 +1,122 @@
+# MikroTik router telemetry from mktxp-exporter. CCR-2004 scraped
+# directly; cAP observed indirectly via CAPsMAN metrics on the controller.
+# Built against the actual mktxp_* metrics flowing on this cluster, not a
+# generic template — so only panels that have data appear.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mikrotik-network-dashboard
+  namespace: monitor
+  labels:
+    grafana_dashboard: "1"
+  annotations:
+    grafana_folder: Platform
+data:
+  mikrotik-network.json: |-
+    {
+      "uid": "mikrotik-network",
+      "title": "MikroTik — Network Overview",
+      "tags": ["platform", "network", "mikrotik"],
+      "timezone": "browser",
+      "refresh": "30s",
+      "schemaVersion": 39,
+      "time": {"from": "now-3h", "to": "now"},
+      "editable": true,
+      "panels": [
+        {
+          "type": "stat",
+          "title": "Routers scraping",
+          "gridPos": {"x": 0, "y": 0, "w": 4, "h": 4},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"expr": "count(group by (routerboard_name) (mktxp_collection_time_total))", "refId": "A"}],
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
+          "fieldConfig": {"defaults": {"color": {"mode": "fixed", "fixedColor": "blue"}}}
+        },
+        {
+          "type": "stat",
+          "title": "DHCP leases",
+          "gridPos": {"x": 4, "y": 0, "w": 4, "h": 4},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"expr": "sum(mktxp_dhcp_lease_active_count)", "refId": "A"}],
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
+          "fieldConfig": {"defaults": {"color": {"mode": "fixed", "fixedColor": "green"}}}
+        },
+        {
+          "type": "stat",
+          "title": "Wireless clients",
+          "gridPos": {"x": 8, "y": 0, "w": 4, "h": 4},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"expr": "sum(mktxp_capsman_registrations_count)", "refId": "A"}],
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
+          "fieldConfig": {"defaults": {"color": {"mode": "fixed", "fixedColor": "orange"}}}
+        },
+        {
+          "type": "stat",
+          "title": "BGP sessions established",
+          "gridPos": {"x": 12, "y": 0, "w": 4, "h": 4},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"expr": "sum(mktxp_bgp_established)", "refId": "A"}],
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
+          "fieldConfig": {"defaults": {"color": {"mode": "fixed", "fixedColor": "purple"}}}
+        },
+        {
+          "type": "stat",
+          "title": "Connection-tracking entries",
+          "gridPos": {"x": 16, "y": 0, "w": 4, "h": 4},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"expr": "sum(mktxp_connections_total)", "refId": "A"}],
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
+          "fieldConfig": {"defaults": {"color": {"mode": "fixed", "fixedColor": "yellow"}}}
+        },
+        {
+          "type": "stat",
+          "title": "DNS cache size",
+          "gridPos": {"x": 20, "y": 0, "w": 4, "h": 4},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"expr": "sum(mktxp_dns_total)", "refId": "A"}],
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
+          "fieldConfig": {"defaults": {"color": {"mode": "fixed", "fixedColor": "blue"}}}
+        },
+        {
+          "type": "timeseries",
+          "title": "Per-interface RX/TX (bps)",
+          "gridPos": {"x": 0, "y": 4, "w": 24, "h": 8},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [
+            {"expr": "rate(mktxp_interface_rx_byte[2m]) * 8", "legendFormat": "rx {{routerboard_name}}:{{name}}", "refId": "A"},
+            {"expr": "rate(mktxp_interface_tx_byte[2m]) * 8 * -1", "legendFormat": "tx {{routerboard_name}}:{{name}}", "refId": "B"}
+          ],
+          "fieldConfig": {"defaults": {"unit": "bps", "custom": {"fillOpacity": 5, "lineWidth": 1}}}
+        },
+        {
+          "type": "table",
+          "title": "CAPsMAN wireless clients (live)",
+          "gridPos": {"x": 0, "y": 12, "w": 24, "h": 8},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"expr": "mktxp_capsman_clients_devices_info", "instant": true, "format": "table", "refId": "A"}],
+          "transformations": [
+            {"id": "organize", "options": {"excludeByName": {"Time": true, "__name__": true, "endpoint": true, "container": true, "job": true, "pod": true, "service": true, "instance": true, "namespace": true, "Value": true}}}
+          ]
+        },
+        {
+          "type": "timeseries",
+          "title": "Wireless client signal strength (dBm)",
+          "gridPos": {"x": 0, "y": 20, "w": 12, "h": 7},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [
+            {"expr": "mktxp_capsman_clients_signal_strength", "legendFormat": "{{dhcp_name}} ({{mac_address}})", "refId": "A"}
+          ],
+          "fieldConfig": {"defaults": {"unit": "dB", "custom": {"fillOpacity": 0, "lineWidth": 1}, "thresholds": {"mode": "absolute", "steps": [{"color": "red"}, {"color": "orange", "value": -75}, {"color": "green", "value": -60}]}}}
+        },
+        {
+          "type": "timeseries",
+          "title": "BGP routes received (per peer)",
+          "gridPos": {"x": 12, "y": 20, "w": 12, "h": 7},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [
+            {"expr": "mktxp_bgp_prefix_count", "legendFormat": "{{name}} (peer)", "refId": "A"}
+          ],
+          "fieldConfig": {"defaults": {"unit": "short", "custom": {"fillOpacity": 5, "lineWidth": 1}}}
+        }
+      ]
+    }

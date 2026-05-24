@@ -1,0 +1,124 @@
+# Loki ingest + storage + query telemetry. Most panels read from
+# Prometheus (loki_* metrics); a few use Loki directly for live log
+# volume. Useful for "is the log pipeline OK" without needing to drill
+# into individual streams.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: loki-log-health-dashboard
+  namespace: monitor
+  labels:
+    grafana_dashboard: "1"
+  annotations:
+    grafana_folder: Platform
+data:
+  loki-log-health.json: |-
+    {
+      "uid": "loki-log-health",
+      "title": "Loki — Log Health",
+      "tags": ["platform", "loki", "logs"],
+      "timezone": "browser",
+      "refresh": "30s",
+      "schemaVersion": 39,
+      "time": {"from": "now-3h", "to": "now"},
+      "editable": true,
+      "panels": [
+        {
+          "type": "stat",
+          "title": "Loki up",
+          "gridPos": {"x": 0, "y": 0, "w": 4, "h": 4},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"expr": "up{job=\"monitor/loki\"}", "refId": "A"}],
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
+          "fieldConfig": {"defaults": {"thresholds": {"mode": "absolute", "steps": [{"color": "red"}, {"color": "green", "value": 1}]}, "color": {"mode": "thresholds"}, "mappings": [{"type": "value", "options": {"0": {"text": "DOWN"}, "1": {"text": "UP"}}}]}}
+        },
+        {
+          "type": "stat",
+          "title": "Ingest rate (lines/s)",
+          "gridPos": {"x": 4, "y": 0, "w": 5, "h": 4},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"expr": "sum(rate(loki_distributor_lines_received_total[2m]))", "refId": "A"}],
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
+          "fieldConfig": {"defaults": {"unit": "short", "color": {"mode": "fixed", "fixedColor": "blue"}}}
+        },
+        {
+          "type": "stat",
+          "title": "Ingest rate (bytes/s)",
+          "gridPos": {"x": 9, "y": 0, "w": 5, "h": 4},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"expr": "sum(rate(loki_distributor_bytes_received_total[2m]))", "refId": "A"}],
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
+          "fieldConfig": {"defaults": {"unit": "Bps", "color": {"mode": "fixed", "fixedColor": "blue"}}}
+        },
+        {
+          "type": "stat",
+          "title": "Chunks stored",
+          "gridPos": {"x": 14, "y": 0, "w": 5, "h": 4},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"expr": "loki_chunk_store_stored_chunks_total", "refId": "A"}],
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
+          "fieldConfig": {"defaults": {"unit": "short", "color": {"mode": "fixed", "fixedColor": "purple"}}}
+        },
+        {
+          "type": "stat",
+          "title": "Active streams",
+          "gridPos": {"x": 19, "y": 0, "w": 5, "h": 4},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"expr": "sum(loki_ingester_memory_streams)", "refId": "A"}],
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
+          "fieldConfig": {"defaults": {"unit": "short", "color": {"mode": "fixed", "fixedColor": "green"}}}
+        },
+        {
+          "type": "timeseries",
+          "title": "Ingest rate by tenant (bytes/s)",
+          "gridPos": {"x": 0, "y": 4, "w": 12, "h": 7},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [
+            {"expr": "sum by (tenant) (rate(loki_distributor_bytes_received_total[2m]))", "legendFormat": "{{tenant}}", "refId": "A"}
+          ],
+          "fieldConfig": {"defaults": {"unit": "Bps", "custom": {"fillOpacity": 10, "lineWidth": 1}}}
+        },
+        {
+          "type": "timeseries",
+          "title": "Write requests by status code (req/s)",
+          "gridPos": {"x": 12, "y": 4, "w": 12, "h": 7},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [
+            {"expr": "sum by (status_code) (rate(loki_request_duration_seconds_count{route=~\".*push.*\"}[2m]))", "legendFormat": "{{status_code}}", "refId": "A"}
+          ],
+          "fieldConfig": {"defaults": {"unit": "reqps", "custom": {"fillOpacity": 10, "lineWidth": 1}}}
+        },
+        {
+          "type": "timeseries",
+          "title": "S3 (Garage) write activity",
+          "gridPos": {"x": 0, "y": 11, "w": 12, "h": 7},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [
+            {"expr": "sum(rate(loki_chunk_store_stored_chunk_bytes_total[2m]))", "legendFormat": "bytes/s to Garage", "refId": "A"},
+            {"expr": "sum(rate(loki_chunk_store_stored_chunks_total[2m]))", "legendFormat": "chunks/s", "refId": "B"}
+          ],
+          "fieldConfig": {"defaults": {"unit": "Bps", "custom": {"fillOpacity": 5, "lineWidth": 2}}}
+        },
+        {
+          "type": "timeseries",
+          "title": "Query latency p95 / p99 (s)",
+          "gridPos": {"x": 12, "y": 11, "w": 12, "h": 7},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [
+            {"expr": "histogram_quantile(0.95, sum by (le, route) (rate(loki_request_duration_seconds_bucket{route=~\".*query.*\"}[5m])))", "legendFormat": "p95 {{route}}", "refId": "A"},
+            {"expr": "histogram_quantile(0.99, sum by (le, route) (rate(loki_request_duration_seconds_bucket{route=~\".*query.*\"}[5m])))", "legendFormat": "p99 {{route}}", "refId": "B"}
+          ],
+          "fieldConfig": {"defaults": {"unit": "s", "custom": {"fillOpacity": 5, "lineWidth": 1}}}
+        },
+        {
+          "type": "logs",
+          "title": "Recent ERROR / WARN / Critical log lines (last 15m)",
+          "gridPos": {"x": 0, "y": 18, "w": 24, "h": 10},
+          "datasource": {"type": "loki", "uid": "P8E80F9AEF21F6940"},
+          "targets": [
+            {"expr": "{namespace=~\".+\"} |~ \"(?i)error|critical|fatal|panic\" | __error__=\"\"", "refId": "A"}
+          ],
+          "options": {"showTime": true, "showLabels": false, "sortOrder": "Descending", "wrapLogMessage": true, "enableLogDetails": true}
+        }
+      ]
+    }

@@ -1,0 +1,119 @@
+# Per-service RED dashboard (Rate / Errors / Duration) sourced from
+# Tempo's metrics-generator span_metrics. Works for any OTEL-instrumented
+# service in the cluster (currently khemeia-controller + surf-api).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tempo-service-red-dashboard
+  namespace: monitor
+  labels:
+    grafana_dashboard: "1"
+  annotations:
+    grafana_folder: Platform
+data:
+  tempo-service-red.json: |-
+    {
+      "uid": "tempo-service-red",
+      "title": "Tempo — Service RED",
+      "tags": ["platform", "tempo", "traces"],
+      "timezone": "browser",
+      "refresh": "30s",
+      "schemaVersion": 39,
+      "time": {"from": "now-1h", "to": "now"},
+      "editable": true,
+      "templating": {
+        "list": [
+          {
+            "name": "service",
+            "label": "Service",
+            "type": "query",
+            "datasource": {"type": "prometheus", "uid": "prometheus"},
+            "query": {"query": "label_values(traces_spanmetrics_calls_total, service)", "refId": "PrometheusVariableQueryEditor-VariableQuery"},
+            "refresh": 2,
+            "includeAll": true,
+            "multi": true,
+            "current": {"text": "All", "value": "$__all"}
+          }
+        ]
+      },
+      "panels": [
+        {
+          "type": "stat",
+          "title": "Services emitting spans",
+          "gridPos": {"x": 0, "y": 0, "w": 6, "h": 4},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"expr": "count(group by (service) (traces_spanmetrics_calls_total))", "refId": "A"}],
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
+          "fieldConfig": {"defaults": {"color": {"mode": "fixed", "fixedColor": "blue"}}}
+        },
+        {
+          "type": "stat",
+          "title": "Total req rate (last 5m)",
+          "gridPos": {"x": 6, "y": 0, "w": 6, "h": 4},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"expr": "sum(rate(traces_spanmetrics_calls_total{service=~\"$service\"}[5m]))", "refId": "A"}],
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
+          "fieldConfig": {"defaults": {"unit": "reqps", "color": {"mode": "fixed", "fixedColor": "blue"}}}
+        },
+        {
+          "type": "stat",
+          "title": "Error rate (5xx + status=error)",
+          "gridPos": {"x": 12, "y": 0, "w": 6, "h": 4},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"expr": "sum(rate(traces_spanmetrics_calls_total{service=~\"$service\",status_code=\"STATUS_CODE_ERROR\"}[5m]))", "refId": "A"}],
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
+          "fieldConfig": {"defaults": {"unit": "reqps", "thresholds": {"mode": "absolute", "steps": [{"color": "green"}, {"color": "orange", "value": 0.01}, {"color": "red", "value": 0.1}]}, "color": {"mode": "thresholds"}}}
+        },
+        {
+          "type": "stat",
+          "title": "p95 latency (5m)",
+          "gridPos": {"x": 18, "y": 0, "w": 6, "h": 4},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"expr": "histogram_quantile(0.95, sum by (le) (rate(traces_spanmetrics_latency_bucket{service=~\"$service\"}[5m])))", "refId": "A"}],
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
+          "fieldConfig": {"defaults": {"unit": "s", "thresholds": {"mode": "absolute", "steps": [{"color": "green"}, {"color": "orange", "value": 0.5}, {"color": "red", "value": 2}]}, "color": {"mode": "thresholds"}}}
+        },
+        {
+          "type": "timeseries",
+          "title": "Request rate per service (req/s)",
+          "gridPos": {"x": 0, "y": 4, "w": 12, "h": 8},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [
+            {"expr": "sum by (service) (rate(traces_spanmetrics_calls_total{service=~\"$service\"}[2m]))", "legendFormat": "{{service}}", "refId": "A"}
+          ],
+          "fieldConfig": {"defaults": {"unit": "reqps", "custom": {"fillOpacity": 10, "lineWidth": 2}}}
+        },
+        {
+          "type": "timeseries",
+          "title": "Error rate per service (req/s)",
+          "gridPos": {"x": 12, "y": 4, "w": 12, "h": 8},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [
+            {"expr": "sum by (service) (rate(traces_spanmetrics_calls_total{service=~\"$service\",status_code=\"STATUS_CODE_ERROR\"}[2m]))", "legendFormat": "{{service}}", "refId": "A"}
+          ],
+          "fieldConfig": {"defaults": {"unit": "reqps", "custom": {"fillOpacity": 10, "lineWidth": 2}, "color": {"mode": "fixed", "fixedColor": "red"}}}
+        },
+        {
+          "type": "timeseries",
+          "title": "Latency p50 / p95 / p99 (s)",
+          "gridPos": {"x": 0, "y": 12, "w": 12, "h": 8},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [
+            {"expr": "histogram_quantile(0.50, sum by (le, service) (rate(traces_spanmetrics_latency_bucket{service=~\"$service\"}[5m])))", "legendFormat": "p50 {{service}}", "refId": "A"},
+            {"expr": "histogram_quantile(0.95, sum by (le, service) (rate(traces_spanmetrics_latency_bucket{service=~\"$service\"}[5m])))", "legendFormat": "p95 {{service}}", "refId": "B"},
+            {"expr": "histogram_quantile(0.99, sum by (le, service) (rate(traces_spanmetrics_latency_bucket{service=~\"$service\"}[5m])))", "legendFormat": "p99 {{service}}", "refId": "C"}
+          ],
+          "fieldConfig": {"defaults": {"unit": "s", "custom": {"fillOpacity": 5, "lineWidth": 1}}}
+        },
+        {
+          "type": "timeseries",
+          "title": "Service graph — edges (req/s between services)",
+          "gridPos": {"x": 12, "y": 12, "w": 12, "h": 8},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [
+            {"expr": "sum by (client, server) (rate(traces_service_graph_request_total[2m]))", "legendFormat": "{{client}} → {{server}}", "refId": "A"}
+          ],
+          "fieldConfig": {"defaults": {"unit": "reqps", "custom": {"fillOpacity": 5, "lineWidth": 1}}}
+        }
+      ]
+    }

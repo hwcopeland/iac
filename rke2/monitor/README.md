@@ -142,14 +142,32 @@ env:
 
 | Folder | Contains | Owners |
 |---|---|---|
-| `Defaults` | kube-prometheus-stack chart dashboards (~24). Read-only by convention — copy to `Platform` to modify. | Helm |
-| `Platform` | Operator-curated infra: `grafana-self-perf`, `kubetest-power`, Loki/Tempo/Alloy self-monitoring. | hwcopeland |
-| `Projects` | Application dashboards: `cs2-surf-server`, future per-app dashboards. | Project owner |
+| `General` | kube-prometheus-stack chart dashboards (~24) + any unannotated CMs. The sidecar writes annotation-less ConfigMaps here. Read-only by convention — copy to `Platform` to modify. | Helm |
+| `Platform` | Operator-curated infra dashboards: `Cluster Overview`, `Tempo — Service RED`, `Loki — Log Health`, `MikroTik — Network Overview`, `Power — Cluster Overview`, `Grafana Self Performance`, `Kubetest — Homelab Power`. | hwcopeland |
+| `Projects` | Application dashboards: `CS2 Surf Server Overview`. Future per-app dashboards land here. | Project owner |
 | `Khemeia` | Khemeia compute-chem platform dashboards. | khemeia team |
 
 Set via `metadata.annotations.grafana_folder: <Folder>` on each ConfigMap.
-Default for chart-managed CMs is `Defaults` (set via
-`grafana.sidecar.dashboards.defaultFolderName` in kps values).
+Without the annotation, the dashboard lands in `General` (the kps grafana
+sidecar's default — `defaultFolderName: Defaults` becomes the *write
+path* concat'd with `folder`, not a Grafana folder name. Annotating
+explicitly is the only reliable way to place dashboards).
+
+In-repo dashboard manifests live under `rke2/monitor/dashboards/` so
+they're easy to find as a group:
+
+```
+rke2/monitor/dashboards/
+  cluster-overview.yaml      → Platform
+  tempo-service-red.yaml     → Platform
+  loki-log-health.yaml       → Platform
+  mikrotik-network.yaml      → Platform
+  power-overview.yaml        → Platform
+```
+
+Two older dashboards (`grafana-self-perf-dashboard.yaml`,
+`kubetest-power-dashboard.yaml`) still live at `rke2/monitor/` root from
+their original commits; move to `dashboards/` opportunistically.
 
 ## Storage
 

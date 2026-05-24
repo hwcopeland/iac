@@ -1,0 +1,130 @@
+# Single-pane "is the cluster OK" dashboard. Highest-signal panels only —
+# replaces the need to bounce between 10+ kube-prometheus-stack defaults
+# when you just want to know if anything's burning.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cluster-overview-dashboard
+  namespace: monitor
+  labels:
+    grafana_dashboard: "1"
+  annotations:
+    grafana_folder: Platform
+data:
+  cluster-overview.json: |-
+    {
+      "uid": "cluster-overview",
+      "title": "Cluster Overview",
+      "tags": ["platform", "overview"],
+      "timezone": "browser",
+      "refresh": "30s",
+      "schemaVersion": 39,
+      "time": {"from": "now-3h", "to": "now"},
+      "editable": true,
+      "panels": [
+        {
+          "type": "stat",
+          "title": "Nodes Ready",
+          "gridPos": {"x": 0, "y": 0, "w": 4, "h": 4},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"expr": "sum(kube_node_status_condition{condition=\"Ready\",status=\"true\"})", "refId": "A"}],
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "textMode": "value_and_name"},
+          "fieldConfig": {"defaults": {"thresholds": {"mode": "absolute", "steps": [{"color": "red"}, {"color": "green", "value": 6}]}, "color": {"mode": "thresholds"}, "unit": "none"}}
+        },
+        {
+          "type": "stat",
+          "title": "Pods Running",
+          "gridPos": {"x": 4, "y": 0, "w": 4, "h": 4},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"expr": "sum(kube_pod_status_phase{phase=\"Running\"})", "refId": "A"}],
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
+          "fieldConfig": {"defaults": {"color": {"mode": "fixed", "fixedColor": "blue"}, "unit": "none"}}
+        },
+        {
+          "type": "stat",
+          "title": "Pods Not Running",
+          "gridPos": {"x": 8, "y": 0, "w": 4, "h": 4},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"expr": "sum(kube_pod_status_phase{phase=~\"Failed|Unknown|Pending\"})", "refId": "A"}],
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
+          "fieldConfig": {"defaults": {"thresholds": {"mode": "absolute", "steps": [{"color": "green"}, {"color": "orange", "value": 1}, {"color": "red", "value": 5}]}, "color": {"mode": "thresholds"}, "unit": "none"}}
+        },
+        {
+          "type": "stat",
+          "title": "Firing Alerts (critical)",
+          "gridPos": {"x": 12, "y": 0, "w": 4, "h": 4},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"expr": "sum(ALERTS{alertstate=\"firing\",severity=\"critical\"})", "refId": "A"}],
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
+          "fieldConfig": {"defaults": {"thresholds": {"mode": "absolute", "steps": [{"color": "green"}, {"color": "red", "value": 1}]}, "color": {"mode": "thresholds"}, "unit": "none"}}
+        },
+        {
+          "type": "stat",
+          "title": "Firing Alerts (warning)",
+          "gridPos": {"x": 16, "y": 0, "w": 4, "h": 4},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"expr": "sum(ALERTS{alertstate=\"firing\",severity=\"warning\"})", "refId": "A"}],
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
+          "fieldConfig": {"defaults": {"thresholds": {"mode": "absolute", "steps": [{"color": "green"}, {"color": "orange", "value": 1}]}, "color": {"mode": "thresholds"}, "unit": "none"}}
+        },
+        {
+          "type": "stat",
+          "title": "etcd Has Leader (3/3)",
+          "gridPos": {"x": 20, "y": 0, "w": 4, "h": 4},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"expr": "sum(etcd_server_has_leader)", "refId": "A"}],
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
+          "fieldConfig": {"defaults": {"thresholds": {"mode": "absolute", "steps": [{"color": "red"}, {"color": "orange", "value": 2}, {"color": "green", "value": 3}]}, "color": {"mode": "thresholds"}, "unit": "none"}}
+        },
+        {
+          "type": "timeseries",
+          "title": "Cluster CPU usage (cores)",
+          "gridPos": {"x": 0, "y": 4, "w": 12, "h": 8},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [
+            {"expr": "sum by (instance) (rate(node_cpu_seconds_total{mode!=\"idle\"}[2m]))", "legendFormat": "{{instance}}", "refId": "A"}
+          ],
+          "fieldConfig": {"defaults": {"unit": "short", "custom": {"fillOpacity": 10, "lineWidth": 1}}}
+        },
+        {
+          "type": "timeseries",
+          "title": "Cluster RAM used",
+          "gridPos": {"x": 12, "y": 4, "w": 12, "h": 8},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [
+            {"expr": "node_memory_MemTotal_bytes - node_memory_MemAvailable_bytes", "legendFormat": "{{instance}}", "refId": "A"}
+          ],
+          "fieldConfig": {"defaults": {"unit": "bytes", "custom": {"fillOpacity": 10, "lineWidth": 1}}}
+        },
+        {
+          "type": "timeseries",
+          "title": "Cluster power draw (W) — RAPL packages",
+          "gridPos": {"x": 0, "y": 12, "w": 12, "h": 8},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [
+            {"expr": "sum by (instance) (rate(node_rapl_package_joules_total[2m]))", "legendFormat": "{{instance}}", "refId": "A"},
+            {"expr": "sum(rate(node_rapl_package_joules_total[2m]))", "legendFormat": "cluster total", "refId": "B"}
+          ],
+          "fieldConfig": {"defaults": {"unit": "watt", "custom": {"fillOpacity": 5, "lineWidth": 2}}}
+        },
+        {
+          "type": "timeseries",
+          "title": "Top 10 namespaces by pod count",
+          "gridPos": {"x": 12, "y": 12, "w": 12, "h": 8},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [
+            {"expr": "topk(10, sum by (namespace) (kube_pod_status_phase{phase=\"Running\"}))", "legendFormat": "{{namespace}}", "refId": "A"}
+          ],
+          "fieldConfig": {"defaults": {"unit": "short", "custom": {"fillOpacity": 5, "lineWidth": 1}}}
+        },
+        {
+          "type": "table",
+          "title": "Currently firing alerts",
+          "gridPos": {"x": 0, "y": 20, "w": 24, "h": 6},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"expr": "ALERTS{alertstate=\"firing\"}", "instant": true, "format": "table", "refId": "A"}],
+          "transformations": [{"id": "organize", "options": {"excludeByName": {"Time": true, "__name__": true, "Value": true, "endpoint": true, "container": true, "instance": true, "job": true, "pod": true, "service": true}}}],
+          "fieldConfig": {"defaults": {"custom": {"align": "left"}}}
+        }
+      ]
+    }
