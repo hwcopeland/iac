@@ -30,7 +30,7 @@ spec:
             - containerPort: 8766
           env:
             - name: LD_LIBRARY_PATH
-              value: "/run/opengl-driver/lib"
+              value: "/run/opengl-driver/lib:/usr/local/lib/python3.11/site-packages/nvidia/cublas/lib:/usr/local/lib/python3.11/site-packages/nvidia/cudnn/lib"
             - name: HF_HOME
               value: "/models"
             - name: PORT
