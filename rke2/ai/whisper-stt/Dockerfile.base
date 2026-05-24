@@ -10,7 +10,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN pip install --no-cache-dir \
     faster-whisper==1.0.3 \
     fastapi "uvicorn[standard]" \
-    numpy scipy soundfile
+    numpy scipy soundfile \
+    requests
 
 # Pre-cached HF + CTranslate2 model dirs target /models (PVC).
 ENV HF_HOME=/models \
