@@ -1,0 +1,89 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: whisper-stt
+  namespace: ai
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: whisper-stt
+  template:
+    metadata:
+      labels:
+        app: whisper-stt
+    spec:
+      nodeSelector:
+        gpu: rtx3070
+      tolerations:
+        - key: gpu
+          operator: Equal
+          value: "true"
+          effect: NoSchedule
+      imagePullSecrets:
+        - name: zot-pull-secret
+      containers:
+        - name: whisper-stt
+          image: zot.hwcopeland.net/ai/whisper-stt:latest
+          ports:
+            - containerPort: 8766
+          env:
+            - name: LD_LIBRARY_PATH
+              value: "/run/opengl-driver/lib"
+            - name: HF_HOME
+              value: "/models"
+            - name: PORT
+              value: "8766"
+            - name: WHISPER_MODEL
+              value: "deepdml/faster-whisper-large-v3-turbo-ct2"
+            - name: WHISPER_DEVICE
+              value: "cuda"
+            - name: WHISPER_COMPUTE
+              value: "float16"
+          resources:
+            requests:
+              nvidia.com/gpu: "1"
+              memory: 3Gi
+            limits:
+              nvidia.com/gpu: "1"
+              memory: 6Gi
+          volumeMounts:
+            - name: models
+              mountPath: /models
+            - name: opengl-driver
+              mountPath: /run/opengl-driver
+              readOnly: true
+            - name: nix-store
+              mountPath: /nix/store
+              readOnly: true
+          readinessProbe:
+            exec:
+              command:
+                - python3
+                - -c
+                - "import urllib.request; r=urllib.request.urlopen('http://localhost:8766/health',timeout=5); import json; d=json.loads(r.read()); exit(0 if d.get('model_loaded') else 1)"
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 10
+            failureThreshold: 12
+          livenessProbe:
+            exec:
+              command:
+                - python3
+                - -c
+                - "import urllib.request; urllib.request.urlopen('http://localhost:8766/health',timeout=5)"
+            initialDelaySeconds: 90
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 3
+      volumes:
+        - name: models
+          persistentVolumeClaim:
+            claimName: whisper-models
+        - name: opengl-driver
+          hostPath:
+            path: /run/opengl-driver
+        - name: nix-store
+          hostPath:
+            path: /nix/store
