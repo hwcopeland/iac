@@ -1,0 +1,94 @@
+# Cluster-aggregate power view. The pre-existing kubetest-power dashboard
+# focuses on per-test benchmarks; this is the "ambient draw" view —
+# answer to "what's my cluster burning right now and where".
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: power-overview-dashboard
+  namespace: monitor
+  labels:
+    grafana_dashboard: "1"
+  annotations:
+    grafana_folder: Platform
+data:
+  power-overview.json: |-
+    {
+      "uid": "power-overview",
+      "title": "Power — Cluster Overview",
+      "tags": ["platform", "power", "rapl"],
+      "timezone": "browser",
+      "refresh": "30s",
+      "schemaVersion": 39,
+      "time": {"from": "now-6h", "to": "now"},
+      "editable": true,
+      "panels": [
+        {
+          "type": "stat",
+          "title": "Cluster total (W, last 5m avg)",
+          "gridPos": {"x": 0, "y": 0, "w": 6, "h": 5},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"expr": "sum(rate(node_rapl_package_joules_total[5m]))", "refId": "A"}],
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
+          "fieldConfig": {"defaults": {"unit": "watt", "thresholds": {"mode": "absolute", "steps": [{"color": "green"}, {"color": "orange", "value": 200}, {"color": "red", "value": 400}]}, "color": {"mode": "thresholds"}}}
+        },
+        {
+          "type": "stat",
+          "title": "GPU node (W)",
+          "gridPos": {"x": 6, "y": 0, "w": 6, "h": 5},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"expr": "rate(node_rapl_package_joules_total{instance=\"10.41.0.10:9100\"}[5m])", "refId": "A"}],
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
+          "fieldConfig": {"defaults": {"unit": "watt", "color": {"mode": "fixed", "fixedColor": "yellow"}}}
+        },
+        {
+          "type": "stat",
+          "title": "Hourly cluster energy (Wh, last 1h)",
+          "gridPos": {"x": 12, "y": 0, "w": 6, "h": 5},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"expr": "sum(increase(node_rapl_package_joules_total[1h])) / 3600", "refId": "A"}],
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
+          "fieldConfig": {"defaults": {"unit": "watth", "color": {"mode": "fixed", "fixedColor": "blue"}}}
+        },
+        {
+          "type": "stat",
+          "title": "Est. monthly kWh (× 730h)",
+          "gridPos": {"x": 18, "y": 0, "w": 6, "h": 5},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"expr": "sum(rate(node_rapl_package_joules_total[1h])) * 730 / 1000", "refId": "A"}],
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
+          "fieldConfig": {"defaults": {"unit": "kwatth", "color": {"mode": "fixed", "fixedColor": "purple"}}}
+        },
+        {
+          "type": "timeseries",
+          "title": "Per-node power draw (W)",
+          "gridPos": {"x": 0, "y": 5, "w": 24, "h": 9},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [
+            {"expr": "sum by (instance) (rate(node_rapl_package_joules_total[2m]))", "legendFormat": "{{instance}}", "refId": "A"},
+            {"expr": "sum(rate(node_rapl_package_joules_total[2m]))", "legendFormat": "cluster total", "refId": "B"}
+          ],
+          "fieldConfig": {"defaults": {"unit": "watt", "custom": {"fillOpacity": 5, "lineWidth": 2, "stacking": {"mode": "none"}}}}
+        },
+        {
+          "type": "timeseries",
+          "title": "Cluster CPU vs Power (correlation — does load explain draw?)",
+          "gridPos": {"x": 0, "y": 14, "w": 12, "h": 8},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [
+            {"expr": "sum(rate(node_cpu_seconds_total{mode!=\"idle\"}[2m]))", "legendFormat": "Σ cores busy", "refId": "A"},
+            {"expr": "sum(rate(node_rapl_package_joules_total[2m])) / 10", "legendFormat": "cluster watts ÷ 10 (for scale)", "refId": "B"}
+          ],
+          "fieldConfig": {"defaults": {"unit": "short", "custom": {"fillOpacity": 5, "lineWidth": 2}}}
+        },
+        {
+          "type": "timeseries",
+          "title": "Top namespaces by CPU (proxy for power consumption)",
+          "gridPos": {"x": 12, "y": 14, "w": 12, "h": 8},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [
+            {"expr": "topk(10, sum by (namespace) (rate(container_cpu_usage_seconds_total{namespace!=\"\",container!=\"\"}[2m])))", "legendFormat": "{{namespace}}", "refId": "A"}
+          ],
+          "fieldConfig": {"defaults": {"unit": "short", "custom": {"fillOpacity": 5, "lineWidth": 1, "stacking": {"mode": "normal"}}}}
+        }
+      ]
+    }
