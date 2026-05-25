@@ -16,6 +16,7 @@ COPY jarvis_personal.py jarvis_personal_mcp.py \
      jarvis_ig_polling.py jarvis_ig_consumer.py \
      jarvis_ig_comment_responder.py jarvis_reel_context.py \
      jarvis_ig_media_dl.py jarvis_song_id.py \
+     jarvis_local_brain.py \
      /app/
 
 ENV EDGE_HTTP_PORT=8088 \
