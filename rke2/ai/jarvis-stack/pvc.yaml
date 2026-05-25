@@ -1,0 +1,41 @@
+---
+# Persistent state for the JARVIS edge daemon — currently holds the
+# live-tunable persona (humor / formality / terseness / sass / TTS knobs
+# / Sonos volume). Pinned to nixos-gpu the same way whisper-models is,
+# since the jarvis-stack pod runs there exclusively.
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: jarvis-state
+spec:
+  capacity:
+    storage: 1Gi
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: local-jarvis-state
+  hostPath:
+    path: /var/lib/jarvis-state
+    type: DirectoryOrCreate
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: In
+              values:
+                - nixos-gpu
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: jarvis-state
+  namespace: ai
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-jarvis-state
+  volumeName: jarvis-state
+  resources:
+    requests:
+      storage: 1Gi

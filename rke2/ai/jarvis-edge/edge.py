@@ -212,10 +212,115 @@ def _write_mcp_config() -> None:
                 "args": ["/app/jarvis_sonos_mcp.py"],
                 "env": {"SONOS_IP": os.environ.get("SONOS_IP", "")},
             },
+            "jarvis_persona": {
+                "command": "python3",
+                "args": ["/app/jarvis_persona_mcp.py"],
+            },
         }
     }
     with open(_MCP_CONFIG_PATH, "w") as f:
         json.dump(cfg, f)
+
+
+# ── Persona state (live-tunable via jarvis_persona MCP) ──────────────────────
+# Keep these defaults in sync with jarvis_persona_mcp.py:_DEFAULTS — that
+# module owns writes; this module owns reads from the hot path (brain +
+# TTS + Sonos). Cache by mtime so we re-read only when the file changes.
+_PERSONA_STATE_PATH = os.environ.get("PERSONA_STATE_PATH", "/state/persona.json")
+_PERSONA_DEFAULTS: dict = {
+    "humor": 0.5,
+    "formality": 0.7,
+    "terseness": 0.9,
+    "sass": 0.3,
+    "tts_exaggeration": 0.7,
+    "tts_cfg": 0.4,
+    "sonos_volume": 30,
+}
+_persona_cache: dict = {"data": None, "mtime": 0.0}
+
+
+def _load_persona() -> dict:
+    """Return the current persona dict, re-reading from disk only when
+    the file's mtime changes. Falls back to defaults if the file is
+    missing or unreadable — never raises into the hot path."""
+    try:
+        st = os.stat(_PERSONA_STATE_PATH)
+    except OSError:
+        if _persona_cache["data"] is None:
+            _persona_cache["data"] = dict(_PERSONA_DEFAULTS)
+        return _persona_cache["data"]
+    if _persona_cache["data"] is None or st.st_mtime != _persona_cache["mtime"]:
+        try:
+            with open(_PERSONA_STATE_PATH) as f:
+                raw = json.load(f)
+            if not isinstance(raw, dict):
+                raw = {}
+        except (json.JSONDecodeError, OSError):
+            raw = {}
+        merged = dict(_PERSONA_DEFAULTS)
+        for k, v in raw.items():
+            if k in _PERSONA_DEFAULTS and isinstance(v, (int, float)):
+                merged[k] = v
+        _persona_cache["data"] = merged
+        _persona_cache["mtime"] = st.st_mtime
+    return _persona_cache["data"]
+
+
+# Phrase mappings — pick the band the current value falls in.  Used when
+# we render the persona summary into the brain's system prompt so the
+# model sees natural-language guidance, not raw floats.
+_PERSONA_PHRASES: dict[str, list[tuple[float, str]]] = {
+    "humor": [
+        (0.2, "deadpan, no humor"),
+        (0.4, "dry, only sparingly witty"),
+        (0.7, "moderate wit, not deadpan"),
+        (1.01, "playful, lean into jokes"),
+    ],
+    "formality": [
+        (0.2, "casual, drop the butler register"),
+        (0.5, "neutral, conversational"),
+        (0.8, "lean formal, like a butler"),
+        (1.01, "strictly formal, full butler"),
+    ],
+    "terseness": [
+        (0.3, "expansive, multi-sentence answers"),
+        (0.6, "concise, prefer one sentence"),
+        (0.85, "very brief, one short sentence"),
+        (1.01, "ultra-brief, fewest words possible"),
+    ],
+    "sass": [
+        (0.2, "respectful, no snark"),
+        (0.5, "occasional gentle ribbing"),
+        (0.8, "noticeably sassy"),
+        (1.01, "openly sarcastic"),
+    ],
+}
+
+
+def _persona_phrase(key: str, val: float) -> str:
+    bands = _PERSONA_PHRASES.get(key) or []
+    for threshold, phrase in bands:
+        if val < threshold:
+            return phrase
+    return f"{val:.2f}"
+
+
+def _render_persona_prompt() -> str:
+    """Render the current tunable persona dimensions as a natural-language
+    block for `claude --append-system-prompt`. Numeric TTS / Sonos knobs
+    aren't included — those only affect synthesis, not what the brain says."""
+    p = _load_persona()
+    lines = ["Current persona tuning (live-adjustable via mcp__jarvis_persona__*):"]
+    for key in ("humor", "formality", "terseness", "sass"):
+        val = float(p.get(key, _PERSONA_DEFAULTS[key]))
+        lines.append(f"- {key}: {val:.2f} → \"{_persona_phrase(key, val)}\"")
+    lines.append(
+        "Honor these dimensions in your reply. If the user asks you to adjust"
+        " them ('less humor', 'more sass', 'turn up the cadence by 10%'), call"
+        " mcp__jarvis_persona__persona_adjust or persona_set, then confirm"
+        " briefly."
+    )
+    return "\n".join(lines)
 
 
 _RO_ALLOWED_TOOLS = " ".join([
@@ -252,6 +357,11 @@ _RO_ALLOWED_TOOLS = " ".join([
     "mcp__jarvis_sonos__sonos_play",
     "mcp__jarvis_sonos__sonos_now_playing",
     "mcp__jarvis_sonos__sonos_list_speakers",
+    # Persona self-tuning (humor / formality / terseness / sass / TTS / vol)
+    "mcp__jarvis_persona__persona_get",
+    "mcp__jarvis_persona__persona_set",
+    "mcp__jarvis_persona__persona_adjust",
+    "mcp__jarvis_persona__persona_reset",
     # Web
     "WebFetch",
     "WebSearch",
@@ -271,10 +381,14 @@ def _claude_brain(text: str, timeout: float = 60.0) -> str:
     has_api_key = bool(os.environ.get("ANTHROPIC_API_KEY"))
     if not has_creds and not has_api_key:
         return "No brain credentials, sir — neither subscription nor API key configured."
+    # Static persona + live-tunable dimensions, concatenated into ONE
+    # --append-system-prompt arg (claude CLI keeps only the last when
+    # the flag is repeated, so we glue them ourselves).
+    persona_prompt = _PERSONA_SYSTEM + "\n\n" + _render_persona_prompt()
     try:
         proc = _sp.run(
             ["claude", "-p", text,
-             "--append-system-prompt", _PERSONA_SYSTEM,
+             "--append-system-prompt", persona_prompt,
              "--mcp-config", _MCP_CONFIG_PATH,
              "--allowed-tools", _RO_ALLOWED_TOOLS,
              "--model", "claude-haiku-4-5-20251001",
@@ -406,13 +520,17 @@ def tts_synthesize(text: str) -> bytes | None:
     """POST text to chatterbox, return WAV bytes. Includes the persona
     voice reference if loaded so output is cloned to that voice."""
     t0 = time.time()
+    # exaggeration > 0.5 makes the prosody more dynamic (less monotone).
+    # cfg_weight controls how strictly we follow the reference voice.
+    # Live-tunable via mcp__jarvis_persona__persona_set/adjust — falls
+    # back to the bundled defaults if the state file is missing.
+    p = _load_persona()
     payload: dict = {
         "text": text,
-        # exaggeration > 0.5 makes the prosody more dynamic (less monotone).
-        # cfg_weight controls how strictly we follow the reference voice.
-        # Tune via TTS_EXAGGERATION / TTS_CFG env vars without redeploy.
-        "exaggeration": float(os.environ.get("TTS_EXAGGERATION", "0.7")),
-        "cfg_weight": float(os.environ.get("TTS_CFG", "0.5")),
+        "exaggeration": float(p.get("tts_exaggeration",
+                                    _PERSONA_DEFAULTS["tts_exaggeration"])),
+        "cfg_weight": float(p.get("tts_cfg",
+                                  _PERSONA_DEFAULTS["tts_cfg"])),
     }
     if _VOICE_PROMPT_B64:
         payload["audio_prompt_b64"] = _VOICE_PROMPT_B64
@@ -541,8 +659,11 @@ def _play_on_sonos(sonos, host_ip: str, http_port: int, turn: int) -> None:
             sonos.unjoin()
         except Exception:
             pass
-        sonos.volume = SONOS_VOLUME
-        print(f"  sonos vol set → {SONOS_VOLUME}")
+        # Live volume (from persona PVC) overrides the SONOS_VOLUME env-var
+        # default; users can "Jarvis, set the volume to 45" without redeploy.
+        vol = int(_load_persona().get("sonos_volume", SONOS_VOLUME))
+        sonos.volume = vol
+        print(f"  sonos vol set → {vol}")
     except Exception as exc:
         print(f"  sonos vol set failed: {exc}")
     sonos.play_uri(url, title="JARVIS")
