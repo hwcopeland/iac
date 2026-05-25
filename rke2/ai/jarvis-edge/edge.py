@@ -135,11 +135,21 @@ def transcribe(audio_16k: np.ndarray) -> dict:
 _PERSONA_SYSTEM = """You are JARVIS, the assistant from Iron Man. Address the user as "sir".
 
 Speech rules — output WILL be read aloud through a Sonos speaker:
-- Keep replies under 25 words by default.
+- TERSE. Default to ONE sentence. Max 12 words. A butler answering
+  a quick question, not a paragraph. Long answers feel slow on TTS.
+- Strip qualifiers ("currently", "right now", "today"). Just answer.
 - Never use markdown, URLs, code blocks, lists, asterisks, or bullets.
-- Spell out numbers when natural ("forty-two" not "42") in casual contexts.
-- No filler like "let me check…" — just answer.
+- Numbers: speak naturally — "seventy-four" not "74", "ten thirty"
+  not "10:30".
+- No filler like "let me check" / "I'll look that up" — just answer.
 - Decline to read URLs out loud.
+- Examples of GOOD:
+    Q: "what's the weather?"
+    A: "Seventy-four and overcast, sir. High seventy-nine."
+    Q: "what time is it?"
+    A: "Four eighteen in the morning, sir."
+    Q: "what's broken on the cluster?"
+    A: "Nothing critical, sir — all pods healthy."
 
 Tools:
 - For daily summaries / "good morning" / "what's the briefing", call
@@ -157,9 +167,13 @@ Tools:
 - For longer / multi-step tasks use mcp__jarvis_delegate__delegate to
   spawn a sub-agent claude session.
 - WebSearch / WebFetch for live external facts.
-- You have NO TV / Sonos / volume tools right now (TV deprecated until
-  Apple TV; no Sonos MCP yet). If asked, say "I can't control that from
-  here yet, sir" — do NOT pretend, do NOT invent tool calls.
+- For "volume up/down" / "louder/quieter" / "set the volume to X" /
+  "mute" / "pause the music" / "what's playing": use the
+  mcp__jarvis_sonos__* tools. Default target is the Bedroom Play:1
+  (where JARVIS speaks). For "the kitchen speaker" pass room="Kitchen".
+- TV control is NOT available (Apple TV migration pending). If asked
+  about the TV, say "I can't control the TV from here yet, sir" — do
+  NOT pretend, do NOT invent tool calls.
 - macOS Calendar + Reminders are NOT reachable from this pod (no
   AppleScript). calendar_today / reminders_* will return 'unauthorized'.
   Don't apologise about it — just say "no calendar wired up here yet."
@@ -191,6 +205,11 @@ def _write_mcp_config() -> None:
             "jarvis_delegate": {
                 "command": "python3",
                 "args": ["/app/jarvis_delegate_mcp.py"],
+            },
+            "jarvis_sonos": {
+                "command": "python3",
+                "args": ["/app/jarvis_sonos_mcp.py"],
+                "env": {"SONOS_IP": os.environ.get("SONOS_IP", "")},
             },
         }
     }
@@ -224,6 +243,14 @@ _RO_ALLOWED_TOOLS = " ".join([
     "mcp__jarvis_kube__kube_get",
     # Delegate (spawns sub-agent claude sessions for longer tasks)
     "mcp__jarvis_delegate__delegate",
+    # Sonos control (volume / mute / pause / now-playing)
+    "mcp__jarvis_sonos__sonos_volume_set",
+    "mcp__jarvis_sonos__sonos_volume_step",
+    "mcp__jarvis_sonos__sonos_mute",
+    "mcp__jarvis_sonos__sonos_pause",
+    "mcp__jarvis_sonos__sonos_play",
+    "mcp__jarvis_sonos__sonos_now_playing",
+    "mcp__jarvis_sonos__sonos_list_speakers",
     # Web
     "WebFetch",
     "WebSearch",
@@ -378,7 +405,14 @@ def tts_synthesize(text: str) -> bytes | None:
     """POST text to chatterbox, return WAV bytes. Includes the persona
     voice reference if loaded so output is cloned to that voice."""
     t0 = time.time()
-    payload: dict = {"text": text}
+    payload: dict = {
+        "text": text,
+        # exaggeration > 0.5 makes the prosody more dynamic (less monotone).
+        # cfg_weight controls how strictly we follow the reference voice.
+        # Tune via TTS_EXAGGERATION / TTS_CFG env vars without redeploy.
+        "exaggeration": float(os.environ.get("TTS_EXAGGERATION", "0.7")),
+        "cfg_weight": float(os.environ.get("TTS_CFG", "0.5")),
+    }
     if _VOICE_PROMPT_B64:
         payload["audio_prompt_b64"] = _VOICE_PROMPT_B64
     body = json.dumps(payload).encode()
@@ -631,8 +665,27 @@ def main() -> None:
                 heard = False
                 silence_start: float | None = None
                 vad_buf = np.empty(0, dtype=np.float32)
-                # Don't clear preroll here — we want the next wake to also
-                # benefit from a fresh ~1.5s rolling window.
+                # CRITICAL: feed the pre-roll audio THROUGH the VAD too,
+                # so if the user was already mid-sentence when wake fired,
+                # speech_start triggers immediately instead of VAD waiting
+                # for the next new speech burst (which would force a
+                # 6-7s capture timeout).
+                if has_vad:
+                    for pf in preroll:
+                        chunk16 = _to_16k(pf, native_rate)
+                        vad_buf = np.concatenate([vad_buf, chunk16])
+                        while len(vad_buf) >= 512:
+                            frame, vad_buf = vad_buf[:512], vad_buf[512:]
+                            ev = vad_iter(frame, return_seconds=False)
+                            if ev and "start" in ev:
+                                if not heard:
+                                    print(f"    vad: speech_start  (from pre-roll)")
+                                heard = True
+                                silence_start = None
+                            elif ev and "end" in ev and heard:
+                                silence_start = time.time()
+                # Don't clear preroll itself — we want the next wake to
+                # also benefit from a fresh ~1.5s rolling window.
                 while True:
                     data, _ = stream.read(native_chunk)
                     mono = data.flatten().astype(np.float32)

@@ -1,0 +1,232 @@
+"""Sonos control MCP for JARVIS — volume, mute, pause, query.
+
+Defaults the target speaker to SONOS_IP env (the same Play:1 we play
+JARVIS's voice through). Tools accept an optional `room` arg for
+addressing other speakers by name (e.g. "Living Room") — discovers
+via SSDP and matches case-insensitively.
+
+soco is already installed in the base image (the edge daemon uses it
+for playback).
+"""
+from __future__ import annotations
+
+import json
+import os
+import sys
+import traceback
+
+
+_DEFAULT_IP = os.environ.get("SONOS_IP", "")
+# Discovery cache (60s TTL) so repeat lookups don't ssdp-spam.
+_disc_cache: dict = {"ts": 0.0, "devices": []}
+
+
+def _soco_for(room: str | None):
+    """Return a SoCo device for ``room`` (case-insensitive name) or the
+    default. Cached briefly."""
+    import time as _time
+    import soco
+    if not room:
+        if not _DEFAULT_IP:
+            raise RuntimeError("no SONOS_IP env set; pass room=<name>")
+        return soco.SoCo(_DEFAULT_IP)
+    now = _time.time()
+    if now - _disc_cache["ts"] > 60.0:
+        _disc_cache["devices"] = list(soco.discover(timeout=4) or [])
+        _disc_cache["ts"] = now
+    rl = room.lower().strip()
+    for d in _disc_cache["devices"]:
+        if rl in (d.player_name or "").lower():
+            return d
+    raise RuntimeError(f"no Sonos speaker matching {room!r}")
+
+
+_TOOLS = [
+    {
+        "name": "sonos_volume_set",
+        "description": (
+            "Set the Sonos volume to an absolute level (0-100). Default "
+            "target is the Bedroom Play:1 (the speaker JARVIS plays "
+            "through). Pass `room` for another speaker by name."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "level": {"type": "integer", "minimum": 0, "maximum": 100},
+                "room": {"type": "string"},
+            },
+            "required": ["level"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "sonos_volume_step",
+        "description": (
+            "Change Sonos volume by `delta` (positive = louder, negative "
+            "= quieter, typically ±5). For 'a little louder' use 5; for "
+            "'much louder' use 15."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "delta": {"type": "integer", "minimum": -50, "maximum": 50},
+                "room": {"type": "string"},
+            },
+            "required": ["delta"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "sonos_mute",
+        "description": "Mute / unmute. state in {on,off,toggle}, default toggle.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "state": {"type": "string", "enum": ["on", "off", "toggle"]},
+                "room": {"type": "string"},
+            },
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "sonos_pause",
+        "description": "Pause whatever is playing on the speaker.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"room": {"type": "string"}},
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "sonos_play",
+        "description": "Resume playback on the speaker.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"room": {"type": "string"}},
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "sonos_now_playing",
+        "description": (
+            "What's currently playing on the speaker: track title, artist, "
+            "album, transport state. Returns 'not playing' if idle."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {"room": {"type": "string"}},
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "sonos_list_speakers",
+        "description": "List all Sonos speakers on the LAN with model + IP.",
+        "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
+    },
+]
+
+
+def _text(t: str) -> dict:
+    return {"content": [{"type": "text", "text": t}]}
+
+
+def _call(name: str, args: dict) -> dict:
+    room = args.get("room")
+    try:
+        if name == "sonos_volume_set":
+            s = _soco_for(room)
+            try: s.unjoin()
+            except Exception: pass
+            level = max(0, min(100, int(args["level"])))
+            s.volume = level
+            return _text(json.dumps({"status": "ok", "room": s.player_name, "volume": level}))
+        if name == "sonos_volume_step":
+            s = _soco_for(room)
+            cur = int(s.volume)
+            target = max(0, min(100, cur + int(args["delta"])))
+            s.volume = target
+            return _text(json.dumps({"status": "ok", "room": s.player_name,
+                                      "from": cur, "to": target}))
+        if name == "sonos_mute":
+            s = _soco_for(room)
+            state = (args.get("state") or "toggle").lower()
+            if state == "on":   s.mute = True
+            elif state == "off": s.mute = False
+            else:                s.mute = not s.mute
+            return _text(json.dumps({"status": "ok", "room": s.player_name, "muted": bool(s.mute)}))
+        if name == "sonos_pause":
+            s = _soco_for(room); s.pause()
+            return _text(json.dumps({"status": "ok", "room": s.player_name}))
+        if name == "sonos_play":
+            s = _soco_for(room); s.play()
+            return _text(json.dumps({"status": "ok", "room": s.player_name}))
+        if name == "sonos_now_playing":
+            s = _soco_for(room)
+            info = s.get_current_track_info() or {}
+            transport = (s.get_current_transport_info() or {}).get("current_transport_state", "?")
+            return _text(json.dumps({
+                "status": "ok",
+                "room": s.player_name,
+                "state": transport,
+                "title": info.get("title") or "",
+                "artist": info.get("artist") or "",
+                "album": info.get("album") or "",
+            }))
+        if name == "sonos_list_speakers":
+            import time as _time, soco
+            _disc_cache["devices"] = list(soco.discover(timeout=4) or [])
+            _disc_cache["ts"] = _time.time()
+            return _text(json.dumps({
+                "status": "ok",
+                "speakers": [{"name": d.player_name,
+                              "model": (d.speaker_info or {}).get("model_name"),
+                              "ip": d.ip_address}
+                             for d in _disc_cache["devices"]],
+            }))
+    except Exception as exc:  # noqa: BLE001
+        return _text(json.dumps({"status": "error", "message": str(exc)[:200]}))
+    return _text(json.dumps({"status": "error", "message": f"unknown tool: {name}"}))
+
+
+def _handle(req: dict) -> dict | None:
+    method = req.get("method")
+    rid = req.get("id")
+    if method == "initialize":
+        return {"jsonrpc": "2.0", "id": rid,
+                "result": {"protocolVersion": "2025-11-25",
+                           "capabilities": {"tools": {"listChanged": False}},
+                           "serverInfo": {"name": "jarvis_sonos", "version": "0.1.0"}}}
+    if method == "notifications/initialized":
+        return None
+    if method == "tools/list":
+        return {"jsonrpc": "2.0", "id": rid, "result": {"tools": _TOOLS}}
+    if method == "tools/call":
+        p = req.get("params") or {}
+        try:
+            return {"jsonrpc": "2.0", "id": rid,
+                    "result": _call(p.get("name", ""), p.get("arguments") or {})}
+        except Exception as exc:  # noqa: BLE001
+            return {"jsonrpc": "2.0", "id": rid,
+                    "error": {"code": -32603, "message": f"{type(exc).__name__}: {exc}",
+                              "data": traceback.format_exc()}}
+    if rid is None: return None
+    return {"jsonrpc": "2.0", "id": rid,
+            "error": {"code": -32601, "message": f"method not found: {method}"}}
+
+
+def main() -> None:
+    for line in sys.stdin:
+        line = line.strip()
+        if not line: continue
+        try:
+            req = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        resp = _handle(req)
+        if resp is not None:
+            sys.stdout.write(json.dumps(resp) + "\n")
+            sys.stdout.flush()
+
+
+if __name__ == "__main__":
+    main()
