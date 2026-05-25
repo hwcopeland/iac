@@ -184,7 +184,7 @@ spec:
             - name: SONOS_IP
               value: "10.0.0.187"          # Bedroom Play:1
             - name: SONOS_VOLUME
-              value: "60"
+              value: "40"
             - name: EDGE_HTTP_PORT
               value: "8088"
             # With hostNetwork the listener binds on the host's interfaces

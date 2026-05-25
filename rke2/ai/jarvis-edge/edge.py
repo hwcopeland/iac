@@ -136,10 +136,31 @@ def brain_respond(text: str) -> str:
 
 
 # ── Cluster TTS ──────────────────────────────────────────────────────────────
+# Load the JARVIS persona voice once at startup so every /synthesize call
+# can include it as audio_prompt_b64 — Chatterbox is zero-shot voice
+# cloning, no training, just give it ~10-30s of reference and every
+# generation comes out in that voice. Without it Chatterbox uses its
+# default voice (not the persona).
+import base64 as _base64
+_VOICE_REF_PATH = os.environ.get("VOICE_REF", "/app/jarvis_voice.wav")
+_VOICE_PROMPT_B64 = ""
+try:
+    with open(_VOICE_REF_PATH, "rb") as _f:
+        _VOICE_PROMPT_B64 = _base64.b64encode(_f.read()).decode("ascii")
+    print(f"voice ref loaded: {_VOICE_REF_PATH} "
+          f"({len(_VOICE_PROMPT_B64) * 3 // 4} bytes)")
+except Exception as _exc:
+    print(f"voice ref unavailable ({_exc}) — Chatterbox will use default voice")
+
+
 def tts_synthesize(text: str) -> bytes | None:
-    """POST text to chatterbox, return WAV bytes."""
+    """POST text to chatterbox, return WAV bytes. Includes the persona
+    voice reference if loaded so output is cloned to that voice."""
     t0 = time.time()
-    body = json.dumps({"text": text}).encode()
+    payload: dict = {"text": text}
+    if _VOICE_PROMPT_B64:
+        payload["audio_prompt_b64"] = _VOICE_PROMPT_B64
+    body = json.dumps(payload).encode()
     req = urllib.request.Request(
         f"{TTS_URL}/synthesize",
         data=body,
