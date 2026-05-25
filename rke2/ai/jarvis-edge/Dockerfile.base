@@ -49,6 +49,7 @@ RUN pip install --no-cache-dir --no-deps openwakeword==0.6.0 \
     soco==0.30.4 \
     silero-vad onnxruntime \
     resemblyzer==0.1.4 \
+    instagrapi==2.7.11 \
     opentelemetry-api opentelemetry-sdk \
     opentelemetry-exporter-otlp-proto-grpc \
     prometheus_client \
