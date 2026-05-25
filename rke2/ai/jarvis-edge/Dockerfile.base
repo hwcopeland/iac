@@ -6,10 +6,20 @@ FROM python:3.12-slim
 # - libportaudio2: backs sounddevice
 # - libsndfile1, ffmpeg: WAV decode for the chatterbox output
 # - libgomp1: silero-vad onnx runtime
+# - curl, gnupg, nodejs, npm: install the Anthropic `claude` CLI which
+#   is the brain. We use it with ANTHROPIC_API_KEY (API mode) — the
+#   subscription OAuth flow doesn't work cleanly in a headless pod.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libpulse0 libportaudio2 libsndfile1 libgomp1 ffmpeg ca-certificates \
     libasound2-plugins \
+    curl gnupg \
+    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
+    && npm install -g @anthropic-ai/claude-code \
     && rm -rf /var/lib/apt/lists/*
+
+# Vizio TV control (pyvizio) + LAN Chromecast (pychromecast).
+RUN pip install --no-cache-dir pyvizio==0.1.64 pychromecast==14.0.10
 
 # Route ALSA through the pulse plugin → pipewire-pulse on the host.
 # Debian's libportaudio2 only ships ALSA + OSS backends (no native pulse

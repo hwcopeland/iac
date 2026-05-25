@@ -201,6 +201,15 @@ spec:
               value: "unix:/run/user/1000/pulse/native"
             - name: MIC_NAME
               value: "yeti"
+            - name: BRAIN_MODE
+              value: "claude"
+            - name: HOME
+              value: "/home/user"           # so ~/.openjarvis/config.toml resolves
+            - name: ANTHROPIC_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: jarvis-secrets
+                  key: ANTHROPIC_API_KEY
           resources:
             requests:
               cpu: "200m"
@@ -213,6 +222,10 @@ spec:
               mountPath: /run/user/1000
             - name: nix-store
               mountPath: /nix/store
+              readOnly: true
+            # config.toml from the Secret — jarvis_tv.py reads ~/.openjarvis/
+            - name: jarvis-config
+              mountPath: /home/user/.openjarvis
               readOnly: true
 
       volumes:
@@ -232,3 +245,10 @@ spec:
           hostPath:
             path: /run/user/1000
             type: Directory
+        - name: jarvis-config
+          secret:
+            secretName: jarvis-secrets
+            items:
+              - key: config.toml
+                path: config.toml
+                mode: 0400
