@@ -440,7 +440,7 @@ spec:
             - name: LOCAL_BRAIN_URL
               value: "http://localhost:11435"
             - name: LOCAL_BRAIN_MODEL
-              value: "huihui_ai/qwen3-abliterated:30b-a3b"
+              value: "hf.co/mradermacher/gemma-4-26B-A4B-it-uncensored-heretic-GGUF:Q4_K_M"
           resources:
             requests:
               cpu: "200m"
