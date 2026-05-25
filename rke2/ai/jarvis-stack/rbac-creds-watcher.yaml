@@ -1,0 +1,41 @@
+---
+# Narrow grant for the creds-watcher sidecar to persist refreshed
+# claude OAuth tokens back to the jarvis-secrets Secret.
+#
+# A pod has ONE service account. The existing pod uses
+# `jarvis-readonly` (see rbac.yaml in this dir), which binds the
+# built-in `view` ClusterRole — explicitly excluding `secrets`. We
+# extend that SA with the *minimum* additional permission required:
+# get/patch on a SINGLE named Secret, namespaced to `ai`. No list,
+# no watch, no other secrets — even in this namespace.
+#
+# Why not a separate SA for the sidecar: Kubernetes binds the SA at
+# the pod spec level, not the container level. Switching the whole
+# pod to a new SA would also strip the `view` perms the brain relies
+# on for kube_mcp. Extending the existing SA is the smallest change
+# that achieves the goal.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: jarvis-creds-patcher
+  namespace: ai
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: ["jarvis-secrets"]
+    verbs: ["get", "patch"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: jarvis-creds-patcher
+  namespace: ai
+roleRef:
+  kind: Role
+  name: jarvis-creds-patcher
+  apiGroup: rbac.authorization.k8s.io
+subjects:
+  - kind: ServiceAccount
+    name: jarvis-readonly
+    namespace: ai

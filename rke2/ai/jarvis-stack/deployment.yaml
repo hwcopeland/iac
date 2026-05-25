@@ -415,6 +415,57 @@ spec:
             - name: jarvis-media
               mountPath: /media/reels
 
+        # ── creds-watcher: persist claude OAuth refresh to the Secret ─
+        # Belt-and-suspenders for the OAuth-refresh problem. The PVC
+        # subPath above already gives us cred durability across pod
+        # restarts — this sidecar additionally PATCHes the refreshed
+        # tokens back to the jarvis-secrets Secret so the Secret stays
+        # the source of truth (and a `kubectl delete pvc jarvis-state`
+        # or fresh-cluster rebuild doesn't strand us with an expired
+        # token in Vault). Watches /tmp/.claude/.credentials.json and
+        # patches on change.
+        # RBAC is scoped to a single resourceName via
+        # rbac-creds-watcher.yaml so the sidecar can't touch any other
+        # secret even if compromised. Uses the existing
+        # jarvis-readonly pod SA (pods have one SA; we extend it
+        # narrowly rather than swapping the whole pod's identity).
+        - name: creds-watcher
+          image: zot.hwcopeland.net/ai/jarvis-creds-watcher:latest
+          imagePullPolicy: Always
+          securityContext:
+            runAsUser: 1000
+            runAsGroup: 100
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          env:
+            - name: NAMESPACE
+              value: "ai"
+            - name: SECRET_NAME
+              value: "jarvis-secrets"
+            - name: SECRET_KEY
+              value: "claude_credentials.json"
+            - name: CREDS_PATH
+              value: "/tmp/.claude/.credentials.json"
+            - name: POLL_INTERVAL_S
+              value: "5"
+            - name: DEBOUNCE_S
+              value: "5"
+          resources:
+            requests:
+              cpu: "10m"
+              memory: "32Mi"
+            limits:
+              cpu: "100m"
+              memory: "64Mi"
+          volumeMounts:
+            # Same PVC subPath jarvis-edge mounts — we read the file
+            # claude rewrites on token refresh.
+            - name: jarvis-state
+              mountPath: /tmp/.claude
+              subPath: .claude
+
       volumes:
         - name: models
           persistentVolumeClaim:
