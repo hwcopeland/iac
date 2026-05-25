@@ -105,8 +105,8 @@ spec:
               # speaker-id embeddings, persona tuning, etc.
               chown 1000:100 /state
               chmod 0775 /state
-              mkdir -p /state/voices /state/users
-              chown 1000:100 /state/voices /state/users
+              mkdir -p /state/voices /state/users /state/reels /state/ig_reel_descriptions
+              chown 1000:100 /state/voices /state/users /state/reels /state/ig_reel_descriptions
               if [ ! -f /state/persona.json ]; then
                 cat > /state/persona.json <<'EOF'
               {
