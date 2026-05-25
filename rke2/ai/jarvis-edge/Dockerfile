@@ -12,6 +12,7 @@ COPY jarvis_personal.py jarvis_personal_mcp.py \
      jarvis_sonos_mcp.py \
      jarvis_persona_mcp.py \
      jarvis_tv.py jarvis_tv_mcp.py \
+     jarvis_voice_id.py jarvis_voice_enroll.py \
      /app/
 
 ENV EDGE_HTTP_PORT=8088 \

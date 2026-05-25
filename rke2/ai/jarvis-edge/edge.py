@@ -67,6 +67,50 @@ OWW_CHUNK = 1280
 SONOS_VOLUME = int(os.environ.get("SONOS_VOLUME", "60"))  # 0-100
 
 
+# ── Speaker-ID ───────────────────────────────────────────────────────────────
+# Lazy-loaded; only constructs the Resemblyzer encoder + reads /state/voices
+# on the first capture, then caches enrolled status for 60s so the hot path
+# stays cheap. If /state/voices doesn't exist or no owner is enrolled, the
+# gate is a pass-through (back-compat for fresh deployments).
+_vid_cache: dict = {"has_owner": False, "ts": 0.0}
+_VID_CACHE_TTL = 60.0
+
+
+def _vid_has_owner() -> bool:
+    """Cached check: is anyone enrolled with role=owner?"""
+    now = time.time()
+    if now - _vid_cache["ts"] > _VID_CACHE_TTL:
+        try:
+            import jarvis_voice_id as _vid
+            _vid_cache["has_owner"] = _vid.has_owner()
+        except Exception as exc:  # noqa: BLE001
+            # Module import or filesystem error — fail open (no gate).
+            print(f"  [vid] has_owner check failed: {exc!r}")
+            _vid_cache["has_owner"] = False
+        _vid_cache["ts"] = now
+    return _vid_cache["has_owner"]
+
+
+def _identify_speaker_from_audio(audio_16k: np.ndarray) -> tuple[str | None, float]:
+    """Embed the captured 16k mono float32 utterance and look it up against
+    enrolled voices. Returns ``(name, confidence)`` on match/borderline, or
+    ``(None, top_score)`` for unknown / no-enrollments / error. Soft-fails to
+    pass-through on any exception so STT/brain stay working even if the
+    voice-id module breaks."""
+    try:
+        import jarvis_voice_id as _vid
+        emb = _vid.embed_from_audio(audio_16k, sample_rate=16000)
+        result = _vid.identify(emb)
+    except Exception as exc:  # noqa: BLE001
+        print(f"  [vid] identify failed: {exc!r}")
+        return (None, 0.0)
+    status = result.get("status")
+    score = float(result.get("score", 0.0))
+    if status in ("match", "borderline"):
+        return (result.get("name"), score)
+    return (None, score)
+
+
 # ── Mic resolve ──────────────────────────────────────────────────────────────
 def _pick_mic() -> tuple[int, int, int]:
     """Pick the best input device. MIC_NAME env (case-insensitive substring)
@@ -813,6 +857,17 @@ def main() -> None:
                 user_text = res.get("text", "").strip()
                 if not user_text:
                     continue
+
+                # ── Speaker-ID gate (drops unknown voices in ambient mode) ──
+                # If owner is enrolled, require voice match before letting
+                # through. Without enrollment, pass-through (back-compat for
+                # fresh deployments).
+                spk_name, spk_confidence = _identify_speaker_from_audio(audio_16k)
+                if _vid_has_owner() and spk_name is None:
+                    print(f"  (unknown speaker drop {dur:.1f}s): {user_text[:70]!r}  conf={spk_confidence:.2f}")
+                    continue
+                if spk_name:
+                    print(f"  speaker: {spk_name} (conf={spk_confidence:.2f})")
 
                 # ── Ambient addressee gate ──────────────────────────
                 # Must contain "jarvis" OR we're in the follow-up window
