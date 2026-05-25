@@ -26,11 +26,19 @@ import urllib.error
 
 
 def _endpoint() -> str:
-    return os.environ.get("LOCAL_BRAIN_URL", "http://ollama.ai.svc.cluster.local:11434").rstrip("/")
+    # Default to localhost:NodePort because jarvis-edge runs hostNetwork
+    # on the same node as ollama. Cluster DNS / ClusterIP routing can
+    # be flaky from hostNetwork; NodePort (32732 → 11434) works because
+    # kube-proxy/Cilium binds it on every node's interface including
+    # localhost. Override with LOCAL_BRAIN_URL if needed.
+    return os.environ.get("LOCAL_BRAIN_URL", "http://localhost:32732").rstrip("/")
 
 
 def _model() -> str:
-    return os.environ.get("LOCAL_BRAIN_MODEL", "huihui_ai/qwen3-abliterated:30b-a3b")
+    # qwen2.5:7b — 4.7GB Q4, fits cleanly alongside whisper+chatterbox
+    # on the shared 3070. The abliterated 30B-a3b MoE works too but is
+    # heavy under VRAM contention. Override via LOCAL_BRAIN_MODEL.
+    return os.environ.get("LOCAL_BRAIN_MODEL", "qwen2.5:7b")
 
 
 def generate(prompt: str, system: str = "", max_tokens: int = 120,
