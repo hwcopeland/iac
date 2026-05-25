@@ -100,6 +100,56 @@ spec:
             timeoutSeconds: 10
             failureThreshold: 3
 
+        # ── TTS: GPU Chatterbox ───────────────────────────────────
+        - name: chatterbox-tts
+          image: zot.hwcopeland.net/ai/chatterbox-tts:latest
+          ports:
+            - name: tts
+              containerPort: 8765
+          env:
+            - name: LD_LIBRARY_PATH
+              value: "/run/opengl-driver/lib"
+            - name: HF_HOME
+              value: "/models-chatterbox"   # separate dir from whisper-stt's /models
+            - name: PORT
+              value: "8765"
+          resources:
+            requests:
+              nvidia.com/gpu: "1"
+              memory: 4Gi
+            limits:
+              nvidia.com/gpu: "1"
+              memory: 8Gi
+          volumeMounts:
+            - name: chatterbox-models
+              mountPath: /models-chatterbox
+            - name: opengl-driver
+              mountPath: /run/opengl-driver
+              readOnly: true
+            - name: nix-store
+              mountPath: /nix/store
+              readOnly: true
+          readinessProbe:
+            exec:
+              command:
+                - python3
+                - -c
+                - "import urllib.request; r=urllib.request.urlopen('http://localhost:8765/health',timeout=5); import json; d=json.loads(r.read()); exit(0 if d.get('model_loaded') else 1)"
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 10
+            failureThreshold: 6
+          livenessProbe:
+            exec:
+              command:
+                - python3
+                - -c
+                - "import urllib.request; urllib.request.urlopen('http://localhost:8765/health',timeout=5)"
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 3
+
         # ── Edge daemon: wake → cluster STT → TTS → Sonos ─────────
         - name: jarvis-edge
           image: zot.hwcopeland.net/ai/jarvis-edge:latest
@@ -120,7 +170,7 @@ spec:
             - name: STT_URL
               value: "http://localhost:8766"
             - name: TTS_URL
-              value: "http://10.44.0.8:8765"
+              value: "http://localhost:8765"     # sibling container in same pod
             - name: SONOS_IP
               value: "10.0.0.187"          # Bedroom Play:1
             - name: SONOS_VOLUME
@@ -154,6 +204,9 @@ spec:
         - name: models
           persistentVolumeClaim:
             claimName: whisper-models
+        - name: chatterbox-models
+          persistentVolumeClaim:
+            claimName: chatterbox-models
         - name: opengl-driver
           hostPath:
             path: /run/opengl-driver

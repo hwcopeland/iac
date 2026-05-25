@@ -7,7 +7,7 @@ metadata:
 spec:
   type: LoadBalancer
   selector:
-    app: chatterbox-tts
+    app: jarvis-stack  # chatterbox-tts container lives inside the combined pod
   ports:
     - port: 8765
       targetPort: 8765
