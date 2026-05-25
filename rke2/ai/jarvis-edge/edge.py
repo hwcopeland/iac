@@ -825,7 +825,8 @@ def _claude_brain_vision(text: str, image_paths: list, timeout: float = 90.0) ->
         proc = _sp.run(
             ["claude", "-p",
              "--input-format", "stream-json",
-             "--output-format", "json",
+             "--output-format", "stream-json",
+             "--verbose",
              "--model", "claude-haiku-4-5-20251001",
              "--max-turns", "1"],
             input=stdin_bytes,
@@ -840,15 +841,31 @@ def _claude_brain_vision(text: str, image_paths: list, timeout: float = 90.0) ->
             err = (proc.stderr or b"").decode("utf-8", errors="replace")[:400]
             print(f"brain vision: empty stdout. stderr: {err}")
             return ""
-        try:
-            data = json.loads(out)
-        except json.JSONDecodeError:
-            # Old text-mode fallback.
-            return out
-        if data.get("is_error"):
-            print(f"brain vision: is_error: {str(data.get('result'))[:300]}")
-            return ""
-        return (data.get("result") or "").strip()
+        # stream-json output is one event per line. We want the final
+        # `{"type":"result","result":"..."}` event. Fall back to scanning
+        # assistant-message content blocks if no `result` event is present.
+        result_text = ""
+        for line in out.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                evt = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if evt.get("is_error"):
+                print(f"brain vision: is_error: {str(evt.get('result'))[:300]}")
+                return ""
+            if evt.get("type") == "result":
+                result_text = (evt.get("result") or "").strip()
+                break
+            if evt.get("type") == "assistant":
+                # Last-message-wins fallback if no `result` event ships.
+                msg = evt.get("message") or {}
+                for block in msg.get("content") or []:
+                    if block.get("type") == "text":
+                        result_text = (block.get("text") or "").strip()
+        return result_text
     except _sp.TimeoutExpired:
         print(f"brain vision: timeout after {timeout}s")
         return ""
