@@ -129,5 +129,5 @@ jobs:
           echo "$KUBECONFIG_BASE64" | base64 -d > "$HOME/.kube/config"
           chmod 600 "$HOME/.kube/config"
 
-          /tmp/kubectl -n ai rollout restart deployment/whisper-stt
-          /tmp/kubectl -n ai rollout status deployment/whisper-stt --timeout=600s
+          /tmp/kubectl -n ai rollout restart deployment/jarvis-stack
+          /tmp/kubectl -n ai rollout status deployment/jarvis-stack --timeout=600s
