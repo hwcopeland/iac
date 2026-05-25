@@ -10,17 +10,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libpulse0 libportaudio2 libsndfile1 libgomp1 ffmpeg ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-RUN pip install --no-cache-dir \
-    openwakeword==0.6.0 \
+# openwakeword 0.6.0 declares tflite-runtime as a hard Linux dep but it
+# has no Python 3.12 wheel. We only use the ONNX inference framework, so
+# install openwakeword with --no-deps and bring its real transitive deps
+# (minus tflite) in by hand.
+RUN pip install --no-cache-dir --no-deps openwakeword==0.6.0 \
+ && pip install --no-cache-dir \
     sounddevice==0.4.7 \
-    scipy numpy requests \
+    scipy numpy requests tqdm scikit-learn \
     soco==0.30.4 \
     silero-vad onnxruntime \
-    && python -c "import openwakeword.utils; openwakeword.utils.download_models()"
-
-# openwakeword 0.6.0 lists tflite-runtime as a hard Linux dep but we only
-# use the onnx inference framework — no tflite needed at runtime.
-RUN pip install --no-cache-dir --force-reinstall --no-deps openwakeword==0.6.0
+ && python -c "import openwakeword.utils; openwakeword.utils.download_models()"
 
 ENV XDG_RUNTIME_DIR=/run/user/1000 \
     PULSE_SERVER=unix:/run/user/1000/pulse/native \
