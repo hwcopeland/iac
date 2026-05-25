@@ -1567,6 +1567,18 @@ def main() -> None:
         except Exception as exc:
             print(f"ig comment: failed to start — {exc}")
 
+    # IG follow-up poller: catches replies to JARVIS's comment thread
+    # that don't re-tag @hmlbjarvis (mention notifications would never
+    # fire for those). Polls media JARVIS has commented on every ~60s
+    # for new comments by followed users. Same downstream consumer
+    # path as mentions — just an alternate trigger source.
+    if os.environ.get("IG_FOLLOWUP_POLL_ENABLED", "1") == "1":
+        try:
+            import jarvis_ig_followup_poller
+            jarvis_ig_followup_poller.start_thread()
+        except Exception as exc:
+            print(f"ig followup: failed to start — {exc}")
+
     # IG DM-shared media downloader: drains _ig_media_queue and saves
     # reels/photos/stories to the Synology-backed /media/reels PVC.
     # Borrows the poller's logged-in Client + the consumer's followed-set

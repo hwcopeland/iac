@@ -1266,6 +1266,11 @@ def _process_job(job: dict, client: Any, replied_set: set[str], handles: dict) -
             dedup_key = thread_comment_id or story_id
             replied_set.add(dedup_key)
             _save_replied(replied_set)
+            try:
+                import jarvis_ig_followup_poller as _fup  # type: ignore[import]
+                _fup.track(media_pk)
+            except Exception:  # noqa: BLE001
+                pass
             metric_replied.labels(authenticated="1").inc()
             print(f"ig comment: [song-id] replied to @{tagger_username} on {media_pk}: {reply!r}")
             return
@@ -1389,6 +1394,15 @@ def _process_job(job: dict, client: Any, replied_set: set[str], handles: dict) -
         dedup_key = thread_comment_id or story_id
         replied_set.add(dedup_key)
         _save_replied(replied_set)
+
+        # Track this media for follow-up polling so we catch replies
+        # to JARVIS's own comment thread even when they don't re-tag.
+        # Fail-open — followup poller is optional.
+        try:
+            import jarvis_ig_followup_poller as _fup  # type: ignore[import]
+            _fup.track(media_pk)
+        except Exception:  # noqa: BLE001
+            pass
 
         metric_replied.labels(authenticated="1").inc()
         author = job["author_username"] or "unknown"
