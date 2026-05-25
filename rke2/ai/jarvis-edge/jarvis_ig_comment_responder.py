@@ -163,6 +163,45 @@ _BANNED_WORDS = (
 )
 
 
+# ── Song-ID trigger detection ──────────────────────────────────────────────
+def _is_song_id_request(trigger_text: str) -> bool:
+    """Detect "name this song" / "id?" / "what song" style tags.
+
+    Case-insensitive. Tolerates a leading @hmlbjarvis mention (with or
+    without the underscore variant). Matches:
+      - Exact short tokens: "id", "song", "id this", "song id"
+      - Compound triggers anywhere in the (post-mention) text:
+        "what song", "what's this song", "whats this song",
+        "id this song", "name this song", "song?", "id?"
+
+    Returns False on empty / non-string input."""
+    if not trigger_text or not isinstance(trigger_text, str):
+        return False
+    t = trigger_text.lower().strip()
+    # Strip leading @-mention(s). Some Apollo-style tag flows double-tag.
+    for prefix in ("@hmlbjarvis", "@hmlb_jarvis"):
+        if t.startswith(prefix):
+            t = t[len(prefix):].strip()
+            break
+    # Strip trailing punctuation/whitespace for the exact-match check
+    # so "id?" / "id." / "id!" all hit the short list.
+    short = t.rstrip("?!.,").strip()
+    if short in ("id", "song", "id this", "song id"):
+        return True
+    for phrase in ("what song", "what's this song", "whats this song",
+                   "id this song", "name this song", "song?", "id?"):
+        if phrase in t:
+            return True
+    return False
+
+
+def _format_song_reply(song_id: dict) -> str:
+    """Clean factual reply: '<title> — <artist>' (em-dash, no persona)."""
+    title = (song_id.get("title") or "").strip()
+    artist = (song_id.get("artist") or "").strip()
+    return f"{title} — {artist}"  # — = em-dash
+
+
 # ── Prometheus counters / OTel span helpers ─────────────────────────────────
 class _NoopMetric:
     def labels(self, *_a, **_kw):
@@ -722,6 +761,87 @@ def _carousel_vision_description(client: Any, media_pk: str, caption: str) -> st
     return desc.strip() or f"<carousel post, caption: {caption[:200]}>"
 
 
+def _run_song_id_pipeline(client: Any, media_pk: str) -> str:
+    """Download the video → extract 16k mono PCM WAV → fingerprint via
+    shazamio → return the formatted reply string.
+
+    On hit: "<title> — <artist>" (em-dash, no quotes, no persona).
+    On miss: short hardcoded fallback ("can't place it") — keeping latency
+    low matters more than a clever line here, the user is waiting on a
+    song ID.
+    On pipeline error before fingerprint: returns "" so caller can skip
+    the post entirely (don't ship a fallback if we never even tried).
+
+    Reuses jarvis_reel_context._extract_audio so we get the same 16kHz
+    mono WAV format shazamio prefers. The reel-context cache for the
+    same media_pk does NOT short-circuit here — even if the reel was
+    described already, the WAV file lives in /tmp and was cleaned up,
+    so we re-download. The shazamio call itself caches per-WAV-hash
+    (in jarvis_song_id) so a re-tag of the same reel just hits that
+    cache."""
+    try:
+        import jarvis_reel_context as _reel  # type: ignore[import]
+        import jarvis_song_id as _song  # type: ignore[import]
+    except Exception as exc:  # noqa: BLE001
+        print(f"ig comment: song-id imports failed: {exc!r}")
+        return ""
+
+    # 1. Download the video.
+    video_path: str | None = None
+    try:
+        path = client.video_download(media_pk, folder="/tmp")
+        video_path = str(path) if path else None
+    except Exception as exc:  # noqa: BLE001
+        print(f"ig comment: song-id video_download({media_pk}) failed: {exc!r}")
+        return ""
+    if not video_path or not os.path.exists(video_path):
+        print(f"ig comment: song-id video_download returned no file for {media_pk}")
+        return ""
+
+    # 2. Extract 16kHz mono PCM WAV via the reel-context helper.
+    audio_path = f"/tmp/{media_pk}_songid.wav"
+    audio_ok = False
+    try:
+        audio_ok = _reel._extract_audio(video_path, audio_path)
+    except Exception as exc:  # noqa: BLE001
+        print(f"ig comment: song-id audio extract crashed for {media_pk}: {exc!r}")
+        traceback.print_exc()
+
+    if not audio_ok:
+        # Clean up the video, return empty so caller drops.
+        try:
+            if video_path and os.path.exists(video_path):
+                os.unlink(video_path)
+        except OSError:
+            pass
+        return ""
+
+    # 3. Shazam recognition.
+    hit: dict | None = None
+    try:
+        hit = _song.identify_from_wav(audio_path)
+    except Exception as exc:  # noqa: BLE001
+        # jarvis_song_id is supposed to never raise, but belt + braces.
+        print(f"ig comment: song-id identify crashed for {media_pk}: {exc!r}")
+        traceback.print_exc()
+        hit = None
+
+    # 4. Cleanup intermediates.
+    for p in (video_path, audio_path):
+        try:
+            if p and os.path.exists(p):
+                os.unlink(p)
+        except OSError:
+            pass
+
+    # 5. Format the reply.
+    if hit and hit.get("title") and hit.get("artist"):
+        return _format_song_reply(hit)
+    # Miss → short hardcoded fallback. The user is waiting on a song
+    # ID; a 2-3s brain round-trip just to phrase "couldn't ID" is wasteful.
+    return "can't place it"
+
+
 def _build_vision_description(client: Any, job: dict) -> str:
     """Dispatch to the right per-media-type vision pipeline."""
     media_pk = job["media_pk"]
@@ -984,6 +1104,56 @@ def _process_job(job: dict, client: Any, replied_set: set[str], handles: dict) -
             print(f"ig comment: dropped unauthenticated tag from @{tagger_username}")
             span.set_attribute("ig.drop_reason", "unauthenticated")
             metric_drops.labels(reason="unauthenticated").inc()
+            return
+
+        # Song-ID short-circuit: if the tag text is asking to identify
+        # the song, skip the gaslight brain and post a clean factual
+        # reply. Only meaningful on videos (photos/carousels have no
+        # audio to fingerprint).
+        if _is_song_id_request(job["trigger_text"]):
+            span.set_attribute("ig.song_id_request", True)
+            if job["media_type"] != "video":
+                # No audio track to ID. Silent drop — replying "no audio
+                # to ID" on every selfie/meme tagged with "id?" would be
+                # noise. (If we wanted to be helpful, we could comment
+                # "no audio here" but the explicit guidance from the
+                # prompt is "skip silently or short reply"; silent is
+                # quieter and less spammy.)
+                print(f"ig comment: song-id requested on non-video {media_pk} "
+                      f"({job['media_type']}); skipping")
+                span.set_attribute("ig.drop_reason", "song_id_non_video")
+                metric_drops.labels(reason="song_id_non_video").inc()
+                return
+
+            reply = _run_song_id_pipeline(client, media_pk)
+            if not reply:
+                # Pipeline crashed before we even fingerprinted. Don't
+                # ship anything — user can re-tag if needed.
+                print(f"ig comment: song-id pipeline produced no reply for {media_pk}")
+                span.set_attribute("ig.drop_reason", "song_id_pipeline_failed")
+                metric_drops.labels(reason="song_id_pipeline_failed").inc()
+                return
+
+            thread_comment_id = _resolve_trigger_comment_id(client, job)
+            span.set_attribute("ig.threaded", bool(thread_comment_id))
+            try:
+                kwargs: dict[str, Any] = {"text": reply}
+                if thread_comment_id:
+                    kwargs["replied_to_comment_id"] = int(thread_comment_id)
+                client.media_comment(media_pk, **kwargs)
+            except Exception as exc:  # noqa: BLE001
+                print(f"ig comment: media_comment({media_pk}) [song-id] failed: {exc!r}")
+                traceback.print_exc()
+                span.set_attribute("ig.drop_reason", "send_failed")
+                span.record_exception(exc)
+                metric_drops.labels(reason="send_failed").inc()
+                return
+
+            dedup_key = thread_comment_id or story_id
+            replied_set.add(dedup_key)
+            _save_replied(replied_set)
+            metric_replied.labels(authenticated="1").inc()
+            print(f"ig comment: [song-id] replied to @{tagger_username} on {media_pk}: {reply!r}")
             return
 
         # Build vision context.
