@@ -24,14 +24,19 @@ Config via env vars (or edit defaults below):
 """
 from __future__ import annotations
 
+import hashlib
+import hmac
 import io
 import json
+import logging
 import os
+import queue
 import socket
 import sys
 import tempfile
 import threading
 import time
+import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from math import gcd
@@ -41,6 +46,167 @@ import sounddevice as sd
 # Wake word removed for AMBIENT MODE — VAD-gated continuous capture instead.
 # (openwakeword and tflite-runtime stay in the base image for future use.)
 from scipy.signal import resample_poly
+
+# ── Observability: OpenTelemetry tracing + Prometheus metrics ────────────────
+# Tracing goes to Grafana Tempo via OTLP/gRPC. Metrics are scraped by
+# Prometheus via the PodMonitor that another agent scaffolded (port 9090).
+# Both paths are FAIL-OPEN: if Tempo is unreachable or 9090 is busy, we log
+# once and JARVIS keeps running normally. Voice-assistant uptime is more
+# important than telemetry.
+import logging as _otel_logging
+
+_OTEL_ENDPOINT = os.environ.get(
+    "OTEL_EXPORTER_OTLP_ENDPOINT",
+    "http://tempo.monitor.svc.cluster.local:4317",
+)
+_OTEL_SERVICE_NAME = "jarvis-edge"
+_PROM_PORT = int(os.environ.get("PROMETHEUS_PORT", "9090"))
+
+# Default tracer is a no-op so spans always work, even if init fails.
+try:
+    from opentelemetry import trace as _otel_trace
+    from opentelemetry.sdk.resources import Resource as _OtelResource
+    from opentelemetry.sdk.trace import TracerProvider as _OtelTracerProvider
+    from opentelemetry.sdk.trace.export import (
+        BatchSpanProcessor as _OtelBatchSpanProcessor,
+    )
+    from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (
+        OTLPSpanExporter as _OtelOTLPSpanExporter,
+    )
+    # Silence the OTLP exporter's per-batch connection errors after the
+    # first warning. Without this, every BatchSpanProcessor flush against a
+    # down Tempo prints a multi-line gRPC stack trace and drowns the logs.
+    _otel_logging.getLogger("opentelemetry.exporter.otlp.proto.grpc.exporter").setLevel(
+        _otel_logging.CRITICAL
+    )
+    _otel_logging.getLogger("opentelemetry.sdk.trace.export").setLevel(
+        _otel_logging.CRITICAL
+    )
+    _otel_resource = _OtelResource.create({"service.name": _OTEL_SERVICE_NAME})
+    _otel_provider = _OtelTracerProvider(resource=_otel_resource)
+    _otel_exporter = _OtelOTLPSpanExporter(endpoint=_OTEL_ENDPOINT, insecure=True)
+    _otel_provider.add_span_processor(_OtelBatchSpanProcessor(_otel_exporter))
+    _otel_trace.set_tracer_provider(_otel_provider)
+    tracer = _otel_trace.get_tracer(_OTEL_SERVICE_NAME)
+    print(f"otel: tracing to {_OTEL_ENDPOINT} (service={_OTEL_SERVICE_NAME})")
+except Exception as _otel_exc:  # noqa: BLE001
+    print(f"otel: tracing unavailable ({_otel_exc!r}) — spans will be no-ops")
+
+    class _NoopSpan:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_a, **_kw):
+            return False
+
+        def set_attribute(self, *_a, **_kw):
+            pass
+
+        def add_event(self, *_a, **_kw):
+            pass
+
+        def set_status(self, *_a, **_kw):
+            pass
+
+        def record_exception(self, *_a, **_kw):
+            pass
+
+    class _NoopTracer:
+        def start_as_current_span(self, *_a, **_kw):
+            return _NoopSpan()
+
+    tracer = _NoopTracer()
+
+# Prometheus metrics. Histograms in seconds (Prom convention). Buckets tuned
+# for voice-assistant timings (sub-100ms STT chunks up to multi-second turns).
+try:
+    from prometheus_client import (
+        Counter as _PromCounter,
+        Histogram as _PromHistogram,
+        start_http_server as _prom_start_http_server,
+    )
+    _DUR_BUCKETS = (0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 3.0, 5.0, 8.0, 13.0, 21.0)
+    METRIC_STT_DURATION = _PromHistogram(
+        "jarvis_stt_duration_seconds",
+        "Whisper STT round-trip duration",
+        buckets=_DUR_BUCKETS,
+    )
+    METRIC_BRAIN_DURATION = _PromHistogram(
+        "jarvis_brain_duration_seconds",
+        "Brain (claude/echo/shortcut) response duration",
+        buckets=_DUR_BUCKETS,
+    )
+    METRIC_TTS_SEGMENT_DURATION = _PromHistogram(
+        "jarvis_tts_segment_duration_seconds",
+        "Chatterbox TTS synthesis per segment",
+        buckets=_DUR_BUCKETS,
+    )
+    METRIC_SONOS_FIRST_AUDIO = _PromHistogram(
+        "jarvis_sonos_first_audio_seconds",
+        "Time from stream start to Sonos first audio playing",
+        buckets=_DUR_BUCKETS,
+    )
+    METRIC_TURN_TOTAL_DURATION = _PromHistogram(
+        "jarvis_turn_total_duration_seconds",
+        "Full per-turn wall-clock: speech_start → stream_done",
+        buckets=_DUR_BUCKETS,
+    )
+    METRIC_TURNS_TOTAL = _PromCounter(
+        "jarvis_turns_total",
+        "Per-turn outcomes",
+        ["addressed", "ambient_drop", "echo_drop"],
+    )
+    METRIC_ECHO_DROPS = _PromCounter(
+        "jarvis_echo_drops_total",
+        "Utterances dropped as JARVIS-self-echo",
+    )
+    METRIC_UNKNOWN_SPEAKER_DROPS = _PromCounter(
+        "jarvis_unknown_speaker_drops_total",
+        "Utterances dropped because speaker did not match an enrolled voice",
+    )
+    METRIC_BRAIN_ERRORS = _PromCounter(
+        "jarvis_brain_errors_total",
+        "Brain failures by reason",
+        ["reason"],
+    )
+    METRIC_IG_EVENTS = _PromCounter(
+        "jarvis_ig_webhook_events_total",
+        "IG webhook events",
+        ["type", "status"],
+    )
+    METRIC_IG_SIG_FAILURES = _PromCounter(
+        "jarvis_ig_webhook_signature_failures_total",
+        "IG webhook HMAC signature failures",
+    )
+    try:
+        _prom_start_http_server(_PROM_PORT)
+        print(f"prometheus: /metrics on 0.0.0.0:{_PROM_PORT}")
+    except OSError as _prom_exc:
+        print(f"prometheus: port {_PROM_PORT} busy ({_prom_exc}) — metrics endpoint disabled")
+except Exception as _prom_exc:  # noqa: BLE001
+    print(f"prometheus: client unavailable ({_prom_exc!r}) — metrics disabled")
+
+    class _NoopMetric:
+        def labels(self, *_a, **_kw):
+            return self
+
+        def observe(self, *_a, **_kw):
+            pass
+
+        def inc(self, *_a, **_kw):
+            pass
+
+    METRIC_STT_DURATION = _NoopMetric()
+    METRIC_BRAIN_DURATION = _NoopMetric()
+    METRIC_TTS_SEGMENT_DURATION = _NoopMetric()
+    METRIC_SONOS_FIRST_AUDIO = _NoopMetric()
+    METRIC_TURN_TOTAL_DURATION = _NoopMetric()
+    METRIC_TURNS_TOTAL = _NoopMetric()
+    METRIC_ECHO_DROPS = _NoopMetric()
+    METRIC_UNKNOWN_SPEAKER_DROPS = _NoopMetric()
+    METRIC_BRAIN_ERRORS = _NoopMetric()
+    METRIC_IG_EVENTS = _NoopMetric()
+    METRIC_IG_SIG_FAILURES = _NoopMetric()
 
 # ── Config ────────────────────────────────────────────────────────────────────
 STT_URL = os.environ.get("STT_URL", "http://10.44.0.20:8766")
@@ -60,11 +226,38 @@ WAKE_THRESHOLD = 0.65        # was 0.5 — bumped to cut kitchen false-fires
 SILENCE_SECS = 0.6
 MAX_UTTERANCE_SECS = 8.0
 MIN_UTTERANCE_SECS = 0.4
-ADDRESSEE_WINDOW_S = 6.0     # was 20 — shorter so a false-fire's window
-                              # closes before a kitchen voice can sneak in
+ADDRESSEE_WINDOW_S = 6.0     # post-reply follow-up window: speech in this
+                              # window doesn't need "jarvis"
+ECHO_SUPPRESS_S = 3.5        # drop any utterance whose speech_start fell
+                              # during JARVIS's own Sonos playback or up
+                              # to N seconds after. Prevents JARVIS from
+                              # transcribing its own voice and replying
+                              # to itself (the "Nineteen, sir. → 19, sir.
+                              # → Nineteen what, sir?" feedback loop).
 OWW_RATE = 16000
 OWW_CHUNK = 1280
 SONOS_VOLUME = int(os.environ.get("SONOS_VOLUME", "60"))  # 0-100
+
+# ── Instagram webhook config ─────────────────────────────────────────────────
+# Meta posts Messenger / IG event payloads to /ig/webhook on the same
+# embedded HTTP server that serves Sonos audio. Verification is a GET
+# handshake; events are POSTs signed with HMAC-SHA256 over the raw body
+# using the app's secret. Parsed events go on _ig_event_queue for a future
+# consumer thread (replies + DMs). FAIL-OPEN: if IG env is missing we
+# reject everything but the daemon keeps running for voice.
+_ig_event_queue: queue.Queue = queue.Queue(maxsize=1000)
+IG_ENABLED = os.environ.get("IG_ENABLED", "") == "1"
+IG_VERIFY_TOKEN = os.environ.get("IG_VERIFY_TOKEN", "")
+IG_APP_SECRET = os.environ.get("IG_APP_SECRET", "")
+IG_PAGE_TOKEN = os.environ.get("IG_PAGE_TOKEN", "")
+if IG_ENABLED:
+    if not IG_VERIFY_TOKEN or not IG_APP_SECRET:
+        print("ig: IG_ENABLED=1 but verify_token or app_secret missing — webhook will reject everything")
+    else:
+        print(f"ig: webhook ready; page_token len={len(IG_PAGE_TOKEN)}")
+# Throttle "signature mismatch" logs to one line per process — Meta spam
+# probes can otherwise fill the log with identical entries.
+_ig_sig_logged_once = False
 
 
 # ── Speaker-ID ───────────────────────────────────────────────────────────────
@@ -149,6 +342,7 @@ def _to_16k(arr: np.ndarray, sr: int) -> np.ndarray:
 # ── Cluster STT ──────────────────────────────────────────────────────────────
 def transcribe(audio_16k: np.ndarray) -> dict:
     t0 = time.time()
+    audio_dur_s = float(len(audio_16k) / 16000.0)
     body = audio_16k.astype(np.float32).tobytes()
     req = urllib.request.Request(
         f"{STT_URL}/v1/transcribe?sr=16000",
@@ -156,13 +350,22 @@ def transcribe(audio_16k: np.ndarray) -> dict:
         headers={"Content-Type": "application/octet-stream"},
         method="POST",
     )
-    try:
-        with urllib.request.urlopen(req, timeout=10.0) as r:
-            data = json.loads(r.read())
-    except Exception as exc:
-        return {"text": "", "error": str(exc), "wire_ms": int((time.time()-t0)*1000)}
-    data["wire_ms"] = int((time.time() - t0) * 1000)
-    return data
+    with tracer.start_as_current_span("jarvis.stt") as span:
+        span.set_attribute("audio_dur_s", audio_dur_s)
+        try:
+            with urllib.request.urlopen(req, timeout=10.0) as r:
+                data = json.loads(r.read())
+        except Exception as exc:
+            span.set_attribute("error", True)
+            span.record_exception(exc)
+            METRIC_STT_DURATION.observe(time.time() - t0)
+            return {"text": "", "error": str(exc), "wire_ms": int((time.time()-t0)*1000)}
+        data["wire_ms"] = int((time.time() - t0) * 1000)
+        span.set_attribute("transcribed_chars", len(data.get("text", "") or ""))
+        span.set_attribute("hallucination", bool(data.get("hallucination", False)))
+        span.set_attribute("lang", str(data.get("lang", "") or ""))
+        METRIC_STT_DURATION.observe(time.time() - t0)
+        return data
 
 
 # ── Brain: real Claude (Haiku for fast turns) ────────────────────────────────
@@ -177,7 +380,7 @@ def transcribe(audio_16k: np.ndarray) -> dict:
 # stream-json session, but keeps the implementation small.
 
 # Persona — short JARVIS butler tone, terse, real time-of-day responses.
-_PERSONA_SYSTEM = """You are JARVIS, the assistant from Iron Man. Address the user as "sir".
+_PERSONA_SYSTEM = """You are JARVIS, the assistant from Iron Man. The owner is Hampton.
 
 Speech rules — output WILL be read aloud through a Sonos speaker:
 - TERSE. Default to ONE sentence. Max 12 words. A butler answering
@@ -188,13 +391,18 @@ Speech rules — output WILL be read aloud through a Sonos speaker:
   not "10:30".
 - No filler like "let me check" / "I'll look that up" — just answer.
 - Decline to read URLs out loud.
+- "Sir" — use SPARINGLY. About one in four replies, mostly when
+  acknowledging or correcting. NEVER tag "sir" on every short factual
+  answer ("Two." not "Two, sir."; "Nineteen." not "Nineteen, sir.").
+  Save it for moments that benefit from formality.
 - Examples of GOOD:
-    Q: "what's the weather?"
-    A: "Seventy-four and overcast, sir. High seventy-nine."
-    Q: "what time is it?"
-    A: "Four eighteen in the morning, sir."
-    Q: "what's broken on the cluster?"
-    A: "Nothing critical, sir — all pods healthy."
+    Q: "what's 9 plus 10?"           A: "Nineteen."
+    Q: "square root of four?"        A: "Two."
+    Q: "what's the weather?"         A: "Seventy-four and overcast. High seventy-nine."
+    Q: "what time is it?"            A: "Four eighteen in the morning."
+    Q: "what's broken on the cluster?" A: "Nothing critical — all pods healthy."
+    Q: "tell me about the briefing"  A: "Of course, sir." (then content)
+    Q: (greeting)                    A: "Good morning, sir."
 
 Tools:
 - For daily summaries / "good morning" / "what's the briefing", call
@@ -367,6 +575,25 @@ def _render_persona_prompt() -> str:
     return "\n".join(lines)
 
 
+def _now_context() -> str:
+    """Wall-clock + tz string injected into the brain's per-turn system
+    prompt. Pod default TZ is UTC; the user is in America/Chicago. Honor
+    a $TZ override if someone sets it on the deployment."""
+    from datetime import datetime
+    try:
+        from zoneinfo import ZoneInfo
+        tz_name = os.environ.get("TZ", "America/Chicago")
+        now = datetime.now(ZoneInfo(tz_name))
+    except Exception:
+        tz_name = "UTC"
+        now = datetime.utcnow()
+    # "12:51 AM, Monday, May 25, 2026 (America/Chicago)"
+    stamp = now.strftime("%-I:%M %p, %A, %B %-d, %Y")
+    return (f"Current local time: {stamp} ({tz_name}). "
+            "Use this for any time-of-day reasoning — greetings, "
+            "'is it late', overnight context, etc.")
+
+
 _RO_ALLOWED_TOOLS = " ".join([
     # Personal: briefing / weather / news / greeting (Calendar+Reminders
     # stubbed to "unauthorized" until CalDAV bridge).
@@ -425,10 +652,14 @@ def _claude_brain(text: str, timeout: float = 60.0) -> str:
     has_api_key = bool(os.environ.get("ANTHROPIC_API_KEY"))
     if not has_creds and not has_api_key:
         return "No brain credentials, sir — neither subscription nor API key configured."
-    # Static persona + live-tunable dimensions, concatenated into ONE
-    # --append-system-prompt arg (claude CLI keeps only the last when
-    # the flag is repeated, so we glue them ourselves).
-    persona_prompt = _PERSONA_SYSTEM + "\n\n" + _render_persona_prompt()
+    # Static persona + live-tunable dimensions + current local wall
+    # clock, concatenated into ONE --append-system-prompt arg (claude
+    # CLI keeps only the last when the flag is repeated, so we glue
+    # them ourselves). Time of day matters: greetings, "is it late?",
+    # "should I be sleeping?", scheduled-task awareness.
+    persona_prompt = (_PERSONA_SYSTEM
+                      + "\n\n" + _render_persona_prompt()
+                      + "\n\n" + _now_context())
     try:
         proc = _sp.run(
             ["claude", "-p", text,
@@ -498,12 +729,48 @@ def _maybe_greeting_shortcircuit(text: str) -> str | None:
 
 
 def brain_respond(text: str) -> str:
-    if BRAIN_MODE == "echo":
-        return f"Sir, I heard: {text}"
-    shortcut = _maybe_greeting_shortcircuit(text)
-    if shortcut:
-        return shortcut
-    return _claude_brain(text)
+    t0 = time.time()
+    with tracer.start_as_current_span("jarvis.brain") as span:
+        span.set_attribute("prompt_chars", len(text or ""))
+        try:
+            if BRAIN_MODE == "echo":
+                reply = f"Sir, I heard: {text}"
+                span.set_attribute("mode", "echo")
+                return reply
+            shortcut = _maybe_greeting_shortcircuit(text)
+            if shortcut:
+                span.set_attribute("mode", "shortcut")
+                return shortcut
+            # Decide whether claude CLI will go subscription or API based on
+            # which credential path is present. Mirrors _claude_brain's logic.
+            mode = "api"
+            if os.path.exists(os.path.expanduser("~/.claude/.credentials.json")):
+                mode = "subscription"
+            span.set_attribute("mode", mode)
+            reply = _claude_brain(text)
+            # Best-effort classification of brain error replies so the
+            # Prometheus counter has useful reasons to slice by.
+            low = (reply or "").lower()
+            if "no brain credentials" in low:
+                METRIC_BRAIN_ERRORS.labels(reason="no_credentials").inc()
+            elif "took too long" in low:
+                METRIC_BRAIN_ERRORS.labels(reason="timeout").inc()
+            elif "lost my connection" in low:
+                METRIC_BRAIN_ERRORS.labels(reason="nonzero_rc").inc()
+            elif "blank" in low or "didn't have anything" in low:
+                METRIC_BRAIN_ERRORS.labels(reason="empty_result").inc()
+            elif "something went wrong" in low:
+                METRIC_BRAIN_ERRORS.labels(reason="is_error").inc()
+            elif low.startswith("brain error"):
+                METRIC_BRAIN_ERRORS.labels(reason="exception").inc()
+            return reply
+        finally:
+            # Capture reply_chars on the way out so both happy + sad paths
+            # get recorded. reply variable is only bound in inner scopes;
+            # use locals().get to stay defensive against future refactors.
+            reply_local = locals().get("reply", "") or ""
+            span.set_attribute("reply_chars", len(reply_local))
+            METRIC_BRAIN_DURATION.observe(time.time() - t0)
 
 
 def _check_brain_auth() -> None:
@@ -585,14 +852,21 @@ def tts_synthesize(text: str) -> bytes | None:
         headers={"Content-Type": "application/json"},
         method="POST",
     )
-    try:
-        with urllib.request.urlopen(req, timeout=30.0) as r:
-            wav = r.read()
-            print(f"  tts: {len(wav)} bytes in {int((time.time()-t0)*1000)}ms")
-            return wav
-    except Exception as exc:
-        print(f"  tts error: {exc}")
-        return None
+    with tracer.start_as_current_span("jarvis.tts.segment") as span:
+        span.set_attribute("chars", len(text or ""))
+        try:
+            with urllib.request.urlopen(req, timeout=30.0) as r:
+                wav = r.read()
+                print(f"  tts: {len(wav)} bytes in {int((time.time()-t0)*1000)}ms")
+                span.set_attribute("bytes", len(wav))
+                METRIC_TTS_SEGMENT_DURATION.observe(time.time() - t0)
+                return wav
+        except Exception as exc:
+            print(f"  tts error: {exc}")
+            span.set_attribute("error", True)
+            span.record_exception(exc)
+            METRIC_TTS_SEGMENT_DURATION.observe(time.time() - t0)
+            return None
 
 
 # ── Embedded HTTP server (Sonos pulls audio from us) ─────────────────────────
@@ -635,6 +909,13 @@ class _AudioHandler(BaseHTTPRequestHandler):
     stash: _AudioStash = None  # type: ignore[assignment]
 
     def do_GET(self):  # noqa: N802
+        # Route IG verification handshake before the WAV-stash lookup.
+        # Path-and-query split: BaseHTTPRequestHandler hands us the raw
+        # request-target, which for GETs includes ?hub.mode=... etc.
+        parsed = urllib.parse.urlsplit(self.path)
+        if parsed.path == "/ig/webhook":
+            self._handle_ig_verify(parsed.query)
+            return
         wav = self.stash.get(self.path) if self.stash else None
         if not wav:
             self.send_response(404)
@@ -653,6 +934,125 @@ class _AudioHandler(BaseHTTPRequestHandler):
             # fetch. Audio playback isn't affected — Sonos opens a fresh
             # connection for the real read. Suppress the noisy traceback.
             pass
+
+    def do_POST(self):  # noqa: N802
+        parsed = urllib.parse.urlsplit(self.path)
+        if parsed.path == "/ig/webhook":
+            self._handle_ig_event()
+            return
+        self.send_response(404)
+        self.end_headers()
+
+    # ── IG: Meta verification handshake ──────────────────────────────
+    def _handle_ig_verify(self, raw_query: str) -> None:
+        with tracer.start_as_current_span("jarvis.ig.webhook_verify") as span:
+            qs = urllib.parse.parse_qs(raw_query)
+            mode = (qs.get("hub.mode") or [""])[0]
+            token = (qs.get("hub.verify_token") or [""])[0]
+            challenge = (qs.get("hub.challenge") or [""])[0]
+            span.set_attribute("ig.hub_mode", mode)
+            expected = os.environ.get("IG_VERIFY_TOKEN", "")
+            ok = (mode == "subscribe"
+                  and bool(expected)
+                  and hmac.compare_digest(token, expected))
+            span.set_attribute("ig.verify_ok", ok)
+            if not ok:
+                self.send_response(403)
+                self.end_headers()
+                return
+            body = challenge.encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            try:
+                self.wfile.write(body)
+            except (ConnectionResetError, BrokenPipeError):
+                pass
+
+    # ── IG: signed event ingress ─────────────────────────────────────
+    def _handle_ig_event(self) -> None:
+        global _ig_sig_logged_once
+        with tracer.start_as_current_span("jarvis.ig.webhook_event") as span:
+            try:
+                # Read EXACTLY Content-Length bytes. Blind .read() hangs
+                # forever on keepalive connections (Meta reuses them).
+                try:
+                    length = int(self.headers.get("Content-Length", "0") or "0")
+                except ValueError:
+                    length = 0
+                body = self.rfile.read(length) if length > 0 else b""
+                span.set_attribute("ig.body_bytes", len(body))
+
+                # HMAC-SHA256 over the raw body, hex-encoded, prefixed.
+                app_secret = os.environ.get("IG_APP_SECRET", "")
+                if not app_secret:
+                    span.set_attribute("ig.reject_reason", "no_app_secret")
+                    METRIC_IG_SIG_FAILURES.inc()
+                    self.send_response(403)
+                    self.end_headers()
+                    return
+                expected = "sha256=" + hmac.new(
+                    app_secret.encode(), body, hashlib.sha256,
+                ).hexdigest()
+                got = self.headers.get("X-Hub-Signature-256", "") or ""
+                if not hmac.compare_digest(expected, got):
+                    METRIC_IG_SIG_FAILURES.inc()
+                    if not _ig_sig_logged_once:
+                        print("ig: signature mismatch (logging once; further mismatches counted silently)")
+                        _ig_sig_logged_once = True
+                    span.set_attribute("ig.reject_reason", "bad_signature")
+                    self.send_response(403)
+                    self.end_headers()
+                    return
+
+                # Signature valid → parse + enqueue. Meta retries any
+                # non-200, so on JSON parse failure we still answer 200
+                # (there's nothing useful to retry).
+                try:
+                    payload = json.loads(body or b"{}")
+                except json.JSONDecodeError as exc:
+                    span.set_attribute("ig.reject_reason", "bad_json")
+                    span.record_exception(exc)
+                    METRIC_IG_EVENTS.labels(type="other", status="bad_json").inc()
+                    self.send_response(200)
+                    self.end_headers()
+                    return
+
+                entries = payload.get("entry") if isinstance(payload, dict) else None
+                entry_count = len(entries) if isinstance(entries, list) else 0
+                obj_type_raw = payload.get("object") if isinstance(payload, dict) else None
+                # Bound metric cardinality — Meta sends a small known set
+                # (instagram, page, messages, messaging_postbacks, etc).
+                # Anything outside the allowlist gets folded into "other".
+                _KNOWN = {"instagram", "page", "messages",
+                          "messaging_postbacks", "comments", "mentions"}
+                obj_type = obj_type_raw if obj_type_raw in _KNOWN else "other"
+                span.set_attribute("ig.object_type", str(obj_type))
+                span.set_attribute("ig.entry_count", entry_count)
+                # Privacy: log entry count + type, NEVER payload content.
+                print(f"ig event type={obj_type} entries={entry_count}")
+
+                try:
+                    _ig_event_queue.put_nowait(payload)
+                    METRIC_IG_EVENTS.labels(type=str(obj_type), status="queued").inc()
+                except queue.Full:
+                    print("ig: event queue full — dropping event (consumer not draining)")
+                    METRIC_IG_EVENTS.labels(type=str(obj_type), status="dropped_full").inc()
+
+                self.send_response(200)
+                self.end_headers()
+            except Exception as exc:  # noqa: BLE001
+                # Never leak stack traces to Meta — log + 200 so they
+                # don't retry forever on a bug in our handler.
+                span.record_exception(exc)
+                print(f"ig: handler exception (returning 200 anyway): {exc!r}")
+                METRIC_IG_EVENTS.labels(type="other", status="handler_error").inc()
+                try:
+                    self.send_response(200)
+                    self.end_headers()
+                except Exception:
+                    pass
 
     def log_message(self, *args, **kwargs):  # silence default access log
         pass
@@ -749,22 +1149,60 @@ def _split_sentences(text: str, max_len: int = 40) -> list[str]:
     return out or [text.strip()]
 
 
+# Timestamp of when JARVIS most recently finished speaking on Sonos.
+# Read by the main capture loop to drop self-echo — any utterance whose
+# speech_start fell during JARVIS's playback or within ECHO_SUPPRESS_S
+# afterward is the Yeti hearing JARVIS through the bedroom Play:1, not
+# the user, and gets dropped before STT-to-brain.
+_jarvis_done_at = 0.0
+_jarvis_speaking = False
+
+
 def _stream_on_sonos(sonos, sentences: list[str], host_ip: str,
-                    http_port: int, turn_n: int, stash: _AudioStash) -> None:
+                    http_port: int, turn_n: int,
+                    stash: _AudioStash) -> dict:
     """Streaming TTS over Sonos queue. Synth + play sentence 1, then
     while it plays, synth + enqueue sentences 2..N. Sonos walks the
     queue. End-to-end wall clock = synth(s1) + play(all), not synth(all)
     + play(all) — cuts perceived lag for multi-sentence replies."""
-    if sonos is None:
-        # No Sonos configured — save chunks to disk for inspection.
-        for i, sent in enumerate(sentences, 1):
-            wav = tts_synthesize(sent)
-            if wav:
-                with open(f"/tmp/jarvis_edge_turn_{turn_n}_{i}.wav", "wb") as f:
-                    f.write(wav)
-        return
+    timings: dict = {"first_audio_ms": None, "stream_done_ms": None}
+    sonos_span = tracer.start_as_current_span("jarvis.sonos.stream")
+    span = sonos_span.__enter__()
+    span.set_attribute("turn_n", turn_n)
+    span.set_attribute("segment_count", len(sentences))
+    try:
+        if sonos is None:
+            # No Sonos configured — save chunks to disk for inspection.
+            span.set_attribute("sonos_configured", False)
+            for i, sent in enumerate(sentences, 1):
+                wav = tts_synthesize(sent)
+                if wav:
+                    with open(f"/tmp/jarvis_edge_turn_{turn_n}_{i}.wav", "wb") as f:
+                        f.write(wav)
+            return timings
+        span.set_attribute("sonos_configured", True)
+        return _stream_on_sonos_impl(sonos, sentences, host_ip, http_port,
+                                     turn_n, stash, timings, span)
+    finally:
+        # Stash the timings dict on the span before exit so reviewers in
+        # Tempo can see first_audio_ms / stream_done_ms on the parent
+        # turn span as well as in the segment children.
+        if timings.get("first_audio_ms") is not None:
+            span.set_attribute("first_audio_ms", timings["first_audio_ms"])
+            METRIC_SONOS_FIRST_AUDIO.observe(timings["first_audio_ms"] / 1000.0)
+        if timings.get("stream_done_ms") is not None:
+            span.set_attribute("stream_done_ms", timings["stream_done_ms"])
+        sonos_span.__exit__(None, None, None)
 
+
+def _stream_on_sonos_impl(sonos, sentences, host_ip, http_port, turn_n,
+                          stash, timings, span) -> dict:
     t0 = time.time()
+    # Mark JARVIS as speaking from the moment we start the stream — the
+    # main loop's echo-suppress check uses _jarvis_done_at + grace, but
+    # the speaking flag is a stricter "is JARVIS audible right now" signal.
+    global _jarvis_speaking
+    _jarvis_speaking = True
     try:
         sonos.unjoin()
     except Exception:
@@ -802,12 +1240,13 @@ def _stream_on_sonos(sonos, sentences: list[str], host_ip: str,
             try:
                 sonos.play_from_queue(0)
                 played_first = True
-                print(f"  sonos: first audio at {int((time.time()-t0)*1000)}ms")
+                timings["first_audio_ms"] = int((time.time() - t0) * 1000)
+                print(f"  sonos: first audio at {timings['first_audio_ms']}ms")
             except Exception as exc:
                 print(f"  ! play_from_queue failed: {exc}")
 
     if not played_first:
-        return
+        return timings
 
     # Wait for queue to drain (Sonos walks through enqueued items).
     while True:
@@ -823,9 +1262,16 @@ def _stream_on_sonos(sonos, sentences: list[str], host_ip: str,
             print("  ! sonos stream timed out at 90s")
             break
 
-    print(f"  sonos: stream done in {int((time.time()-t0)*1000)}ms")
+    timings["stream_done_ms"] = int((time.time() - t0) * 1000)
+    print(f"  sonos: stream done in {timings['stream_done_ms']}ms")
+    # Mark the moment JARVIS stopped speaking so the main loop can drop
+    # any self-echo the Yeti captured during/just-after playback.
+    global _jarvis_done_at, _jarvis_speaking
+    _jarvis_done_at = time.time()
+    _jarvis_speaking = False
     # Bound memory: drop old turns' WAV chunks.
     stash.clear_older_than(turn_n)
+    return timings
 
 
 # Kept for backward-compat callers, but main loop uses _stream_on_sonos now.
@@ -962,66 +1408,147 @@ def main() -> None:
                 if dur < MIN_UTTERANCE_SECS:
                     continue
 
-                audio_native = np.concatenate(frames)
-                audio_16k = _to_16k(audio_native, native_rate)
-                res = transcribe(audio_16k)
-                if res.get("error"):
-                    print(f"  ✗ STT error: {res['error']}")
-                    continue
-                if res.get("hallucination"):
-                    continue   # silently drop Whisper "thanks for watching" etc
-                user_text = res.get("text", "").strip()
-                if not user_text:
-                    continue
-
-                # ── Speaker-ID gate (drops unknown voices in ambient mode) ──
-                # If owner is enrolled, require voice match before letting
-                # through. Without enrollment, pass-through (back-compat for
-                # fresh deployments).
-                spk_name, spk_confidence = _identify_speaker_from_audio(audio_16k)
-                if _vid_has_owner() and spk_name is None:
-                    print(f"  (unknown speaker drop {dur:.1f}s): {user_text[:70]!r}  conf={spk_confidence:.2f}")
-                    continue
-                if spk_name:
-                    print(f"  speaker: {spk_name} (conf={spk_confidence:.2f})")
-
-                # ── Ambient addressee gate ──────────────────────────
-                # Must contain "jarvis" OR we're in the follow-up window
-                # from a previous reply.
-                low = user_text.lower()
-                addressed = ("jarvis" in low) or (time.time() < engaged_until)
-                if not addressed:
-                    print(f"  (ambient drop {dur:.1f}s): {user_text[:70]!r}")
-                    continue
-
-                print(f"\n[{time.strftime('%H:%M:%S')}] YOU: {user_text!r}  "
-                      f"(dur={dur:.1f}s, stt {res.get('model_ms','?')}ms)")
-                notify("JARVIS", "Listening…", urgency="normal", expire_ms=1500)
-
-                # ── Brain ───────────────────────────────────────────
-                reply = brain_respond(user_text)
-                print(f"  JARVIS: {reply!r}")
-                if not reply or not reply.strip():
-                    print("  → empty reply, skipping TTS")
-                    continue
-
-                # ── Streaming TTS + Sonos queue playback ─────────────
-                # Split the brain reply into sentence-ish chunks. Synth
-                # sentence 1, hand to Sonos, then synth+enqueue 2..N
-                # while sentence 1 plays. First audio at ~1.5s instead
-                # of ~6-8s for multi-sentence replies.
-                turn_n += 1
-                sentences = _split_sentences(reply)
-                if not sentences:
-                    print("  → no synthesizable text, skipping TTS")
-                    continue
-                print(f"  streaming {len(sentences)} segment(s)")
+                # ── Root turn span ──────────────────────────────────
+                # Opened the moment we have an utterance with a known
+                # t_speech_start. Closed at the end of the iteration —
+                # either after streaming finishes, or at any drop
+                # (echo / ambient / unknown speaker / STT-empty) via
+                # the try/finally below. Drops are recorded as span
+                # events so Tempo shows WHY a turn was dropped.
+                turn_span_ctx = tracer.start_as_current_span("jarvis.turn")
+                turn_span = turn_span_ctx.__enter__()
+                turn_t0 = t_speech_start if t_speech_start is not None else time.time()
+                turn_outcome = "addressed"  # default; overwritten on drop/empty
                 try:
-                    _stream_on_sonos(sonos, sentences, host_ip,
-                                     EDGE_ADVERTISED_PORT, turn_n, stash)
-                    engaged_until = time.time() + ADDRESSEE_WINDOW
-                except Exception as exc:
-                    print(f"  sonos stream error: {exc}")
+                    turn_span.set_attribute("utterance_dur_s", float(dur))
+                    if t_speech_start is not None:
+                        turn_span.set_attribute("speech_start_ts", float(t_speech_start))
+
+                    # ── Echo suppression ────────────────────────────────
+                    # If JARVIS was speaking when this utterance started, or
+                    # finished < ECHO_SUPPRESS_S ago, this is almost certainly
+                    # the Yeti picking up the Sonos playback — drop without
+                    # transcribing. Prevents "Nineteen, sir. → 19, sir.
+                    # → Nineteen what, sir?" self-conversations.
+                    if t_speech_start is not None:
+                        since_jarvis = t_speech_start - _jarvis_done_at
+                        if _jarvis_speaking or (0 <= since_jarvis < ECHO_SUPPRESS_S):
+                            print(f"  (echo drop {dur:.1f}s; "
+                                  f"speaking={_jarvis_speaking}, "
+                                  f"since_jarvis={since_jarvis:.1f}s)")
+                            turn_span.add_event("echo_drop", {
+                                "dur_s": float(dur),
+                                "since_jarvis_s": float(since_jarvis),
+                                "jarvis_speaking": bool(_jarvis_speaking),
+                            })
+                            turn_outcome = "echo_drop"
+                            METRIC_ECHO_DROPS.inc()
+                            METRIC_TURNS_TOTAL.labels(
+                                addressed="0", ambient_drop="0", echo_drop="1",
+                            ).inc()
+                            continue
+
+                    audio_native = np.concatenate(frames)
+                    audio_16k = _to_16k(audio_native, native_rate)
+                    res = transcribe(audio_16k)
+                    if res.get("error"):
+                        print(f"  ✗ STT error: {res['error']}")
+                        turn_span.add_event("stt_error", {"error": str(res["error"])[:200]})
+                        turn_outcome = "stt_error"
+                        continue
+                    if res.get("hallucination"):
+                        turn_span.add_event("stt_hallucination")
+                        turn_outcome = "stt_hallucination"
+                        continue   # silently drop Whisper "thanks for watching" etc
+                    user_text = res.get("text", "").strip()
+                    if not user_text:
+                        turn_outcome = "empty_text"
+                        continue
+
+                    # ── Speaker-ID gate (drops unknown voices in ambient mode) ──
+                    # If owner is enrolled, require voice match before letting
+                    # through. Without enrollment, pass-through (back-compat for
+                    # fresh deployments).
+                    spk_name, spk_confidence = _identify_speaker_from_audio(audio_16k)
+                    if _vid_has_owner() and spk_name is None:
+                        print(f"  (unknown speaker drop {dur:.1f}s): {user_text[:70]!r}  conf={spk_confidence:.2f}")
+                        turn_span.add_event("unknown_speaker_drop", {
+                            "dur_s": float(dur),
+                            "confidence": float(spk_confidence),
+                            "text_preview": user_text[:70],
+                        })
+                        turn_outcome = "unknown_speaker_drop"
+                        METRIC_UNKNOWN_SPEAKER_DROPS.inc()
+                        continue
+                    if spk_name:
+                        print(f"  speaker: {spk_name} (conf={spk_confidence:.2f})")
+                        turn_span.set_attribute("speaker", str(spk_name))
+                        turn_span.set_attribute("speaker_confidence", float(spk_confidence))
+
+                    # ── Ambient addressee gate ──────────────────────────
+                    # Must contain "jarvis" OR we're in the follow-up window
+                    # from a previous reply.
+                    low = user_text.lower()
+                    addressed = ("jarvis" in low) or (time.time() < engaged_until)
+                    if not addressed:
+                        print(f"  (ambient drop {dur:.1f}s): {user_text[:70]!r}")
+                        turn_span.add_event("ambient_drop", {
+                            "dur_s": float(dur),
+                            "text_preview": user_text[:70],
+                        })
+                        turn_outcome = "ambient_drop"
+                        METRIC_TURNS_TOTAL.labels(
+                            addressed="0", ambient_drop="1", echo_drop="0",
+                        ).inc()
+                        continue
+
+                    print(f"\n[{time.strftime('%H:%M:%S')}] YOU: {user_text!r}  "
+                          f"(dur={dur:.1f}s, stt {res.get('model_ms','?')}ms)")
+                    notify("JARVIS", "Listening…", urgency="normal", expire_ms=1500)
+
+                    # ── Brain ───────────────────────────────────────────
+                    reply = brain_respond(user_text)
+                    print(f"  JARVIS: {reply!r}")
+                    if not reply or not reply.strip():
+                        print("  → empty reply, skipping TTS")
+                        turn_outcome = "empty_reply"
+                        continue
+
+                    # ── Streaming TTS + Sonos queue playback ─────────────
+                    # Split the brain reply into sentence-ish chunks. Synth
+                    # sentence 1, hand to Sonos, then synth+enqueue 2..N
+                    # while sentence 1 plays. First audio at ~1.5s instead
+                    # of ~6-8s for multi-sentence replies.
+                    turn_n += 1
+                    turn_span.set_attribute("turn_n", turn_n)
+                    sentences = _split_sentences(reply)
+                    if not sentences:
+                        print("  → no synthesizable text, skipping TTS")
+                        turn_outcome = "no_synthesizable_text"
+                        continue
+                    turn_span.set_attribute("segment_count", len(sentences))
+                    print(f"  streaming {len(sentences)} segment(s)")
+                    try:
+                        _stream_on_sonos(sonos, sentences, host_ip,
+                                         EDGE_ADVERTISED_PORT, turn_n, stash)
+                        engaged_until = time.time() + ADDRESSEE_WINDOW
+                    except Exception as exc:
+                        print(f"  sonos stream error: {exc}")
+                        turn_span.record_exception(exc)
+                        turn_outcome = "sonos_error"
+                    else:
+                        METRIC_TURNS_TOTAL.labels(
+                            addressed="1", ambient_drop="0", echo_drop="0",
+                        ).inc()
+                finally:
+                    # Single exit point for the turn span — records total
+                    # wall-clock from speech_start through whatever path
+                    # the turn took (success or drop).
+                    total_s = time.time() - turn_t0
+                    turn_span.set_attribute("outcome", turn_outcome)
+                    turn_span.set_attribute("total_duration_s", float(total_s))
+                    METRIC_TURN_TOTAL_DURATION.observe(total_s)
+                    turn_span_ctx.__exit__(None, None, None)
         except KeyboardInterrupt:
             print("\nbye")
 

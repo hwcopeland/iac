@@ -1,0 +1,39 @@
+# Placeholder dashboard ConfigMap for the JARVIS voice pipeline.
+#
+# Picked up by the kube-prometheus-stack Grafana sidecar via the
+# `grafana_dashboard: "1"` label (searchNamespace: ALL — see
+# rke2/monitor/kube-prometheus-stack-values.yaml). Lives in the
+# `Voice` Grafana folder via the `grafana_folder` annotation.
+#
+# Body is a STUB — a separate agent will populate panels once the
+# jarvis-edge daemon is emitting /metrics and OTLP traces. Expected
+# panel coverage (from operator briefing): per-turn latency budget
+# broken down by stage (VAD endpointing → STT first-token → Brain
+# response → TTS synth → Sonos play), plus Tempo service-graph
+# pivot to surf the trace span tree per turn.
+#
+# Sidecar auto-discovers new keys in the data: block on each
+# ConfigMap update, so swapping the JSON later is a hot operation
+# — no Grafana restart needed.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: jarvis-voice-pipeline-dashboard
+  namespace: ai
+  labels:
+    grafana_dashboard: "1"
+  annotations:
+    grafana_folder: Voice
+data:
+  jarvis-voice-pipeline.json: |-
+    {
+      "uid": "jarvis-voice-pipeline",
+      "title": "JARVIS Voice Pipeline",
+      "tags": ["voice", "jarvis", "traces"],
+      "timezone": "browser",
+      "refresh": "30s",
+      "schemaVersion": 39,
+      "time": {"from": "now-1h", "to": "now"},
+      "editable": true,
+      "panels": []
+    }

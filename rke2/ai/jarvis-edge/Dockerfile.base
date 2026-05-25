@@ -49,6 +49,9 @@ RUN pip install --no-cache-dir --no-deps openwakeword==0.6.0 \
     soco==0.30.4 \
     silero-vad onnxruntime \
     resemblyzer==0.1.4 \
+    opentelemetry-api opentelemetry-sdk \
+    opentelemetry-exporter-otlp-proto-grpc \
+    prometheus_client \
  && python -c "import openwakeword.utils; openwakeword.utils.download_models()"
 
 ENV XDG_RUNTIME_DIR=/run/user/1000 \
