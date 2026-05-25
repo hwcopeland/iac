@@ -70,25 +70,41 @@ def _load_cached(media_pk: str) -> dict | None:
         return None
 
 
-def _save_cached(media_pk: str, description: str, transcript: str) -> None:
-    """Persist description + raw transcript atomically. Best-effort —
-    if disk is full or path isn't writable, we still return the
-    description to the caller (the cache write isn't load-bearing for
-    correctness, only for not re-processing the same reel)."""
+def _save_cached(media_pk: str, description: str, transcript: str,
+                 song_id: dict | None = None) -> None:
+    """Persist description + raw transcript + optional song_id atomically.
+    Best-effort — if disk is full or path isn't writable, we still
+    return the description to the caller (the cache write isn't
+    load-bearing for correctness, only for not re-processing the same
+    reel).
+
+    song_id schema: {"title", "artist", "album", "apple_music_url"} on
+    hit, None on miss/error. Backward-compatible: older cache files
+    without song_id still read fine."""
     path = _cache_path(media_pk)
     tmp = path + ".tmp"
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
     except OSError:
         pass
+    blob: dict = {
+        "media_pk": str(media_pk),
+        "description": description,
+        "transcript": transcript,
+        "cached_at": time.time(),
+    }
+    if song_id is not None:
+        # Persist only the small surface fields, not the full raw track
+        # dict — the raw blob is large and not load-bearing for callers.
+        blob["song_id"] = {
+            "title": song_id.get("title", ""),
+            "artist": song_id.get("artist", ""),
+            "album": song_id.get("album", ""),
+            "apple_music_url": song_id.get("apple_music_url", ""),
+        }
     try:
         with open(tmp, "w") as f:
-            json.dump({
-                "media_pk": str(media_pk),
-                "description": description,
-                "transcript": transcript,
-                "cached_at": time.time(),
-            }, f)
+            json.dump(blob, f)
         os.replace(tmp, path)
     except OSError as exc:
         print(f"reel context: cache write failed for {media_pk}: {exc!r}")
@@ -310,6 +326,28 @@ def _fallback_from_media(media_pk: str, client: Any | None) -> str:
         return f"<reel {media_pk}>"
 
 
+# ── Song-line helper ───────────────────────────────────────────────────────
+def _append_song_line(description: str, song_id: dict | None,
+                      audio_ok: bool) -> str:
+    """Append a 'Song: ...' line so the gaslight brain has the
+    identified track as context. We append unconditionally when we
+    extracted audio — a 'Song: unrecognised' line is signal too (rules
+    out instrumental as a punchline). When audio extraction itself
+    failed we skip the line (no signal either way)."""
+    desc = (description or "").rstrip()
+    if not audio_ok:
+        return desc
+    if song_id and song_id.get("title") and song_id.get("artist"):
+        line = f"Song: {song_id['title']} by {song_id['artist']}"
+    else:
+        line = "Song: unrecognised"
+    # Append with a separating newline only if the description itself
+    # has content; otherwise return the line standalone.
+    if desc:
+        return f"{desc}\n{line}"
+    return line
+
+
 # ── Public entry point ─────────────────────────────────────────────────────
 def analyze(media_pk: str) -> str:
     """Best-effort 2-4 sentence description of an IG reel. NEVER raises.
@@ -389,11 +427,27 @@ def analyze(media_pk: str) -> str:
             print(f"reel context: STT crashed for {media_pk}: {exc!r}")
             traceback.print_exc()
 
+    # 5b. Song ID via shazamio. Fail-open — a Shazam blip MUST NOT
+    # block the description. Only attempt if we got audio.
+    song_id: dict | None = None
+    if audio_ok:
+        try:
+            import jarvis_song_id as _song  # type: ignore[import]
+            song_id = _song.identify_from_wav(audio_path)
+        except Exception as exc:  # noqa: BLE001
+            print(f"reel context: song_id crashed for {media_pk}: {exc!r}")
+            traceback.print_exc()
+            song_id = None
+
     # 6. Vision call. If we have zero keyframes AND no transcript, skip
     #    the brain call and ship the caption-based fallback — paying for
-    #    a Claude turn with no signal is wasteful.
+    #    a Claude turn with no signal is wasteful. Song info still gets
+    #    appended below if we identified one (helps the gaslight brain
+    #    even when we couldn't grab visuals).
     if not keyframes and not transcript:
         desc = _fallback_from_media(media_pk, client)
+        desc = _append_song_line(desc, song_id, audio_ok)
+        _save_cached(media_pk, desc, transcript, song_id)
         _cleanup(video_path, audio_path, keyframes)
         return desc
 
@@ -426,10 +480,12 @@ def analyze(media_pk: str) -> str:
     if not description.strip():
         description = _fallback_from_media(media_pk, client)
 
+    description = _append_song_line(description.strip(), song_id, audio_ok)
+
     # 7. Cache + 8. cleanup.
-    _save_cached(media_pk, description.strip(), transcript)
+    _save_cached(media_pk, description, transcript, song_id)
     _cleanup(video_path, audio_path, keyframes)
-    return description.strip()
+    return description
 
 
 def _cleanup(video_path: str | None, audio_path: str, keyframes: list[str]) -> None:
