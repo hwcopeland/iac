@@ -412,6 +412,31 @@ def _poll_once(client: Any, handles: dict, hwm_us: int) -> int:
     with tracer.start_as_current_span("jarvis.ig.poll_cycle") as cycle_span:
         cycle_span.set_attribute("ig.thread_amount", amount)
         cycle_span.set_attribute("ig.hwm_us", hwm_us)
+
+        # ── Raw inbox scan: route tagged_comment items first ─────────────
+        # `client.direct_threads()` parses messages into pydantic
+        # DirectMessage models that DROP the `send_attribution` field, so
+        # tagged_comment detection from those is impossible. Fetch the
+        # raw inbox dict in parallel and route mention-DMs from there.
+        routed_item_ids: set = set()
+        try:
+            raw = client.private_request(
+                "direct_v2/inbox/?persistentBadging=true&limit=20"
+            )
+            for raw_thread in (raw.get("inbox", {}) or {}).get("threads", []) or []:
+                for raw_item in raw_thread.get("items", []) or []:
+                    if raw_item.get("send_attribution") != "tagged_comment":
+                        continue
+                    ts_us = int(raw_item.get("timestamp") or 0)
+                    if ts_us <= hwm_us:
+                        continue
+                    # _try_route_tagged_comment accepts a dict directly
+                    # (see _msg_as_dict's isinstance(dict) early-return).
+                    if _try_route_tagged_comment(raw_item, raw_thread):
+                        routed_item_ids.add(str(raw_item.get("item_id") or ""))
+        except Exception as exc:  # noqa: BLE001
+            print(f"ig polling: raw-inbox tagged_comment scan failed ({exc!r})")
+
         threads = client.direct_threads(amount=amount)
         cycle_span.set_attribute("ig.thread_count", len(threads) if threads else 0)
 
@@ -437,6 +462,15 @@ def _poll_once(client: Any, handles: dict, hwm_us: int) -> int:
                     # poll cycle / pod restart.
                     if _try_route_tagged_comment(msg, thread):
                         msg_span.set_attribute("ig.tagged_comment_routed", True)
+                        if ts_us > new_hwm:
+                            new_hwm = ts_us
+                        continue
+                    # Skip messages already routed by the raw-inbox scan
+                    # earlier in this cycle (pydantic models don't carry
+                    # send_attribution; raw scan is the source of truth).
+                    msg_id = str(getattr(msg, "id", "") or "")
+                    if msg_id and msg_id in routed_item_ids:
+                        msg_span.set_attribute("ig.tagged_comment_routed_raw", True)
                         if ts_us > new_hwm:
                             new_hwm = ts_us
                         continue
