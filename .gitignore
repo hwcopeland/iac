@@ -16,3 +16,8 @@ rke2/chemistry/relativistic
 
 rke2/theswamp/u4u-engine/
 .claude/
+rke2/ai/comfyui/
+rke2/ai/invokeai/
+
+# Project specs — keep local, do not ship to GitHub
+**/docs/spec/
