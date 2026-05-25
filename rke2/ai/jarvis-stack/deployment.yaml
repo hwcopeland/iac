@@ -111,9 +111,10 @@ spec:
               protocol: TCP
           securityContext:
             # Run as the user that owns /run/user/1000 (PipeWire socket).
+            # The pulse socket at /run/user/1000/pulse/native is
+            # world-writable per host briefing, so no extra group needed.
             runAsUser: 1000
             runAsGroup: 100
-            supplementalGroups: [29]      # 'audio' on Debian; harmless if absent
           env:
             # STT hits the sibling container over the shared pod localhost.
             - name: STT_URL
