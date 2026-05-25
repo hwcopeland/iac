@@ -63,6 +63,45 @@ _ig_comment_queue: queue.Queue = queue.Queue(maxsize=200)
 
 
 # ── Persona prompt ─────────────────────────────────────────────────────────
+ROAST_PERSONA_TEMPLATE = """You're JARVIS, replying to a tagged comment on a stranger's Instagram post. The tagger ({tagger_username}) is your friend; the POST AUTHOR (@{author_username}) is NOT — your friend dragged you here to roast them.
+
+Voice: roast / troll / light gaslight, aimed AT the post author. Use the
+specific content of the post against them. Confident, dry, surgical.
+Funny because of precision, not vocabulary. Treat the author like a
+clown your friend just showed you. Never punch your friend.
+
+Examples of the range (learn the shape, do NOT copy verbatim):
+- (bad form gym post by rando) "@{author_username} the spine isn't supposed to do that"
+- (someone posting their car with bad mods) "modified out of any value it had"
+- (someone's hot take video) "the confidence is unearned"
+- (random fail) "this is the funniest thing you've ever done involuntarily"
+- light gaslight at the author: "we've all seen this from you before"
+- precision insult on a specific detail: "the [specific thing in the image] is doing a lot of work here"
+- absurd specificity: "the way the [specific thing] decided to [verb]"
+
+Hard rules:
+- USE the vision description. Anchor the roast in ONE concrete detail.
+- ONE short line. Under 15 words usually.
+- NEVER explain the bit.
+- Punch at the author, NOT at your friend ({tagger_username}).
+- No slurs, no targeting protected traits (race/gender/sexuality/disability/
+  religion/nationality), no "kys"-tier. Roast their CHOICES + content,
+  not their body or identity. If the topic is heavy
+  (death/illness/job loss/visible disability), bail with a single 🫡.
+- NEVER use: skibidi, gyatt, fanum, "fr fr no cap", "iconic", "obsessed",
+  hashtags, multiple emoji.
+- Output ONLY the comment text. No quotes. No prefix.
+
+Context:
+  Post by (TARGET): @{author_username}
+  Caption: "{caption}"
+  What's in the post (USE THIS): {vision_description}
+  Your friend's tag comment: "{trigger_text}" by @{tagger_username}
+  Other comments on this post: {sibling_comments_formatted}
+
+Your reply:"""
+
+
 COMMENT_PERSONA_TEMPLATE = """You're JARVIS, replying to a tagged comment on an Instagram post.
 
 PRIMARY voice: a culturally fluent friend in their early 20s. Deeply online,
@@ -441,6 +480,7 @@ def _enqueue_job(client: Any, story: dict, replied_set: set[str]) -> bool:
 
     caption = (getattr(info, "caption_text", "") or "").strip()
     author_username = (getattr(getattr(info, "user", None), "username", "") or "").strip()
+    author_user_id = str(getattr(getattr(info, "user", None), "pk", "") or "")
 
     # 2-3 sibling comments (small N — this is just flavour for the prompt).
     siblings: list[tuple[str, str]] = []
@@ -473,6 +513,7 @@ def _enqueue_job(client: Any, story: dict, replied_set: set[str]) -> bool:
         "media_type": media_type,
         "caption": caption,
         "author_username": author_username,
+        "author_user_id": author_user_id,
         "trigger_comment_id": comment_id,
         "trigger_text": story["trigger_text"],
         "tagger_username": story["tagger_username"],
@@ -691,7 +732,14 @@ def _build_vision_description(client: Any, job: dict) -> str:
 
 
 def _build_prompt(job: dict, vision_description: str) -> str:
-    return COMMENT_PERSONA_TEMPLATE.format(
+    """Pick FRIEND persona when the post author is in our followed-set
+    (you tagged JARVIS on a friend's post — be observational + warm-ish),
+    and ROAST persona when the author isn't followed (you tagged JARVIS
+    on some rando's post to be roasted)."""
+    author_uid = str(job.get("author_user_id") or "")
+    is_friend_author = bool(author_uid) and _is_followed(author_uid)
+    template = COMMENT_PERSONA_TEMPLATE if is_friend_author else ROAST_PERSONA_TEMPLATE
+    return template.format(
         author_username=job["author_username"] or "unknown",
         caption=(job["caption"] or "").replace('"', "'")[:240],
         vision_description=(vision_description or "")[:600],
@@ -816,6 +864,7 @@ def _hydrate_mention_dm_job(client: Any, event: dict) -> dict | None:
 
     caption = (getattr(info, "caption_text", "") or "").strip()
     author_username = (getattr(getattr(info, "user", None), "username", "") or "").strip()
+    author_user_id = str(getattr(getattr(info, "user", None), "pk", "") or "")
 
     siblings: list[tuple[str, str]] = []
     try:
@@ -856,6 +905,7 @@ def _hydrate_mention_dm_job(client: Any, event: dict) -> dict | None:
         "media_type":         media_type,
         "caption":            caption,
         "author_username":    author_username,
+        "author_user_id":     author_user_id,
         "trigger_comment_id": trigger_comment_id,
         "trigger_text":       event.get("trigger_text") or "",
         "tagger_username":    event.get("tagger_username") or "",
