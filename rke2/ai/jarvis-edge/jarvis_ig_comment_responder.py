@@ -182,27 +182,58 @@ def _is_question_request(trigger_text: str) -> bool:
     return False
 
 
-_OF_CAPTION_HINTS = (
+# Strong signals — any one of these is enough to fire the OF protocol.
+_OF_STRONG_HINTS = (
     "onlyfans", "only fans", "link in bio", "link n bio", "linknbio",
-    "spicy", "exclusive content", "subscribe", "premium content",
-    "vip access", "🍑", "💦", "🔞", "18+", "subscribers only",
-    "subs only", "fans only", "fanvue", "fansly", "uncensored",
-    "behind the paywall", "promo code", "free trial", "💋",
-    "0$ promo", "free month", "spice", "premium snap",
+    "exclusive content", "premium content", "vip access",
+    "subscribers only", "subs only", "fans only", "fanvue", "fansly",
+    "behind the paywall", "premium snap", "spicy content",
+    "uncensored content", "18+", "🔞",
+)
+
+# Soft signals — visual / vibe hints. These each individually wouldn't
+# fire (someone in a bikini at the beach isn't OF bait), but combined
+# with a feminine-subject signal we treat the post as in-context.
+_OF_VISUAL_HINTS = (
+    "lingerie", "thong", "topless", "nude", "negligee", "fishnet",
+    "see-through", "see through", "revealing outfit", "suggestive pose",
+    "provocative pose", "scantily clad", "barely covered",
+    "mirror selfie",  # OF cliche framing
+    "💦", "🍑", "💋",
+)
+
+# Feminine-subject signals. Combined with visual hints above.
+_OF_FEMININE_HINTS = (
+    "woman", "women", "she", "her ", "girl", "girls",
+    "lady", "feminine", "female subject",
 )
 
 
 def _is_of_bait(caption: str, vision_description: str, sibling_comments) -> bool:
-    """Detect OnlyFans / paywalled-spicy-content bait posts. Look in
-    caption, vision description, and sibling comments for usual
-    giveaways. Conservative bias — false positives drag a JARVIS bit
-    into the wrong post; false negatives just miss the bit."""
+    """Fire the OF/spicy protocol when EITHER:
+      (a) Strong signal in caption/vision/siblings (explicit OF / link
+          in bio / "exclusive content" / 18+ etc.), OR
+      (b) Soft visual-suggestive signal AND a feminine-subject signal
+          in the vision description (e.g. "woman in lingerie", "mirror
+          selfie in revealing outfit").
+
+    Hampton's framing: if it's spicy and there's a woman and he's
+    tagged JARVIS, the butler bit fires. The follower-auth gate
+    already ensures the tagger is someone we follow back (i.e.,
+    Hampton), so we don't check tagger identity here."""
     blob = " ".join([
         (caption or "").lower(),
         (vision_description or "").lower(),
         " ".join((u or "") + " " + (t or "") for u, t in (sibling_comments or [])).lower(),
     ])
-    return any(hint in blob for hint in _OF_CAPTION_HINTS)
+    # Strong-signal path
+    if any(hint in blob for hint in _OF_STRONG_HINTS):
+        return True
+    # Soft-signal-+-feminine-subject path (both must match)
+    vd = (vision_description or "").lower()
+    has_visual = any(hint in vd for hint in _OF_VISUAL_HINTS)
+    has_feminine = any(hint in vd for hint in _OF_FEMININE_HINTS)
+    return has_visual and has_feminine
 
 
 QA_PROMPT_TEMPLATE = """You're JARVIS, answering a friend's question about an Instagram post they tagged you in. Answer the question accurately. No persona dressing, no "Sir", no jokes, no commentary. Just the answer.
