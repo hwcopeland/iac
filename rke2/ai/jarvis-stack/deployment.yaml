@@ -1,0 +1,165 @@
+---
+# Combined STT + edge daemon on nixos-gpu — single pod, two containers.
+# Scaling and rollouts move both together; the edge container hits STT
+# over localhost (zero LB hop), Sonos still reaches the audio HTTP
+# server via hostPort 8088 on nixos-gpu's LAN interface.
+#
+# Why one pod, not two:
+#   - Both must run on nixos-gpu (whisper-stt = GPU, jarvis-edge = local Yeti).
+#   - Tied lifecycle: if STT goes down, the edge can't transcribe anyway.
+#   - Avoid the LB round-trip for the highest-traffic call path.
+#
+# Why not hostNetwork (vs hostPort): keeps whisper-stt reachable via its
+# existing LB Service for external callers (the Mac daemon) AND lets the
+# edge container expose just :8088 to the host for Sonos. Best of both.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: jarvis-stack
+  namespace: ai
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate                       # hostPort 8088 prevents 2-on-1-node
+  selector:
+    matchLabels:
+      app: jarvis-stack
+  template:
+    metadata:
+      labels:
+        app: jarvis-stack
+        # Keep the legacy label so the existing `whisper-stt` Service
+        # selector (app: whisper-stt) still picks this pod up.
+        app.kubernetes.io/component: jarvis-stack
+    spec:
+      nodeSelector:
+        gpu: rtx3070
+      tolerations:
+        - key: gpu
+          operator: Equal
+          value: "true"
+          effect: NoSchedule
+      imagePullSecrets:
+        - name: zot-pull-secret
+
+      containers:
+        # ── STT: GPU faster-whisper ────────────────────────────────
+        - name: whisper-stt
+          image: zot.hwcopeland.net/ai/whisper-stt:latest
+          imagePullPolicy: Always
+          ports:
+            - name: stt
+              containerPort: 8766
+          env:
+            - name: LD_LIBRARY_PATH
+              value: "/run/opengl-driver/lib:/usr/local/lib/python3.11/site-packages/nvidia/cublas/lib:/usr/local/lib/python3.11/site-packages/nvidia/cudnn/lib"
+            - name: HF_HOME
+              value: "/models"
+            - name: PORT
+              value: "8766"
+            - name: WHISPER_MODEL
+              value: "deepdml/faster-whisper-large-v3-turbo-ct2"
+            - name: WHISPER_DEVICE
+              value: "cuda"
+            - name: WHISPER_COMPUTE
+              value: "float16"
+          resources:
+            requests:
+              nvidia.com/gpu: "1"
+              memory: 3Gi
+            limits:
+              nvidia.com/gpu: "1"
+              memory: 6Gi
+          volumeMounts:
+            - name: models
+              mountPath: /models
+            - name: opengl-driver
+              mountPath: /run/opengl-driver
+              readOnly: true
+            - name: nix-store
+              mountPath: /nix/store
+              readOnly: true
+          readinessProbe:
+            exec:
+              command:
+                - python3
+                - -c
+                - "import urllib.request; r=urllib.request.urlopen('http://localhost:8766/health',timeout=5); import json; d=json.loads(r.read()); exit(0 if d.get('model_loaded') else 1)"
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 10
+            failureThreshold: 12
+          livenessProbe:
+            exec:
+              command:
+                - python3
+                - -c
+                - "import urllib.request; urllib.request.urlopen('http://localhost:8766/health',timeout=5)"
+            initialDelaySeconds: 90
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 3
+
+        # ── Edge daemon: wake → cluster STT → TTS → Sonos ─────────
+        - name: jarvis-edge
+          image: zot.hwcopeland.net/ai/jarvis-edge:latest
+          imagePullPolicy: Always
+          ports:
+            - name: audio-http
+              containerPort: 8088
+              hostPort: 8088              # Sonos fetches http://10.0.0.190:8088/turn-*.wav
+              protocol: TCP
+          securityContext:
+            # Run as the user that owns /run/user/1000 (PipeWire socket).
+            runAsUser: 1000
+            runAsGroup: 100
+            supplementalGroups: [29]      # 'audio' on Debian; harmless if absent
+          env:
+            # STT hits the sibling container over the shared pod localhost.
+            - name: STT_URL
+              value: "http://localhost:8766"
+            - name: TTS_URL
+              value: "http://10.44.0.8:8765"
+            - name: SONOS_IP
+              value: "10.0.0.187"          # Bedroom Play:1
+            - name: SONOS_VOLUME
+              value: "60"
+            - name: EDGE_HTTP_PORT
+              value: "8088"
+            # nixos-gpu's LAN IP — what Sonos fetches WAVs from.
+            - name: EDGE_HOST_IP
+              value: "10.0.0.190"
+            - name: XDG_RUNTIME_DIR
+              value: "/run/user/1000"
+            - name: PULSE_SERVER
+              value: "unix:/run/user/1000/pulse/native"
+            - name: MIC_NAME
+              value: "yeti"
+          resources:
+            requests:
+              cpu: "200m"
+              memory: "512Mi"
+            limits:
+              cpu: "1500m"
+              memory: "2Gi"
+          volumeMounts:
+            - name: user-runtime
+              mountPath: /run/user/1000
+            - name: nix-store
+              mountPath: /nix/store
+              readOnly: true
+
+      volumes:
+        - name: models
+          persistentVolumeClaim:
+            claimName: whisper-models
+        - name: opengl-driver
+          hostPath:
+            path: /run/opengl-driver
+        - name: nix-store
+          hostPath:
+            path: /nix/store
+        - name: user-runtime
+          hostPath:
+            path: /run/user/1000
+            type: Directory
