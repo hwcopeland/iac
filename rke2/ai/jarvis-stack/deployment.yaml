@@ -76,6 +76,39 @@ spec:
             - name: claude-home
               mountPath: /dst
 
+        # Seed /state/persona.json with the factory defaults on first
+        # boot. Idempotent — if a persona.json already exists we leave
+        # it alone so user-tuned values survive pod restarts. Runs as
+        # uid 1000 so the file is writable by jarvis-edge later.
+        - name: persona-state-init
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              if [ ! -f /state/persona.json ]; then
+                cat > /state/persona.json <<'EOF'
+              {
+                "humor": 0.5,
+                "formality": 0.7,
+                "terseness": 0.9,
+                "sass": 0.3,
+                "tts_exaggeration": 0.7,
+                "tts_cfg": 0.4,
+                "sonos_volume": 30
+              }
+              EOF
+                echo "persona.json seeded with defaults"
+              else
+                echo "persona.json already exists — preserving user-tuned values"
+              fi
+          securityContext:
+            runAsUser: 1000
+            runAsGroup: 100
+          volumeMounts:
+            - name: jarvis-state
+              mountPath: /state
+
       containers:
         # ── STT: GPU faster-whisper ────────────────────────────────
         - name: whisper-stt
@@ -256,6 +289,10 @@ spec:
             # Claude subscription creds — writable so OAuth refresh works.
             - name: claude-home
               mountPath: /tmp/.claude
+            # Persistent persona state — humor/formality/terseness/sass/
+            # TTS/Sonos knobs, live-tunable by voice via the persona MCP.
+            - name: jarvis-state
+              mountPath: /state
 
       volumes:
         - name: models
@@ -298,3 +335,8 @@ spec:
         # re-seeds from the Secret.
         - name: claude-home
           emptyDir: {}
+        # Persistent state on nixos-gpu hostPath (see pvc.yaml). Survives
+        # pod restarts so persona tuning ("less humor", "volume 45") stays.
+        - name: jarvis-state
+          persistentVolumeClaim:
+            claimName: jarvis-state

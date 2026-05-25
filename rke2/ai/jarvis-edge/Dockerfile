@@ -10,6 +10,7 @@ COPY jarvis_personal.py jarvis_personal_mcp.py \
      jarvis_delegate_mcp.py \
      jarvis_kube_mcp.py \
      jarvis_sonos_mcp.py \
+     jarvis_persona_mcp.py \
      jarvis_tv.py jarvis_tv_mcp.py \
      /app/
 
