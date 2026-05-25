@@ -596,27 +596,56 @@ def tts_synthesize(text: str) -> bytes | None:
 
 
 # ── Embedded HTTP server (Sonos pulls audio from us) ─────────────────────────
+# Streaming-TTS aware: serves multiple WAV chunks per turn (one per sentence).
+# Paths like /turn-5-1.wav, /turn-5-2.wav ... are stashed individually so
+# Sonos can fetch them in queue order while later chunks are still being
+# synthesized.
 class _AudioStash:
-    """Holds the current WAV blob the HTTP server serves."""
+    """Multi-chunk WAV store keyed by URL path. Thread-safe."""
     def __init__(self) -> None:
-        self.wav: bytes = b""
-        self.path = "/turn.wav"  # rotated each turn for cache-bust
+        self.wavs: dict[str, bytes] = {}
+        self.lock = threading.Lock()
+
+    def put(self, path: str, data: bytes) -> None:
+        with self.lock:
+            self.wavs[path] = data
+
+    def get(self, path: str) -> bytes | None:
+        with self.lock:
+            return self.wavs.get(path)
+
+    def clear_older_than(self, current_turn_n: int, keep_last: int = 2) -> None:
+        """Bound memory: drop chunks belonging to turns older than the
+        last `keep_last`. Paths like /turn-<N>-<seg>.wav."""
+        with self.lock:
+            drop = []
+            for k in self.wavs:
+                try:
+                    if k.startswith("/turn-"):
+                        n = int(k.split("-")[1])
+                        if n < current_turn_n - keep_last:
+                            drop.append(k)
+                except (ValueError, IndexError):
+                    pass
+            for k in drop:
+                del self.wavs[k]
 
 
 class _AudioHandler(BaseHTTPRequestHandler):
     stash: _AudioStash = None  # type: ignore[assignment]
 
     def do_GET(self):  # noqa: N802
-        if self.stash is None or not self.stash.wav:
+        wav = self.stash.get(self.path) if self.stash else None
+        if not wav:
             self.send_response(404)
             self.end_headers()
             return
         self.send_response(200)
         self.send_header("Content-Type", "audio/wav")
-        self.send_header("Content-Length", str(len(self.stash.wav)))
+        self.send_header("Content-Length", str(len(wav)))
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
-        self.wfile.write(self.stash.wav)
+        self.wfile.write(wav)
 
     def log_message(self, *args, **kwargs):  # silence default access log
         pass
@@ -685,41 +714,118 @@ def notify(title: str, body: str = "", urgency: str = "low",
         pass
 
 
-def _play_on_sonos(sonos, host_ip: str, http_port: int, turn: int) -> None:
-    """Tell Sonos to fetch the current /turn-{N}.wav and play it, wait for done.
+import re as _re_split
 
-    ``http_port`` is the port Sonos hits in the URL — this is
-    EDGE_ADVERTISED_PORT (the NodePort) when running in k8s, not the
-    container's listen port."""
-    url = f"http://{host_ip}:{http_port}/turn-{turn}.wav"
+
+def _split_sentences(text: str, max_len: int = 90) -> list[str]:
+    """Split brain output into roughly-sentence chunks for streaming
+    synthesis. Merges fragments < max_len into the previous chunk so
+    we don't synth tiny "Sir." standalone.
+
+    Fallback: if no sentence boundaries detected, returns [text] —
+    streaming still works with a single chunk (same latency as before)."""
+    if not text or not text.strip():
+        return []
+    parts = _re_split.split(r"(?<=[.!?])\s+", text.strip())
+    out: list[str] = []
+    for p in parts:
+        p = p.strip()
+        if not p:
+            continue
+        if out and len(out[-1]) + 1 + len(p) < max_len:
+            out[-1] += " " + p
+        else:
+            out.append(p)
+    return out or [text.strip()]
+
+
+def _stream_on_sonos(sonos, sentences: list[str], host_ip: str,
+                    http_port: int, turn_n: int, stash: _AudioStash) -> None:
+    """Streaming TTS over Sonos queue. Synth + play sentence 1, then
+    while it plays, synth + enqueue sentences 2..N. Sonos walks the
+    queue. End-to-end wall clock = synth(s1) + play(all), not synth(all)
+    + play(all) — cuts perceived lag for multi-sentence replies."""
+    if sonos is None:
+        # No Sonos configured — save chunks to disk for inspection.
+        for i, sent in enumerate(sentences, 1):
+            wav = tts_synthesize(sent)
+            if wav:
+                with open(f"/tmp/jarvis_edge_turn_{turn_n}_{i}.wav", "wb") as f:
+                    f.write(wav)
+        return
+
     t0 = time.time()
     try:
-        # Force-set every turn — Sonos's reported `.volume` can be stale
-        # when the speaker is in a group / when another app is in control,
-        # so skipping on "near-match" was leaving us at the previous level.
-        # Also un-join from any group so the volume targets this device
-        # directly (group volume can override single-device set).
-        try:
-            sonos.unjoin()
-        except Exception:
-            pass
-        # Live volume (from persona PVC) overrides the SONOS_VOLUME env-var
-        # default; users can "Jarvis, set the volume to 45" without redeploy.
+        sonos.unjoin()
+    except Exception:
+        pass
+    try:
         vol = int(_load_persona().get("sonos_volume", SONOS_VOLUME))
         sonos.volume = vol
         print(f"  sonos vol set → {vol}")
     except Exception as exc:
         print(f"  sonos vol set failed: {exc}")
-    sonos.play_uri(url, title="JARVIS")
-    # Wait for transport to leave PLAYING state.
+    # Clear stale queue before we start enqueueing this turn.
+    try:
+        sonos.clear_queue()
+    except Exception as exc:
+        print(f"  queue clear failed (continuing): {exc}")
+
+    played_first = False
+    for i, sent in enumerate(sentences, 1):
+        t_synth = time.time()
+        wav = tts_synthesize(sent)
+        if not wav:
+            print(f"  ! synth failed for seg {i}: {sent[:50]!r}")
+            continue
+        path = f"/turn-{turn_n}-{i}.wav"
+        stash.put(path, wav)
+        url = f"http://{host_ip}:{http_port}{path}"
+        synth_ms = int((time.time() - t_synth) * 1000)
+        print(f"  tts seg {i}/{len(sentences)}: {len(wav)}b in {synth_ms}ms")
+        try:
+            sonos.add_uri_to_queue(url)
+        except Exception as exc:
+            print(f"  ! queue add failed: {exc}")
+            continue
+        if not played_first:
+            try:
+                sonos.play_from_queue(0)
+                played_first = True
+                print(f"  sonos: first audio at {int((time.time()-t0)*1000)}ms")
+            except Exception as exc:
+                print(f"  ! play_from_queue failed: {exc}")
+
+    if not played_first:
+        return
+
+    # Wait for queue to drain (Sonos walks through enqueued items).
     while True:
         time.sleep(0.4)
-        info = sonos.get_current_transport_info()
-        state = info.get("current_transport_state", "")
+        try:
+            state = sonos.get_current_transport_info().get(
+                "current_transport_state", "")
+        except Exception:
+            break
         if state in ("STOPPED", "PAUSED_PLAYBACK"):
             break
-        if time.time() - t0 > 60:
+        if time.time() - t0 > 90:
+            print("  ! sonos stream timed out at 90s")
             break
+
+    print(f"  sonos: stream done in {int((time.time()-t0)*1000)}ms")
+    # Bound memory: drop old turns' WAV chunks.
+    stash.clear_older_than(turn_n)
+
+
+# Kept for backward-compat callers, but main loop uses _stream_on_sonos now.
+def _play_on_sonos(sonos, host_ip: str, http_port: int, turn: int) -> None:
+    """Legacy single-shot playback (one /turn-N.wav). Now wraps streaming
+    with a single 'sentence' for callers that haven't migrated."""
+    _stream_on_sonos(sonos,
+                     [f"_turn_{turn}_singleshot"],  # placeholder
+                     host_ip, http_port, turn,
+                     _AudioHandler.stash)
     print(f"  sonos: played in {int((time.time()-t0)*1000)}ms")
 
 
@@ -889,29 +995,23 @@ def main() -> None:
                     print("  → empty reply, skipping TTS")
                     continue
 
-                # ── TTS ─────────────────────────────────────────────
-                wav = tts_synthesize(reply)
-                if not wav:
-                    continue
-
-                # ── Stash + tell Sonos to fetch ─────────────────────
+                # ── Streaming TTS + Sonos queue playback ─────────────
+                # Split the brain reply into sentence-ish chunks. Synth
+                # sentence 1, hand to Sonos, then synth+enqueue 2..N
+                # while sentence 1 plays. First audio at ~1.5s instead
+                # of ~6-8s for multi-sentence replies.
                 turn_n += 1
-                stash.wav = wav
-                # Re-route handler on the rotating path so Sonos cache-busts.
-                _AudioHandler.stash.path = f"/turn-{turn_n}.wav"
-                if sonos is not None:
-                    try:
-                        _play_on_sonos(sonos, host_ip,
-                                       EDGE_ADVERTISED_PORT, turn_n)
-                        engaged_until = time.time() + ADDRESSEE_WINDOW
-                    except Exception as exc:
-                        print(f"  sonos error: {exc}")
-                else:
-                    # Sonos not configured — write to disk so the user can audit
-                    out = f"/tmp/jarvis_edge_turn_{turn_n}.wav"
-                    with open(out, "wb") as f:
-                        f.write(wav)
-                    print(f"  → saved to {out}")
+                sentences = _split_sentences(reply)
+                if not sentences:
+                    print("  → no synthesizable text, skipping TTS")
+                    continue
+                print(f"  streaming {len(sentences)} segment(s)")
+                try:
+                    _stream_on_sonos(sonos, sentences, host_ip,
+                                     EDGE_ADVERTISED_PORT, turn_n, stash)
+                    engaged_until = time.time() + ADDRESSEE_WINDOW
+                except Exception as exc:
+                    print(f"  sonos stream error: {exc}")
         except KeyboardInterrupt:
             print("\nbye")
 
