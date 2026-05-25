@@ -255,6 +255,18 @@ def _format_event(thread: Any, msg: Any) -> dict:
     except Exception:  # noqa: BLE001
         pass
     text = getattr(msg, "text", "") or ""
+    item_type = getattr(msg, "item_type", "") or ""
+    # Surface which side-channel fields are populated so we can decide
+    # how to extend non-text handling. Keep raw payload off the queue —
+    # we only ship field names, not pydantic models.
+    populated_extras = [
+        name for name in (
+            "media_share", "clip", "reel_share", "story_share",
+            "xma_share", "voice_media", "link", "animated_media",
+            "visual_media", "raven_media",
+        )
+        if getattr(msg, name, None) is not None
+    ]
     timestamp = getattr(msg, "timestamp", None)
     if timestamp is not None and hasattr(timestamp, "isoformat"):
         ts_iso = timestamp.isoformat()
@@ -270,6 +282,8 @@ def _format_event(thread: Any, msg: Any) -> dict:
             "username": sender_username or "",
         },
         "text": text,
+        "item_type": item_type,
+        "populated_extras": populated_extras,
         "timestamp": ts_iso,
     }
 
@@ -287,6 +301,102 @@ def _message_ts_us(msg: Any) -> int:
         return int(ts.timestamp() * 1_000_000)
     except Exception:  # noqa: BLE001
         return 0
+
+
+def _msg_as_dict(msg: Any) -> dict:
+    """Convert an instagrapi DirectMessage pydantic model to a plain dict
+    so we can poke at fields the model doesn't surface via attributes
+    (e.g. nested generic_xma payloads with attribution metadata). Tolerant
+    of both pydantic v1 (.dict()) and v2 (.model_dump()) plus the
+    fallback where instagrapi already handed us a dict."""
+    if isinstance(msg, dict):
+        return msg
+    for attr in ("model_dump", "dict"):
+        dumper = getattr(msg, attr, None)
+        if callable(dumper):
+            try:
+                out = dumper()
+                if isinstance(out, dict):
+                    return out
+            except Exception:  # noqa: BLE001
+                continue
+    return {}
+
+
+def _try_route_tagged_comment(msg: Any, thread: Any) -> bool:
+    """If `msg` is a generic_xma DM item carrying a tagged-comment
+    notification (IG delivers @mentions on posts as a special DM item
+    with send_attribution=='tagged_comment'), parse the deep-link in
+    cta_buttons[0].action_url to recover the media_pk + comment_id, then
+    hand the event to the comment responder's queue. Returns True if we
+    routed it (caller should `continue` and SKIP the normal DM enqueue),
+    False otherwise.
+
+    NOTE: this runs BEFORE the normal DM enqueue path on purpose — we
+    never want a tagged_comment item to ALSO land in the DM queue. If
+    routing here fails (queue full, parse error, comment responder
+    module not importable), we still return True so we drop the item
+    silently rather than confusing the DM consumer with a contentless
+    generic_xma payload."""
+    item = _msg_as_dict(msg)
+    if item.get("item_type") != "generic_xma":
+        return False
+    if item.get("send_attribution") != "tagged_comment":
+        return False
+    xma_list = item.get("generic_xma") or []
+    if not xma_list:
+        # Still claim it — a tagged_comment with no payload is unusable
+        # but shouldn't fall through to the DM queue either.
+        print("ig polling: tagged_comment with empty generic_xma; dropping")
+        return True
+    xma = xma_list[0] if isinstance(xma_list[0], dict) else {}
+    cta_buttons = xma.get("cta_buttons") or []
+    cta = cta_buttons[0] if cta_buttons and isinstance(cta_buttons[0], dict) else {}
+    action = cta.get("action_url") or ""
+    if not action.startswith("instagram://comments?"):
+        print(f"ig polling: tagged_comment with unexpected action_url {action!r}; dropping")
+        return True
+    import urllib.parse as _up
+    try:
+        qs = _up.parse_qs(_up.urlparse(action).query)
+    except Exception as exc:  # noqa: BLE001
+        print(f"ig polling: tagged_comment action_url parse failed ({exc!r}); dropping")
+        return True
+    media_id = (qs.get("media_id") or [None])[0]
+    comment_id = (qs.get("comment_id") or [None])[0]
+    if not media_id or not comment_id:
+        print(f"ig polling: tagged_comment missing media_id/comment_id in {action!r}; dropping")
+        return True
+    # IG action_url media_id is "<pk>_<userid>" — instagrapi's
+    # media_info(pk) expects the leading int before the underscore.
+    media_pk = str(media_id).split("_", 1)[0]
+    comment_event = {
+        "source":             "mention_dm",
+        "media_pk":           media_pk,
+        "media_id":           media_id,
+        "trigger_comment_id": str(comment_id),
+        "trigger_text":       xma.get("subtitle_text") or "",
+        "tagger_username":    xma.get("title_text") or "",
+        "tagger_id":          str(item.get("user_id") or ""),
+        "preview_url":        xma.get("preview_url") or "",
+        "thread_id":          getattr(thread, "id", None) or item.get("thread_id"),
+        "dm_item_id":         item.get("item_id"),
+        "timestamp":          item.get("timestamp"),
+    }
+    try:
+        import jarvis_ig_comment_responder as _resp  # type: ignore[import]
+        _resp._ig_comment_queue.put_nowait(comment_event)
+        print(
+            f"ig polling: enqueued TAGGED_COMMENT from "
+            f"@{comment_event['tagger_username']} on media "
+            f"{comment_event['media_pk']}: {comment_event['trigger_text'][:80]!r}"
+        )
+    except Exception as exc:  # noqa: BLE001
+        # Comment responder not loaded / queue full / etc. Log loudly
+        # so Hampton sees it, but still return True — we don't want a
+        # half-routed tagged_comment to also pollute the DM queue.
+        print(f"ig polling: failed to enqueue tagged_comment ({exc!r}); dropping")
+    return True
 
 
 def _poll_once(client: Any, handles: dict, hwm_us: int) -> int:
@@ -318,6 +428,18 @@ def _poll_once(client: Any, handles: dict, hwm_us: int) -> int:
                     msg_span.set_attribute("ig.thread_id", str(getattr(thread, "id", "")))
                     msg_span.set_attribute("ig.message_id", str(getattr(msg, "id", "")))
                     msg_span.set_attribute("ig.message_ts_us", ts_us)
+                    # Intercept generic_xma 'tagged_comment' DM items
+                    # BEFORE we hit the normal DM enqueue path. These are
+                    # @mentions on posts that IG delivers via the DM
+                    # inbox; they belong on the comment responder's
+                    # queue, not the DM queue. Routed items still
+                    # advance the hwm so we don't re-process on next
+                    # poll cycle / pod restart.
+                    if _try_route_tagged_comment(msg, thread):
+                        msg_span.set_attribute("ig.tagged_comment_routed", True)
+                        if ts_us > new_hwm:
+                            new_hwm = ts_us
+                        continue
                     event = _format_event(thread, msg)
                     try:
                         event_queue.put_nowait(event)
@@ -330,7 +452,10 @@ def _poll_once(client: Any, handles: dict, hwm_us: int) -> int:
                         try:
                             sender = (event.get("from") or {}).get("username") or "unknown"
                             preview = (event.get("text") or "")[:60]
-                            print(f"ig polling: enqueued msg from {sender}: {preview!r}")
+                            it = event.get("item_type") or "?"
+                            extras = event.get("populated_extras") or []
+                            extras_s = ",".join(extras) if extras else "-"
+                            print(f"ig polling: enqueued msg from {sender} item_type={it} extras=[{extras_s}]: {preview!r}")
                         except Exception:  # noqa: BLE001
                             pass
                         if ts_us > new_hwm:
