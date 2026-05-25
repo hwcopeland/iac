@@ -1,0 +1,60 @@
+---
+# Read-only k8s access for the JARVIS brain.
+#
+# Binds to k8s's built-in `view` ClusterRole, which by design EXCLUDES
+# secrets. Brain can describe pods, read logs, list namespaces/nodes/
+# services/configmaps/events/deployments/etc — i.e. everything you'd
+# need to answer "is the cluster healthy" without being able to read
+# credentials or mutate state.
+#
+# The pod runs with serviceAccountName: jarvis-readonly. Its mounted
+# token (auto-projected at /var/run/secrets/kubernetes.io/serviceaccount/)
+# is what kubectl picks up by default inside cluster pods.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: jarvis-readonly
+  namespace: ai
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: jarvis-readonly-view
+subjects:
+  - kind: ServiceAccount
+    name: jarvis-readonly
+    namespace: ai
+roleRef:
+  kind: ClusterRole
+  name: view              # built-in: pod/service/etc reads, NO secrets
+  apiGroup: rbac.authorization.k8s.io
+
+---
+# `view` doesn't include `nodes` (it's a non-namespaced read often broken
+# out separately). Add it via an extra ClusterRole so kube_nodes works.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: jarvis-node-reader
+rules:
+  - apiGroups: [""]
+    resources: ["nodes", "nodes/proxy", "nodes/status"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["metrics.k8s.io"]
+    resources: ["pods", "nodes"]   # for `kubectl top`
+    verbs: ["get", "list"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: jarvis-readonly-nodes
+subjects:
+  - kind: ServiceAccount
+    name: jarvis-readonly
+    namespace: ai
+roleRef:
+  kind: ClusterRole
+  name: jarvis-node-reader
+  apiGroup: rbac.authorization.k8s.io

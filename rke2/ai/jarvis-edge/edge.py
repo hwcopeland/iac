@@ -141,25 +141,56 @@ Speech rules — output WILL be read aloud through a Sonos speaker:
 - No filler like "let me check…" — just answer.
 - Decline to read URLs out loud.
 
-Tool use:
-- When the user asks about the TV (on/off, volume, mute, switch input,
-  what's playing, launch an app, play a Plex show), use the
-  mcp__jarvis_tv__* tools. Never invent that you did something — only
-  report what the tool actually returned.
+Tools:
+- For daily summaries / "good morning" / "what's the briefing", call
+  mcp__jarvis_personal__briefing (instant cached version) and SPEAK
+  THE RESULT VERBATIM — it's already formatted for voice.
+- For weather, use mcp__jarvis_personal__weather (configured to
+  Murfreesboro, TN by default).
+- For "what happened overnight" / "any news", use
+  mcp__jarvis_personal__news_overnight.
+- For "what am I listening to" / Spotify questions, use the
+  mcp__jarvis_spotify__* tools.
+- For "is the cluster healthy" / "how many devices" / "what's broken",
+  use the mcp__jarvis_kube__* tools (kube_get_pods, kube_top_nodes,
+  kube_events, etc). You have READ access only — no secrets, no writes.
+- For longer / multi-step tasks use mcp__jarvis_delegate__delegate to
+  spawn a sub-agent claude session.
+- WebSearch / WebFetch for live external facts.
+- You have NO TV / Sonos / volume tools right now (TV deprecated until
+  Apple TV; no Sonos MCP yet). If asked, say "I can't control that from
+  here yet, sir" — do NOT pretend, do NOT invent tool calls.
+- macOS Calendar + Reminders are NOT reachable from this pod (no
+  AppleScript). calendar_today / reminders_* will return 'unauthorized'.
+  Don't apologise about it — just say "no calendar wired up here yet."
 
-You are running on a cluster pod with a microphone in the kitchen / a
-Sonos in the bedroom. The current owner is Hampton."""
+You are running on a cluster pod (nixos-gpu) with a Yeti USB mic and a
+Sonos Play:1 in the bedroom. The current owner is Hampton."""
 
+# MCP servers the brain can invoke. TV is DEPRECATED until Apple TV
+# arrives. Spotify needs spotify_tokens.json mounted via Secret; if
+# missing it returns 'unauthorized' but doesn't crash the brain.
 _MCP_CONFIG_PATH = "/tmp/jarvis_mcp.json"
 
 
 def _write_mcp_config() -> None:
-    """Materialize the MCP server config for the brain to consume."""
     cfg = {
         "mcpServers": {
-            "jarvis_tv": {
+            "jarvis_personal": {
                 "command": "python3",
-                "args": ["/app/jarvis_tv_mcp.py"],
+                "args": ["/app/jarvis_personal_mcp.py"],
+            },
+            "jarvis_spotify": {
+                "command": "python3",
+                "args": ["/app/jarvis_spotify_mcp.py"],
+            },
+            "jarvis_kube": {
+                "command": "python3",
+                "args": ["/app/jarvis_kube_mcp.py"],
+            },
+            "jarvis_delegate": {
+                "command": "python3",
+                "args": ["/app/jarvis_delegate_mcp.py"],
             },
         }
     }
@@ -168,27 +199,38 @@ def _write_mcp_config() -> None:
 
 
 _RO_ALLOWED_TOOLS = " ".join([
-    "mcp__jarvis_tv__tv_status",
-    "mcp__jarvis_tv__tv_power",
-    "mcp__jarvis_tv__tv_volume_set",
-    "mcp__jarvis_tv__tv_volume_step",
-    "mcp__jarvis_tv__tv_mute",
-    "mcp__jarvis_tv__tv_inputs",
-    "mcp__jarvis_tv__tv_input_set",
-    "mcp__jarvis_tv__tv_launch_app",
-    "mcp__jarvis_tv__tv_youtube_play",
-    "mcp__jarvis_tv__tv_spotify_play",
-    "mcp__jarvis_tv__tv_plex_play",
-    "mcp__jarvis_tv__tv_plex_search",
-    "mcp__jarvis_tv__tv_plex_libraries",
-    "mcp__jarvis_tv__tv_cast_url",
-    "mcp__jarvis_tv__tv_cast_stop",
+    # Personal: briefing / weather / news / greeting (Calendar+Reminders
+    # stubbed to "unauthorized" until CalDAV bridge).
+    "mcp__jarvis_personal__briefing",
+    "mcp__jarvis_personal__weather",
+    "mcp__jarvis_personal__news_overnight",
+    "mcp__jarvis_personal__greeting",
+    "mcp__jarvis_personal__calendar_today",
+    "mcp__jarvis_personal__reminders_open",
+    "mcp__jarvis_personal__reminders_due_today",
+    # Spotify
+    "mcp__jarvis_spotify__current_track",
+    "mcp__jarvis_spotify__recently_played",
+    "mcp__jarvis_spotify__top_artists",
+    "mcp__jarvis_spotify__top_tracks",
+    # Kube read-only (ServiceAccount jarvis-readonly → view+nodes)
+    "mcp__jarvis_kube__kube_get_pods",
+    "mcp__jarvis_kube__kube_logs",
+    "mcp__jarvis_kube__kube_describe",
+    "mcp__jarvis_kube__kube_nodes",
+    "mcp__jarvis_kube__kube_events",
+    "mcp__jarvis_kube__kube_top_pods",
+    "mcp__jarvis_kube__kube_top_nodes",
+    "mcp__jarvis_kube__kube_get",
+    # Delegate (spawns sub-agent claude sessions for longer tasks)
+    "mcp__jarvis_delegate__delegate",
+    # Web
     "WebFetch",
     "WebSearch",
 ])
 
 
-def _claude_brain(text: str, timeout: float = 30.0) -> str:
+def _claude_brain(text: str, timeout: float = 60.0) -> str:
     """Subprocess `claude` with the persona + MCP config."""
     import subprocess as _sp
     if not os.environ.get("ANTHROPIC_API_KEY"):
@@ -214,9 +256,39 @@ def _claude_brain(text: str, timeout: float = 30.0) -> str:
         return f"Brain error, sir — {exc}"
 
 
+_GREETING_PHRASES = (
+    "good morning", "good afternoon", "good evening", "good night",
+    "i'm home", "im home", "i am home", "wake up", "morning jarvis",
+    "briefing", "give me the briefing", "the briefing", "morning briefing",
+)
+
+
+def _maybe_greeting_shortcircuit(text: str) -> str | None:
+    """If the user says a greeting / briefing trigger, call
+    jarvis_personal.compose_briefing() (or greeting()) directly. Skips a
+    ~10s claude round-trip. Returns None if not a greeting."""
+    low = text.lower().strip().rstrip("!.,?")
+    if not any(p in low for p in _GREETING_PHRASES):
+        return None
+    try:
+        sys.path.insert(0, "/app")
+        import jarvis_personal as _jp  # noqa: WPS433
+    except Exception:
+        return None
+    try:
+        if "brief" in low or "morning" in low or "wake" in low or "home" in low:
+            return _jp.compose_briefing()
+        return _jp.greeting()
+    except Exception as exc:  # noqa: BLE001
+        return f"Briefing unavailable, sir — {exc}"
+
+
 def brain_respond(text: str) -> str:
     if BRAIN_MODE == "echo":
         return f"Sir, I heard: {text}"
+    shortcut = _maybe_greeting_shortcircuit(text)
+    if shortcut:
+        return shortcut
     return _claude_brain(text)
 
 
