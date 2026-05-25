@@ -51,6 +51,46 @@ from typing import Any
 
 
 # ── Cache layout ────────────────────────────────────────────────────────────
+_REFUSAL_PREFIXES = (
+    "i can't",
+    "i cannot",
+    "i won't",
+    "i will not",
+    "i'm sorry",
+    "i am sorry",
+    "i don't feel comfortable",
+    "i do not feel comfortable",
+    "sorry, i can't",
+    "sorry, i cannot",
+    "i'm not able to",
+    "i am not able to",
+    "i'm unable to",
+)
+_REFUSAL_SUBSTRINGS = (
+    "i can't help",
+    "i cannot help",
+    "i won't transcribe",
+    "i won't engage",
+    "i'm not going to",
+    "against my guidelines",
+    "against my values",
+    "won't be able to help",
+    "unable to assist",
+    "potential misrepresentation",
+)
+
+
+def _looks_like_refusal(text: str) -> bool:
+    """True if `text` looks like a Claude refusal rather than the
+    requested content. Used to keep refusal text out of the cache."""
+    s = (text or "").strip().lower()
+    if not s:
+        return False
+    if s.startswith(_REFUSAL_PREFIXES):
+        return True
+    return any(needle in s for needle in _REFUSAL_SUBSTRINGS)
+
+
 def _cache_dir() -> str:
     return os.environ.get("REEL_CACHE_DIR", "/state/ig_reel_descriptions")
 
@@ -475,6 +515,14 @@ def analyze(media_pk: str) -> str:
     except Exception as exc:  # noqa: BLE001
         print(f"reel context: vision call crashed for {media_pk}: {exc!r}")
         traceback.print_exc()
+        description = ""
+
+    # Detect Claude refusals. If the vision call returned a refusal
+    # explanation instead of an actual description, fall back to the
+    # caption-anchored stub — caching the refusal text as if it were
+    # a description poisons every downstream prompt that reads it.
+    if _looks_like_refusal(description):
+        print(f"reel context: vision returned a refusal for {media_pk}; falling back to caption stub")
         description = ""
 
     if not description.strip():

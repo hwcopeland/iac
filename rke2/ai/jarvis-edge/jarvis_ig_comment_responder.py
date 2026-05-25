@@ -144,6 +144,17 @@ HARD RULES:
 - NEVER use: skibidi, gyatt, fanum, "fr fr no cap", "iconic", "obsessed",
   hashtags, more than 0 emoji (unless the answer literally IS just 🫡).
 - Output ONLY the comment text. No quotes. No prefix. No "Reply:".
+- IF AND ONLY IF you cannot in good conscience generate ANY reply
+  (genuine memorial / RIP / hospital-bed / real disability / direct
+  reference to a real-named human's death), output literally one
+  token: ABSTAIN (all caps, no punctuation, no explanation). Do NOT
+  output a meta-refusal explaining why. The system will catch
+  ABSTAIN cleanly and post nothing. Edgy / dark / slapstick /
+  political / "bait and switch" content with caption mismatches is
+  NOT abstain territory — that's prime IG comment fodder. Pattern-
+  matching on tragedy-adjacent vocabulary in sibling comments (where
+  other users might mention historical events) is also NOT abstain
+  territory — react to THE POST, not to the sibling thread.
 
 Context:
   Post by: @{author_username}
@@ -890,15 +901,33 @@ def _emoji_count(s: str) -> int:
     return n
 
 
+_REFUSAL_PREFIXES = (
+    "i can't", "i cannot", "i won't", "i will not", "i'm sorry",
+    "i am sorry", "sorry, i can't", "sorry, i cannot", "i'm not able",
+    "i am not able", "i'm unable", "i don't feel comfortable",
+    "i do not feel comfortable", "i'm not going to",
+)
+
+
 def _quality_check(reply: str) -> tuple[bool, str]:
     """Return (ok, reason). ok=True means the reply passes Hampton's
     rules and we can post. ok=False means retry / skip."""
     if not reply or not reply.strip():
         return False, "empty"
     r = reply.strip()
+    low = r.lower()
+    # Detect Claude refusals BEFORE length check so we don't waste a
+    # retry on the same too-long refusal — refusal text never lands
+    # as a real comment, no matter the length.
+    if low.startswith(_REFUSAL_PREFIXES):
+        return False, "refusal"
+    # Also catch the explicit "ABSTAIN" signal we now teach the brain
+    # to emit when it doesn't want to comment. Surface it as a clean
+    # abstain reason rather than retrying.
+    if r == "ABSTAIN":
+        return False, "abstain"
     if len(r) > 100:
         return False, "too_long"
-    low = r.lower()
     for word in _BANNED_WORDS:
         if word in low:
             return False, f"banned:{word}"
