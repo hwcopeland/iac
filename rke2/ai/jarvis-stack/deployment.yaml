@@ -334,6 +334,14 @@ spec:
                 secretKeyRef:
                   name: jarvis-ig-credentials
                   key: IG_PASSWORD
+
+            # ── IG DM consumer (drains _ig_event_queue, replies to DMs) ─
+            # Borrows the poller's logged-in Client to avoid a second
+            # login from this IP (would trip a challenge). Authenticates
+            # senders against the followed-back set — silent drop for
+            # unauthenticated DMs so we don't leak that we're a bot.
+            - name: IG_CONSUMER_ENABLED
+              value: "1"
           resources:
             requests:
               cpu: "200m"
