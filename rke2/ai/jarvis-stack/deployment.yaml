@@ -342,6 +342,17 @@ spec:
             # unauthenticated DMs so we don't leak that we're a bot.
             - name: IG_CONSUMER_ENABLED
               value: "1"
+
+            # ── IG comment-tag responder ─────────────────────────────
+            # When someone (we follow back) @-mentions @hmlbjarvis in a
+            # comment on any post, this poller picks it up off the
+            # news/inbox activity feed every 60s and the consumer drops
+            # a brainrot one-liner in that comment thread. For videos
+            # it runs a download → ffmpeg → Whisper → Claude-vision
+            # pipeline; for photos it does a single image vision call.
+            # Same auth gate as the DM consumer.
+            - name: IG_COMMENT_ENABLED
+              value: "1"
           resources:
             requests:
               cpu: "200m"

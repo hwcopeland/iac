@@ -701,6 +701,162 @@ def _claude_brain(text: str, timeout: float = 60.0) -> str:
         return f"Brain error, sir — {exc}"
 
 
+def _claude_brain_raw(text: str, system_prompt: str | None = None,
+                       timeout: float = 60.0) -> str:
+    """claude CLI call with NO butler-persona injection, NO MCP tools,
+    NO greeting shortcut. The caller's text IS the prompt — useful when
+    the prompt already carries its own persona (e.g. the IG comment
+    responder's gaslight persona).
+
+    If `system_prompt` is provided, it's passed via --append-system-prompt;
+    otherwise no system prompt is set (Claude's default behaviour).
+
+    Same subscription/api auth fallback as _claude_brain. Returns "" on
+    any failure — callers handle the empty case (post nothing / skip)."""
+    import subprocess as _sp
+    has_creds = os.path.exists(os.path.expanduser("~/.claude/.credentials.json"))
+    has_api_key = bool(os.environ.get("ANTHROPIC_API_KEY"))
+    if not has_creds and not has_api_key:
+        print("brain raw: no credentials configured")
+        return ""
+    argv = ["claude", "-p", text,
+            "--model", "claude-haiku-4-5-20251001",
+            "--max-turns", "1",
+            "--output-format", "json"]
+    if system_prompt:
+        argv += ["--append-system-prompt", system_prompt]
+    try:
+        proc = _sp.run(argv, capture_output=True, text=True, timeout=timeout)
+        if proc.returncode != 0:
+            print(f"brain raw: rc={proc.returncode}  stderr: {proc.stderr[:400]}")
+            return ""
+        out = (proc.stdout or "").strip()
+        if not out:
+            print(f"brain raw: empty stdout. stderr: {proc.stderr[:400]}")
+            return ""
+        try:
+            data = json.loads(out)
+        except json.JSONDecodeError:
+            return out
+        if data.get("is_error"):
+            print(f"brain raw: is_error: {str(data.get('result'))[:300]}")
+            return ""
+        return (data.get("result") or "").strip()
+    except _sp.TimeoutExpired:
+        print(f"brain raw: timeout after {timeout}s")
+        return ""
+    except Exception as exc:  # noqa: BLE001
+        print(f"brain raw: exception {exc!r}")
+        return ""
+
+
+def _claude_brain_vision(text: str, image_paths: list, timeout: float = 90.0) -> str:
+    """Multimodal brain call: claude CLI with a single user message that
+    embeds the text + one or more images as base64 content blocks.
+
+    Used by jarvis_reel_context (reel keyframes) and the IG comment
+    responder's photo path. Same subscription auth as _claude_brain (no
+    ANTHROPIC_API_KEY required when ~/.claude/.credentials.json is
+    present). NO MCP tools wired — this is a pure describe-the-image
+    call; tool loops would burn time and money for no benefit.
+
+    image_paths is a list of JPEG/PNG file paths. Empty list is allowed
+    (degrades to text-only). Anything that fails to read is skipped (we
+    still try to describe with whatever we got).
+
+    Returns the result text, or "" on any failure. NEVER raises — the
+    callers expect a string they can show in a comment / cache.
+
+    Wire format (claude --input-format=stream-json):
+
+        { "type": "user", "message": {
+            "role": "user",
+            "content": [
+                {"type":"image","source":{"type":"base64","media_type":"image/jpeg","data":"..."}},
+                ...,
+                {"type":"text","text":"..."}
+            ]}}
+
+    One JSON object per line; we send exactly one and close stdin so
+    claude prints + exits."""
+    import subprocess as _sp
+    import base64 as _b64
+    has_creds = os.path.exists(os.path.expanduser("~/.claude/.credentials.json"))
+    has_api_key = bool(os.environ.get("ANTHROPIC_API_KEY"))
+    if not has_creds and not has_api_key:
+        print("brain vision: no credentials configured")
+        return ""
+
+    # Build content blocks. Images first so the model "sees" them before
+    # reading the task description — matches the public API best practice.
+    content: list[dict] = []
+    for p in image_paths or []:
+        try:
+            with open(p, "rb") as f:
+                data = f.read()
+        except OSError as exc:
+            print(f"brain vision: skip unreadable image {p}: {exc!r}")
+            continue
+        if not data:
+            continue
+        ext = (os.path.splitext(p)[1] or "").lower()
+        media_type = {
+            ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+            ".png": "image/png", ".webp": "image/webp",
+            ".gif": "image/gif",
+        }.get(ext, "image/jpeg")
+        content.append({
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": media_type,
+                "data": _b64.b64encode(data).decode("ascii"),
+            },
+        })
+    content.append({"type": "text", "text": text})
+
+    user_msg = {
+        "type": "user",
+        "message": {"role": "user", "content": content},
+    }
+    stdin_bytes = (json.dumps(user_msg) + "\n").encode("utf-8")
+
+    try:
+        proc = _sp.run(
+            ["claude", "-p",
+             "--input-format", "stream-json",
+             "--output-format", "json",
+             "--model", "claude-haiku-4-5-20251001",
+             "--max-turns", "1"],
+            input=stdin_bytes,
+            capture_output=True, timeout=timeout,
+        )
+        if proc.returncode != 0:
+            err = (proc.stderr or b"").decode("utf-8", errors="replace")[:400]
+            print(f"brain vision: rc={proc.returncode}  stderr: {err}")
+            return ""
+        out = (proc.stdout or b"").decode("utf-8", errors="replace").strip()
+        if not out:
+            err = (proc.stderr or b"").decode("utf-8", errors="replace")[:400]
+            print(f"brain vision: empty stdout. stderr: {err}")
+            return ""
+        try:
+            data = json.loads(out)
+        except json.JSONDecodeError:
+            # Old text-mode fallback.
+            return out
+        if data.get("is_error"):
+            print(f"brain vision: is_error: {str(data.get('result'))[:300]}")
+            return ""
+        return (data.get("result") or "").strip()
+    except _sp.TimeoutExpired:
+        print(f"brain vision: timeout after {timeout}s")
+        return ""
+    except Exception as exc:  # noqa: BLE001
+        print(f"brain vision: exception {exc!r}")
+        return ""
+
+
 _GREETING_PHRASES = (
     "good morning", "good afternoon", "good evening", "good night",
     "i'm home", "im home", "i am home", "wake up", "morning jarvis",
@@ -1336,6 +1492,19 @@ def main() -> None:
             print("ig consumer: thread started")
         except Exception as exc:
             print(f"ig consumer: failed to start — {exc}")
+
+    # IG comment responder: poller (news_inbox_v1 every 60s) + consumer
+    # (drains _ig_comment_queue → vision pipeline → gaslight one-liner →
+    # client.media_comment). Shares the DM poller's logged-in Client +
+    # followed-set cache. FAIL-OPEN — import or start failures don't
+    # take down the voice loop or DM path.
+    if os.environ.get("IG_COMMENT_ENABLED", "1") == "1":
+        try:
+            import jarvis_ig_comment_responder
+            jarvis_ig_comment_responder.start_threads()
+            print("ig comment: threads started")
+        except Exception as exc:
+            print(f"ig comment: failed to start — {exc}")
 
     try:
         import torch  # noqa: F401
