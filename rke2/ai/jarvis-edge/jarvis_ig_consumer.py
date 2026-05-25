@@ -343,9 +343,13 @@ def _process_event(payload: Any, client: Any, handles: dict) -> None:
         # No-text guard. We only handle text DMs for now; voice memos,
         # photos, reels, etc. all come through with empty .text.
         if not text:
-            print(f"ig consumer: skip non-text from {sender_username or 'unknown'}")
+            it = event.get("item_type") or "?"
+            extras = event.get("populated_extras") or []
+            extras_s = ",".join(extras) if extras else "-"
+            print(f"ig consumer: skip non-text from {sender_username or 'unknown'} item_type={it} extras=[{extras_s}]")
             span.set_attribute("ig.dropped", True)
             span.set_attribute("ig.drop_reason", "no_text")
+            span.set_attribute("ig.item_type", it)
             metric_drops.labels(reason="no_text").inc()
             return
 

@@ -1,0 +1,18 @@
+---
+# Synology-backed media store for IG reels/photos Hampton DMs to
+# @hmlbjarvis. The jarvis_ig_media_dl module mounts this at /media/reels
+# and writes each saved file alongside a JSON sidecar capturing source,
+# caption, vision description, etc. Lives on Synology iSCSI (not the
+# nixos-gpu local PV) because reels are heavy and we want them durable
+# across pod restarts AND node moves.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: jarvis-media
+  namespace: ai
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: synology-iscsi-storage
+  resources:
+    requests:
+      storage: 100Gi

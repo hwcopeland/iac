@@ -54,6 +54,7 @@ from __future__ import annotations
 
 import json
 import os
+import queue as _queue
 import threading
 import time
 import traceback
@@ -62,6 +63,24 @@ from typing import Any
 # ── Module-level state (set by start_polling_thread) ──────────────────────
 _thread: threading.Thread | None = None
 _thread_lock = threading.Lock()
+
+# ── DM media-share queue ───────────────────────────────────────────────────
+# When a user (we follow back) DMs us a reel/post/story-share, the poller
+# enqueues a media_share event onto this queue and jarvis_ig_media_dl
+# drains it. Separate from _ig_event_queue (text DMs) and the comment
+# responder's queue (post @mentions) so each consumer can be enabled
+# independently without coupling. Bounded so an idle/wedged downloader
+# can't starve the polling cycle — if full, we drop oldest with a log
+# (mirrors the comment responder pattern).
+_ig_media_queue: _queue.Queue = _queue.Queue(maxsize=200)
+
+
+def get_media_queue() -> _queue.Queue:
+    """Return the module-level media-share queue. Exposed so the
+    downloader (jarvis_ig_media_dl) can drain it without importing
+    private state. Module-attribute fallback (jarvis_ig_polling._ig_media_queue)
+    still works for parity with the existing _ig_comment_queue contract."""
+    return _ig_media_queue
 
 # Live instagrapi Client cached for sibling modules (jarvis_ig_consumer)
 # that need to send DMs. We expose this rather than letting consumers
@@ -399,6 +418,196 @@ def _try_route_tagged_comment(msg: Any, thread: Any) -> bool:
     return True
 
 
+def _extract_media_share_fields(item: dict) -> dict | None:
+    """Pull (media_pk, media_type, caption_hint, source_url, sender) out
+    of a DM item that shares media. Returns None if the item isn't a
+    recognised share type OR we can't extract a media_pk.
+    Defensive — IG's payload shapes drift; if a key is missing we log
+    and return None rather than crashing the poll cycle. The downloader
+    will silently skip None events anyway, but we'd rather not enqueue
+    them in the first place."""
+    item_type = item.get("item_type") or ""
+    media_pk: str = ""
+    media_type: str = ""
+    caption_hint: str = ""
+    source_url: str = ""
+
+    if item_type == "clip":
+        # IG wraps reels in a double-nested {clip: {clip: {...}}}.
+        # The outer .clip is a generic wrapper; the inner .clip holds
+        # the actual media. Earlier IG dumps confirmed this shape.
+        outer = item.get("clip") or {}
+        inner = outer.get("clip") if isinstance(outer, dict) else None
+        if not isinstance(inner, dict):
+            return None
+        media_pk = str(inner.get("pk") or inner.get("id") or "").split("_", 1)[0]
+        media_type = "clip"
+        cap = inner.get("caption") or {}
+        if isinstance(cap, dict):
+            caption_hint = (cap.get("text") or "")[:400]
+        code = inner.get("code") or ""
+        if code:
+            source_url = f"https://www.instagram.com/reel/{code}/"
+
+    elif item_type == "media_share":
+        ms = item.get("media_share") or {}
+        if not isinstance(ms, dict):
+            return None
+        media_pk = str(ms.get("pk") or ms.get("id") or "").split("_", 1)[0]
+        # caption may be string-typed or nested {text: ...}
+        cap = ms.get("caption")
+        if isinstance(cap, dict):
+            caption_hint = (cap.get("text") or "")[:400]
+        elif isinstance(cap, str):
+            caption_hint = cap[:400]
+        media_type = "feed"
+        code = ms.get("code") or ""
+        if code:
+            source_url = f"https://www.instagram.com/p/{code}/"
+
+    elif item_type == "xma_media_share":
+        # xma_media_share is the "shared via system-share-sheet" wrapping:
+        # an array of XMA objects, each with a cta_buttons[0].action_url
+        # deep-link or a preview_media_fbid.
+        xma_list = item.get("xma_media_share") or item.get("generic_xma") or []
+        if not isinstance(xma_list, list) or not xma_list:
+            return None
+        xma = xma_list[0] if isinstance(xma_list[0], dict) else {}
+        # Try cta action URL first (mirrors tagged_comment path).
+        cta_buttons = xma.get("cta_buttons") or []
+        if cta_buttons and isinstance(cta_buttons[0], dict):
+            action = cta_buttons[0].get("action_url") or ""
+            # Examples: instagram://media?id=12345_67890
+            # or instagram://reels?media_id=12345_67890
+            if action:
+                import urllib.parse as _up
+                try:
+                    parsed = _up.urlparse(action)
+                    qs = _up.parse_qs(parsed.query)
+                    mid = (qs.get("media_id") or qs.get("id") or [""])[0]
+                    if mid:
+                        media_pk = str(mid).split("_", 1)[0]
+                except Exception:  # noqa: BLE001
+                    pass
+        # preview_media_fbid is a fallback in some XMA shapes.
+        if not media_pk:
+            pf = xma.get("preview_media_fbid")
+            if pf:
+                media_pk = str(pf).split("_", 1)[0]
+        if not media_pk:
+            return None
+        media_type = "feed"  # XMA can wrap reels too; "feed" is the safe default
+        caption_hint = (xma.get("subtitle_text") or xma.get("header_subtitle_text") or "")[:400]
+        source_url = xma.get("preview_url") or ""
+
+    elif item_type == "story_share":
+        ss = item.get("story_share") or {}
+        if not isinstance(ss, dict):
+            return None
+        media = ss.get("media") or {}
+        if not isinstance(media, dict):
+            return None
+        media_pk = str(media.get("pk") or media.get("id") or "").split("_", 1)[0]
+        media_type = "story"
+        cap = media.get("caption")
+        if isinstance(cap, dict):
+            caption_hint = (cap.get("text") or "")[:400]
+
+    else:
+        return None
+
+    if not media_pk:
+        return None
+
+    return {
+        "media_pk":    media_pk,
+        "media_type":  media_type,
+        "caption_hint": caption_hint,
+        "source_url":  source_url,
+    }
+
+
+def _try_route_media_share(msg: Any, thread: Any) -> bool:
+    """If `msg` is a shared-media DM item (clip/media_share/xma_media_share/
+    story_share), enqueue a media_share event onto _ig_media_queue and
+    return True so the caller can SKIP the normal DM enqueue path.
+    Returns False if the item isn't a media share — caller falls through
+    to the regular DM enqueue logic.
+
+    Accepts either an instagrapi pydantic DirectMessage OR a raw dict
+    (from the raw-inbox scan), same pattern as _try_route_tagged_comment."""
+    item = _msg_as_dict(msg)
+    item_type = item.get("item_type") or ""
+    if item_type not in ("clip", "media_share", "xma_media_share", "story_share"):
+        return False
+
+    fields = _extract_media_share_fields(item)
+    if not fields:
+        print(f"ig polling: media_share item_type={item_type} missing media_pk; dropping")
+        # Still return True — we don't want a half-parsed share to also
+        # land in the DM queue and confuse the text consumer.
+        return True
+
+    # Sender resolution: prefer thread.users[match] for username; fall
+    # back to the user nested inside the share payload.
+    from_user_id = int(item.get("user_id") or 0)
+    from_username = ""
+    try:
+        for u in (getattr(thread, "users", None) or []) or (thread.get("users", []) if isinstance(thread, dict) else []):
+            uid = getattr(u, "pk", None) if not isinstance(u, dict) else u.get("pk")
+            if uid and int(uid) == from_user_id:
+                from_username = (getattr(u, "username", None) if not isinstance(u, dict) else u.get("username")) or ""
+                break
+    except Exception:  # noqa: BLE001
+        pass
+    if not from_username:
+        # Last-ditch: some share payloads embed the sender's username in
+        # the nested user object on the share itself (e.g. clip.user.username
+        # is the POSTER's, NOT sender — only use share-level user if no
+        # thread match was possible).
+        pass
+
+    thread_id = (
+        (thread.get("thread_id") if isinstance(thread, dict) else None)
+        or (getattr(thread, "id", None))
+        or item.get("thread_id")
+        or ""
+    )
+
+    event = {
+        "source":         "dm_media_share",
+        "media_pk":       fields["media_pk"],
+        "media_type":     fields["media_type"],
+        "from_username":  from_username,
+        "from_user_id":   from_user_id,
+        "thread_id":      str(thread_id) if thread_id else "",
+        "dm_item_id":     str(item.get("item_id") or ""),
+        "timestamp_us":   int(item.get("timestamp") or 0),
+        "caption_hint":   fields["caption_hint"],
+        "source_url":     fields["source_url"],
+    }
+    try:
+        _ig_media_queue.put_nowait(event)
+        print(
+            f"ig polling: enqueued DM_MEDIA_SHARE from "
+            f"@{from_username or from_user_id} media_pk={fields['media_pk']} "
+            f"type={item_type}"
+        )
+    except _queue.Full:
+        # Drop oldest to keep latency low. The downloader is single-threaded
+        # so a wedged Synology/iSCSI write could back this up; we still
+        # claim the item so we don't re-enqueue on the next poll cycle.
+        try:
+            _ig_media_queue.get_nowait()
+            _ig_media_queue.put_nowait(event)
+            print("ig polling: media queue full — dropped oldest, enqueued new")
+        except Exception:  # noqa: BLE001
+            print("ig polling: media queue full + recovery failed; dropping event")
+    except Exception as exc:  # noqa: BLE001
+        print(f"ig polling: media_share enqueue failed ({exc!r}); dropping")
+    return True
+
+
 def _poll_once(client: Any, handles: dict, hwm_us: int) -> int:
     """Run ONE polling cycle. Returns the new hwm (max ts seen across
     all messages this cycle, or the input hwm if nothing newer was
@@ -413,11 +622,14 @@ def _poll_once(client: Any, handles: dict, hwm_us: int) -> int:
         cycle_span.set_attribute("ig.thread_amount", amount)
         cycle_span.set_attribute("ig.hwm_us", hwm_us)
 
-        # ── Raw inbox scan: route tagged_comment items first ─────────────
+        # ── Raw inbox scan: route tagged_comment + media_share first ─────
         # `client.direct_threads()` parses messages into pydantic
-        # DirectMessage models that DROP the `send_attribution` field, so
-        # tagged_comment detection from those is impossible. Fetch the
-        # raw inbox dict in parallel and route mention-DMs from there.
+        # DirectMessage models that DROP some fields (`send_attribution`,
+        # nested xma_media_share payloads), so detection from those is
+        # impossible. Fetch the raw inbox dict in parallel and route
+        # mention-DMs + shared-media DMs from there. We DO still re-scan
+        # in the direct_threads loop below for shapes the raw inbox
+        # missed — both routes populate routed_item_ids for dedupe.
         routed_item_ids: set = set()
         try:
             raw = client.private_request(
@@ -425,17 +637,24 @@ def _poll_once(client: Any, handles: dict, hwm_us: int) -> int:
             )
             for raw_thread in (raw.get("inbox", {}) or {}).get("threads", []) or []:
                 for raw_item in raw_thread.get("items", []) or []:
-                    if raw_item.get("send_attribution") != "tagged_comment":
-                        continue
                     ts_us = int(raw_item.get("timestamp") or 0)
                     if ts_us <= hwm_us:
                         continue
-                    # _try_route_tagged_comment accepts a dict directly
-                    # (see _msg_as_dict's isinstance(dict) early-return).
-                    if _try_route_tagged_comment(raw_item, raw_thread):
-                        routed_item_ids.add(str(raw_item.get("item_id") or ""))
+                    item_id = str(raw_item.get("item_id") or "")
+                    # tagged_comment route (existing)
+                    if raw_item.get("send_attribution") == "tagged_comment":
+                        if _try_route_tagged_comment(raw_item, raw_thread):
+                            routed_item_ids.add(item_id)
+                            continue
+                    # media_share route (new) — any of the four share shapes
+                    if raw_item.get("item_type") in (
+                        "clip", "media_share", "xma_media_share", "story_share",
+                    ):
+                        if _try_route_media_share(raw_item, raw_thread):
+                            routed_item_ids.add(item_id)
+                            continue
         except Exception as exc:  # noqa: BLE001
-            print(f"ig polling: raw-inbox tagged_comment scan failed ({exc!r})")
+            print(f"ig polling: raw-inbox scan failed ({exc!r})")
 
         threads = client.direct_threads(amount=amount)
         cycle_span.set_attribute("ig.thread_count", len(threads) if threads else 0)
@@ -470,7 +689,18 @@ def _poll_once(client: Any, handles: dict, hwm_us: int) -> int:
                     # send_attribution; raw scan is the source of truth).
                     msg_id = str(getattr(msg, "id", "") or "")
                     if msg_id and msg_id in routed_item_ids:
-                        msg_span.set_attribute("ig.tagged_comment_routed_raw", True)
+                        msg_span.set_attribute("ig.routed_raw", True)
+                        if ts_us > new_hwm:
+                            new_hwm = ts_us
+                        continue
+                    # Route shared-media DMs (clip/media_share/xma_media_share/
+                    # story_share) to the media downloader queue BEFORE
+                    # falling through to the text-DM enqueue. Pydantic
+                    # DirectMessage models DO surface item_type + the
+                    # nested clip/media_share fields for most shapes, so
+                    # this catches anything the raw-inbox scan missed.
+                    if _try_route_media_share(msg, thread):
+                        msg_span.set_attribute("ig.media_share_routed", True)
                         if ts_us > new_hwm:
                             new_hwm = ts_us
                         continue

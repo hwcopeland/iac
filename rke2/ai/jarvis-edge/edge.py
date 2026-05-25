@@ -1523,6 +1523,19 @@ def main() -> None:
         except Exception as exc:
             print(f"ig comment: failed to start — {exc}")
 
+    # IG DM-shared media downloader: drains _ig_media_queue and saves
+    # reels/photos/stories to the Synology-backed /media/reels PVC.
+    # Borrows the poller's logged-in Client + the consumer's followed-set
+    # cache; both must be running for this to do anything. FAIL-OPEN as
+    # above.
+    if os.environ.get("IG_MEDIA_DL_ENABLED", "1") == "1":
+        try:
+            import jarvis_ig_media_dl
+            jarvis_ig_media_dl.start_downloader_thread()
+            print("ig media: downloader thread started")
+        except Exception as exc:
+            print(f"ig media: failed to start — {exc}")
+
     try:
         import torch  # noqa: F401
         from silero_vad import load_silero_vad, VADIterator

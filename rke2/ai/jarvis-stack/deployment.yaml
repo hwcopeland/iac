@@ -353,6 +353,22 @@ spec:
             # Same auth gate as the DM consumer.
             - name: IG_COMMENT_ENABLED
               value: "1"
+
+            # ── IG DM-shared media downloader ────────────────────────
+            # When Hampton (or anyone we follow back) DMs a reel/post/
+            # story to @hmlbjarvis, the poller enqueues a media_share
+            # event and this downloader saves the underlying media to
+            # the Synology-backed /media/reels volume plus a JSON
+            # sidecar with caption, source, and vision description.
+            # IG_REEL_CONFIRM_REPLY=1 makes JARVIS DM back a one-liner
+            # reaction; OFF by default to avoid spamming ourselves
+            # during testing.
+            - name: IG_MEDIA_DL_ENABLED
+              value: "1"
+            - name: IG_MEDIA_DL_DESCRIBE
+              value: "1"
+            - name: IG_REEL_CONFIRM_REPLY
+              value: "0"
           resources:
             requests:
               cpu: "200m"
@@ -377,6 +393,10 @@ spec:
             # TTS/Sonos knobs, live-tunable by voice via the persona MCP.
             - name: jarvis-state
               mountPath: /state
+            # Synology-backed media store for IG reels/photos Hampton DMs
+            # to @hmlbjarvis. jarvis_ig_media_dl writes here.
+            - name: jarvis-media
+              mountPath: /media/reels
 
       volumes:
         - name: models
@@ -424,3 +444,7 @@ spec:
         - name: jarvis-state
           persistentVolumeClaim:
             claimName: jarvis-state
+        # Synology iSCSI volume for DM-shared reels (see pvc-jarvis-media.yaml).
+        - name: jarvis-media
+          persistentVolumeClaim:
+            claimName: jarvis-media
