@@ -31,6 +31,23 @@ spec:
         - kind: Service
           name: jarvis-edge
           port: 8088
+    # Privacy policy — required by Meta before flipping Jarvis-IG to
+    # Live mode. Served by a tiny nginx pod, not the edge daemon.
+    # URLRewrite strips /privacy so nginx serves index.html at root.
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /privacy
+      filters:
+        - type: URLRewrite
+          urlRewrite:
+            path:
+              type: ReplacePrefixMatch
+              replacePrefixMatch: /
+      backendRefs:
+        - kind: Service
+          name: jarvis-privacy
+          port: 80
 ---
 # Cloudflare DNS record for ai.hwcopeland.net. Proxied (orange-cloud) so
 # the public IP is hidden and the wildcard cert path works the same as
