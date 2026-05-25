@@ -779,13 +779,128 @@ def _is_followed(user_id: str) -> bool:
         return False
 
 
+def _hydrate_mention_dm_job(client: Any, event: dict) -> dict | None:
+    """The DM poller emits a thin event shape for tagged_comment items
+    (source='mention_dm') — it doesn't make any IG API calls when
+    enqueueing, so we owe a media_info + media_comments lookup here in
+    the consumer. Returns a job dict matching the news_inbox_v1 shape
+    so _process_job doesn't care which source the event came from.
+    Returns None if media_info fails (treat as transient — caller logs
+    + drops; next time the user re-tags, we'll try again).
+
+    Why hydrate here vs in the poller: the DM poller is on a tight
+    30s loop and already has plenty to do; hydrating in the consumer
+    keeps that loop cheap and isolates the failure mode (a flaky
+    media_info doesn't block subsequent DM polls)."""
+    media_pk = event["media_pk"]
+    trigger_comment_id = event.get("trigger_comment_id") or ""
+    try:
+        info = client.media_info(media_pk)
+    except Exception as exc:  # noqa: BLE001
+        print(f"ig comment: hydrate media_info({media_pk}) failed: {exc!r}")
+        return None
+
+    mt = int(getattr(info, "media_type", 0) or 0)
+    if mt == 1:
+        media_type = "photo"
+    elif mt == 2:
+        media_type = "video"
+    elif mt == 8:
+        media_type = "carousel"
+    else:
+        media_type = "photo"
+
+    caption = (getattr(info, "caption_text", "") or "").strip()
+    author_username = (getattr(getattr(info, "user", None), "username", "") or "").strip()
+
+    siblings: list[tuple[str, str]] = []
+    try:
+        comments = client.media_comments(media_pk, amount=8)
+    except Exception as exc:  # noqa: BLE001
+        print(f"ig comment: hydrate media_comments({media_pk}) failed: {exc!r}")
+        comments = []
+    for c in comments or []:
+        try:
+            u = getattr(getattr(c, "user", None), "username", "") or ""
+            t = (getattr(c, "text", "") or "").strip()
+            cid = str(getattr(c, "pk", "") or "")
+            # Skip the trigger comment itself.
+            if cid and trigger_comment_id and cid == trigger_comment_id:
+                continue
+            # Skip our own past replies.
+            if u and u.lower() == _own_username():
+                continue
+            if not t:
+                continue
+            siblings.append((u, t[:160]))
+            if len(siblings) >= 3:
+                break
+        except Exception:  # noqa: BLE001
+            continue
+
+    # Synthesize a story_id so dedup keys keep working across both
+    # sources. Prefer the deterministic comment_id when present
+    # (matches _enqueue_job's dedup_key precedence in _process_job).
+    story_id = (
+        f"mention_dm:{trigger_comment_id}"
+        if trigger_comment_id
+        else f"mention_dm:{event.get('dm_item_id') or media_pk}"
+    )
+
+    return {
+        "media_pk":           str(media_pk),
+        "media_type":         media_type,
+        "caption":            caption,
+        "author_username":    author_username,
+        "trigger_comment_id": trigger_comment_id,
+        "trigger_text":       event.get("trigger_text") or "",
+        "tagger_username":    event.get("tagger_username") or "",
+        "tagger_id":          str(event.get("tagger_id") or ""),
+        "sibling_comments":   siblings,
+        "story_id":           story_id,
+        "source":             "mention_dm",
+    }
+
+
 def _process_job(job: dict, client: Any, replied_set: set[str], handles: dict) -> None:
     """End-to-end handle of one comment-tag job. Wrapped by the consumer
     loop's try/except so any leak lands in `error` instead of killing
-    the thread."""
+    the thread.
+
+    Accepts two job shapes (distinguished by job.get('source')):
+      - news_inbox_v1 path — populated by the poller's _enqueue_job;
+        already hydrated with media_info + sibling comments.
+      - mention_dm path — populated by jarvis_ig_polling's tagged_comment
+        branch; thin event hydrated here via _hydrate_mention_dm_job
+        before processing."""
     tracer = handles["tracer"]
     metric_replied = handles["metric_replied"]
     metric_drops = handles["metric_drops"]
+
+    # Dedupe BEFORE we burn a media_info call. The news_inbox path
+    # dedupes inside _enqueue_job before hitting the queue, but the
+    # mention_dm path comes straight from the DM poller without that
+    # check — so an already-replied comment_id could otherwise get
+    # double-hydrated. Safe to do this for both shapes — the news_inbox
+    # path will short-circuit here too if a duplicate slips through
+    # (e.g. queue had it before we got the latest replied_set load).
+    if job.get("source") == "mention_dm":
+        dedup_pre = job.get("trigger_comment_id") or job.get("dm_item_id") or ""
+        if dedup_pre and dedup_pre in replied_set:
+            print(f"ig comment: dropping already-replied mention_dm comment {dedup_pre}")
+            metric_drops.labels(reason="already_replied").inc()
+            return
+
+    # Hydrate the thin mention_dm event into a full job. We do this here
+    # (rather than at queue.put time in the poller) so the DM poller's
+    # hot loop stays cheap.
+    if job.get("source") == "mention_dm" and "media_type" not in job:
+        hydrated = _hydrate_mention_dm_job(client, job)
+        if hydrated is None:
+            print(f"ig comment: hydrate failed for mention_dm media {job.get('media_pk')}; dropping")
+            metric_drops.labels(reason="hydrate_failed").inc()
+            return
+        job = hydrated
 
     media_pk = job["media_pk"]
     tagger_username = job["tagger_username"] or "unknown"
