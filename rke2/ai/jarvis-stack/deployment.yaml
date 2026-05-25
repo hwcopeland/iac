@@ -49,6 +49,8 @@ spec:
       # routes Services to hostNetwork pods via their host IP endpoints.
       hostNetwork: true
       dnsPolicy: ClusterFirstWithHostNet
+      # Read-only k8s access (no secrets). See rbac.yaml in this dir.
+      serviceAccountName: jarvis-readonly
 
       containers:
         # ── STT: GPU faster-whisper ────────────────────────────────
@@ -251,4 +253,7 @@ spec:
             items:
               - key: config.toml
                 path: config.toml
+                mode: 0400
+              - key: spotify_tokens.json
+                path: spotify_tokens.json
                 mode: 0400
