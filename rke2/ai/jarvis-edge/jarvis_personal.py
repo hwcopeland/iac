@@ -581,11 +581,65 @@ def compose_briefing() -> str:
             f"{wx['temp_f']}°, high {wx['high_f']}, low {wx['low_f']}."
         )
 
-    overnight = news_overnight(hours=12, limit=3)
-    if overnight:
-        parts.append("Overnight world headlines: " + "; ".join(overnight) + ".")
+    relevant = _interest_filtered_news(hours=12, max_items=2)
+    if relevant:
+        if len(relevant) == 1:
+            parts.append(f"Worth your attention, sir: {relevant[0]}.")
+        else:
+            parts.append(
+                f"Worth your attention, sir: {relevant[0]}. "
+                f"Also: {'; '.join(relevant[1:])}."
+            )
+    # If zero matches → silently skip the news line (no generic headlines —
+    # owner explicitly said dumping random world news kills the briefing).
 
     return " ".join(parts)
+
+
+def _load_owner_interests() -> List[str]:
+    """Read /state/users/<owner>/profile.md and pull keywords from a line
+    starting with `Interests:` (case-insensitive). Returns lowercased,
+    de-duplicated keyword list. Empty list = no filtering, news skipped."""
+    import re
+    # Find first owner-role profile under /state/users/
+    base = "/state/users"
+    if not os.path.isdir(base):
+        return []
+    keywords: List[str] = []
+    for name in sorted(os.listdir(base)):
+        p = os.path.join(base, name, "profile.md")
+        if not os.path.isfile(p):
+            continue
+        try:
+            txt = open(p).read()
+        except OSError:
+            continue
+        m = re.search(r"(?im)^\s*(?:interests|topics|care_about|i_care_about)\s*[:=]\s*(.+)$",
+                      txt)
+        if m:
+            for k in re.split(r"[,;]", m.group(1)):
+                k = k.strip().lower()
+                if k and k not in keywords:
+                    keywords.append(k)
+    return keywords
+
+
+def _interest_filtered_news(hours: int = 12, max_items: int = 2) -> List[str]:
+    """Pull overnight headlines, filter by keyword match against the
+    owner's profile.md Interests line. Return up to `max_items`. If no
+    interests configured → empty list (briefing skips news entirely)."""
+    interests = _load_owner_interests()
+    if not interests:
+        return []
+    candidates = news_overnight(hours=hours, limit=30)
+    matched: List[str] = []
+    for headline in candidates:
+        low = headline.lower()
+        if any(kw in low for kw in interests):
+            matched.append(headline)
+            if len(matched) >= max_items:
+                break
+    return matched
 
 
 def write_cache(text: str) -> None:
