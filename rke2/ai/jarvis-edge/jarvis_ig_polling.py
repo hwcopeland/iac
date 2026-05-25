@@ -465,11 +465,17 @@ def _extract_media_share_fields(item: dict) -> dict | None:
         if code:
             source_url = f"https://www.instagram.com/p/{code}/"
 
-    elif item_type == "xma_media_share":
-        # xma_media_share is the "shared via system-share-sheet" wrapping:
-        # an array of XMA objects, each with a cta_buttons[0].action_url
-        # deep-link or a preview_media_fbid.
-        xma_list = item.get("xma_media_share") or item.get("generic_xma") or []
+    elif item_type in ("xma_media_share", "xma_clip", "xma_reel_share",
+                        "xma_story_share", "xma_profile"):
+        # XMA = "extensible message attachment". IG ships shared media
+        # through several XMA-flavoured item types depending on whether
+        # the share is a feed post / reel / story / etc. They all share
+        # the same payload shape: an array of XMA objects, each with a
+        # cta_buttons[0].action_url deep-link or a preview_media_fbid.
+        # We treat them uniformly here.
+        xma_list = (item.get("xma_media_share") or item.get("xma_clip")
+                    or item.get("xma_reel_share") or item.get("xma_story_share")
+                    or item.get("xma_profile") or item.get("generic_xma") or [])
         if not isinstance(xma_list, list) or not xma_list:
             return None
         xma = xma_list[0] if isinstance(xma_list[0], dict) else {}
