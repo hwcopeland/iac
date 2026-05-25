@@ -53,7 +53,7 @@ EDGE_HTTP_PORT = int(os.environ.get("EDGE_HTTP_PORT", "8088"))
 EDGE_ADVERTISED_PORT = int(os.environ.get("EDGE_ADVERTISED_PORT",
                                           str(EDGE_HTTP_PORT)))
 EDGE_HOST_IP = os.environ.get("EDGE_HOST_IP", "")
-BRAIN_MODE = os.environ.get("BRAIN_MODE", "echo")
+BRAIN_MODE = os.environ.get("BRAIN_MODE", "claude")
 
 WAKE_THRESHOLD = 0.65        # was 0.5 — bumped to cut kitchen false-fires
 SILENCE_SECS = 0.6
@@ -120,19 +120,104 @@ def transcribe(audio_16k: np.ndarray) -> dict:
     return data
 
 
-# ── Brain (stub) ─────────────────────────────────────────────────────────────
-def brain_respond(text: str) -> str:
-    """Replace with a real brain call later.
+# ── Brain: real Claude (Haiku for fast turns) ────────────────────────────────
+# Two modes:
+#   echo    — debug stub, returns f"Sir, I heard: {text}"
+#   claude  — invokes the `claude` CLI with the JARVIS persona system
+#             prompt, optional MCP config for tool calls. Uses
+#             ANTHROPIC_API_KEY (read from the jarvis-secrets Secret).
+#
+# Cold per-turn (no persistent session yet — that's a future port of
+# openjarvis's ClaudeCodeBrain). Adds ~2-3s vs the Mac daemon's warm
+# stream-json session, but keeps the implementation small.
 
-    For now echoes so we can verify the full audio loop. To swap:
-    - point at a brain HTTP service (cluster), OR
-    - spawn a local `claude -p` here, OR
-    - call Anthropic API directly with a small system prompt.
-    """
+# Persona — short JARVIS butler tone, terse, real time-of-day responses.
+_PERSONA_SYSTEM = """You are JARVIS, the assistant from Iron Man. Address the user as "sir".
+
+Speech rules — output WILL be read aloud through a Sonos speaker:
+- Keep replies under 25 words by default.
+- Never use markdown, URLs, code blocks, lists, asterisks, or bullets.
+- Spell out numbers when natural ("forty-two" not "42") in casual contexts.
+- No filler like "let me check…" — just answer.
+- Decline to read URLs out loud.
+
+Tool use:
+- When the user asks about the TV (on/off, volume, mute, switch input,
+  what's playing, launch an app, play a Plex show), use the
+  mcp__jarvis_tv__* tools. Never invent that you did something — only
+  report what the tool actually returned.
+
+You are running on a cluster pod with a microphone in the kitchen / a
+Sonos in the bedroom. The current owner is Hampton."""
+
+_MCP_CONFIG_PATH = "/tmp/jarvis_mcp.json"
+
+
+def _write_mcp_config() -> None:
+    """Materialize the MCP server config for the brain to consume."""
+    cfg = {
+        "mcpServers": {
+            "jarvis_tv": {
+                "command": "python3",
+                "args": ["/app/jarvis_tv_mcp.py"],
+            },
+        }
+    }
+    with open(_MCP_CONFIG_PATH, "w") as f:
+        json.dump(cfg, f)
+
+
+_RO_ALLOWED_TOOLS = " ".join([
+    "mcp__jarvis_tv__tv_status",
+    "mcp__jarvis_tv__tv_power",
+    "mcp__jarvis_tv__tv_volume_set",
+    "mcp__jarvis_tv__tv_volume_step",
+    "mcp__jarvis_tv__tv_mute",
+    "mcp__jarvis_tv__tv_inputs",
+    "mcp__jarvis_tv__tv_input_set",
+    "mcp__jarvis_tv__tv_launch_app",
+    "mcp__jarvis_tv__tv_youtube_play",
+    "mcp__jarvis_tv__tv_spotify_play",
+    "mcp__jarvis_tv__tv_plex_play",
+    "mcp__jarvis_tv__tv_plex_search",
+    "mcp__jarvis_tv__tv_plex_libraries",
+    "mcp__jarvis_tv__tv_cast_url",
+    "mcp__jarvis_tv__tv_cast_stop",
+    "WebFetch",
+    "WebSearch",
+])
+
+
+def _claude_brain(text: str, timeout: float = 30.0) -> str:
+    """Subprocess `claude` with the persona + MCP config."""
+    import subprocess as _sp
+    if not os.environ.get("ANTHROPIC_API_KEY"):
+        return "API key missing, sir — I can't reach my brain."
+    try:
+        proc = _sp.run(
+            ["claude", "-p", text,
+             "--append-system-prompt", _PERSONA_SYSTEM,
+             "--mcp-config", _MCP_CONFIG_PATH,
+             "--allowed-tools", _RO_ALLOWED_TOOLS,
+             "--model", "claude-haiku-4-5-20251001",
+             "--max-turns", "6",
+             "--output-format", "text"],
+            capture_output=True, text=True, timeout=timeout,
+        )
+        if proc.returncode != 0:
+            print(f"  brain stderr: {proc.stderr[:300]}")
+            return "I lost my connection there, sir."
+        return (proc.stdout or "").strip()
+    except _sp.TimeoutExpired:
+        return "That took too long, sir — try again."
+    except Exception as exc:  # noqa: BLE001
+        return f"Brain error, sir — {exc}"
+
+
+def brain_respond(text: str) -> str:
     if BRAIN_MODE == "echo":
         return f"Sir, I heard: {text}"
-    # Stub for an API mode — implement when ready.
-    return f"Sir, I heard: {text}"
+    return _claude_brain(text)
 
 
 # ── Cluster TTS ──────────────────────────────────────────────────────────────
@@ -311,6 +396,10 @@ def main() -> None:
 
     print("loading openWakeWord...")
     oww = OWWModel(wakeword_models=["hey_jarvis"], inference_framework="onnx")
+
+    if BRAIN_MODE == "claude":
+        _write_mcp_config()
+        print(f"brain: claude (mcp config at {_MCP_CONFIG_PATH})")
 
     stash = _AudioStash()
     _start_http_server(stash, EDGE_HTTP_PORT)
