@@ -1313,6 +1313,18 @@ def main() -> None:
         except Exception as exc:
             print(f"sonos init failed ({exc}); will print responses instead")
 
+    # Optional: IG DM polling fallback (instagrapi private-mobile-API).
+    # Webhook path is gated behind Meta Business Verification; this
+    # poller is the pragmatic workaround. FAIL-OPEN — import or start
+    # failures don't take down the voice loop.
+    if os.environ.get("IG_POLLING_ENABLED", "") == "1":
+        try:
+            import jarvis_ig_polling
+            jarvis_ig_polling.start_polling_thread()
+            print("ig polling: thread started")
+        except Exception as exc:
+            print(f"ig polling: failed to start — {exc}")
+
     try:
         import torch  # noqa: F401
         from silero_vad import load_silero_vad, VADIterator

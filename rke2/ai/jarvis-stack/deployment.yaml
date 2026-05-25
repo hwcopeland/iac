@@ -313,6 +313,27 @@ spec:
                 secretKeyRef:
                   name: jarvis-ig-credentials
                   key: IG_APP_ID
+
+            # ── IG DM polling fallback (instagrapi private mobile API) ─
+            # Webhook ingress requires Meta Business Verification which
+            # we're not doing. This polls the @hmlbjarvis inbox every
+            # IG_POLL_INTERVAL_S seconds and enqueues new DMs onto the
+            # SAME _ig_event_queue the webhook feeds — downstream
+            # consumers see them identically (source: "polling" vs the
+            # webhook's "webhook" tag). Set IG_POLLING_ENABLED=0 to
+            # disable without touching code.
+            - name: IG_POLLING_ENABLED
+              value: "1"
+            - name: IG_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: jarvis-ig-credentials
+                  key: IG_USERNAME
+            - name: IG_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: jarvis-ig-credentials
+                  key: IG_PASSWORD
           resources:
             requests:
               cpu: "200m"
