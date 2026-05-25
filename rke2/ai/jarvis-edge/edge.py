@@ -1201,7 +1201,7 @@ def _stream_on_sonos_impl(sonos, sentences, host_ip, http_port, turn_n,
     # Mark JARVIS as speaking from the moment we start the stream — the
     # main loop's echo-suppress check uses _jarvis_done_at + grace, but
     # the speaking flag is a stricter "is JARVIS audible right now" signal.
-    global _jarvis_speaking
+    global _jarvis_speaking, _jarvis_done_at
     _jarvis_speaking = True
     try:
         sonos.unjoin()
@@ -1266,7 +1266,6 @@ def _stream_on_sonos_impl(sonos, sentences, host_ip, http_port, turn_n,
     print(f"  sonos: stream done in {timings['stream_done_ms']}ms")
     # Mark the moment JARVIS stopped speaking so the main loop can drop
     # any self-echo the Yeti captured during/just-after playback.
-    global _jarvis_done_at, _jarvis_speaking
     _jarvis_done_at = time.time()
     _jarvis_speaking = False
     # Bound memory: drop old turns' WAV chunks.
