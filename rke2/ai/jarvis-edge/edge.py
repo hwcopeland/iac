@@ -233,10 +233,16 @@ _RO_ALLOWED_TOOLS = " ".join([
 def _claude_brain(text: str, timeout: float = 60.0) -> str:
     """Subprocess `claude` with the persona + MCP config. Uses json
     output so we can see WHY claude returned nothing (auth fail, tool
-    loop, etc) instead of silently shipping '' to TTS."""
+    loop, etc) instead of silently shipping '' to TTS.
+
+    Auth: prefers SUBSCRIPTION via ~/.claude/.credentials.json (Claude Max).
+    Falls back to API mode if ANTHROPIC_API_KEY is set. Bails only if
+    NEITHER is present."""
     import subprocess as _sp
-    if not os.environ.get("ANTHROPIC_API_KEY"):
-        return "API key missing, sir — I can't reach my brain."
+    has_creds = os.path.exists(os.path.expanduser("~/.claude/.credentials.json"))
+    has_api_key = bool(os.environ.get("ANTHROPIC_API_KEY"))
+    if not has_creds and not has_api_key:
+        return "No brain credentials, sir — neither subscription nor API key configured."
     try:
         proc = _sp.run(
             ["claude", "-p", text,
