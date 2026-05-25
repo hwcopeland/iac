@@ -24,6 +24,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Vizio TV control (pyvizio) + LAN Chromecast (pychromecast).
 RUN pip install --no-cache-dir pyvizio==0.1.64 pychromecast==14.0.10
 
+# CalDAV for iCloud calendar + reminders (replaces the macOS AppleScript
+# path now that JARVIS runs in a cluster pod). Credentials come from a
+# Bitwarden item → External Secret → env vars. See:
+#   docs/spec/jarvis-icloud-caldav.md
+RUN pip install --no-cache-dir caldav==1.4.0 icalendar==6.1.0
+
 # Route ALSA through the pulse plugin → pipewire-pulse on the host.
 # Debian's libportaudio2 only ships ALSA + OSS backends (no native pulse
 # compiled in), so ALSA→pulse via this plugin is the only path for

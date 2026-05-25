@@ -53,60 +53,169 @@ def _osa(script: str, timeout: float = 25.0) -> tuple[bool, str]:
     return False, "AppleScript unavailable in cluster pod"
 
 
-# ── Reminders ────────────────────────────────────────────────────────────
+# ── iCloud CalDAV bridge (replaces macOS AppleScript path on Linux) ────────
+# Connects to https://caldav.icloud.com using an Apple ID + app-specific
+# password from env (sourced from a Bitwarden item via External Secret —
+# see docs/spec/jarvis-icloud-caldav.md). When env vars are absent the
+# functions return "unauthorized" so the briefing degrades cleanly.
+
+_CALDAV_URL = os.environ.get("ICLOUD_CALDAV_URL", "https://caldav.icloud.com")
+_caldav_client = None  # type: ignore[var-annotated]
+_caldav_principal = None  # type: ignore[var-annotated]
+
+
+def _caldav() -> tuple[object, object] | None:
+    """Lazy-init the iCloud CalDAV client. Returns (client, principal) or
+    None if creds aren't configured."""
+    global _caldav_client, _caldav_principal
+    if _caldav_client is not None:
+        return _caldav_client, _caldav_principal
+    user = os.environ.get("ICLOUD_APPLE_ID")
+    pw = os.environ.get("ICLOUD_APP_PASSWORD")
+    if not user or not pw:
+        return None
+    try:
+        import caldav as _cd  # noqa: WPS433
+        _caldav_client = _cd.DAVClient(url=_CALDAV_URL, username=user, password=pw)
+        _caldav_principal = _caldav_client.principal()
+    except Exception as exc:
+        # Don't cache failure as success — leave client=None for retry
+        _caldav_client = None
+        _caldav_principal = None
+        return None
+    return _caldav_client, _caldav_principal
+
+
+def _today_window() -> tuple[_dt.datetime, _dt.datetime]:
+    now = _dt.datetime.now()
+    d0 = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    d1 = d0 + _dt.timedelta(days=1)
+    return d0, d1
+
+
+def _vtodo_summary(comp) -> str:
+    try:
+        v = comp.icalendar_component if hasattr(comp, "icalendar_component") else comp
+        s = v.get("SUMMARY") or v.get("summary")
+        return str(s) if s else ""
+    except Exception:
+        return ""
+
+
+def _vtodo_due_today(comp) -> bool:
+    try:
+        v = comp.icalendar_component if hasattr(comp, "icalendar_component") else comp
+        due = v.get("DUE") or v.get("due")
+        if due is None:
+            return False
+        d = due.dt if hasattr(due, "dt") else due
+        if isinstance(d, _dt.datetime):
+            d0, d1 = _today_window()
+            return d0 <= d.replace(tzinfo=None) < d1
+        # date-only
+        return d == _dt.date.today()
+    except Exception:
+        return False
+
+
+# ── Reminders (CalDAV VTODO collections on iCloud) ────────────────────────
 def reminders_open(limit: int = 12) -> List[str]:
-    ok, out = _osa(
-        'tell application "Reminders" to get name of '
-        '(reminders whose completed is false)')
-    if not ok or not out:
+    res = _caldav()
+    if res is None:
         return []
-    # osascript returns a comma-space separated list on one line
-    items = [s.strip() for s in out.split(",") if s.strip()]
-    return items[:limit]
+    _, principal = res
+    out: List[str] = []
+    try:
+        for cal in principal.calendars():
+            try:
+                if "VTODO" not in (cal.get_supported_components() or []):
+                    continue
+            except Exception:
+                continue
+            try:
+                todos = cal.todos(include_completed=False)
+            except Exception:
+                continue
+            for t in todos:
+                name = _vtodo_summary(t)
+                if name:
+                    out.append(name)
+                if len(out) >= limit:
+                    return out
+    except Exception:
+        return out
+    return out[:limit]
 
 
 def reminders_due_today() -> List[str]:
-    script = (
-        'set d0 to current date\n'
-        'set time of d0 to 0\n'
-        'set d1 to d0 + 1 * days\n'
-        'tell application "Reminders" to get name of (reminders whose '
-        'completed is false and due date ≥ d0 and due date < d1)')
-    ok, out = _osa(script)
-    if not ok or not out:
+    res = _caldav()
+    if res is None:
         return []
-    return [s.strip() for s in out.split(",") if s.strip()]
+    _, principal = res
+    out: List[str] = []
+    try:
+        for cal in principal.calendars():
+            try:
+                if "VTODO" not in (cal.get_supported_components() or []):
+                    continue
+            except Exception:
+                continue
+            try:
+                todos = cal.todos(include_completed=False)
+            except Exception:
+                continue
+            for t in todos:
+                if _vtodo_due_today(t):
+                    name = _vtodo_summary(t)
+                    if name:
+                        out.append(name)
+    except Exception:
+        return out
+    return out
 
 
-# ── Calendar (needs TCC Automation grant; degrades on -1743) ──────────────
+# ── Calendar (CalDAV VEVENT collections on iCloud) ────────────────────────
 def calendar_today() -> dict:
-    script = (
-        'set out to ""\n'
-        'set d0 to current date\n'
-        'set time of d0 to 0\n'
-        'set d1 to d0 + 1 * days\n'
-        'tell application "Calendar"\n'
-        '  repeat with c in calendars\n'
-        '    try\n'
-        '      repeat with e in (every event of c whose start date ≥ d0 '
-        'and start date < d1)\n'
-        '        set out to out & (summary of e) & " @@ " & '
-        '(start date of e as string) & linefeed\n'
-        '      end repeat\n'
-        '    end try\n'
-        '  end repeat\n'
-        'end tell\n'
-        'return out')
-    ok, out = _osa(script, timeout=40.0)
-    if not ok:
-        if "-1743" in out or "Not authorized" in out:
-            return {"status": "unauthorized"}
-        return {"status": "error", "detail": out[:120]}
-    events = []
-    for line in out.splitlines():
-        if "@@" in line:
-            title, when = line.split("@@", 1)
-            events.append({"title": title.strip(), "when": when.strip()})
+    res = _caldav()
+    if res is None:
+        return {"status": "unauthorized"}
+    _, principal = res
+    d0, d1 = _today_window()
+    events: list[dict] = []
+    try:
+        for cal in principal.calendars():
+            try:
+                comps = cal.get_supported_components() or []
+                if "VEVENT" not in comps:
+                    continue
+            except Exception:
+                continue
+            try:
+                results = cal.search(start=d0, end=d1, event=True, expand=True)
+            except Exception:
+                # older caldav lib API
+                try:
+                    results = cal.date_search(start=d0, end=d1)
+                except Exception:
+                    continue
+            for ev in results:
+                try:
+                    v = ev.icalendar_component if hasattr(ev, "icalendar_component") else ev
+                    title = str(v.get("SUMMARY") or v.get("summary") or "Untitled")
+                    start = v.get("DTSTART") or v.get("dtstart")
+                    when = ""
+                    if start is not None:
+                        sd = start.dt if hasattr(start, "dt") else start
+                        if isinstance(sd, _dt.datetime):
+                            when = sd.strftime("%-I:%M %p").lstrip("0")
+                        else:
+                            when = "all day"
+                    events.append({"title": title.strip(), "when": when})
+                except Exception:
+                    continue
+    except Exception as exc:
+        return {"status": "error", "detail": str(exc)[:120]}
+    events.sort(key=lambda e: e.get("when") or "")
     return {"status": "ok", "events": events}
 
 
