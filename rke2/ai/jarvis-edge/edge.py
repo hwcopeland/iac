@@ -640,12 +640,19 @@ class _AudioHandler(BaseHTTPRequestHandler):
             self.send_response(404)
             self.end_headers()
             return
-        self.send_response(200)
-        self.send_header("Content-Type", "audio/wav")
-        self.send_header("Content-Length", str(len(wav)))
-        self.send_header("Cache-Control", "no-store")
-        self.end_headers()
-        self.wfile.write(wav)
+        try:
+            self.send_response(200)
+            self.send_header("Content-Type", "audio/wav")
+            self.send_header("Content-Length", str(len(wav)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(wav)
+        except (ConnectionResetError, BrokenPipeError):
+            # Sonos sometimes opens a HEAD-probe connection it abandons
+            # before the body, or queue advances + drops the current
+            # fetch. Audio playback isn't affected — Sonos opens a fresh
+            # connection for the real read. Suppress the noisy traceback.
+            pass
 
     def log_message(self, *args, **kwargs):  # silence default access log
         pass
@@ -717,10 +724,13 @@ def notify(title: str, body: str = "", urgency: str = "low",
 import re as _re_split
 
 
-def _split_sentences(text: str, max_len: int = 90) -> list[str]:
-    """Split brain output into roughly-sentence chunks for streaming
-    synthesis. Merges fragments < max_len into the previous chunk so
-    we don't synth tiny "Sir." standalone.
+def _split_sentences(text: str, max_len: int = 40) -> list[str]:
+    """Split brain output into sentence chunks for streaming synthesis.
+
+    `max_len=40` keeps the FIRST chunk small (~10 words) so it
+    synthesizes in ~1.5s and Sonos can start playing before later
+    chunks are even ready. Bigger merge thresholds (we had 90) made
+    the first chunk multi-sentence → 7s synth → 7s perceived lag.
 
     Fallback: if no sentence boundaries detected, returns [text] —
     streaming still works with a single chunk (same latency as before)."""
