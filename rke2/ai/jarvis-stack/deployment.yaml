@@ -410,10 +410,14 @@ spec:
             # TTS/Sonos knobs, live-tunable by voice via the persona MCP.
             - name: jarvis-state
               mountPath: /state
-            # Synology-backed media store for IG reels/photos Hampton DMs
-            # to @hmlbjarvis. jarvis_ig_media_dl writes here.
-            - name: jarvis-media
+            # TODO: re-enable jarvis-media volume once Synology CSI driver
+            # is deployed on nixos-gpu (currently only present on the
+            # plex-system / game-server nodes). For now, reels download
+            # to /state/reels (hostPath PVC) via subPath so we don't
+            # block the pod start. Saves to /state instead of /media/reels.
+            - name: jarvis-state
               mountPath: /media/reels
+              subPath: reels
 
       volumes:
         - name: models
@@ -459,7 +463,7 @@ spec:
         - name: jarvis-state
           persistentVolumeClaim:
             claimName: jarvis-state
-        # Synology iSCSI volume for DM-shared reels (see pvc-jarvis-media.yaml).
-        - name: jarvis-media
-          persistentVolumeClaim:
-            claimName: jarvis-media
+        # (jarvis-media Synology volume removed — Synology CSI driver
+        # isn't deployed on nixos-gpu. Reels temporarily co-locate on
+        # jarvis-state PVC under subPath 'reels'. See pvc-jarvis-media.yaml
+        # — PVC still exists, just not mounted.)
