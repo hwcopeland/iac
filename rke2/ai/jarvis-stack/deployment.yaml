@@ -243,6 +243,55 @@ spec:
             timeoutSeconds: 10
             failureThreshold: 3
 
+        # ── Ollama sidecar: uncensored local-brain fallback ──────
+        # Listens on localhost:11435 (different port from the
+        # standalone ollama Deployment so they coexist on the same
+        # node). Mounted at the same hostPath /var/lib/ollama where
+        # the standalone instance keeps its models — bypasses RWO PVC
+        # conflict and gives us instant access to whatever's already
+        # pulled (qwen2.5:7b, qwen3:8b, huihui_ai/qwen3-abliterated:30b-a3b).
+        # GPU shared via NVIDIA time-slicing on nixos-gpu.
+        - name: ollama
+          image: ollama/ollama:latest
+          ports:
+            - containerPort: 11435
+              name: ollama-api
+          env:
+            - name: OLLAMA_HOST
+              value: "0.0.0.0:11435"
+            - name: LD_LIBRARY_PATH
+              value: "/run/opengl-driver/lib"
+          resources:
+            requests:
+              nvidia.com/gpu: "1"
+              memory: 4Gi
+            limits:
+              nvidia.com/gpu: "1"
+              memory: 16Gi
+          volumeMounts:
+            - name: ollama-models-host
+              mountPath: /root/.ollama
+            - name: opengl-driver
+              mountPath: /run/opengl-driver
+              readOnly: true
+            - name: nix-store
+              mountPath: /nix/store
+              readOnly: true
+          readinessProbe:
+            exec:
+              command: ["ollama", "list"]
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 10
+            failureThreshold: 12
+          livenessProbe:
+            exec:
+              command: ["ollama", "list"]
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 5
+
         # ── Edge daemon: wake → cluster STT → TTS → Sonos ─────────
         - name: jarvis-edge
           image: zot.hwcopeland.net/ai/jarvis-edge:latest
@@ -383,6 +432,15 @@ spec:
               value: "1"
             - name: IG_REEL_CONFIRM_REPLY
               value: "0"
+            # ── Local brain (Ollama sidecar) fallback ────────────────
+            # When Claude refuses on edgy IG content, _claude_brain_raw
+            # falls back to this. Sidecar runs in this pod on
+            # localhost:11435; model auto-picked from what's already
+            # on the shared hostPath /var/lib/ollama.
+            - name: LOCAL_BRAIN_URL
+              value: "http://localhost:11435"
+            - name: LOCAL_BRAIN_MODEL
+              value: "huihui_ai/qwen3-abliterated:30b-a3b"
           resources:
             requests:
               cpu: "200m"
@@ -429,6 +487,14 @@ spec:
         - name: opengl-driver
           hostPath:
             path: /run/opengl-driver
+        # Ollama sidecar's model store — same hostPath the standalone
+        # ollama Deployment uses. Bypasses RWO PVC conflict and lets
+        # both pods see the same pulled models (read-only effectively
+        # from the sidecar; standalone owns writes).
+        - name: ollama-models-host
+          hostPath:
+            path: /var/lib/ollama
+            type: DirectoryOrCreate
         - name: nix-store
           hostPath:
             path: /nix/store
