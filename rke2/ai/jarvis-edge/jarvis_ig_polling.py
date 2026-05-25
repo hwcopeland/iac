@@ -63,6 +63,22 @@ from typing import Any
 _thread: threading.Thread | None = None
 _thread_lock = threading.Lock()
 
+# Live instagrapi Client cached for sibling modules (jarvis_ig_consumer)
+# that need to send DMs. We expose this rather than letting consumers
+# log in themselves — two parallel logins from one IP gets us challenged.
+# Set inside the poll loop on every successful (re-)login; cleared on
+# auth-class failures.
+_client: Any = None
+
+
+def get_client() -> Any:
+    """Return the live instagrapi Client, or None if the poller hasn't
+    logged in yet. Sibling modules (jarvis_ig_consumer.send_reply) use
+    this to share the session — DO NOT call .login() on it; that's the
+    poller's job."""
+    return _client
+
+
 # Default backoff after ANY error (login challenge, rate limit, etc.).
 # 5 minutes is a balance between "recover quickly when transient" and
 # "don't hammer IG with retries when they're rate-limiting us".
@@ -307,6 +323,16 @@ def _poll_once(client: Any, handles: dict, hwm_us: int) -> int:
                         event_queue.put_nowait(event)
                         enqueued += 1
                         metric_messages.inc()
+                        # Log every successful enqueue. The silent-on-success
+                        # behaviour confused Hampton when he was watching the
+                        # log to confirm DMs were landing — single log line
+                        # per pickup makes the data path visible.
+                        try:
+                            sender = (event.get("from") or {}).get("username") or "unknown"
+                            preview = (event.get("text") or "")[:60]
+                            print(f"ig polling: enqueued msg from {sender}: {preview!r}")
+                        except Exception:  # noqa: BLE001
+                            pass
                         if ts_us > new_hwm:
                             new_hwm = ts_us
                     except Exception as exc:  # noqa: BLE001
@@ -381,6 +407,7 @@ def _run_loop() -> None:
         _save_last_seen(hwm_us)
         print(f"ig polling: seeded hwm = {hwm_us} (now) — will only pick up DMs after this moment")
 
+    global _client
     while True:
         try:
             if handles is None:
@@ -389,6 +416,10 @@ def _run_loop() -> None:
                 metric_cycles = handles["metric_cycles"]
             if client is None:
                 client = _build_client()
+                # Publish the live client so sibling modules (consumer)
+                # can borrow it for outbound DMs. Avoids two parallel
+                # logins from one IP, which would trip a challenge.
+                _client = client
 
             hwm_us = _poll_once(client, handles, hwm_us)
             _save_last_seen(hwm_us)
@@ -408,6 +439,7 @@ def _run_loop() -> None:
             if reason in ("ChallengeRequired", "LoginRequired",
                           "BadPassword", "TwoFactorRequired"):
                 client = None
+                _client = None
                 print(f"ig polling: dropped client; will re-login after backoff "
                       f"({reason} — may need manual resolution via "
                       f"`kubectl exec` + `c.challenge_resolve(c.last_json)`)")

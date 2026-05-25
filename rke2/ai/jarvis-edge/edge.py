@@ -1325,6 +1325,18 @@ def main() -> None:
         except Exception as exc:
             print(f"ig polling: failed to start — {exc}")
 
+    # IG DM consumer: drains _ig_event_queue and replies via instagrapi.
+    # Reuses the poller's logged-in Client (jarvis_ig_polling.get_client)
+    # — DO NOT start this without the poller, the consumer will idle
+    # until a client is available. FAIL-OPEN as above.
+    if os.environ.get("IG_CONSUMER_ENABLED", "1") == "1":
+        try:
+            import jarvis_ig_consumer
+            jarvis_ig_consumer.start_consumer_thread()
+            print("ig consumer: thread started")
+        except Exception as exc:
+            print(f"ig consumer: failed to start — {exc}")
+
     try:
         import torch  # noqa: F401
         from silero_vad import load_silero_vad, VADIterator
