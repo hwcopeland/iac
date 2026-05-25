@@ -46,6 +46,12 @@ STT_URL = os.environ.get("STT_URL", "http://10.44.0.20:8766")
 TTS_URL = os.environ.get("TTS_URL", "http://10.44.0.8:8765")
 SONOS_IP = os.environ.get("SONOS_IP", "")
 EDGE_HTTP_PORT = int(os.environ.get("EDGE_HTTP_PORT", "8088"))
+# Port that Sonos hits in the URL — may differ from EDGE_HTTP_PORT when
+# the pod is exposed via a NodePort Service (containerPort 8088 maps to
+# nodePort 30088, for example). Defaults to EDGE_HTTP_PORT for direct
+# host-network deployments.
+EDGE_ADVERTISED_PORT = int(os.environ.get("EDGE_ADVERTISED_PORT",
+                                          str(EDGE_HTTP_PORT)))
 EDGE_HOST_IP = os.environ.get("EDGE_HOST_IP", "")
 BRAIN_MODE = os.environ.get("BRAIN_MODE", "echo")
 
@@ -241,7 +247,11 @@ def notify(title: str, body: str = "", urgency: str = "low",
 
 
 def _play_on_sonos(sonos, host_ip: str, http_port: int, turn: int) -> None:
-    """Tell Sonos to fetch the current /turn-{N}.wav and play it, wait for done."""
+    """Tell Sonos to fetch the current /turn-{N}.wav and play it, wait for done.
+
+    ``http_port`` is the port Sonos hits in the URL — this is
+    EDGE_ADVERTISED_PORT (the NodePort) when running in k8s, not the
+    container's listen port."""
     url = f"http://{host_ip}:{http_port}/turn-{turn}.wav"
     t0 = time.time()
     try:
@@ -443,7 +453,8 @@ def main() -> None:
                 _AudioHandler.stash.path = f"/turn-{turn_n}.wav"
                 if sonos is not None:
                     try:
-                        _play_on_sonos(sonos, host_ip, EDGE_HTTP_PORT, turn_n)
+                        _play_on_sonos(sonos, host_ip,
+                                       EDGE_ADVERTISED_PORT, turn_n)
                         engaged_until = time.time() + ADDRESSEE_WINDOW
                     except Exception as exc:
                         print(f"  sonos error: {exc}")

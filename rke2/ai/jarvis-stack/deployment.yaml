@@ -157,8 +157,10 @@ spec:
           ports:
             - name: audio-http
               containerPort: 8088
-              hostPort: 8088              # Sonos fetches http://10.0.0.190:8088/turn-*.wav
               protocol: TCP
+              # No hostPort — Cilium-on-RKE2 doesn't honor it reliably.
+              # Exposed to the LAN via the jarvis-edge-audio NodePort
+              # Service (nodePort 30088 → containerPort 8088).
           securityContext:
             # Run as the user that owns /run/user/1000 (PipeWire socket).
             # The pulse socket at /run/user/1000/pulse/native is
@@ -176,8 +178,11 @@ spec:
             - name: SONOS_VOLUME
               value: "60"
             - name: EDGE_HTTP_PORT
-              value: "8088"
-            # nixos-gpu's LAN IP — what Sonos fetches WAVs from.
+              value: "8088"                  # HTTP server binds here (in-pod)
+            - name: EDGE_ADVERTISED_PORT
+              value: "30088"                  # NodePort the Sonos URL points at
+            # nixos-gpu's LAN IP (true IP, not the 10.41.0.10 cluster VIP)
+            # — Sonos is on 10.0.0.0/24 and can only route to this one.
             - name: EDGE_HOST_IP
               value: "10.0.0.190"
             - name: XDG_RUNTIME_DIR
