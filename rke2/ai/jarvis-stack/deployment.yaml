@@ -52,29 +52,43 @@ spec:
       # Read-only k8s access (no secrets). See rbac.yaml in this dir.
       serviceAccountName: jarvis-readonly
       initContainers:
-        # Copy the (read-only) Secret-mounted credentials.json into a
-        # writable emptyDir so claude CLI can refresh its OAuth tokens
-        # in place. The Secret stays the source of truth; we re-init
-        # from it on every pod start. If claude refreshes during a
-        # pod's lifetime, those refreshed tokens are lost on next
-        # restart — acceptable trade-off for a homelab.
+        # Seed-only init: if /dst/.credentials.json doesn't exist yet
+        # (fresh PVC / first boot / Hampton wiped it), copy from the
+        # Secret. Otherwise leave the file alone — claude CLI's OAuth
+        # auto-refresh writes back to this same path in-pod, and we
+        # want those refreshed tokens to SURVIVE pod restarts. The
+        # /dst mount is now PVC-backed (jarvis-state subPath '.claude')
+        # so writes persist. No more 8-hour re-auth hell.
         - name: claude-creds-init
           image: busybox:1.36
           command:
             - sh
             - -c
             - |
-              install -m 0600 /src/claude_credentials.json /dst/.credentials.json
-              echo "claude creds installed to /dst/.credentials.json"
+              # The /dst dir lives on jarvis-state (subPath .claude).
+              # persona-state-init chowns the parent /state but not this
+              # subPath, so we do it here.
+              chown 1000:100 /dst || true
+              chmod 0700 /dst || true
+              if [ -s /dst/.credentials.json ]; then
+                echo "claude creds: existing credentials.json found ($(wc -c </dst/.credentials.json) bytes) — preserving in-pod refreshes"
+              else
+                install -m 0600 /src/claude_credentials.json /dst/.credentials.json
+                chown 1000:100 /dst/.credentials.json
+                echo "claude creds: seeded from Secret (first boot or post-wipe)"
+              fi
+          # Run as root so we can chown the kubelet-created PVC subPath
+          # to uid 1000. The main container still runs as uid 1000.
           securityContext:
-            runAsUser: 1000
-            runAsGroup: 100
+            runAsUser: 0
+            runAsGroup: 0
           volumeMounts:
             - name: claude-creds-src
               mountPath: /src
               readOnly: true
-            - name: claude-home
+            - name: jarvis-state
               mountPath: /dst
+              subPath: .claude
 
         # Seed /state/persona.json with the factory defaults on first
         # boot. Idempotent — if a persona.json already exists we leave
@@ -386,9 +400,12 @@ spec:
             - name: jarvis-config
               mountPath: /tmp/.openjarvis
               readOnly: true
-            # Claude subscription creds — writable so OAuth refresh works.
-            - name: claude-home
+            # Claude subscription creds — writable AND durable. Backed
+            # by the jarvis-state PVC via subPath so OAuth-refreshed
+            # tokens survive pod restarts (no more 8h re-auth grind).
+            - name: jarvis-state
               mountPath: /tmp/.claude
+              subPath: .claude
             # Persistent persona state — humor/formality/terseness/sass/
             # TTS/Sonos knobs, live-tunable by voice via the persona MCP.
             - name: jarvis-state
@@ -434,11 +451,9 @@ spec:
               - key: claude_credentials.json
                 path: claude_credentials.json
                 mode: 0444   # readable by uid 1000 (Secret default owner is root)
-        # Writable home for claude CLI's creds + cache; OAuth refresh
-        # writes back here in-pod. Lost on pod restart — init container
-        # re-seeds from the Secret.
-        - name: claude-home
-          emptyDir: {}
+        # (claude-home emptyDir removed — claude CLI's creds now live on
+        # jarvis-state PVC at subPath '.claude' so OAuth-refreshed tokens
+        # survive pod restarts.)
         # Persistent state on nixos-gpu hostPath (see pvc.yaml). Survives
         # pod restarts so persona tuning ("less humor", "volume 45") stays.
         - name: jarvis-state
