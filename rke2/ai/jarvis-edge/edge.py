@@ -231,7 +231,9 @@ _RO_ALLOWED_TOOLS = " ".join([
 
 
 def _claude_brain(text: str, timeout: float = 60.0) -> str:
-    """Subprocess `claude` with the persona + MCP config."""
+    """Subprocess `claude` with the persona + MCP config. Uses json
+    output so we can see WHY claude returned nothing (auth fail, tool
+    loop, etc) instead of silently shipping '' to TTS."""
     import subprocess as _sp
     if not os.environ.get("ANTHROPIC_API_KEY"):
         return "API key missing, sir — I can't reach my brain."
@@ -243,13 +245,33 @@ def _claude_brain(text: str, timeout: float = 60.0) -> str:
              "--allowed-tools", _RO_ALLOWED_TOOLS,
              "--model", "claude-haiku-4-5-20251001",
              "--max-turns", "6",
-             "--output-format", "text"],
+             "--output-format", "json"],
             capture_output=True, text=True, timeout=timeout,
         )
         if proc.returncode != 0:
-            print(f"  brain stderr: {proc.stderr[:300]}")
+            print(f"  brain rc={proc.returncode}  stderr: {proc.stderr[:400]}")
             return "I lost my connection there, sir."
-        return (proc.stdout or "").strip()
+        # JSON output: try to parse the structured result envelope.
+        out = (proc.stdout or "").strip()
+        if not out:
+            print(f"  brain empty stdout. stderr: {proc.stderr[:400]}")
+            return "My response came back blank, sir — try again."
+        try:
+            data = json.loads(out)
+        except json.JSONDecodeError:
+            # Old text-mode fallback — just return whatever it gave us.
+            return out
+        # Modern claude-code SDK envelope: {type, subtype, result, is_error, ...}
+        if data.get("is_error"):
+            err = data.get("result") or data.get("error") or "unknown"
+            print(f"  brain is_error: {str(err)[:300]}")
+            return "Something went wrong, sir — try again."
+        result = (data.get("result") or "").strip()
+        if not result:
+            # Brain ran tools but emitted no spoken text — log + bail.
+            print(f"  brain empty result. keys={list(data.keys())[:10]}")
+            return "I didn't have anything to say there, sir."
+        return result
     except _sp.TimeoutExpired:
         return "That took too long, sir — try again."
     except Exception as exc:  # noqa: BLE001
@@ -622,6 +644,9 @@ def main() -> None:
                 # ── Brain ───────────────────────────────────────────
                 reply = brain_respond(user_text)
                 print(f"  JARVIS: {reply!r}")
+                if not reply or not reply.strip():
+                    print("  → empty reply, skipping TTS")
+                    continue
 
                 # ── TTS ─────────────────────────────────────────────
                 wav = tts_synthesize(reply)
