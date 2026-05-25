@@ -41,6 +41,14 @@ spec:
           effect: NoSchedule
       imagePullSecrets:
         - name: zot-pull-secret
+      # hostNetwork so the audio HTTP server (jarvis-edge) binds on the
+      # host's enp15s0 (LAN IP 10.0.0.190) — that's the only address
+      # Sonos at 10.0.0.187 can route to. Cilium NodePort only binds on
+      # the cluster InternalIP (10.41.0.10), unreachable from the LAN.
+      # Services for whisper-stt + chatterbox still work because k8s
+      # routes Services to hostNetwork pods via their host IP endpoints.
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
 
       containers:
         # ── STT: GPU faster-whisper ────────────────────────────────
@@ -178,9 +186,11 @@ spec:
             - name: SONOS_VOLUME
               value: "60"
             - name: EDGE_HTTP_PORT
-              value: "8088"                  # HTTP server binds here (in-pod)
+              value: "8088"
+            # With hostNetwork the listener binds on the host's interfaces
+            # directly, so the URL we hand Sonos uses the same port (8088).
             - name: EDGE_ADVERTISED_PORT
-              value: "30088"                  # NodePort the Sonos URL points at
+              value: "8088"
             # nixos-gpu's LAN IP (true IP, not the 10.41.0.10 cluster VIP)
             # — Sonos is on 10.0.0.0/24 and can only route to this one.
             - name: EDGE_HOST_IP
