@@ -280,10 +280,10 @@ spec:
             items:
               - key: config.toml
                 path: config.toml
-                mode: 0400
+                mode: 0444   # readable by uid 1000 (Secret default owner is root)
               - key: spotify_tokens.json
                 path: spotify_tokens.json
-                mode: 0400
+                mode: 0444   # readable by uid 1000 (Secret default owner is root)
         # Read-only source for the init container; main container never
         # mounts this directly (uses claude-home / emptyDir instead).
         - name: claude-creds-src
@@ -292,7 +292,7 @@ spec:
             items:
               - key: claude_credentials.json
                 path: claude_credentials.json
-                mode: 0400
+                mode: 0444   # readable by uid 1000 (Secret default owner is root)
         # Writable home for claude CLI's creds + cache; OAuth refresh
         # writes back here in-pod. Lost on pod restart — init container
         # re-seeds from the Secret.
