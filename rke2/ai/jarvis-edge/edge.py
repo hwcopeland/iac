@@ -38,7 +38,8 @@ from math import gcd
 
 import numpy as np
 import sounddevice as sd
-from openwakeword.model import Model as OWWModel
+# Wake word removed for AMBIENT MODE — VAD-gated continuous capture instead.
+# (openwakeword and tflite-runtime stay in the base image for future use.)
 from scipy.signal import resample_poly
 
 # ── Config ────────────────────────────────────────────────────────────────────
@@ -564,9 +565,7 @@ def main() -> None:
     print(f"tts: {TTS_URL}")
     print(f"sonos: {SONOS_IP or 'NOT SET — set SONOS_IP env var'}")
 
-    print("loading openWakeWord...")
-    oww = OWWModel(wakeword_models=["hey_jarvis"], inference_framework="onnx")
-
+    # No wake-word loader — ambient mode runs VAD-gated continuous STT.
     if BRAIN_MODE == "claude":
         _write_mcp_config()
         print(f"brain: claude (mcp config at {_MCP_CONFIG_PATH})")
@@ -609,150 +608,103 @@ def main() -> None:
     # long capture took (avoids losing turns where kitchen voices
     # padded the capture out past the engagement window).
     just_woke = False
-    # Pre-roll buffer: keep ~1.5s of audio that PRECEDED wake-fire, so
-    # the user doesn't have to pause between "Hey JARVIS" and the next
-    # words. openWakeWord needs ~1s of audio to recognize the trigger,
-    # by which point the user may already be partway through their
-    # follow-up. We seed the capture frames with this buffer.
+    # AMBIENT MODE: no wake-word loop. We continuously VAD-gate the mic
+    # and STT every speech segment. Drop transcripts that don't contain
+    # "jarvis" (the addressee gate). Cost: ~290ms STT per speech segment;
+    # GPU on nixos-gpu handles it easily. Privacy: ambient speech IS
+    # transcribed but immediately discarded if not addressed.
     from collections import deque
-    PREROLL_CHUNKS = max(1, int(1.5 / 0.080))  # 1.5s @ 80ms per chunk = ~19
+    # Small pre-roll keeps the leading edge of each utterance (Silero
+    # speech_start fires after the first word's already started).
+    PREROLL_CHUNKS = max(1, int(0.4 / 0.080))  # 0.4s = 5 chunks
     preroll = deque(maxlen=PREROLL_CHUNKS)
 
     with sd.InputStream(samplerate=native_rate, channels=1, dtype="float32",
                         blocksize=native_chunk, device=mic_idx) as stream:
-        print("\nready — say 'Hey JARVIS' to trigger. Ctrl-C to quit.\n")
+        print("\nready — ambient mode (say 'jarvis' anywhere in a sentence). Ctrl-C to quit.\n")
         try:
             while True:
-                # ── Wake ──────────────────────────────────────────────
-                while True:
-                    data, _ = stream.read(native_chunk)
-                    mono = data.flatten().astype(np.float32)
-                    preroll.append(mono.copy())   # keep pre-wake audio
-                    resampled = _to_16k(mono, native_rate)
-                    if len(resampled) < OWW_CHUNK:
-                        resampled = np.pad(resampled, (0, OWW_CHUNK - len(resampled)))
-                    else:
-                        resampled = resampled[:OWW_CHUNK]
-                    pcm16 = (resampled * 32767).astype(np.int16)
-                    score = oww.predict(pcm16).get("hey_jarvis", 0.0)
-                    if score > WAKE_THRESHOLD:
-                        oww.reset()
-                        # The wake word IS the addressee signal — the next
-                        # utterance is implicitly directed at JARVIS even
-                        # if the user doesn't say "jarvis" inside it. Set
-                        # both the window AND a one-shot flag so a long
-                        # capture (e.g. kitchen voices padding it out) can't
-                        # cause the window to expire before the check.
-                        engaged_until = time.time() + ADDRESSEE_WINDOW
-                        just_woke = True
-                        print(f"\n[{time.strftime('%H:%M:%S')}] WAKE  score={score:.2f}")
-                        notify("JARVIS", f"Listening… (wake {score:.2f})",
-                               urgency="normal", expire_ms=2500)
-                        break
-
-                # ── Capture ──────────────────────────────────────────
+                # ── Per-utterance VAD-gated capture ─────────────────
                 if has_vad:
                     vad_iter = VADIterator(
                         vad_model, sampling_rate=16000,
                         min_silence_duration_ms=int(SILENCE_SECS * 1000),
                         speech_pad_ms=120,
                     )
-                # Seed capture with the pre-wake audio buffer so words
-                # uttered DURING / immediately after the wake aren't lost
-                # to the 80ms-ish detection lag.
-                frames: list[np.ndarray] = list(preroll)
+                frames: list[np.ndarray] = []
                 t_start = time.time()
+                t_speech_start: float | None = None
                 heard = False
                 silence_start: float | None = None
                 vad_buf = np.empty(0, dtype=np.float32)
-                # CRITICAL: feed the pre-roll audio THROUGH the VAD too,
-                # so if the user was already mid-sentence when wake fired,
-                # speech_start triggers immediately instead of VAD waiting
-                # for the next new speech burst (which would force a
-                # 6-7s capture timeout).
-                if has_vad:
-                    for pf in preroll:
-                        chunk16 = _to_16k(pf, native_rate)
-                        vad_buf = np.concatenate([vad_buf, chunk16])
-                        while len(vad_buf) >= 512:
-                            frame, vad_buf = vad_buf[:512], vad_buf[512:]
-                            ev = vad_iter(frame, return_seconds=False)
-                            if ev and "start" in ev:
-                                if not heard:
-                                    print(f"    vad: speech_start  (from pre-roll)")
-                                heard = True
-                                silence_start = None
-                            elif ev and "end" in ev and heard:
-                                silence_start = time.time()
-                # Don't clear preroll itself — we want the next wake to
-                # also benefit from a fresh ~1.5s rolling window.
                 while True:
                     data, _ = stream.read(native_chunk)
                     mono = data.flatten().astype(np.float32)
-                    frames.append(mono)
+                    if heard:
+                        frames.append(mono)
+                    else:
+                        preroll.append(mono.copy())
                     if has_vad:
-                        # Buffer between iterations so we don't drop the
-                        # trailing < 512-sample remainder of each chunk
-                        # (Silero VADIterator requires exactly 512 samples).
                         vad_buf = np.concatenate([vad_buf, _to_16k(mono, native_rate)])
                         while len(vad_buf) >= 512:
                             frame, vad_buf = vad_buf[:512], vad_buf[512:]
                             ev = vad_iter(frame, return_seconds=False)
-                            if ev and "start" in ev:
-                                if not heard:
-                                    print(f"    vad: speech_start  ({int((time.time()-t_start)*1000)}ms after wake)")
+                            if ev and "start" in ev and not heard:
+                                # backfill pre-roll so the leading word is captured
+                                frames = list(preroll)
                                 heard = True
+                                t_speech_start = time.time()
                                 silence_start = None
                             elif ev and "end" in ev and heard:
                                 silence_start = time.time()
-                                print(f"    vad: speech_end → ending turn")
                         if silence_start and (time.time() - silence_start) >= 0.05:
                             break
                     else:
                         rms = float(np.sqrt(np.mean(mono ** 2)))
                         if rms > 0.01:
+                            if not heard:
+                                frames = list(preroll)
+                                t_speech_start = time.time()
                             heard = True
                             silence_start = None
                         elif heard:
                             silence_start = silence_start or time.time()
                             if time.time() - silence_start > SILENCE_SECS:
                                 break
-                    if (time.time() - t_start) > MAX_UTTERANCE_SECS:
+                    if heard and t_speech_start \
+                            and (time.time() - t_speech_start) > MAX_UTTERANCE_SECS:
                         break
 
+                if not heard:
+                    continue  # no speech this slice — keep listening
                 dur = sum(len(f) for f in frames) / native_rate
-                if dur < MIN_UTTERANCE_SECS or not heard:
-                    print(f"  → ignored (dur={dur:.2f}s, heard={heard})")
+                if dur < MIN_UTTERANCE_SECS:
                     continue
 
                 audio_native = np.concatenate(frames)
                 audio_16k = _to_16k(audio_native, native_rate)
-                print(f"  → {dur:.2f}s captured; transcribing...")
                 res = transcribe(audio_16k)
                 if res.get("error"):
                     print(f"  ✗ STT error: {res['error']}")
                     continue
                 if res.get("hallucination"):
-                    print(f"  → hallucination: '{res.get('raw_text','')}' dropped")
-                    continue
+                    continue   # silently drop Whisper "thanks for watching" etc
                 user_text = res.get("text", "").strip()
                 if not user_text:
-                    print("  → empty transcript")
                     continue
-                print(f"  YOU: {user_text!r}  ({res.get('wire_ms','?')}ms wire / {res.get('model_ms','?')}ms model)")
 
-                # ── Addressee gate ──────────────────────────────────
-                # Wake fired so we're inside an utterance; the wake itself
-                # is the addressee signal for THIS turn (just_woke). For
-                # follow-up turns within the engagement window or any turn
-                # that explicitly says "jarvis", also pass.
-                addressed = (just_woke
-                             or "jarvis" in user_text.lower()
-                             or time.time() < engaged_until)
-                just_woke = False  # consume the one-shot
+                # ── Ambient addressee gate ──────────────────────────
+                # Must contain "jarvis" OR we're in the follow-up window
+                # from a previous reply.
+                low = user_text.lower()
+                addressed = ("jarvis" in low) or (time.time() < engaged_until)
                 if not addressed:
-                    print(f"  → not addressed (no 'jarvis' in transcript) — dropped")
+                    print(f"  (ambient drop {dur:.1f}s): {user_text[:70]!r}")
                     continue
+
+                print(f"\n[{time.strftime('%H:%M:%S')}] YOU: {user_text!r}  "
+                      f"(dur={dur:.1f}s, stt {res.get('model_ms','?')}ms)")
+                notify("JARVIS", "Listening…", urgency="normal", expire_ms=1500)
 
                 # ── Brain ───────────────────────────────────────────
                 reply = brain_respond(user_text)
