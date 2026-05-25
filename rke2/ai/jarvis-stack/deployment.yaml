@@ -230,7 +230,7 @@ spec:
             - name: BRAIN_MODE
               value: "claude"
             - name: HOME
-              value: "/home/user"           # so ~/.openjarvis/config.toml + ~/.claude/.credentials.json resolve
+              value: "/tmp/jarvis-home"           # so ~/.openjarvis/config.toml + ~/.claude/.credentials.json resolve
             # No ANTHROPIC_API_KEY env — we run claude in SUBSCRIPTION
             # mode (Claude Max). claude CLI reads ~/.claude/.credentials.json
             # which the init container populates from the jarvis-secrets
@@ -251,11 +251,11 @@ spec:
               readOnly: true
             # config.toml from the Secret — jarvis_tv.py reads ~/.openjarvis/
             - name: jarvis-config
-              mountPath: /home/user/.openjarvis
+              mountPath: /tmp/jarvis-home/.openjarvis
               readOnly: true
             # Claude subscription creds — writable so OAuth refresh works.
             - name: claude-home
-              mountPath: /home/user/.claude
+              mountPath: /tmp/jarvis-home/.claude
 
       volumes:
         - name: models
