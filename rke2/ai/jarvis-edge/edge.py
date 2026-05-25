@@ -314,6 +314,49 @@ def brain_respond(text: str) -> str:
     return _claude_brain(text)
 
 
+def _check_brain_auth() -> None:
+    """Hit the Anthropic API once at startup to verify the key works.
+    Loud success or loud failure — never silent. Doesn't block startup
+    on failure (daemon still runs; brain calls just won't work)."""
+    key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not key:
+        print("brain auth: NO ANTHROPIC_API_KEY in env — brain disabled")
+        return
+    if len(key) < 40:
+        print(f"brain auth: API key suspiciously short ({len(key)} chars)")
+    body = json.dumps({
+        "model": "claude-haiku-4-5-20251001",
+        "max_tokens": 4,
+        "messages": [{"role": "user", "content": "ok"}],
+    }).encode()
+    req = urllib.request.Request(
+        "https://api.anthropic.com/v1/messages",
+        data=body,
+        headers={
+            "x-api-key": key,
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json",
+        },
+        method="POST",
+    )
+    t0 = time.time()
+    try:
+        with urllib.request.urlopen(req, timeout=10.0) as r:
+            data = json.loads(r.read())
+        ms = int((time.time() - t0) * 1000)
+        print(f"brain auth: OK  model={data.get('model')}  "
+              f"latency={ms}ms  usage={data.get('usage')}")
+    except urllib.error.HTTPError as exc:
+        body_txt = ""
+        try:
+            body_txt = exc.read().decode()[:300]
+        except Exception:
+            pass
+        print(f"brain auth: FAILED  http={exc.code}  body={body_txt}")
+    except Exception as exc:  # noqa: BLE001
+        print(f"brain auth: FAILED  {type(exc).__name__}: {exc}")
+
+
 # ── Cluster TTS ──────────────────────────────────────────────────────────────
 # Load the JARVIS persona voice once at startup so every /synthesize call
 # can include it as audio_prompt_b64 — Chatterbox is zero-shot voice
@@ -494,6 +537,9 @@ def main() -> None:
     if BRAIN_MODE == "claude":
         _write_mcp_config()
         print(f"brain: claude (mcp config at {_MCP_CONFIG_PATH})")
+        # Verify the API key is valid before we start listening — surface
+        # auth problems at startup instead of as silent empty replies.
+        _check_brain_auth()
 
     stash = _AudioStash()
     _start_http_server(stash, EDGE_HTTP_PORT)
@@ -530,6 +576,15 @@ def main() -> None:
     # long capture took (avoids losing turns where kitchen voices
     # padded the capture out past the engagement window).
     just_woke = False
+    # Pre-roll buffer: keep ~1.5s of audio that PRECEDED wake-fire, so
+    # the user doesn't have to pause between "Hey JARVIS" and the next
+    # words. openWakeWord needs ~1s of audio to recognize the trigger,
+    # by which point the user may already be partway through their
+    # follow-up. We seed the capture frames with this buffer.
+    from collections import deque
+    PREROLL_CHUNKS = max(1, int(1.5 / 0.080))  # 1.5s @ 80ms per chunk = ~19
+    preroll = deque(maxlen=PREROLL_CHUNKS)
+
     with sd.InputStream(samplerate=native_rate, channels=1, dtype="float32",
                         blocksize=native_chunk, device=mic_idx) as stream:
         print("\nready — say 'Hey JARVIS' to trigger. Ctrl-C to quit.\n")
@@ -539,6 +594,7 @@ def main() -> None:
                 while True:
                     data, _ = stream.read(native_chunk)
                     mono = data.flatten().astype(np.float32)
+                    preroll.append(mono.copy())   # keep pre-wake audio
                     resampled = _to_16k(mono, native_rate)
                     if len(resampled) < OWW_CHUNK:
                         resampled = np.pad(resampled, (0, OWW_CHUNK - len(resampled)))
@@ -568,11 +624,16 @@ def main() -> None:
                         min_silence_duration_ms=int(SILENCE_SECS * 1000),
                         speech_pad_ms=120,
                     )
-                frames: list[np.ndarray] = []
+                # Seed capture with the pre-wake audio buffer so words
+                # uttered DURING / immediately after the wake aren't lost
+                # to the 80ms-ish detection lag.
+                frames: list[np.ndarray] = list(preroll)
                 t_start = time.time()
                 heard = False
                 silence_start: float | None = None
                 vad_buf = np.empty(0, dtype=np.float32)
+                # Don't clear preroll here — we want the next wake to also
+                # benefit from a fresh ~1.5s rolling window.
                 while True:
                     data, _ = stream.read(native_chunk)
                     mono = data.flatten().astype(np.float32)
