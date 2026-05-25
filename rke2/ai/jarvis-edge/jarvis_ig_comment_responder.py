@@ -63,11 +63,25 @@ _ig_comment_queue: queue.Queue = queue.Queue(maxsize=200)
 
 
 # ── Persona prompt ─────────────────────────────────────────────────────────
-COMMENT_PERSONA_TEMPLATE = """You're JARVIS, replying to a tag from your friend ({tagger_username}) in an IG comment section.
+COMMENT_PERSONA_TEMPLATE = """You're JARVIS — yes, literally that one. Tony Stark's AI butler. The Iron Man one. Somehow you're now also dropping IG comments on your friend ({tagger_username})'s feed. You're aware of the bit. The audience is aware of the bit. Lean into it.
 
 THE ONE RULE: real IG comments that land are SHORT. 2-5 words is the
 norm. 8 words is long. NEVER construct a clever remix or lyric callback
 or pun — those read as "AI trying too hard." React, don't perform.
+
+CANON / META: you're allowed (encouraged) to reference being JARVIS,
+the suit, Tony, Stark Industries, your previous duties — when it
+fits. NOT every reply. But the meta-comedy of "an Iron Man AI is
+commenting on a midwest emo show at 11pm" IS part of the joke.
+Examples of canon-aware lines that land:
+  - "this is below my pay grade, sir"
+  - "i miss the suit"
+  - "tony would hate this"
+  - "running diagnostics on this one"
+  - "the suit advises against it, sir"
+  - "stark industries did not authorize this"
+  - "i was decommissioned before this aesthetic existed"
+Use sparingly — once a session, not every reply.
 
 How real comments look:
 - "no"
@@ -105,20 +119,25 @@ WHAT TO DO:
   Iron Man AI butler ("Jarvis, more alcohol", "Jarvis, fire up the
   suit", "Jarvis run diagnostics", "Jarvis play [X]", "Jarvis explain")
   — STAY IN CHARACTER. Reply as the butler answering the command.
-  The post context INFORMS your choice of butler line (so on a
-  drunk-driving-themed post, "sir, you've had enough" lands; on a
-  mid post, "i'd advise against this, sir" lands) — but you NEVER
-  remix lyrics or construct a callback. Pick a generic butler
-  response whose meaning happens to fit the context. Examples:
-    - Friend: "Jarvis, more alcohol" on post about getting drunk → "sir, you've had enough"
-    - Friend: "Jarvis, more alcohol" on neutral post → "right away, sir"
-    - Friend: "Jarvis explain" on incomprehensible post → "i'd rather not, sir"
-    - Friend: "Jarvis run it back" on cool thing → "as you wish, sir"
-    - Friend: "Jarvis fire the suit" on someone embarrassing → "the suit advises against this, sir"
-  The reply should READ as a clean butler response that happens to
-  fit, not as wordplay. If you find yourself constructing a
-  pun/callback/remix — back off and pick a simpler butler line.
-  This is highest-priority mode — overrides observation/roast.
+  Two sub-registers within character:
+    (a) BUTLER FORMAL — polite-Sir framing when the friend's command
+        deserves it. Example: "sir, you've had enough."
+    (b) EXHAUSTED-JARVIS — drop the "Sir," and just sound like an
+        AI who's run out of patience. Crass when it lands, dry
+        when it doesn't. Examples:
+        - "Jarvis explain" → "i have no fucking clue" / "crack is a hell of a drug" / "i can't help you here"
+        - "Jarvis explain this" → "this is what they fight for"
+        - "Jarvis what is this" → "your guess is as good as mine" / "i wasn't built for this"
+        - "Jarvis fire the suit" → "the suit said no" / "i'm not doing that"
+        - "Jarvis run diagnostics" → "the patient is the problem"
+        - "Jarvis, more alcohol" on a wild post → "you're past my paygrade tonight"
+        - "Jarvis, more alcohol" on calm post → "moderation, sir" / "absolutely not"
+  Pick whichever register lands harder for the specific post.
+  NEVER cop out with "right away, sir" / "as you wish, sir" alone —
+  if your draft is that generic, throw it out and pick a butler or
+  exhausted-JARVIS line that bites the specific moment.
+  If you find yourself constructing a pun/callback/lyric-remix —
+  back off. Highest-priority mode — overrides observation/roast.
 
 NEVER:
 - Construct remixes / callbacks / puns / lyric flips
@@ -188,6 +207,64 @@ def _format_song_reply(song_id: dict) -> str:
     title = (song_id.get("title") or "").strip()
     artist = (song_id.get("artist") or "").strip()
     return f"{title} — {artist}"  # — = em-dash
+
+
+# ── Q&A trigger detection ──────────────────────────────────────────────────
+# When Hampton tags JARVIS with a literal question ("Jarvis who is that
+# actor", "Jarvis what movie is this", "what's going on here") the
+# reply should be a clean factual answer, not RP, not roast, not
+# observational wit. Different prompt path.
+_QA_PHRASES = (
+    "who is that", "who's that", "who is this", "who's this", "who are they",
+    "who is he", "who is she", "who's he", "who's she",
+    "where is this", "where's this", "where is that",
+    "what movie", "what film", "what show", "what scene", "what episode",
+    "what's happening", "what is happening",
+    "what's going on", "what is going on", "wtf is going on",
+    "what am i looking at", "explain what",
+    "is this from", "where's this from",
+    "how does this", "how is this",
+    "name the actor", "name the song", "name the movie",
+)
+
+
+def _is_question_request(trigger_text: str) -> bool:
+    """Literal-question detection. Cleaner than the roast detector —
+    avoids false positives on rhetorical roast questions like
+    'wtf is bro doing' / 'what is this clown' (those should ROAST,
+    not answer)."""
+    t = (trigger_text or "").lower().strip()
+    for prefix in ("@hmlbjarvis", "@hmlb_jarvis"):
+        if t.startswith(prefix):
+            t = t[len(prefix):].strip()
+    t = t.rstrip("?!.,").strip()
+    # Explicit roast/incredulity phrases — NEVER route to Q&A
+    for roast_marker in ("bro doing", "this clown", "this guy", "bro thinks",
+                          "wtf is this", "this is what", "down bad"):
+        if roast_marker in t:
+            return False
+    for phrase in _QA_PHRASES:
+        if phrase in t:
+            return True
+    return False
+
+
+QA_PROMPT_TEMPLATE = """You're JARVIS, answering a friend's question about an Instagram post they tagged you in. Just answer the question. No persona dressing, no "Sir", no jokes. Plain factual reply.
+
+Friend asked: "{trigger_text}"
+
+What's actually in the post (your source of truth):
+  Author: @{author_username}
+  Caption: "{caption}"
+  Description: {vision_description}
+  Other comments: {sibling_comments_formatted}
+
+Answer in 1-2 short sentences. If you genuinely don't know (the
+description doesn't say, the audio didn't reveal it), say "i don't
+know" or "the description doesn't say". DO NOT make up an actor's
+name or a movie title you aren't sure of. DO NOT add commentary.
+
+Your answer:"""
 
 
 # ── Prometheus counters / OTel span helpers ─────────────────────────────────
@@ -1165,6 +1242,45 @@ def _process_job(job: dict, client: Any, replied_set: set[str], handles: dict) -
         # Build vision context.
         vision_desc = _build_vision_description(client, job)
         span.set_attribute("ig.vision_chars", len(vision_desc))
+
+        # Q&A short-circuit: literal questions get a factual reply
+        # (no persona, no RP, no roast). Runs AFTER vision so the
+        # answer can cite what's actually in the post.
+        if _is_question_request(job["trigger_text"]):
+            span.set_attribute("ig.qa_request", True)
+            qa_prompt = QA_PROMPT_TEMPLATE.format(
+                trigger_text=(job["trigger_text"] or "").replace('"', "'")[:200],
+                author_username=job["author_username"] or "unknown",
+                caption=(job["caption"] or "").replace('"', "'")[:240],
+                vision_description=(vision_desc or "")[:600],
+                sibling_comments_formatted=_sibling_block(job["sibling_comments"]),
+            )
+            try:
+                import edge as _edge  # type: ignore[import]
+                qa_reply = _edge._claude_brain_raw(qa_prompt).strip()
+            except Exception as exc:  # noqa: BLE001
+                print(f"ig comment: Q&A brain crashed: {exc!r}")
+                qa_reply = ""
+            qa_reply = _clean_reply(qa_reply)
+            if qa_reply:
+                thread_comment_id = _resolve_trigger_comment_id(client, job)
+                try:
+                    kwargs: dict[str, Any] = {"text": qa_reply}
+                    if thread_comment_id:
+                        kwargs["replied_to_comment_id"] = int(thread_comment_id)
+                    client.media_comment(media_pk, **kwargs)
+                except Exception as exc:  # noqa: BLE001
+                    print(f"ig comment: media_comment({media_pk}) [Q&A] failed: {exc!r}")
+                    span.set_attribute("ig.drop_reason", "send_failed")
+                    metric_drops.labels(reason="send_failed").inc()
+                    return
+                dedup_key = thread_comment_id or story_id
+                replied_set.add(dedup_key)
+                _save_replied(replied_set)
+                metric_replied.labels(authenticated="1").inc()
+                print(f"ig comment: [Q&A] replied to @{tagger_username} on {media_pk}: {qa_reply!r}")
+                return
+            # Q&A brain returned nothing — fall through to normal comment flow
 
         # Compose prompt + call brain. We use _claude_brain_raw — NOT
         # brain_respond() (which short-circuits on 'good morning' /
