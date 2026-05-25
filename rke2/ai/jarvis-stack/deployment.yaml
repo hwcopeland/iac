@@ -86,6 +86,13 @@ spec:
             - sh
             - -c
             - |
+              # kubelet creates /state owned by root:root; chown so the
+              # main container (uid 1000) can write OAuth-refreshed state,
+              # speaker-id embeddings, persona tuning, etc.
+              chown 1000:100 /state
+              chmod 0775 /state
+              mkdir -p /state/voices /state/users
+              chown 1000:100 /state/voices /state/users
               if [ ! -f /state/persona.json ]; then
                 cat > /state/persona.json <<'EOF'
               {
@@ -98,13 +105,18 @@ spec:
                 "sonos_volume": 30
               }
               EOF
+                chown 1000:100 /state/persona.json
+                chmod 0664 /state/persona.json
                 echo "persona.json seeded with defaults"
               else
                 echo "persona.json already exists — preserving user-tuned values"
               fi
+          # Run as root to chown the kubelet-created mountpoint. The
+          # main jarvis-edge container still runs as uid 1000 (no
+          # elevation there).
           securityContext:
-            runAsUser: 1000
-            runAsGroup: 100
+            runAsUser: 0
+            runAsGroup: 0
           volumeMounts:
             - name: jarvis-state
               mountPath: /state
