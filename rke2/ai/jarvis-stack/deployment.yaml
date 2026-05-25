@@ -51,6 +51,30 @@ spec:
       dnsPolicy: ClusterFirstWithHostNet
       # Read-only k8s access (no secrets). See rbac.yaml in this dir.
       serviceAccountName: jarvis-readonly
+      initContainers:
+        # Copy the (read-only) Secret-mounted credentials.json into a
+        # writable emptyDir so claude CLI can refresh its OAuth tokens
+        # in place. The Secret stays the source of truth; we re-init
+        # from it on every pod start. If claude refreshes during a
+        # pod's lifetime, those refreshed tokens are lost on next
+        # restart — acceptable trade-off for a homelab.
+        - name: claude-creds-init
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              install -m 0600 /src/claude_credentials.json /dst/.credentials.json
+              echo "claude creds installed to /dst/.credentials.json"
+          securityContext:
+            runAsUser: 1000
+            runAsGroup: 100
+          volumeMounts:
+            - name: claude-creds-src
+              mountPath: /src
+              readOnly: true
+            - name: claude-home
+              mountPath: /dst
 
       containers:
         # ── STT: GPU faster-whisper ────────────────────────────────
@@ -206,12 +230,12 @@ spec:
             - name: BRAIN_MODE
               value: "claude"
             - name: HOME
-              value: "/home/user"           # so ~/.openjarvis/config.toml resolves
-            - name: ANTHROPIC_API_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: jarvis-secrets
-                  key: ANTHROPIC_API_KEY
+              value: "/home/user"           # so ~/.openjarvis/config.toml + ~/.claude/.credentials.json resolve
+            # No ANTHROPIC_API_KEY env — we run claude in SUBSCRIPTION
+            # mode (Claude Max). claude CLI reads ~/.claude/.credentials.json
+            # which the init container populates from the jarvis-secrets
+            # Secret. The Mac daemon's _claude_brain explicitly pops this
+            # env var; we just don't set it.
           resources:
             requests:
               cpu: "200m"
@@ -229,6 +253,9 @@ spec:
             - name: jarvis-config
               mountPath: /home/user/.openjarvis
               readOnly: true
+            # Claude subscription creds — writable so OAuth refresh works.
+            - name: claude-home
+              mountPath: /home/user/.claude
 
       volumes:
         - name: models
@@ -257,3 +284,17 @@ spec:
               - key: spotify_tokens.json
                 path: spotify_tokens.json
                 mode: 0400
+        # Read-only source for the init container; main container never
+        # mounts this directly (uses claude-home / emptyDir instead).
+        - name: claude-creds-src
+          secret:
+            secretName: jarvis-secrets
+            items:
+              - key: claude_credentials.json
+                path: claude_credentials.json
+                mode: 0400
+        # Writable home for claude CLI's creds + cache; OAuth refresh
+        # writes back here in-pod. Lost on pod restart — init container
+        # re-seeds from the Secret.
+        - name: claude-home
+          emptyDir: {}

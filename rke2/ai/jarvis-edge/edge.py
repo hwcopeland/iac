@@ -315,46 +315,39 @@ def brain_respond(text: str) -> str:
 
 
 def _check_brain_auth() -> None:
-    """Hit the Anthropic API once at startup to verify the key works.
-    Loud success or loud failure — never silent. Doesn't block startup
-    on failure (daemon still runs; brain calls just won't work)."""
-    key = os.environ.get("ANTHROPIC_API_KEY", "")
-    if not key:
-        print("brain auth: NO ANTHROPIC_API_KEY in env — brain disabled")
+    """Verify the subscription OAuth credentials are present + non-expired.
+    Loud success or loud failure — never silent. We DON'T do an actual
+    API call here (no spend) — just inspect the credentials file. If
+    expired, claude CLI will refresh on first use using the long-lived
+    refreshToken (and write back to the file thanks to emptyDir mount)."""
+    import time as _time
+    creds_path = os.path.expanduser("~/.claude/.credentials.json")
+    if not os.path.exists(creds_path):
+        print(f"brain auth: NO creds at {creds_path} — brain will not work")
+        print("brain auth: check the claude-creds-init initContainer ran "
+              "and jarvis-secrets has claude_credentials.json")
         return
-    if len(key) < 40:
-        print(f"brain auth: API key suspiciously short ({len(key)} chars)")
-    body = json.dumps({
-        "model": "claude-haiku-4-5-20251001",
-        "max_tokens": 4,
-        "messages": [{"role": "user", "content": "ok"}],
-    }).encode()
-    req = urllib.request.Request(
-        "https://api.anthropic.com/v1/messages",
-        data=body,
-        headers={
-            "x-api-key": key,
-            "anthropic-version": "2023-06-01",
-            "content-type": "application/json",
-        },
-        method="POST",
-    )
-    t0 = time.time()
     try:
-        with urllib.request.urlopen(req, timeout=10.0) as r:
-            data = json.loads(r.read())
-        ms = int((time.time() - t0) * 1000)
-        print(f"brain auth: OK  model={data.get('model')}  "
-              f"latency={ms}ms  usage={data.get('usage')}")
-    except urllib.error.HTTPError as exc:
-        body_txt = ""
-        try:
-            body_txt = exc.read().decode()[:300]
-        except Exception:
-            pass
-        print(f"brain auth: FAILED  http={exc.code}  body={body_txt}")
+        with open(creds_path) as f:
+            blob = json.load(f)
+        oauth = blob.get("claudeAiOauth") or blob
+        exp_ms = oauth.get("expiresAt") or 0
+        exp_s = exp_ms / 1000 if exp_ms > 1e12 else exp_ms
+        remaining_h = (exp_s - _time.time()) / 3600
+        sub = oauth.get("subscriptionType", "?")
+        if remaining_h > 0:
+            print(f"brain auth: subscription OAuth OK  type={sub}  "
+                  f"access_token expires in {remaining_h:.1f}h")
+        else:
+            print(f"brain auth: WARN access_token expired "
+                  f"{-remaining_h:.1f}h ago — claude will refresh on first use")
+        # Also check that ANTHROPIC_API_KEY is NOT set (it would override
+        # subscription mode and burn metered credit).
+        if os.environ.get("ANTHROPIC_API_KEY"):
+            print("brain auth: WARN ANTHROPIC_API_KEY is set — claude will "
+                  "use API mode not subscription. Unset the env var.")
     except Exception as exc:  # noqa: BLE001
-        print(f"brain auth: FAILED  {type(exc).__name__}: {exc}")
+        print(f"brain auth: FAILED to read creds: {exc}")
 
 
 # ── Cluster TTS ──────────────────────────────────────────────────────────────
