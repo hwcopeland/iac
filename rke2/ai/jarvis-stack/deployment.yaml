@@ -281,6 +281,38 @@ spec:
             # which the init container populates from the jarvis-secrets
             # Secret. The Mac daemon's _claude_brain explicitly pops this
             # env var; we just don't set it.
+
+            # ── Instagram webhook (Meta callbacks → /ig/webhook) ─────
+            # IG_ENABLED gates the daemon's startup log + handler arming;
+            # set to "0" (or remove) to keep the routes disabled while
+            # still able to roll the rest of the stack.
+            - name: IG_ENABLED
+              value: "1"
+            - name: IG_VERIFY_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: jarvis-ig-credentials
+                  key: IG_VERIFY_TOKEN
+            - name: IG_APP_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: jarvis-ig-credentials
+                  key: IG_APP_SECRET
+            - name: IG_PAGE_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: jarvis-ig-credentials
+                  key: IG_PAGE_TOKEN
+            - name: META_APP_ID
+              valueFrom:
+                secretKeyRef:
+                  name: jarvis-ig-credentials
+                  key: META_APP_ID
+            - name: IG_APP_ID
+              valueFrom:
+                secretKeyRef:
+                  name: jarvis-ig-credentials
+                  key: IG_APP_ID
           resources:
             requests:
               cpu: "200m"

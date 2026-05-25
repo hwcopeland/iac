@@ -1,0 +1,66 @@
+# PodMonitor for jarvis-edge's /metrics endpoint.
+#
+# PodMonitor (not ServiceMonitor) because:
+#   1. The jarvis-stack pod runs hostNetwork: true (see deployment.yaml).
+#      Prometheus reaches the pod via its host IP, which is identical to
+#      the pod IP under hostNetwork. PodMonitor scrapes pod IPs directly
+#      — Service-layer routing isn't needed.
+#   2. We DON'T want a Service for /metrics. The existing whisper-stt
+#      and chatterbox-tts Services target the same pod (selector
+#      `app: jarvis-stack`); adding /metrics to one of them would
+#      conflict with their app port. A dedicated metrics Service is
+#      possible but adds yaml without benefit — PodMonitor avoids it.
+#   3. cilium-podmonitor in rke2/monitor/cilium-podmonitor.yaml uses
+#      the same pattern (scrapes hostNetwork=true cilium-agent pods
+#      across the cluster). Matching that pattern keeps the platform
+#      consistent.
+#
+# `release: kube-prometheus-stack` label is required for the operator
+# to pick this up — see the prometheusSpec.podMonitorSelector default
+# in the kube-prometheus-stack chart.
+#
+# # TODO: confirm /metrics port number with @senior-engineer who owns
+# jarvis-edge. Common pattern is 9090 or 9100, but jarvis-edge is on
+# hostNetwork so the port must NOT collide with anything already on
+# nixos-gpu (lsof check before apply). Update `containerPort` below
+# AND make sure the edge.py daemon's prometheus_client.start_http_server()
+# call binds the same number. The deployment.yaml's `ports:` block
+# under the jarvis-edge container should also gain a named port for
+# the scrape target — without it the selector below still works
+# (PodMonitor can target a port by number) but a named port makes
+# the link explicit.
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: jarvis-edge
+  namespace: ai
+  labels:
+    release: kube-prometheus-stack
+spec:
+  namespaceSelector:
+    matchNames:
+      - ai
+  selector:
+    matchLabels:
+      app: jarvis-stack
+  podMetricsEndpoints:
+    - # # TODO: change to the named port (e.g. `port: metrics`) once
+      # deployment.yaml's jarvis-edge container declares it. Until then,
+      # use the numeric target port directly.
+      targetPort: 9090
+      path: /metrics
+      interval: 30s
+      scrapeTimeout: 10s
+      # Drop the chatterbox + whisper container metrics if those
+      # containers ever expose /metrics on the same pod — only the
+      # jarvis-edge container is in scope here.
+      relabelings:
+        - sourceLabels: [__meta_kubernetes_pod_container_name]
+          regex: jarvis-edge
+          action: keep
+        # Pin the instance label to the pod name so Grafana panels can
+        # template by instance without surfacing the cluster-internal
+        # IP (which equals the host IP under hostNetwork — not useful
+        # as a label).
+        - sourceLabels: [__meta_kubernetes_pod_name]
+          targetLabel: instance

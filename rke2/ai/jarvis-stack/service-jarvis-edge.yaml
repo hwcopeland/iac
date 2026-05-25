@@ -1,0 +1,24 @@
+---
+# ClusterIP Service fronting the jarvis-edge container's embedded HTTP
+# server (port 8088). Today that server serves both Sonos audio chunks
+# AND the IG webhook (/ig/webhook GET verify + POST event). Sonos still
+# fetches audio directly from the host LAN IP (the pod is hostNetwork:true);
+# this Service is what the HTTPRoute / Gateway points at for public ingress.
+#
+# Because the pod uses hostNetwork:true, the Service's Endpoints resolve
+# to the host's IP (nixos-gpu, 10.0.0.190), not a pod IP. That's fine —
+# kube-proxy/Cilium still routes correctly.
+apiVersion: v1
+kind: Service
+metadata:
+  name: jarvis-edge
+  namespace: ai
+spec:
+  type: ClusterIP
+  selector:
+    app: jarvis-stack
+  ports:
+    - name: audio-http
+      port: 8088
+      targetPort: 8088
+      protocol: TCP
