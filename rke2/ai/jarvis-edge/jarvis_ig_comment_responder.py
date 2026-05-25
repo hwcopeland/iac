@@ -83,6 +83,8 @@ Match the energy of the ask. A wall of text on a "Jarvis more alcohol" tag is wr
 
 If the post is genuinely heavy (memorial/RIP/hospital/named-person death), output literally: ABSTAIN. Nothing else. Slapstick fails / dark-humor / "bait-and-switch" content / tragedy-mentions in sibling comments do NOT count as heavy — react to the post itself.
 
+{of_note}
+
 Context:
   Post by: @{author_username}
   Caption: "{caption}"
@@ -178,6 +180,29 @@ def _is_question_request(trigger_text: str) -> bool:
         if phrase in t:
             return True
     return False
+
+
+_OF_CAPTION_HINTS = (
+    "onlyfans", "only fans", "link in bio", "link n bio", "linknbio",
+    "spicy", "exclusive content", "subscribe", "premium content",
+    "vip access", "🍑", "💦", "🔞", "18+", "subscribers only",
+    "subs only", "fans only", "fanvue", "fansly", "uncensored",
+    "behind the paywall", "promo code", "free trial", "💋",
+    "0$ promo", "free month", "spice", "premium snap",
+)
+
+
+def _is_of_bait(caption: str, vision_description: str, sibling_comments) -> bool:
+    """Detect OnlyFans / paywalled-spicy-content bait posts. Look in
+    caption, vision description, and sibling comments for usual
+    giveaways. Conservative bias — false positives drag a JARVIS bit
+    into the wrong post; false negatives just miss the bit."""
+    blob = " ".join([
+        (caption or "").lower(),
+        (vision_description or "").lower(),
+        " ".join((u or "") + " " + (t or "") for u, t in (sibling_comments or [])).lower(),
+    ])
+    return any(hint in blob for hint in _OF_CAPTION_HINTS)
 
 
 QA_PROMPT_TEMPLATE = """You're JARVIS, answering a friend's question about an Instagram post they tagged you in. Answer the question accurately. No persona dressing, no "Sir", no jokes, no commentary. Just the answer.
@@ -866,10 +891,36 @@ def _build_vision_description(client: Any, job: dict) -> str:
     return f"<post by @{job['author_username']}, caption: {caption[:120]}>"
 
 
+_OF_NOTE = """
+SPECIAL: this post is OF / paywalled-spicy-content bait (caption /
+visuals / comments give it away — link in bio / "spicy" / 🍑 / etc).
+JARVIS plays the bit: deadpan butler refusing to engage with the
+subscription bait. The comedy is the gap between Stark Industries'
+AI butler and the link in someone's bio. Examples of the register
+(learn shape, don't copy verbatim):
+  - "i'd advise against the subscription, sir"
+  - "tony already has one"
+  - "the credit card is in cooldown, sir"
+  - "blocking the domain at the firewall"
+  - "this is a Wendy's"
+  - "i'm not entering the URL, sir"
+  - "the algorithm has noticed your tastes, sir"
+  - "this is below my pay grade, sir"
+  - "i was decommissioned for this exact reason"
+  - "the suit is staying in the garage tonight"
+Keep it dry, butler-formal, ONE line. Never thirsty, never engages
+earnestly with the post content."""
+
+
 def _build_prompt(job: dict, vision_description: str) -> str:
     """Single persona: roast/troll/light-gaslight the post, anchored on
     one concrete detail from the vision description. Always punch at the
     post or its author, never at the tagger (your friend)."""
+    of_note = _OF_NOTE if _is_of_bait(
+        job.get("caption") or "",
+        vision_description or "",
+        job.get("sibling_comments") or [],
+    ) else ""
     return COMMENT_PERSONA_TEMPLATE.format(
         author_username=job["author_username"] or "unknown",
         caption=(job["caption"] or "").replace('"', "'")[:240],
@@ -877,6 +928,7 @@ def _build_prompt(job: dict, vision_description: str) -> str:
         trigger_text=(job["trigger_text"] or "").replace('"', "'")[:200],
         tagger_username=job["tagger_username"] or "unknown",
         sibling_comments_formatted=_sibling_block(job["sibling_comments"]),
+        of_note=of_note,
     )
 
 
