@@ -186,20 +186,25 @@ def _is_allowed_source(msg: Any) -> bool:
 
     Empty whitelist or unset owner id collapses to "drop everything" —
     safer than failing-open into spam."""
+    # Per Hampton's directive: ONLY he can summon JARVIS. Anyone else
+    # mentioning @hmlbjarvis (even in a whitelisted guild) is silently
+    # dropped — there's no continuous-conversation path for non-owner
+    # users. If Hampton's message instructs JARVIS to address someone
+    # else, the REPLY content can mention them, but the trigger always
+    # has to be Hampton's message.
+    owner = _owner_id()
+    if not owner:
+        return False
+    author_id = int(getattr(getattr(msg, "author", None), "id", 0) or 0)
+    if author_id != owner:
+        return False
+    # Now check source: DMs from owner are always fine; guild messages
+    # must additionally be in a whitelisted server.
     guild = getattr(msg, "guild", None)
     if guild is None:
-        # DM channel — only owner.
-        owner = _owner_id()
-        if not owner:
-            return False
-        author_id = getattr(getattr(msg, "author", None), "id", 0)
-        return int(author_id or 0) == owner
-    # Guild message — whitelist the guild itself; per-message trigger
-    # detection runs separately.
+        return True
     guild_id = int(getattr(guild, "id", 0) or 0)
-    if not guild_id:
-        return False
-    return guild_id in _whitelist_server_ids()
+    return guild_id != 0 and guild_id in _whitelist_server_ids()
 
 
 def _is_triggered(msg: Any, own_id: int) -> bool:
@@ -439,27 +444,28 @@ def _compose_reply(ig_mod: Any, job: dict, msg: Any) -> str:
         print(f"discord: Q&A quality fail ({reason}): {qa_reply[:120]!r}")
         # Fall through to comment-persona retry.
 
-    # ── Default: comment-persona (gaslight one-liner). Reuses the IG
-    #    prompt verbatim. The "post by @author" / "caption" framing
-    #    becomes a non-sequitur on Discord but the persona / banned-
-    #    word rules still apply — and Hampton's preference (per memory
-    #    [[project_jarvis_ig_comment_responder]]) is to use
-    #    _claude_brain_raw with the same template, NOT brain_respond
-    #    (which short-circuits on "good morning") and NOT _claude_brain
-    #    (butler persona that fights the gaslight prompt).
+    # ── Default: full butler brain WITH MCP tools enabled.
+    #    Discord is a conversational interface (only Hampton can talk
+    #    to JARVIS — owner-only gate is upstream), not a public IG
+    #    comment-section drop-in. Use brain_respond() so JARVIS has the
+    #    same butler persona + full MCP toolbox (spotify / sonos /
+    #    kube-read / personal / persona / google / etc.) that the voice
+    #    JARVIS uses at the desk. Reply length is unbounded — Discord
+    #    cap is ~2000 chars per message, plenty.
     try:
-        prompt = ig_mod._build_prompt(job, vision_description="(discord message — no post)")
         import edge as _edge  # type: ignore[import]
-        raw = _edge._claude_brain_raw(prompt) or ""
+        raw = _edge.brain_respond(msg_text) or ""
     except Exception as exc:  # noqa: BLE001
-        print(f"discord: comment brain crashed: {exc!r}")
+        print(f"discord: brain_respond crashed: {exc!r}")
         return ""
-    reply = ig_mod._clean_reply(raw)
-    ok, reason = ig_mod._quality_check(reply)
-    if ok:
-        return reply
-    print(f"discord: comment quality fail ({reason}): {reply[:120]!r}")
-    return ""
+    # Strip wrapping quotes / prefix junk but don't apply the IG
+    # one-liner quality gate — butler replies are allowed to be
+    # multi-sentence and may include tool-driven content.
+    reply = ig_mod._clean_reply(raw).strip()
+    if not reply:
+        print("discord: butler brain returned empty")
+        return ""
+    return reply
 
 
 # ── Attachment helpers ──────────────────────────────────────────────────────
