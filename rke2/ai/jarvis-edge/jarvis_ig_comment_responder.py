@@ -209,6 +209,38 @@ _OF_FEMININE_HINTS = (
 )
 
 
+# Phrases in the TAGGER's comment that explicitly summon the OF
+# protocol regardless of post content. Hampton's claim is the signal;
+# JARVIS plays the bit without auto-evaluating whether the post
+# actually qualifies as OF. Lower-cased substring match against the
+# trigger_text (after the leading @hmlbjarvis is stripped). Avoid
+# generic words ("of") that would false-positive constantly — only
+# the meme-coded summon phrases count.
+_OF_SUMMON_PHRASES = (
+    "of detected", "of bait", "of girl", "of moment", "of vibes",
+    "of energy", "of in disguise", "is this of", "is she of",
+    "smells like of", "of confirmed", "of alert", "spicy detected",
+    "spicy alert", "🍑 detected", "💦 detected",
+    # Standalone "OF" with explicit punctuation framing so we don't
+    # match "best of times" / "kind of" / etc.
+    " of?", "of?", "(of)",
+)
+
+
+def _is_of_summon(trigger_text: str) -> bool:
+    """True when the tagger's text explicitly invokes the OF protocol.
+    Trusts the tagger's claim over content detection — Hampton's call,
+    JARVIS plays the bit. The mismatch (if the post isn't actually OF)
+    is the joke."""
+    t = (trigger_text or "").lower().strip()
+    for prefix in ("@hmlbjarvis", "@hmlb_jarvis"):
+        if t.startswith(prefix):
+            t = t[len(prefix):].strip()
+    # exact-tail check ("... of detected") and substring check both work
+    # for the phrases above
+    return any(phrase in t for phrase in _OF_SUMMON_PHRASES)
+
+
 def _is_of_bait(caption: str, vision_description: str, sibling_comments) -> bool:
     """Fire the OF/spicy protocol when EITHER:
       (a) Strong signal in caption/vision/siblings (explicit OF / link
@@ -947,11 +979,18 @@ def _build_prompt(job: dict, vision_description: str) -> str:
     """Single persona: roast/troll/light-gaslight the post, anchored on
     one concrete detail from the vision description. Always punch at the
     post or its author, never at the tagger (your friend)."""
-    of_note = _OF_NOTE if _is_of_bait(
+    # Fire OF protocol on EITHER content-based detection OR explicit
+    # summon in the tagger's text. If Hampton tags "@hmlbjarvis OF
+    # detected" on a post that doesn't auto-trigger the detector,
+    # trust his claim and play the bit anyway — the mismatch IS the
+    # joke if the post isn't actually OF.
+    of_summoned = _is_of_summon(job.get("trigger_text") or "")
+    of_detected = _is_of_bait(
         job.get("caption") or "",
         vision_description or "",
         job.get("sibling_comments") or [],
-    ) else ""
+    )
+    of_note = _OF_NOTE if (of_summoned or of_detected) else ""
     return COMMENT_PERSONA_TEMPLATE.format(
         author_username=job["author_username"] or "unknown",
         caption=(job["caption"] or "").replace('"', "'")[:240],
