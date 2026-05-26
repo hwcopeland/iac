@@ -455,7 +455,7 @@ def _compose_reply(ig_mod: Any, job: dict, msg: Any) -> str:
     #    cap is ~2000 chars per message, plenty.
     try:
         import edge as _edge  # type: ignore[import]
-        raw = _edge.brain_respond(msg_text) or ""
+        raw = _edge.brain_respond(trigger_text) or ""
     except Exception as exc:  # noqa: BLE001
         print(f"discord: brain_respond crashed: {exc!r}")
         return ""
