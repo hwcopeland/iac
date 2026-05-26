@@ -239,10 +239,11 @@ def _build_client() -> Any:
     bot."""
     import discord  # type: ignore[import]
 
-    intents = discord.Intents.default()
-    # discord.py-self ignores most intent flags (the user gateway doesn't
-    # negotiate intents the way the bot gateway does), but constructing
-    # the default Intents is the supported initializer call.
+    # NOTE: discord.py-self is the user-gateway library — selfbots have
+    # the full user account's access and don't negotiate Intents the
+    # way bots do. The Intents class was removed/never-present in the
+    # selfbot fork; constructing the Client without intents= is the
+    # supported pattern here.
 
     class JarvisClient(discord.Client):
         async def on_ready(self) -> None:
@@ -272,7 +273,7 @@ def _build_client() -> Any:
                 print(f"discord on_message: {exc!r}")
                 traceback.print_exc()
 
-    return JarvisClient(intents=intents)
+    return JarvisClient()
 
 
 # ── Message handler ────────────────────────────────────────────────────────
