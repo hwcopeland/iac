@@ -18,6 +18,7 @@ COPY jarvis_personal.py jarvis_personal_mcp.py \
      jarvis_ig_media_dl.py jarvis_song_id.py \
      jarvis_ig_followup_poller.py \
      jarvis_local_brain.py \
+     jarvis_discord.py \
      /app/
 
 ENV EDGE_HTTP_PORT=8088 \
