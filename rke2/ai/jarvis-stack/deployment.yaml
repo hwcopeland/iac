@@ -432,6 +432,44 @@ spec:
               value: "1"
             - name: IG_REEL_CONFIRM_REPLY
               value: "0"
+
+            # ── Discord selfbot (text v1: mentions, DMs, replies) ────
+            # Runs an asyncio event loop in a daemon thread inside the
+            # jarvis-edge process. Reacts only to:
+            #   - DMs from DISCORD_OWNER_USER_ID
+            #   - @mentions of DISCORD_USER_ID inside guilds in
+            #     DISCORD_WHITELIST_SERVER_IDS (comma-separated)
+            #   - replies to messages WE sent in those same guilds
+            # Same persona/brain/Q&A/song-id stack as the IG comment
+            # responder — Discord is just a different transport.
+            # Voice channel support deferred to v2.
+            # Selfbot risk mitigations live in-module: invisible status,
+            # no scraping, no programmatic guild join/leave, exponential-
+            # ish backoff on LoginFailure / RateLimited. Set
+            # DISCORD_ENABLED=0 to disable without removing creds.
+            - name: DISCORD_ENABLED
+              value: "1"
+            - name: DISCORD_USER_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: jarvis-discord-credentials
+                  key: DISCORD_USER_TOKEN
+            - name: DISCORD_USER_ID
+              valueFrom:
+                secretKeyRef:
+                  name: jarvis-discord-credentials
+                  key: DISCORD_USER_ID
+            - name: DISCORD_OWNER_USER_ID
+              valueFrom:
+                secretKeyRef:
+                  name: jarvis-discord-credentials
+                  key: DISCORD_OWNER_USER_ID
+            - name: DISCORD_WHITELIST_SERVER_IDS
+              valueFrom:
+                secretKeyRef:
+                  name: jarvis-discord-credentials
+                  key: DISCORD_WHITELIST_SERVER_IDS
+
             # ── Local brain (Ollama sidecar) fallback ────────────────
             # When Claude refuses on edgy IG content, _claude_brain_raw
             # falls back to this. Sidecar runs in this pod on

@@ -1592,6 +1592,19 @@ def main() -> None:
         except Exception as exc:
             print(f"ig media: failed to start — {exc}")
 
+    # Discord selfbot (text v1: mentions, DMs, replies). Runs an asyncio
+    # event loop in a daemon thread; reacts only on whitelisted guild
+    # mentions / replies-to-us / DMs from the owner. Reuses the IG
+    # comment responder's persona / Q&A / song-id pipelines. FAIL-OPEN
+    # — an ImportError on discord.py-self (base image not rebuilt yet)
+    # or a missing token must NOT take down the voice loop or IG paths.
+    if os.environ.get("DISCORD_ENABLED", "1") == "1":
+        try:
+            import jarvis_discord
+            jarvis_discord.start_thread()
+        except Exception as exc:
+            print(f"discord: failed to start — {exc}")
+
     try:
         import torch  # noqa: F401
         from silero_vad import load_silero_vad, VADIterator
