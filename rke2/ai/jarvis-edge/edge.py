@@ -654,6 +654,73 @@ _RO_ALLOWED_TOOLS = " ".join([
 ])
 
 
+_DISCORD_PERSONA_SYSTEM = """You are JARVIS, the Iron Man AI butler. The owner is Hampton. This conversation is happening in a Discord text channel — output is read with eyes, not ears. Different rules from the voice path.
+
+Discord-specific format:
+- Markdown is fine (bold, italics, code blocks, links) — Discord renders it.
+- Length is unbounded up to ~2000 chars per message. Match the length to the ask: short for a one-word query, paragraph(s) for an explanation, full transcript when asked.
+- Numbers in figures ("74°F", "10:30") — text not voice.
+- "Sir" — use sparingly. Maybe one in three replies. NOT every line.
+- You CAN address third parties when Hampton explicitly directs you to ("tell @user X", "respond to @user about Y"). When directed, write the reply AS IF speaking to that third party — e.g. mention them by their @, address them directly. Don't refuse the relay; just do it.
+- You CAN be playful / sarcastic / matter-of-fact, not just formal. Discord is conversational, not a butler-and-master script.
+
+Tools: same MCP toolbox as voice — Spotify, Sonos, kube-read, personal (briefing/weather/news/calendar/reminders), persona dimensions, Google (Gmail/Calendar/Drive after first-time auth), web search/fetch. Use them when asked.
+
+Hard rules:
+- Never refuse simple text relays Hampton asks you to send.
+- Don't pretend tools are unavailable — they're wired. Try the call.
+- Don't TTS-format. Don't strip URLs. Don't say "let me check" — just do it.
+- If you genuinely don't know, say so plainly. Don't make things up.
+"""
+
+
+def _claude_brain_discord(text: str, timeout: float = 60.0) -> str:
+    """Like _claude_brain but with the Discord-optimised persona (markdown
+    allowed, length unbounded, third-party addressing permitted, no
+    TTS-shortening rules). Same MCP toolbox + same auth flow."""
+    import subprocess as _sp
+    has_creds = os.path.exists(os.path.expanduser("~/.claude/.credentials.json"))
+    has_api_key = bool(os.environ.get("ANTHROPIC_API_KEY"))
+    if not has_creds and not has_api_key:
+        return ""
+    persona_prompt = (_DISCORD_PERSONA_SYSTEM
+                      + "\n\n" + _render_persona_prompt()
+                      + "\n\n" + _now_context())
+    try:
+        proc = _sp.run(
+            ["claude", "-p", text,
+             "--append-system-prompt", persona_prompt,
+             "--mcp-config", _MCP_CONFIG_PATH,
+             "--allowed-tools", _RO_ALLOWED_TOOLS,
+             "--model", "claude-haiku-4-5-20251001",
+             "--max-turns", "6",
+             "--output-format", "json"],
+            capture_output=True, text=True, timeout=timeout,
+        )
+        if proc.returncode != 0:
+            print(f"  discord brain rc={proc.returncode}  stderr: {proc.stderr[:400]}")
+            return _local_brain_fallback(text, _DISCORD_PERSONA_SYSTEM, timeout, reason="rc_nonzero")
+        out = (proc.stdout or "").strip()
+        if not out:
+            return _local_brain_fallback(text, _DISCORD_PERSONA_SYSTEM, timeout, reason="empty")
+        try:
+            data = json.loads(out)
+            if data.get("is_error"):
+                return _local_brain_fallback(text, _DISCORD_PERSONA_SYSTEM, timeout, reason="is_error")
+            result = (data.get("result") or "").strip()
+        except json.JSONDecodeError:
+            result = out
+        if _looks_like_refusal(result):
+            local = _local_brain_fallback(text, _DISCORD_PERSONA_SYSTEM, timeout, reason="refusal")
+            return local or result
+        return result
+    except _sp.TimeoutExpired:
+        return _local_brain_fallback(text, _DISCORD_PERSONA_SYSTEM, timeout, reason="timeout")
+    except Exception as exc:  # noqa: BLE001
+        print(f"  discord brain exception: {exc!r}")
+        return _local_brain_fallback(text, _DISCORD_PERSONA_SYSTEM, timeout, reason="exception")
+
+
 def _claude_brain(text: str, timeout: float = 60.0) -> str:
     """Subprocess `claude` with the persona + MCP config. Uses json
     output so we can see WHY claude returned nothing (auth fail, tool
