@@ -22,7 +22,7 @@ Contract:
 
 Env:
     IG_FOLLOWUP_POLL_ENABLED        "1" to start (default)
-    IG_FOLLOWUP_INTERVAL_S          per-cycle sleep (default 60)
+    IG_FOLLOWUP_INTERVAL_S          per-cycle sleep (default 600)
     IG_FOLLOWUP_TTL_S               drop media after this many seconds
                                     of inactivity (default 7d)
     IG_FOLLOWUP_TRACKED_PATH        on-disk tracked-media list
@@ -52,7 +52,7 @@ def _tracked_path() -> str:
 
 
 def _interval_s() -> int:
-    return int(os.environ.get("IG_FOLLOWUP_INTERVAL_S", "60"))
+    return int(os.environ.get("IG_FOLLOWUP_INTERVAL_S", "600"))
 
 
 def _ttl_s() -> int:
@@ -151,7 +151,7 @@ def _poll_one(client: Any, media_pk: str, followed_ids: set, queue) -> int:
     """Scan one media's comments for new follow-ups by followed users.
     Returns count of new follow-ups enqueued."""
     try:
-        comments = client.media_comments(media_pk, amount=20) or []
+        comments = client.media_comments(media_pk, amount=8) or []
     except Exception as exc:  # noqa: BLE001
         print(f"ig followup: media_comments({media_pk}) failed: {exc!r}")
         return 0
