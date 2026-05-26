@@ -153,6 +153,55 @@ def _remember_own_message(message_id: int) -> None:
         _own_message_ids.append(int(message_id))
 
 
+async def _collect_reply_chain(
+    msg: Any, max_depth: int | None = None
+) -> list[tuple[str, str]]:
+    """Walk msg.reference upward, returning (author_name, content) tuples
+    ordered oldest → newest (so the immediate parent of `msg` is last).
+
+    Each text is trimmed to keep the prompt bounded. Stops on the first
+    parent we can't resolve (deleted, no perms, network error).
+
+    Depth defaults to DISCORD_REPLY_CHAIN_DEPTH (4)."""
+    if max_depth is None:
+        max_depth = max(0, _env_int("DISCORD_REPLY_CHAIN_DEPTH", 4))
+    if max_depth <= 0:
+        return []
+    text_cap = max(40, _env_int("DISCORD_REPLY_CHAIN_TEXT_CAP", 300))
+
+    chain: list[tuple[str, str]] = []
+    cursor = msg
+    for _ in range(max_depth):
+        ref = getattr(cursor, "reference", None)
+        if ref is None:
+            break
+        ref_id = getattr(ref, "message_id", None)
+        if not ref_id:
+            break
+        parent = getattr(ref, "resolved", None)
+        if parent is None:
+            channel = getattr(cursor, "channel", None)
+            if channel is None or not hasattr(channel, "fetch_message"):
+                break
+            try:
+                parent = await channel.fetch_message(int(ref_id))
+            except Exception as exc:  # noqa: BLE001
+                print(f"discord: fetch_message({ref_id}) failed: {exc!r}")
+                break
+        if parent is None:
+            break
+        p_author = getattr(parent, "author", None)
+        p_name = str(getattr(p_author, "name", "") or "?")
+        p_text = (getattr(parent, "content", "") or "").strip()
+        if len(p_text) > text_cap:
+            p_text = p_text[:text_cap].rstrip() + "…"
+        if p_text:
+            chain.append((p_name, p_text))
+        cursor = parent
+    chain.reverse()
+    return chain
+
+
 def _is_reply_to_us(msg: Any) -> bool:
     """True if msg.reference points at a message we sent THIS process
     lifetime. Returns False for replies older than our cache window or
@@ -322,6 +371,19 @@ async def _on_message_safe(client: Any, msg: Any) -> None:
           f"({'DM' if is_dm else f'guild={guild_name}'}): "
           f"{trigger_text[:120]!r}")
 
+    # If this message is itself a Discord reply, pull the chain above it
+    # so the brain sees what we're actually replying to. Falls back to []
+    # on any error — the brain still responds, just without context.
+    reply_chain: list[tuple[str, str]] = []
+    if getattr(msg, "reference", None) is not None:
+        try:
+            reply_chain = await _collect_reply_chain(msg)
+            if reply_chain:
+                print(f"discord: reply-chain depth={len(reply_chain)} "
+                      f"(oldest=@{reply_chain[0][0]}, newest=@{reply_chain[-1][0]})")
+        except Exception as exc:  # noqa: BLE001
+            print(f"discord: reply-chain walk failed: {exc!r}")
+
     # Lazy-import the IG persona module so a discord.py-self bug can't
     # block edge.py startup at import time.
     try:
@@ -343,7 +405,7 @@ async def _on_message_safe(client: Any, msg: Any) -> None:
         "trigger_text":       trigger_text,
         "tagger_username":    str(getattr(author, "name", "") or ""),
         "tagger_id":          str(author_id),
-        "sibling_comments":   [],
+        "sibling_comments":   reply_chain,
         "story_id":           f"discord:{getattr(msg, 'id', 0)}",
         "source":             "discord",
     }
