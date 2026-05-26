@@ -636,6 +636,21 @@ _RO_ALLOWED_TOOLS = " ".join([
     # Web
     "WebFetch",
     "WebSearch",
+    # Google (Gmail, Calendar, Drive) — claude CLI ships these as
+    # mcp__claude_ai_* tools. Auth via one-time OAuth dance the first
+    # time a tool is invoked; tokens persist on /state/.claude/ PVC
+    # subPath so subsequent calls just work. Pattern:
+    #   1. JARVIS calls e.g. Gmail__search → returns auth-required
+    #   2. Brain calls mcp__claude_ai_Gmail__authenticate → URL
+    #   3. Hampton visits URL in browser, signs into Google
+    #   4. Brain calls mcp__claude_ai_Gmail__complete_authentication
+    #   5. Future calls work indefinitely
+    "mcp__claude_ai_Gmail__authenticate",
+    "mcp__claude_ai_Gmail__complete_authentication",
+    "mcp__claude_ai_Google_Calendar__authenticate",
+    "mcp__claude_ai_Google_Calendar__complete_authentication",
+    "mcp__claude_ai_Google_Drive__authenticate",
+    "mcp__claude_ai_Google_Drive__complete_authentication",
 ])
 
 
