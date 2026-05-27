@@ -20,6 +20,36 @@ _DEFAULT_IP = os.environ.get("SONOS_IP", "")
 # Discovery cache (60s TTL) so repeat lookups don't ssdp-spam.
 _disc_cache: dict = {"ts": 0.0, "devices": []}
 
+# Persona state — edge.py reads sonos_volume from here on every speak
+# turn. If we only set the LIVE Sonos value, the next speak turn would
+# clobber it back to the persona/schedule value. Writing here makes the
+# change stick. When the brain is asked to "go back to schedule", we
+# remove the key so edge.py's _scheduled_sonos_volume() takes over.
+_PERSONA_PATH = os.environ.get("PERSONA_PATH", "/state/persona.json")
+
+
+def _persona_set_volume(level: int | None) -> None:
+    """Write (or clear if level is None) the sonos_volume override in
+    persona.json. Best-effort — failure here doesn't fail the tool call,
+    just falls back to the live-only behaviour."""
+    try:
+        try:
+            with open(_PERSONA_PATH) as f:
+                d = json.load(f)
+        except (OSError, ValueError):
+            d = {}
+        if level is None:
+            d.pop("sonos_volume", None)
+        else:
+            d["sonos_volume"] = int(level)
+        tmp = _PERSONA_PATH + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(d, f, indent=2)
+        os.replace(tmp, _PERSONA_PATH)
+    except Exception as exc:  # noqa: BLE001
+        print(f"sonos mcp: persona write failed: {exc!r}",
+              file=sys.stderr)
+
 
 def _soco_for(room: str | None):
     """Return a SoCo device for ``room`` (case-insensitive name) or the
@@ -75,6 +105,16 @@ _TOOLS = [
             "required": ["delta"],
             "additionalProperties": False,
         },
+    },
+    {
+        "name": "sonos_volume_schedule",
+        "description": (
+            "Clear any manual volume override and let JARVIS's day/night "
+            "schedule drive the Sonos volume again. Use when the user "
+            "says 'go back to auto', 'reset the volume', 'use the "
+            "schedule', etc."
+        ),
+        "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
     },
     {
         "name": "sonos_mute",
@@ -139,14 +179,24 @@ def _call(name: str, args: dict) -> dict:
             except Exception: pass
             level = max(0, min(100, int(args["level"])))
             s.volume = level
+            # Persist as persona override so the next speak turn doesn't
+            # immediately clobber this back to the schedule value.
+            _persona_set_volume(level)
             return _text(json.dumps({"status": "ok", "room": s.player_name, "volume": level}))
         if name == "sonos_volume_step":
             s = _soco_for(room)
             cur = int(s.volume)
             target = max(0, min(100, cur + int(args["delta"])))
             s.volume = target
+            _persona_set_volume(target)
             return _text(json.dumps({"status": "ok", "room": s.player_name,
                                       "from": cur, "to": target}))
+        if name == "sonos_volume_schedule":
+            # Clear the persona override so edge.py's day/night
+            # _scheduled_sonos_volume() takes back over.
+            _persona_set_volume(None)
+            return _text(json.dumps({"status": "ok",
+                                      "message": "volume now follows day/night schedule"}))
         if name == "sonos_mute":
             s = _soco_for(room)
             state = (args.get("state") or "toggle").lower()
