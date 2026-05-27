@@ -1,0 +1,28 @@
+---
+# Front Open WebUI on chat.hwcopeland.net via the shared
+# kube-system/hwcopeland-gateway. TLS comes from the wildcard
+# *.hwcopeland.net cert already wired on the gateway's `https` listener.
+#
+# Auth: Open WebUI handles its own OIDC login against Authentik
+# (provider+app declared in rke2/authentik/blueprints/providers-open-webui.yaml).
+# The route itself is unauthenticated — Open WebUI gates the UI.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: open-webui
+  namespace: ai
+spec:
+  hostnames:
+    - chat.hwcopeland.net
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: hwcopeland-gateway
+      namespace: kube-system
+      sectionName: https
+  rules:
+    - backendRefs:
+        - group: ""
+          kind: Service
+          name: open-webui
+          port: 8080

@@ -1,0 +1,98 @@
+---
+# Open WebUI client for the Ollama backend.
+# Runs on microedge (a normal Longhorn node) — NOT nixos-gpu, which has a
+# Cilium host->pod quirk that breaks LoadBalancer/probe reachability.
+# Reaches Ollama (on nixos-gpu) over cluster-internal Service DNS.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: open-webui
+  namespace: ai
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: open-webui
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: open-webui
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: microedge
+      containers:
+        - name: open-webui
+          image: ghcr.io/open-webui/open-webui:main
+          ports:
+            - containerPort: 8080
+          env:
+            - name: OLLAMA_BASE_URL
+              value: "http://ollama.ai.svc.cluster.local:11434"
+            - name: ENABLE_OPENAI_API
+              value: "false"
+            - name: ANONYMIZED_TELEMETRY
+              value: "false"
+            - name: WEBUI_NAME
+              value: "hwcopeland AI"
+            # ── Authentik OIDC ────────────────────────────────────────
+            # Provider/app declared in
+            # rke2/authentik/blueprints/providers-open-webui.yaml.
+            # Authentik auto-generates the client_secret on first
+            # provider create; copy it out of the Authentik UI into
+            # the K8s secret `open-webui-oidc` (key: client_secret).
+            - name: WEBUI_URL
+              value: "https://chat.hwcopeland.net"
+            - name: ENABLE_OAUTH_SIGNUP
+              value: "true"
+            # New OIDC sign-ins land as active 'user' (no pending-approval
+            # wait). Authentik is the actual gate for who can sign in;
+            # admin promotion is per-user via the Open WebUI admin panel.
+            - name: DEFAULT_USER_ROLE
+              value: "user"
+            - name: OAUTH_MERGE_ACCOUNTS_BY_EMAIL
+              value: "true"
+            - name: OAUTH_PROVIDER_NAME
+              value: "authentik"
+            - name: OAUTH_CLIENT_ID
+              value: "open-webui"
+            - name: OAUTH_SCOPES
+              value: "openid email profile"
+            - name: OPENID_PROVIDER_URL
+              value: "https://auth.hwcopeland.net/application/o/open-webui/.well-known/openid-configuration"
+            - name: OAUTH_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: open-webui-oidc
+                  key: client_secret
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "2"
+              memory: 2Gi
+          volumeMounts:
+            - name: data
+              mountPath: /app/backend/data
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 120
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 6
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: open-webui-data

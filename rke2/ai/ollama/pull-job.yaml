@@ -1,0 +1,35 @@
+---
+# Run once after the Ollama deployment is ready to pre-pull models.
+# Re-apply to re-run: kubectl delete job ollama-pull -n ai && kubectl apply -f pull-job.yaml
+# ollama pull is idempotent — models already present are skipped quickly.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ollama-pull
+  namespace: ai
+spec:
+  ttlSecondsAfterFinished: 600
+  backoffLimit: 3
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: pull
+          image: curlimages/curl:latest
+          command:
+            - sh
+            - -c
+            - |
+              set -e
+              API=http://ollama.ai.svc.cluster.local:11434/api/pull
+              echo "Pulling qwen3-abliterated:30b-a3b (uncensored MoE, ~18 GB) ..."
+              curl -sf -X POST "$API" \
+                -H 'Content-Type: application/json' \
+                -d '{"name":"huihui_ai/qwen3-abliterated:30b-a3b","stream":false}' \
+                --max-time 5400
+              echo "Pulling qwen2.5:7b ..."
+              curl -sf -X POST "$API" \
+                -H 'Content-Type: application/json' \
+                -d '{"name":"qwen2.5:7b","stream":false}' \
+                --max-time 1800
+              echo "Done."

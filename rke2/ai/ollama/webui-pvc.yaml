@@ -1,0 +1,16 @@
+---
+# Longhorn-backed data volume for Open WebUI (sqlite DB, uploads, RAG store).
+# microedge is a Longhorn node, so CSI provisioning works here — unlike
+# nixos-gpu, which has no CSI driver.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: open-webui-data
+  namespace: ai
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: longhorn
+  resources:
+    requests:
+      storage: 8Gi
