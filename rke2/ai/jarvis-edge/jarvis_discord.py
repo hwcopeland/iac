@@ -153,53 +153,53 @@ def _remember_own_message(message_id: int) -> None:
         _own_message_ids.append(int(message_id))
 
 
-# ── Per-DM rolling conversation history ────────────────────────────────────
-# Keyed by (author_id, channel_id). Each value is a deque of
-# (timestamp, author_name, text) entries. The reply-chain walker only
-# helps when the user explicitly threads a Discord reply; rolling history
-# fills the gap for plain back-and-forth DMs where each message is its
-# own root. Per-channel scoping keeps separate conversations isolated.
-_dm_history: dict[tuple[int, int], collections.deque] = {}
-_dm_history_lock = threading.Lock()
+# ── Per-channel rolling conversation history ───────────────────────────────
+# Keyed by channel_id. Each value is a deque of (timestamp, author_name,
+# text) entries from ANY non-bot author in that channel — the owner,
+# everyone else, even self. The reply-chain walker only helps when the
+# user explicitly threads a Discord reply; rolling history fills the
+# gap when context is scattered across multiple senders' messages
+# (e.g. "@jarvis translate this" where the thing-to-translate was
+# posted by a different user moments ago).
+_channel_history: dict[int, collections.deque] = {}
+_channel_history_lock = threading.Lock()
 
 
-def _history_key(msg: Any) -> tuple[int, int] | None:
-    author = getattr(msg, "author", None)
-    aid = int(getattr(author, "id", 0) or 0)
+def _channel_id(msg: Any) -> int | None:
     channel = getattr(msg, "channel", None)
     cid = int(getattr(channel, "id", 0) or 0)
-    if not aid or not cid:
-        return None
-    return (aid, cid)
+    return cid or None
 
 
 def _history_append(msg: Any, author_name: str, text: str) -> None:
-    """Append one turn to the rolling history for this conversation."""
-    key = _history_key(msg)
-    if key is None or not text:
+    """Append one turn to the rolling history for this channel."""
+    cid = _channel_id(msg)
+    if cid is None or not text:
         return
-    cap = max(2, _env_int("DISCORD_HISTORY_TURNS", 8))
-    with _dm_history_lock:
-        dq = _dm_history.get(key)
+    cap = max(2, _env_int("DISCORD_HISTORY_TURNS", 12))
+    with _channel_history_lock:
+        dq = _channel_history.get(cid)
         if dq is None or dq.maxlen != cap:
             dq = collections.deque(maxlen=cap)
-            _dm_history[key] = dq
+            _channel_history[cid] = dq
         dq.append((time.time(), author_name, text))
 
 
-def _history_recent(msg: Any) -> list[tuple[str, str]]:
-    """Return the rolling history for this conversation as
-    (author_name, text) tuples, oldest → newest, TTL-filtered.
-    Skips the empty-text entries that may have slipped in."""
-    key = _history_key(msg)
-    if key is None:
+def _history_recent(
+    msg: Any, exclude_text: str = ""
+) -> list[tuple[str, str]]:
+    """Return rolling history for this channel as (author_name, text)
+    tuples, oldest → newest, TTL-filtered. `exclude_text` lets the
+    caller skip the trigger message itself if it's been recorded."""
+    cid = _channel_id(msg)
+    if cid is None:
         return []
     ttl = max(60, _env_int("DISCORD_HISTORY_TTL_S", 3600))
     cap_chars = max(60, _env_int("DISCORD_HISTORY_TEXT_CAP", 240))
     cutoff = time.time() - ttl
     out: list[tuple[str, str]] = []
-    with _dm_history_lock:
-        dq = _dm_history.get(key)
+    with _channel_history_lock:
+        dq = _channel_history.get(cid)
         if not dq:
             return []
         for ts, name, txt in dq:
@@ -207,26 +207,69 @@ def _history_recent(msg: Any) -> list[tuple[str, str]]:
                 continue
             if not txt:
                 continue
+            if exclude_text and txt == exclude_text:
+                continue
             t = txt if len(txt) <= cap_chars else txt[:cap_chars].rstrip() + "…"
             out.append((name, t))
     return out
 
 
+async def _fetch_channel_backfill(msg: Any, limit: int | None = None
+                                   ) -> list[tuple[str, str]]:
+    """Pull the last N messages from the Discord channel via the API.
+    Used as a one-shot context grab when the rolling buffer is thin
+    (e.g. right after pod start, or the trigger arrives before the
+    channel-history accumulator has caught up). Oldest → newest order.
+    Skips the trigger message itself and bot/self messages."""
+    if limit is None:
+        limit = max(2, _env_int("DISCORD_BACKFILL_LIMIT", 12))
+    channel = getattr(msg, "channel", None)
+    if channel is None or not hasattr(channel, "history"):
+        return []
+    own = _own_id()
+    trigger_id = int(getattr(msg, "id", 0) or 0)
+    cap_chars = max(60, _env_int("DISCORD_HISTORY_TEXT_CAP", 240))
+    out: list[tuple[str, str]] = []
+    try:
+        # discord.py: channel.history() is an async iterator; newest first
+        async for m in channel.history(limit=limit + 1):
+            mid = int(getattr(m, "id", 0) or 0)
+            if mid == trigger_id:
+                continue
+            author = getattr(m, "author", None)
+            aid = int(getattr(author, "id", 0) or 0)
+            if aid == own:
+                continue
+            if getattr(author, "bot", False):
+                continue
+            text = (getattr(m, "content", "") or "").strip()
+            if not text:
+                continue
+            name = str(getattr(author, "name", "") or "?")
+            if len(text) > cap_chars:
+                text = text[:cap_chars].rstrip() + "…"
+            out.append((name, text))
+    except Exception as exc:  # noqa: BLE001
+        print(f"discord: channel.history fetch failed: {exc!r}")
+        return []
+    out.reverse()  # oldest → newest
+    return out
+
+
 def _merge_context(
-    history: list[tuple[str, str]],
-    reply_chain: list[tuple[str, str]],
+    *sources: list[tuple[str, str]],
 ) -> list[tuple[str, str]]:
-    """Combine rolling history and explicit reply-chain into one list for
-    the brain's sibling_comments slot. Dedupes adjacent (name, text)
-    pairs so a reply-chain entry that's also in history doesn't repeat.
-    History first (older), then reply-chain (more proximate)."""
+    """Combine multiple context sources into one list for the brain's
+    sibling_comments slot. Dedupes (name, text) pairs. Pass sources in
+    oldest → newest order; the merge preserves that order."""
     seen: set[tuple[str, str]] = set()
     out: list[tuple[str, str]] = []
-    for entry in (*history, *reply_chain):
-        if entry in seen:
-            continue
-        seen.add(entry)
-        out.append(entry)
+    for src in sources:
+        for entry in src:
+            if entry in seen:
+                continue
+            seen.add(entry)
+            out.append(entry)
     return out
 
 
@@ -297,6 +340,25 @@ def _is_reply_to_us(msg: Any) -> bool:
 
 
 # ── Gate logic ──────────────────────────────────────────────────────────────
+def _should_capture_context(msg: Any) -> bool:
+    """Looser gate than _is_allowed_source — controls whether we RECORD
+    a message into the rolling channel history for later context. We
+    capture ANY non-bot author in a whitelisted guild (so the owner can
+    later ask JARVIS about something someone else said), plus DMs from
+    the owner. We never record DMs from non-owners (privacy + scope)."""
+    guild = getattr(msg, "guild", None)
+    if guild is None:
+        # DM — only the owner.
+        owner = _owner_id()
+        if not owner:
+            return False
+        author_id = int(getattr(getattr(msg, "author", None), "id", 0) or 0)
+        return author_id == owner
+    # Guild message — whitelist check, any author.
+    guild_id = int(getattr(guild, "id", 0) or 0)
+    return guild_id != 0 and guild_id in _whitelist_server_ids()
+
+
 def _is_allowed_source(msg: Any) -> bool:
     """Decide whether the message comes from a source we're allowed to
     react in.
@@ -428,6 +490,18 @@ async def _on_message_safe(client: Any, msg: Any) -> None:
         # External bots — drop. Don't engage with other bots.
         return
 
+    # ── Passive context capture ──────────────────────────────────────────
+    # Record every non-bot message in a whitelisted channel into the
+    # rolling channel history, BEFORE the owner gate. This way when the
+    # owner later @-mentions JARVIS to ask about something a different
+    # user said, the brain already has the surrounding conversation.
+    if _should_capture_context(msg):
+        msg_text = (getattr(msg, "content", "") or "").strip()
+        if msg_text:
+            _history_append(msg,
+                            str(getattr(author, "name", "") or "?"),
+                            msg_text)
+
     if not _is_allowed_source(msg):
         return
 
@@ -455,22 +529,34 @@ async def _on_message_safe(client: Any, msg: Any) -> None:
     if getattr(msg, "reference", None) is not None:
         try:
             reply_chain = await _collect_reply_chain(msg)
-            if reply_chain:
-                print(f"discord: reply-chain depth={len(reply_chain)} "
-                      f"(oldest=@{reply_chain[0][0]}, newest=@{reply_chain[-1][0]})")
+            for i, (name, txt) in enumerate(reply_chain):
+                print(f"discord: reply-chain[{i}] @{name}: {txt[:100]!r}")
         except Exception as exc:  # noqa: BLE001
             print(f"discord: reply-chain walk failed: {exc!r}")
 
-    # Rolling per-(author, channel) DM history — fills the gap when the
-    # user fires successive messages without Discord-replying. Pull what
-    # we have BEFORE appending the current message so the trigger_text
-    # doesn't duplicate into sibling_comments.
-    history = _history_recent(msg)
-    _history_append(msg, str(getattr(author, "name", "") or "?"), trigger_text)
-    sibling_comments = _merge_context(history, reply_chain)
+    # Rolling channel history — captured passively by the loop above.
+    # Pull what we have, excluding the trigger text itself so the brain
+    # doesn't see it duplicated in sibling_comments. Trigger message
+    # was already appended in the passive-capture branch.
+    history = _history_recent(msg, exclude_text=trigger_text)
+
+    # Channel backfill — when the rolling buffer is thin (cold start,
+    # bot just joined, etc.), pull recent messages from Discord directly.
+    # Async; runs every trigger but is cheap (one channel.history call).
+    backfill = await _fetch_channel_backfill(msg)
+    if backfill:
+        print(f"discord: channel backfill={len(backfill)} message(s)")
+
+    # Merge: passive history first (oldest), backfill next, reply-chain
+    # last (most proximate). Dedup adjacent (name,text) pairs.
+    sibling_comments = _merge_context(history, backfill, reply_chain)
     if sibling_comments:
         print(f"discord: context len={len(sibling_comments)} "
-              f"(history={len(history)}, reply_chain={len(reply_chain)})")
+              f"(history={len(history)}, backfill={len(backfill)}, "
+              f"reply_chain={len(reply_chain)})")
+        # Log the FULL context so we can see exactly what the brain sees.
+        for i, (name, txt) in enumerate(sibling_comments):
+            print(f"discord: context[{i}] @{name}: {txt[:120]!r}")
 
     # Lazy-import the IG persona module so a discord.py-self bug can't
     # block edge.py startup at import time.
