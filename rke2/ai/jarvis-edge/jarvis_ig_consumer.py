@@ -409,6 +409,14 @@ def _process_event(payload: Any, client: Any, handles: dict) -> None:
             client.direct_send(reply, thread_ids=[thread_id])
         except Exception as exc:  # noqa: BLE001
             print(f"ig consumer: direct_send failed for {sender_username}: {exc!r}")
+            # Record IG-side throttle so the polling + responder both
+            # back off too. Fail-open: if cooldown module missing, skip.
+            if type(exc).__name__ in ("FeedbackRequired", "PleaseWaitFewMinutes"):
+                try:
+                    import jarvis_ig_cooldown as _cd  # type: ignore[import]
+                    _cd.record_throttle(exc)
+                except Exception:  # noqa: BLE001
+                    pass
             span.set_attribute("ig.dropped", True)
             span.set_attribute("ig.drop_reason", "send_failed")
             span.record_exception(exc)

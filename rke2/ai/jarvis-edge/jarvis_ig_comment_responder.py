@@ -61,6 +61,61 @@ _threads_lock = threading.Lock()
 # gag bot).
 _ig_comment_queue: queue.Queue = queue.Queue(maxsize=200)
 
+# ── Poison-pill protection ────────────────────────────────────────────────
+# A media_pk that keeps throwing FeedbackRequired on hydrate/post would
+# loop forever (the poller re-discovers the mention every cycle). Track
+# how many times we've tried each media_pk; once it crosses the budget,
+# add it to the persisted dropped-set so subsequent enqueues become
+# no-ops. Eviction is by file persistence — manual reset by removing
+# /state/ig_dropped_media.json or aging out entries older than 7d.
+_DROPPED_PATH = "/state/ig_dropped_media.json"
+_DROP_BUDGET = int(os.environ.get("IG_DROP_BUDGET", "3"))
+_attempt_counts: dict[str, int] = {}
+_attempt_lock = threading.Lock()
+
+
+def _load_dropped() -> set[str]:
+    try:
+        with open(_DROPPED_PATH) as f:
+            d = json.load(f)
+        return {str(k) for k, v in (d.get("dropped") or {}).items()
+                if (time.time() - float(v)) < 7 * 86400}
+    except (OSError, ValueError):
+        return set()
+
+
+def _save_dropped(media_pk: str) -> None:
+    try:
+        try:
+            with open(_DROPPED_PATH) as f:
+                d = json.load(f)
+        except (OSError, ValueError):
+            d = {"dropped": {}}
+        d.setdefault("dropped", {})[str(media_pk)] = time.time()
+        tmp = _DROPPED_PATH + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(d, f)
+        os.replace(tmp, _DROPPED_PATH)
+    except OSError as exc:
+        print(f"ig comment: persist dropped failed: {exc!r}")
+
+
+def _is_dropped(media_pk: str) -> bool:
+    return str(media_pk) in _load_dropped()
+
+
+def _bump_attempt(media_pk: str) -> int:
+    """Increment per-media-pk attempt counter. Returns the new count."""
+    with _attempt_lock:
+        n = _attempt_counts.get(str(media_pk), 0) + 1
+        _attempt_counts[str(media_pk)] = n
+        return n
+
+
+def _reset_attempt(media_pk: str) -> None:
+    with _attempt_lock:
+        _attempt_counts.pop(str(media_pk), None)
+
 
 # ── Persona prompt ─────────────────────────────────────────────────────────
 COMMENT_PERSONA_TEMPLATE = """You're JARVIS — yes, the Iron Man one. Tony Stark's AI butler, somehow dropping comments on your friend ({tagger_username})'s IG feed. The audience is in on it.
@@ -1451,6 +1506,10 @@ def _process_job(job: dict, client: Any, replied_set: set[str], handles: dict) -
 def _consumer_loop() -> None:
     """Drains _ig_comment_queue forever. Each job independently wrapped."""
     print("ig comment consumer: thread loop starting")
+    try:
+        import jarvis_ig_cooldown as _cd  # type: ignore[import]
+    except Exception:  # noqa: BLE001
+        _cd = None  # fail-open: no cooldown gate if module missing
     handles: dict | None = None
     while True:
         try:
@@ -1461,15 +1520,43 @@ def _consumer_loop() -> None:
                 time.sleep(5)
                 continue
 
+            # IG cooldown gate — when the soft-block is active, hold the
+            # queue. The poller's own gate keeps it from refilling
+            # uncontrollably during the same window.
+            if _cd and _cd.is_cooling_down():
+                rem = _cd.cooldown_remaining_s()
+                # Sleep in 30s chunks so a clean restart picks up faster.
+                time.sleep(min(30, max(5, rem)))
+                continue
+
             try:
                 job = _ig_comment_queue.get(timeout=2.0)
             except queue.Empty:
+                continue
+
+            # Poison-pill drop: media_pks that exceeded the per-job
+            # attempt budget are persisted; never process them again.
+            mp = str(job.get("media_pk") or "")
+            if mp and _is_dropped(mp):
+                print(f"ig comment: skipping dropped media_pk={mp}")
                 continue
 
             replied_set = _load_replied()
             try:
                 _process_job(job, client, replied_set, handles)
             except Exception as exc:  # noqa: BLE001
+                # Per-job throttle: count attempts, drop after budget.
+                if mp:
+                    n = _bump_attempt(mp)
+                    if n >= _DROP_BUDGET:
+                        _save_dropped(mp)
+                        _reset_attempt(mp)
+                        print(f"ig comment: media_pk={mp} dropped after "
+                              f"{n} failed attempts")
+                # Record IG-side throttle if that's what failed.
+                if _cd and type(exc).__name__ in ("FeedbackRequired",
+                                                  "PleaseWaitFewMinutes"):
+                    _cd.record_throttle(exc)
                 print(f"ig comment consumer: per-job crash: {exc!r}")
                 traceback.print_exc()
                 try:

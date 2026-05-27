@@ -154,6 +154,12 @@ def _poll_one(client: Any, media_pk: str, followed_ids: set, queue) -> int:
         comments = client.media_comments(media_pk, amount=8) or []
     except Exception as exc:  # noqa: BLE001
         print(f"ig followup: media_comments({media_pk}) failed: {exc!r}")
+        if type(exc).__name__ in ("FeedbackRequired", "PleaseWaitFewMinutes"):
+            try:
+                import jarvis_ig_cooldown as _cd  # type: ignore[import]
+                _cd.record_throttle(exc)
+            except Exception:  # noqa: BLE001
+                pass
         return 0
 
     own = _own_username()
@@ -218,8 +224,16 @@ def _run_loop() -> None:
         print(f"ig followup: thread loop starting "
               f"(tracking {len(_tracked)} media, interval={_interval_s()}s)")
 
+    try:
+        import jarvis_ig_cooldown as _cd  # type: ignore[import]
+    except Exception:  # noqa: BLE001
+        _cd = None
     while True:
         time.sleep(_interval_s())
+        if _cd and _cd.is_cooling_down():
+            rem = _cd.cooldown_remaining_s()
+            print(f"ig followup: cooldown active ({rem}s) — skip cycle")
+            continue
         handles = _get_handles()
         if not handles:
             continue

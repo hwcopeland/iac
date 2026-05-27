@@ -307,6 +307,12 @@ def _maybe_confirm_reply(client: Any, event: dict, description: str) -> None:
         print(f"ig media: sent confirm reply to thread {thread_id}: {reply!r}")
     except Exception as exc:  # noqa: BLE001
         print(f"ig media: direct_send confirm failed: {exc!r}")
+        if type(exc).__name__ in ("FeedbackRequired", "PleaseWaitFewMinutes"):
+            try:
+                import jarvis_ig_cooldown as _cd  # type: ignore[import]
+                _cd.record_throttle(exc)
+            except Exception:  # noqa: BLE001
+                pass
 
 
 # ── Per-event processing ────────────────────────────────────────────────────
