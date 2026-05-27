@@ -342,8 +342,13 @@ spec:
             # consumers see them identically (source: "polling" vs the
             # webhook's "webhook" tag). Set IG_POLLING_ENABLED=0 to
             # disable without touching code.
+            # DISABLED: @hmlbjarvis tripped Meta's automation detection
+            # 2026-05-27 — session invalidated, account warned about
+            # automated behavior. Stays off until Meta Business
+            # Verification completes and we move to the webhook path.
+            # See memory: project_meta_ig_business_verification_wall.
             - name: IG_POLLING_ENABLED
-              value: "1"
+              value: "0"
             - name: IG_USERNAME
               valueFrom:
                 secretKeyRef:
@@ -360,8 +365,9 @@ spec:
             # login from this IP (would trip a challenge). Authenticates
             # senders against the followed-back set — silent drop for
             # unauthenticated DMs so we don't leak that we're a bot.
+            # DISABLED — see IG_POLLING_ENABLED comment above.
             - name: IG_CONSUMER_ENABLED
-              value: "1"
+              value: "0"
 
             # ── IG comment-tag responder ─────────────────────────────
             # When someone (we follow back) @-mentions @hmlbjarvis in a
@@ -371,8 +377,9 @@ spec:
             # it runs a download → ffmpeg → Whisper → Claude-vision
             # pipeline; for photos it does a single image vision call.
             # Same auth gate as the DM consumer.
+            # DISABLED — see IG_POLLING_ENABLED comment above.
             - name: IG_COMMENT_ENABLED
-              value: "1"
+              value: "0"
 
             # ── IG DM-shared media downloader ────────────────────────
             # When Hampton (or anyone we follow back) DMs a reel/post/
