@@ -126,6 +126,28 @@ def _whitelist_server_ids() -> set[int]:
     return out
 
 
+def _allowed_user_ids() -> set[int]:
+    """Comma-separated Discord user ids that can ALSO trigger JARVIS
+    (beyond the owner). Owner is always allowed. These users get the
+    same trigger surface as owner — mentions, replies-to-JARVIS — but
+    don't change the persona's notion of who "sir" is. The brain still
+    sees the actual triggerer's username in the prompt so it can
+    address them by name.
+
+    Empty set means "owner only" (original behaviour)."""
+    raw = os.environ.get("DISCORD_ALLOWED_USER_IDS", "")
+    out: set[int] = set()
+    for tok in raw.split(","):
+        tok = tok.strip()
+        if not tok:
+            continue
+        try:
+            out.add(int(tok))
+        except ValueError:
+            print(f"discord: skipping malformed user id {tok!r}")
+    return out
+
+
 def _backoff_s() -> int:
     return max(30, _env_int("DISCORD_RECONNECT_BACKOFF_S", 300))
 
@@ -374,20 +396,20 @@ def _is_allowed_source(msg: Any) -> bool:
 
     Empty whitelist or unset owner id collapses to "drop everything" —
     safer than failing-open into spam."""
-    # Per Hampton's directive: ONLY he can summon JARVIS. Anyone else
-    # mentioning @hmlbjarvis (even in a whitelisted guild) is silently
-    # dropped — there's no continuous-conversation path for non-owner
-    # users. If Hampton's message instructs JARVIS to address someone
-    # else, the REPLY content can mention them, but the trigger always
-    # has to be Hampton's message.
+    # The owner is always allowed. Additional users listed in
+    # DISCORD_ALLOWED_USER_IDS can also trigger — useful for letting
+    # specific friends/co-residents query JARVIS without leaking the
+    # bot to the whole channel. The persona's "sir" still refers to
+    # the owner; non-owner triggerers are addressed by their actual
+    # username (see brain_input construction in _compose_reply).
     owner = _owner_id()
     if not owner:
         return False
     author_id = int(getattr(getattr(msg, "author", None), "id", 0) or 0)
-    if author_id != owner:
+    if author_id != owner and author_id not in _allowed_user_ids():
         return False
-    # Now check source: DMs from owner are always fine; guild messages
-    # must additionally be in a whitelisted server.
+    # Now check source: DMs from allowed users are fine; guild
+    # messages must additionally be in a whitelisted server.
     guild = getattr(msg, "guild", None)
     if guild is None:
         return True
@@ -635,6 +657,14 @@ def _compose_reply(ig_mod: Any, job: dict, msg: Any) -> str:
     actual prompts / quality rules / banned-word list are still imported
     from jarvis_ig_comment_responder so the persona stays unified."""
     trigger_text = job["trigger_text"]
+    # Identify whether this is an owner-tier or allowed-but-non-owner
+    # request. Non-owner requesters get the LOCKED brain path only —
+    # no MCP tools, no sub-agents, no access to owner data. Song-ID
+    # is allowed for everyone (it's just attachment fingerprinting,
+    # no owner data exposed).
+    _owner_id_local = _owner_id()
+    _author_id = int(job.get("author_user_id") or 0)
+    _is_owner = (_owner_id_local != 0 and _author_id == _owner_id_local)
 
     # ── Song-ID path: tag text reads like "id?" / "what song" / etc.,
     #    AND the message has at least one audio/video attachment we
@@ -657,6 +687,35 @@ def _compose_reply(ig_mod: Any, job: dict, msg: Any) -> str:
                 return ig_mod._format_song_reply(hit)
             return "can't place it"
         # No attachment to fingerprint — fall through.
+
+    # Non-owner allowed users skip Q&A + butler-with-tools paths
+    # entirely; they get the locked Claude brain only. Owner uses the
+    # standard routing below.
+    if not _is_owner:
+        try:
+            import edge as _edge  # type: ignore[import]
+            siblings = job.get("sibling_comments") or []
+            requester = job.get("author_username") or "the user"
+            if siblings:
+                context_block = "\n".join(f"- @{u}: {t}" for u, t in siblings)
+                locked_input = (
+                    "Recent channel messages (oldest → newest):\n"
+                    f"{context_block}\n\n"
+                    f"@{requester}'s request: {trigger_text}\n\n"
+                    "Resolve referents from the context above when present."
+                )
+            else:
+                locked_input = f"@{requester}: {trigger_text}"
+            print(f"discord: locked brain for non-owner @{requester}")
+            raw = _edge._claude_brain_discord_locked(locked_input) or ""
+        except Exception as exc:  # noqa: BLE001
+            print(f"discord: locked brain crashed: {exc!r}")
+            return ""
+        reply = ig_mod._clean_reply(raw).strip()
+        if not reply:
+            print("discord: locked brain returned empty")
+            return ""
+        return reply
 
     # ── Q&A path: literal question. We don't have a post / caption /
     #    vision description on Discord, so the QA template's
@@ -698,13 +757,15 @@ def _compose_reply(ig_mod: Any, job: dict, msg: Any) -> str:
         # Build a context-bearing prompt: surface the recent channel
         # messages so the brain can resolve referents like "this" /
         # "that" / "translate it" → the message the user is pointing at.
+        # Owner-only fallthrough — non-owners are routed to locked
+        # brain in the early branch above, never reach here.
         siblings = job.get("sibling_comments") or []
         if siblings:
             context_block = "\n".join(f"- @{u}: {t}" for u, t in siblings)
             brain_input = (
                 "Recent channel messages (oldest → newest):\n"
                 f"{context_block}\n\n"
-                f"Hampton's request: {trigger_text}\n\n"
+                f"sir's request: {trigger_text}\n\n"
                 "If the request references prior context "
                 "(e.g. \"translate this\", \"explain that\", "
                 "\"what did they say\"), it refers to the messages "

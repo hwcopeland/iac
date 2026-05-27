@@ -433,6 +433,11 @@ spec:
                 secretKeyRef:
                   name: jarvis-discord-credentials
                   key: DISCORD_WHITELIST_SERVER_IDS
+            # Comma-separated extra Discord user IDs allowed to query
+            # JARVIS (beyond the owner). Persona refers to the owner as
+            # "sir"; non-owner triggerers are addressed by @username.
+            - name: DISCORD_ALLOWED_USER_IDS
+              value: "354076668517679107"
 
             # ── Local brain (Ollama sidecar) fallback ────────────────
             # When Claude refuses on edgy IG content, _claude_brain_raw
