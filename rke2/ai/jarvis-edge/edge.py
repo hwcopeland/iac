@@ -238,6 +238,32 @@ OWW_RATE = 16000
 OWW_CHUNK = 1280
 SONOS_VOLUME = int(os.environ.get("SONOS_VOLUME", "60"))  # 0-100
 
+# Two-tier time-of-day Sonos volume. Night hours (default 22:00–07:00
+# local) get the quieter level so JARVIS doesn't blast in the bedroom
+# overnight. Outside that band uses the day level. All knobs overridable
+# via env; persona.json's sonos_volume still wins when present, so the
+# user can pin a level via the persona MCP.
+SONOS_VOLUME_NIGHT = int(os.environ.get("SONOS_VOLUME_NIGHT", "30"))
+SONOS_VOLUME_DAY = int(os.environ.get("SONOS_VOLUME_DAY", "40"))
+SONOS_NIGHT_START_HOUR = int(os.environ.get("SONOS_NIGHT_START_HOUR", "22"))
+SONOS_NIGHT_END_HOUR = int(os.environ.get("SONOS_NIGHT_END_HOUR", "7"))
+
+
+def _is_night_hours(now_hour: int) -> bool:
+    """True if `now_hour` (0–23) falls inside the night band. The band
+    wraps midnight when start > end (e.g. 22→7)."""
+    s, e = SONOS_NIGHT_START_HOUR, SONOS_NIGHT_END_HOUR
+    if s == e:
+        return False
+    if s < e:
+        return s <= now_hour < e
+    return now_hour >= s or now_hour < e
+
+
+def _scheduled_sonos_volume() -> int:
+    """Pick the volume from the time-of-day band, in LOCAL time (TZ env)."""
+    return SONOS_VOLUME_NIGHT if _is_night_hours(time.localtime().tm_hour) else SONOS_VOLUME_DAY
+
 # ── Instagram webhook config ─────────────────────────────────────────────────
 # Meta posts Messenger / IG event payloads to /ig/webhook on the same
 # embedded HTTP server that serves Sonos audio. Verification is a GET
@@ -1507,9 +1533,13 @@ def _stream_on_sonos_impl(sonos, sentences, host_ip, http_port, turn_n,
     except Exception:
         pass
     try:
-        vol = int(_load_persona().get("sonos_volume", SONOS_VOLUME))
+        # Persona override (set via the persona MCP) wins over the
+        # time-of-day schedule. When persona has no sonos_volume key,
+        # fall back to the night/day band.
+        persona_vol = _load_persona().get("sonos_volume")
+        vol = int(persona_vol) if persona_vol is not None else _scheduled_sonos_volume()
         sonos.volume = vol
-        print(f"  sonos vol set → {vol}")
+        print(f"  sonos vol set → {vol} ({'persona' if persona_vol is not None else 'schedule'})")
     except Exception as exc:
         print(f"  sonos vol set failed: {exc}")
     # Clear stale queue before we start enqueueing this turn.
