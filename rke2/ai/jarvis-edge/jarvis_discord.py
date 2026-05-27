@@ -665,12 +665,13 @@ def _compose_reply(ig_mod: Any, job: dict, msg: Any) -> str:
     #    "who is the actor in Top Gun" where context isn't needed.
     if ig_mod._is_question_request(trigger_text):
         try:
+            siblings = job.get("sibling_comments") or []
             qa_prompt = ig_mod.QA_PROMPT_TEMPLATE.format(
                 trigger_text=trigger_text.replace('"', "'")[:400],
                 author_username=job["author_username"] or "unknown",
                 caption="",
                 vision_description="(discord — no post context)",
-                sibling_comments_formatted="(none)",
+                sibling_comments_formatted=ig_mod._sibling_block(siblings),
             )
             import edge as _edge  # type: ignore[import]
             qa_reply_raw = _edge._claude_brain_raw(qa_prompt) or ""
@@ -694,7 +695,24 @@ def _compose_reply(ig_mod: Any, job: dict, msg: Any) -> str:
     #    cap is ~2000 chars per message, plenty.
     try:
         import edge as _edge  # type: ignore[import]
-        raw = _edge._claude_brain_discord(trigger_text) or ""
+        # Build a context-bearing prompt: surface the recent channel
+        # messages so the brain can resolve referents like "this" /
+        # "that" / "translate it" → the message the user is pointing at.
+        siblings = job.get("sibling_comments") or []
+        if siblings:
+            context_block = "\n".join(f"- @{u}: {t}" for u, t in siblings)
+            brain_input = (
+                "Recent channel messages (oldest → newest):\n"
+                f"{context_block}\n\n"
+                f"Hampton's request: {trigger_text}\n\n"
+                "If the request references prior context "
+                "(e.g. \"translate this\", \"explain that\", "
+                "\"what did they say\"), it refers to the messages "
+                "above. Resolve the referent and respond directly."
+            )
+        else:
+            brain_input = trigger_text
+        raw = _edge._claude_brain_discord(brain_input) or ""
     except Exception as exc:  # noqa: BLE001
         print(f"discord: brain_respond crashed: {exc!r}")
         return ""
