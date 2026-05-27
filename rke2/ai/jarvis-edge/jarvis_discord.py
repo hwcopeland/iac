@@ -153,6 +153,83 @@ def _remember_own_message(message_id: int) -> None:
         _own_message_ids.append(int(message_id))
 
 
+# ── Per-DM rolling conversation history ────────────────────────────────────
+# Keyed by (author_id, channel_id). Each value is a deque of
+# (timestamp, author_name, text) entries. The reply-chain walker only
+# helps when the user explicitly threads a Discord reply; rolling history
+# fills the gap for plain back-and-forth DMs where each message is its
+# own root. Per-channel scoping keeps separate conversations isolated.
+_dm_history: dict[tuple[int, int], collections.deque] = {}
+_dm_history_lock = threading.Lock()
+
+
+def _history_key(msg: Any) -> tuple[int, int] | None:
+    author = getattr(msg, "author", None)
+    aid = int(getattr(author, "id", 0) or 0)
+    channel = getattr(msg, "channel", None)
+    cid = int(getattr(channel, "id", 0) or 0)
+    if not aid or not cid:
+        return None
+    return (aid, cid)
+
+
+def _history_append(msg: Any, author_name: str, text: str) -> None:
+    """Append one turn to the rolling history for this conversation."""
+    key = _history_key(msg)
+    if key is None or not text:
+        return
+    cap = max(2, _env_int("DISCORD_HISTORY_TURNS", 8))
+    with _dm_history_lock:
+        dq = _dm_history.get(key)
+        if dq is None or dq.maxlen != cap:
+            dq = collections.deque(maxlen=cap)
+            _dm_history[key] = dq
+        dq.append((time.time(), author_name, text))
+
+
+def _history_recent(msg: Any) -> list[tuple[str, str]]:
+    """Return the rolling history for this conversation as
+    (author_name, text) tuples, oldest → newest, TTL-filtered.
+    Skips the empty-text entries that may have slipped in."""
+    key = _history_key(msg)
+    if key is None:
+        return []
+    ttl = max(60, _env_int("DISCORD_HISTORY_TTL_S", 3600))
+    cap_chars = max(60, _env_int("DISCORD_HISTORY_TEXT_CAP", 240))
+    cutoff = time.time() - ttl
+    out: list[tuple[str, str]] = []
+    with _dm_history_lock:
+        dq = _dm_history.get(key)
+        if not dq:
+            return []
+        for ts, name, txt in dq:
+            if ts < cutoff:
+                continue
+            if not txt:
+                continue
+            t = txt if len(txt) <= cap_chars else txt[:cap_chars].rstrip() + "…"
+            out.append((name, t))
+    return out
+
+
+def _merge_context(
+    history: list[tuple[str, str]],
+    reply_chain: list[tuple[str, str]],
+) -> list[tuple[str, str]]:
+    """Combine rolling history and explicit reply-chain into one list for
+    the brain's sibling_comments slot. Dedupes adjacent (name, text)
+    pairs so a reply-chain entry that's also in history doesn't repeat.
+    History first (older), then reply-chain (more proximate)."""
+    seen: set[tuple[str, str]] = set()
+    out: list[tuple[str, str]] = []
+    for entry in (*history, *reply_chain):
+        if entry in seen:
+            continue
+        seen.add(entry)
+        out.append(entry)
+    return out
+
+
 async def _collect_reply_chain(
     msg: Any, max_depth: int | None = None
 ) -> list[tuple[str, str]]:
@@ -384,6 +461,17 @@ async def _on_message_safe(client: Any, msg: Any) -> None:
         except Exception as exc:  # noqa: BLE001
             print(f"discord: reply-chain walk failed: {exc!r}")
 
+    # Rolling per-(author, channel) DM history — fills the gap when the
+    # user fires successive messages without Discord-replying. Pull what
+    # we have BEFORE appending the current message so the trigger_text
+    # doesn't duplicate into sibling_comments.
+    history = _history_recent(msg)
+    _history_append(msg, str(getattr(author, "name", "") or "?"), trigger_text)
+    sibling_comments = _merge_context(history, reply_chain)
+    if sibling_comments:
+        print(f"discord: context len={len(sibling_comments)} "
+              f"(history={len(history)}, reply_chain={len(reply_chain)})")
+
     # Lazy-import the IG persona module so a discord.py-self bug can't
     # block edge.py startup at import time.
     try:
@@ -405,7 +493,7 @@ async def _on_message_safe(client: Any, msg: Any) -> None:
         "trigger_text":       trigger_text,
         "tagger_username":    str(getattr(author, "name", "") or ""),
         "tagger_id":          str(author_id),
-        "sibling_comments":   reply_chain,
+        "sibling_comments":   sibling_comments,
         "story_id":           f"discord:{getattr(msg, 'id', 0)}",
         "source":             "discord",
     }
@@ -428,6 +516,9 @@ async def _on_message_safe(client: Any, msg: Any) -> None:
         _remember_own_message(int(getattr(sent, "id", 0) or 0))
     except Exception:  # noqa: BLE001
         pass
+    # Record JARVIS's own reply into the rolling history so the NEXT
+    # turn in this conversation sees both sides of the exchange.
+    _history_append(msg, "jarvis", reply)
     print(f"discord: replied to @{getattr(author, 'name', '?')}: {reply[:120]!r}")
 
 
