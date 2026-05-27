@@ -753,6 +753,7 @@ def _classify_error(exc: BaseException) -> str:
     # match by class name).
     known = {
         "ChallengeRequired",
+        "FeedbackRequired",
         "LoginRequired",
         "PleaseWaitFewMinutes",
         "RateLimitError",
@@ -803,6 +804,10 @@ def _run_loop() -> None:
         print(f"ig polling: seeded hwm = {hwm_us} (now) — will only pick up DMs after this moment")
 
     global _client
+    try:
+        import jarvis_ig_cooldown as _cd  # type: ignore[import]
+    except Exception:  # noqa: BLE001
+        _cd = None
     while True:
         try:
             if handles is None:
@@ -816,12 +821,23 @@ def _run_loop() -> None:
                 # logins from one IP, which would trip a challenge.
                 _client = client
 
+            # Cooldown gate — when IG is throttling the account, sit out
+            # the entire cycle rather than making any API calls.
+            if _cd and _cd.is_cooling_down():
+                rem = _cd.cooldown_remaining_s()
+                print(f"ig polling: cooldown active ({rem}s remaining) — skip cycle")
+                metric_cycles.labels(outcome="cooldown").inc()
+                time.sleep(min(60, max(5, rem)))
+                continue
+
             hwm_us = _poll_once(client, handles, hwm_us)
             _save_last_seen(hwm_us)
             metric_cycles.labels(outcome="ok").inc()
         except Exception as exc:  # noqa: BLE001
             # Catch EVERYTHING — voice path is more important than IG.
             reason = _classify_error(exc)
+            if _cd and reason in ("FeedbackRequired", "PleaseWaitFewMinutes"):
+                _cd.record_throttle(exc)
             metric_errors.labels(reason=reason).inc()
             metric_cycles.labels(outcome="error").inc()
             print(f"ig polling: cycle failed ({reason}): {exc!r}")
