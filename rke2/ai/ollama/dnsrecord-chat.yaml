@@ -1,0 +1,16 @@
+---
+# Cloudflare DNS for chat.hwcopeland.net → cloudflared tunnel
+# (CNAME-to-apex pattern used by all other hwcopeland.net subdomains).
+# Proxied so TLS terminates at Cloudflare; cluster Gateway sees HTTP.
+apiVersion: cloudflare-operator.io/v1
+kind: DNSRecord
+metadata:
+  name: chat
+  namespace: ai
+spec:
+  name: chat.hwcopeland.net
+  type: CNAME
+  content: hwcopeland.net
+  proxied: true
+  ttl: 1
+  interval: 5m

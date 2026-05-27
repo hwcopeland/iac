@@ -1,0 +1,77 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ollama
+  namespace: ai
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ollama
+  template:
+    metadata:
+      labels:
+        app: ollama
+    spec:
+      nodeSelector:
+        gpu: rtx3070
+      tolerations:
+        - key: gpu
+          operator: Equal
+          value: "true"
+          effect: NoSchedule
+      containers:
+        - name: ollama
+          image: ollama/ollama:latest
+          ports:
+            - containerPort: 11434
+          env:
+            - name: OLLAMA_HOST
+              value: "0.0.0.0:11434"
+            - name: LD_LIBRARY_PATH
+              value: "/run/opengl-driver/lib"
+          resources:
+            requests:
+              nvidia.com/gpu: "1"
+              memory: 16Gi
+            limits:
+              nvidia.com/gpu: "1"
+              memory: 48Gi
+          volumeMounts:
+            - name: models
+              mountPath: /root/.ollama
+            - name: opengl-driver
+              mountPath: /run/opengl-driver
+              readOnly: true
+            - name: nix-store
+              mountPath: /nix/store
+              readOnly: true
+          readinessProbe:
+            exec:
+              command:
+                - ollama
+                - list
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 10
+            failureThreshold: 6
+          livenessProbe:
+            exec:
+              command:
+                - ollama
+                - list
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 5
+      volumes:
+        - name: models
+          persistentVolumeClaim:
+            claimName: ollama-models
+        - name: opengl-driver
+          hostPath:
+            path: /run/opengl-driver
+        - name: nix-store
+          hostPath:
+            path: /nix/store

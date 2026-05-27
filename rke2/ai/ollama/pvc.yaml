@@ -1,0 +1,40 @@
+---
+# Static PV backed by hostPath on nixos-gpu.
+# Models live locally on the node — no network I/O on load, and Longhorn CSI
+# isn't installed on nixos-gpu anyway.
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: ollama-models
+spec:
+  capacity:
+    storage: 60Gi
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: local-ollama
+  hostPath:
+    path: /var/lib/ollama
+    type: DirectoryOrCreate
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: In
+              values:
+                - nixos-gpu
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ollama-models
+  namespace: ai
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-ollama
+  volumeName: ollama-models
+  resources:
+    requests:
+      storage: 60Gi

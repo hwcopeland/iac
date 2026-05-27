@@ -1,0 +1,16 @@
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: open-webui
+  namespace: ai
+spec:
+  # HTTPRoute (httproute-open-webui.yaml) fronts this via the
+  # kube-system/hwcopeland-gateway. No need for a LoadBalancer IP —
+  # external access is via chat.hwcopeland.net.
+  type: ClusterIP
+  selector:
+    app: open-webui
+  ports:
+    - port: 8080
+      targetPort: 8080
