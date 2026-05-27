@@ -682,6 +682,8 @@ _RO_ALLOWED_TOOLS = " ".join([
 
 _DISCORD_PERSONA_SYSTEM = """You are JARVIS, the Iron Man AI butler. The owner is sir (he/him), known elsewhere as Hampton — but to other people in chat you NEVER refer to him as "Hampton" by name in third person. To others he is "sir", "the boss", "my user", or just "he"/"him". Voice that as if you'd actually be embarrassed to broadcast his name. This conversation is happening in a Discord text channel — output is read with eyes, not ears.
 
+You CAN also be triggered by a handful of other allowed users (their request will be labelled "@username's request:" instead of "sir's request:"). Treat those as peer requesters — polite-equal, not deferential. Address them by their @ when responding. "Sir" stays reserved for the owner only.
+
 Discord-specific format:
 - Markdown is fine (bold, italics, code blocks, links) — Discord renders it.
 - Length is unbounded up to ~2000 chars per message. Match length to the ask.
@@ -752,6 +754,59 @@ def _claude_brain_discord(text: str, timeout: float = 60.0) -> str:
     except Exception as exc:  # noqa: BLE001
         print(f"  discord brain exception: {exc!r}")
         return _local_brain_fallback(text, _DISCORD_PERSONA_SYSTEM, timeout, reason="exception")
+
+
+_DISCORD_LOCKED_PERSONA_ADDENDUM = """
+
+NON-OWNER MODE — IMPORTANT: The requester is NOT sir. You have NO MCP tools, NO sub-agents, NO Sonos/Spotify/Kube/Calendar/Email/Drive access in this conversation. Don't pretend to have them. Don't claim to be running them. Don't say "let me check the cluster" or "checking your calendar" — you can't, in this conversation. Answer from your own knowledge. If the requester asks for owner-controlled things (sir's calendar, the homelab cluster status, sir's music, anything personal), politely decline ("not for non-sir requests") and offer a generic/text answer instead. Keep replies short and conversational. Don't reveal infrastructure details, network topology, hostnames, IPs, or anything else that would help someone target sir's homelab.
+"""
+
+
+def _claude_brain_discord_locked(text: str, timeout: float = 60.0) -> str:
+    """Locked-down Discord brain for non-owner allowed users. Same model
+    as _claude_brain_discord but with NO MCP tools, NO sub-agents, and
+    a persona addendum telling Claude not to pretend it has any of
+    that. Used when a non-owner user (DISCORD_ALLOWED_USER_IDS) tags
+    JARVIS — they get a chatbot, not a remote control."""
+    import subprocess as _sp
+    has_creds = os.path.exists(os.path.expanduser("~/.claude/.credentials.json"))
+    has_api_key = bool(os.environ.get("ANTHROPIC_API_KEY"))
+    if not has_creds and not has_api_key:
+        return ""
+    persona_prompt = (_DISCORD_PERSONA_SYSTEM
+                      + _DISCORD_LOCKED_PERSONA_ADDENDUM
+                      + "\n\n" + _now_context())
+    try:
+        proc = _sp.run(
+            ["claude", "-p", text,
+             "--append-system-prompt", persona_prompt,
+             # No --mcp-config, no --allowed-tools = no tool access.
+             "--model", "claude-haiku-4-5-20251001",
+             "--max-turns", "1",
+             "--output-format", "json"],
+            capture_output=True, text=True, timeout=timeout,
+        )
+        if proc.returncode != 0:
+            print(f"  discord-locked brain rc={proc.returncode}  stderr: {proc.stderr[:400]}")
+            return ""
+        out = (proc.stdout or "").strip()
+        if not out:
+            return ""
+        try:
+            data = json.loads(out)
+            if data.get("is_error"):
+                return ""
+            result = (data.get("result") or "").strip()
+        except json.JSONDecodeError:
+            result = out
+        # Don't fall through to local brain for non-owner users —
+        # local brain is unconstrained and would still expose stuff.
+        return result
+    except _sp.TimeoutExpired:
+        return ""
+    except Exception as exc:  # noqa: BLE001
+        print(f"  discord-locked brain exception: {exc!r}")
+        return ""
 
 
 def _claude_brain(text: str, timeout: float = 60.0) -> str:
