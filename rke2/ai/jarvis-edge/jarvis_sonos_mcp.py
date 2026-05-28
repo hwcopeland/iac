@@ -163,6 +163,30 @@ _TOOLS = [
         "description": "List all Sonos speakers on the LAN with model + IP.",
         "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
     },
+    {
+        "name": "sonos_play_spotify",
+        "description": (
+            "Play a Spotify track DIRECTLY on the Sonos via Sonos's "
+            "native Spotify integration (NOT via Spotify Connect). "
+            "Prefer this over spotify_search_and_play when the user "
+            "wants playback on a Sonos speaker — works even when the "
+            "Sonos isn't currently registered as a Spotify Connect "
+            "device. Pass natural-language `query` like "
+            "'toot it and boot it by YG'. Default room is the Bedroom "
+            "Play:1; pass `room` for another speaker. Requires Spotify "
+            "linked on the Sonos (Sonos app → Settings → Services & "
+            "Voice → Music & Content → Spotify)."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string"},
+                "room": {"type": "string"},
+            },
+            "required": ["query"],
+            "additionalProperties": False,
+        },
+    },
 ]
 
 
@@ -197,6 +221,50 @@ def _call(name: str, args: dict) -> dict:
             _persona_set_volume(None)
             return _text(json.dumps({"status": "ok",
                                       "message": "volume now follows day/night schedule"}))
+        if name == "sonos_play_spotify":
+            # Native Sonos-Spotify integration. Bypasses Spotify Connect
+            # entirely — Sonos handles the playback via its own stored
+            # Spotify account. Requires Spotify linked on the Sonos
+            # (Sonos app → Settings → Services & Voice → Spotify).
+            from soco.music_services import MusicService
+            s = _soco_for(room)
+            try: s.unjoin()
+            except Exception: pass
+            query = (args.get("query") or "").strip()
+            if not query:
+                return _text(json.dumps({"status": "error",
+                                          "detail": "query required"}))
+            try:
+                spotify = MusicService("Spotify")
+                results = spotify.search(category="tracks", term=query, count=5)
+            except Exception as exc:  # noqa: BLE001
+                msg = str(exc)
+                if "AuthToken" in msg or "Authorization" in msg:
+                    return _text(json.dumps({
+                        "status": "error",
+                        "detail": ("Sonos Spotify auth expired. Re-link "
+                                   "Spotify in the Sonos app: "
+                                   "Settings → Services & Voice → "
+                                   "Music & Content → Spotify."),
+                    }))
+                return _text(json.dumps({"status": "error",
+                                          "detail": f"sonos search failed: {msg[:200]}"}))
+            if not results:
+                return _text(json.dumps({"status": "error",
+                                          "detail": f"no Sonos-Spotify results for {query!r}"}))
+            track = results[0]
+            try:
+                s.clear_queue()
+            except Exception: pass
+            try:
+                s.add_to_queue(track)
+                s.play_from_queue(0)
+            except Exception as exc:  # noqa: BLE001
+                return _text(json.dumps({"status": "error",
+                                          "detail": f"sonos play failed: {str(exc)[:200]}"}))
+            title = getattr(track, "title", str(track))
+            return _text(json.dumps({"status": "ok", "room": s.player_name,
+                                      "playing": title, "via": "sonos-native"}))
         if name == "sonos_mute":
             s = _soco_for(room)
             state = (args.get("state") or "toggle").lower()
