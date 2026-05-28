@@ -411,8 +411,14 @@ spec:
             # no scraping, no programmatic guild join/leave, exponential-
             # ish backoff on LoginFailure / RateLimited. Set
             # DISCORD_ENABLED=0 to disable without removing creds.
+            # DISABLED 2026-05-27: Discord invalidated @hmlbjarvis's user
+            # token (LoginFailure 'Improper token has been passed' ~20min
+            # after each new connection — selfbot detection). Stays off
+            # until we migrate to a real Bot Application — see the
+            # conversation logs around the discord.py-vs-bot-api Q. The
+            # webhook + voice paths are unaffected.
             - name: DISCORD_ENABLED
-              value: "1"
+              value: "0"
             - name: DISCORD_USER_TOKEN
               valueFrom:
                 secretKeyRef:
