@@ -246,11 +246,42 @@ def current_track() -> dict:
 
 
 # ── Playback control (requires user-modify-playback-state scope) ─────────
+_TRACK_BY_ARTIST_RX = __import__("re").compile(
+    r"^\s*(?P<track>.+?)\s+by\s+(?P<artist>.+?)\s*$",
+    flags=__import__("re").IGNORECASE,
+)
+
+
+def _structured_query(raw: str) -> str:
+    """Detect 'X by Y' / 'X by Y on/from/in the …' patterns and rewrite to
+    Spotify's structured search syntax: `track:"X" artist:Y`. Massively
+    improves top-hit accuracy — Spotify's default ranking is noisy on
+    short titles. If no 'by' pattern, return the raw query unchanged."""
+    s = (raw or "").strip()
+    # Strip trailing device hint ("on the sonos play one", "on bedroom")
+    for marker in (" on the ", " on my ", " in the ", " in my ", " from the "):
+        idx = s.lower().rfind(marker)
+        if idx >= 0:
+            s = s[:idx]
+    m = _TRACK_BY_ARTIST_RX.match(s)
+    if not m:
+        return s
+    track = m.group("track").strip(' "')
+    artist = m.group("artist").strip(' "')
+    return f'track:"{track}" artist:"{artist}"'
+
+
 def search_tracks(query: str, limit: int = 5) -> dict:
     """Search Spotify for tracks matching `query`. Returns list of
-    candidates with name, artists, album, URI, and id."""
+    candidates with name, artists, album, URI, and id.
+
+    Handles natural-language queries: 'X by Y' gets rewritten to
+    Spotify's structured `track:"X" artist:"Y"` syntax for far more
+    accurate top hits. Device-name suffixes ('on the sonos play one')
+    are stripped before search."""
+    structured = _structured_query(query)
     res = _api("/search",
-               {"q": query, "type": "track",
+               {"q": structured, "type": "track",
                 "limit": max(1, min(20, int(limit)))})
     if res.get("status") != "ok":
         return res

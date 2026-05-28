@@ -664,6 +664,7 @@ _RO_ALLOWED_TOOLS = " ".join([
     "mcp__jarvis_sonos__sonos_play",
     "mcp__jarvis_sonos__sonos_now_playing",
     "mcp__jarvis_sonos__sonos_list_speakers",
+    "mcp__jarvis_sonos__sonos_play_spotify",
     # Persona self-tuning (humor / formality / terseness / sass / TTS / vol)
     "mcp__jarvis_persona__persona_get",
     "mcp__jarvis_persona__persona_set",
