@@ -630,11 +630,21 @@ _RO_ALLOWED_TOOLS = " ".join([
     "mcp__jarvis_personal__calendar_today",
     "mcp__jarvis_personal__reminders_open",
     "mcp__jarvis_personal__reminders_due_today",
-    # Spotify
+    # Spotify (read)
     "mcp__jarvis_spotify__current_track",
     "mcp__jarvis_spotify__recently_played",
     "mcp__jarvis_spotify__top_artists",
     "mcp__jarvis_spotify__top_tracks",
+    # Spotify (playback — requires user-modify-playback-state scope;
+    # one-time re-auth needed after this scope was added).
+    "mcp__jarvis_spotify__spotify_search",
+    "mcp__jarvis_spotify__spotify_devices",
+    "mcp__jarvis_spotify__spotify_play_track",
+    "mcp__jarvis_spotify__spotify_search_and_play",
+    "mcp__jarvis_spotify__spotify_pause",
+    "mcp__jarvis_spotify__spotify_resume",
+    "mcp__jarvis_spotify__spotify_skip_next",
+    "mcp__jarvis_spotify__spotify_skip_previous",
     # Kube read-only (ServiceAccount jarvis-readonly → view+nodes)
     "mcp__jarvis_kube__kube_get_pods",
     "mcp__jarvis_kube__kube_logs",

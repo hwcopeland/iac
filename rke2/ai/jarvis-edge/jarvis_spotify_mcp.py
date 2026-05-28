@@ -78,6 +78,95 @@ _TOOLS = [
         "inputSchema": {"type": "object", "properties": {},
                          "additionalProperties": False},
     },
+    {
+        "name": "spotify_search",
+        "description": (
+            "Search Spotify for tracks. Returns up to `limit` candidates "
+            "with name, artists, album, and URI. Use the URI with "
+            "spotify_play_track. For voice 'play X by Y' use "
+            "spotify_search_and_play directly instead."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string"},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 20},
+            },
+            "required": ["query"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "spotify_devices",
+        "description": (
+            "List Spotify Connect devices available to play on (Sonos, "
+            "phones, laptops). Returns each with id, name, type. Use "
+            "the `name` for spotify_play_track's `device` arg — substring "
+            "match is fine (e.g. 'play one' matches 'Bedroom Play:1')."
+        ),
+        "inputSchema": {"type": "object", "properties": {},
+                         "additionalProperties": False},
+    },
+    {
+        "name": "spotify_play_track",
+        "description": (
+            "Start playback of a Spotify track URI on a target device. "
+            "URI must be like `spotify:track:...` (use spotify_search "
+            "first). `device` is a Spotify Connect device name (substring "
+            "match) — omit to play on the user's currently active device."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "uri": {"type": "string"},
+                "device": {"type": "string"},
+            },
+            "required": ["uri"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "spotify_search_and_play",
+        "description": (
+            "One-shot: search Spotify, pick the top match, play it on "
+            "`device`. Use for natural voice/chat asks like "
+            "'play toot it and boot it by YG on the Play:1'. `device` is "
+            "a substring of a Spotify Connect device name."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string"},
+                "device": {"type": "string"},
+            },
+            "required": ["query"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "spotify_pause",
+        "description": "Pause Spotify playback on the active device.",
+        "inputSchema": {"type": "object", "properties": {},
+                         "additionalProperties": False},
+    },
+    {
+        "name": "spotify_resume",
+        "description": "Resume Spotify playback on the active device.",
+        "inputSchema": {"type": "object", "properties": {},
+                         "additionalProperties": False},
+    },
+    {
+        "name": "spotify_skip_next",
+        "description": "Skip to the next Spotify track.",
+        "inputSchema": {"type": "object", "properties": {},
+                         "additionalProperties": False},
+    },
+    {
+        "name": "spotify_skip_previous",
+        "description": "Skip to the previous Spotify track.",
+        "inputSchema": {"type": "object", "properties": {},
+                         "additionalProperties": False},
+    },
 ]
 
 
@@ -102,6 +191,31 @@ def _call(name: str, args: dict) -> dict:
         )))
     if name == "current_track":
         return _text_result(json.dumps(sp.current_track()))
+    if name == "spotify_search":
+        return _text_result(json.dumps(sp.search_tracks(
+            args.get("query", ""),
+            int(args.get("limit", 5)),
+        )))
+    if name == "spotify_devices":
+        return _text_result(json.dumps(sp.devices()))
+    if name == "spotify_play_track":
+        return _text_result(json.dumps(sp.play_track(
+            args.get("uri", ""),
+            device=args.get("device"),
+        )))
+    if name == "spotify_search_and_play":
+        return _text_result(json.dumps(sp.search_and_play(
+            args.get("query", ""),
+            device=args.get("device"),
+        )))
+    if name == "spotify_pause":
+        return _text_result(json.dumps(sp.pause()))
+    if name == "spotify_resume":
+        return _text_result(json.dumps(sp.resume()))
+    if name == "spotify_skip_next":
+        return _text_result(json.dumps(sp.skip_next()))
+    if name == "spotify_skip_previous":
+        return _text_result(json.dumps(sp.skip_previous()))
     return {"content": [{"type": "text", "text": f"unknown tool: {name}"}],
             "isError": True}
 
