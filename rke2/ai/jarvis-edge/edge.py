@@ -1608,6 +1608,25 @@ def _stream_on_sonos_impl(sonos, sentences, host_ip, http_port, turn_n,
     # the speaking flag is a stricter "is JARVIS audible right now" signal.
     global _jarvis_speaking, _jarvis_done_at
     _jarvis_speaking = True
+
+    # Snapshot whatever the Sonos was playing (Spotify, podcast, anything)
+    # BEFORE we wipe the queue for the TTS turn. Restored at the end so
+    # music resumes at the exact spot after JARVIS finishes speaking.
+    # Snapshot failures are non-fatal — TTS still works, we just lose
+    # the resume-music ability for this turn.
+    snap = None
+    pre_state = None
+    try:
+        from soco.snapshot import Snapshot  # local import — soco is hot
+        snap = Snapshot(sonos, snapshot_queue=True)
+        snap.snapshot()
+        pre_state = snap.transport_state
+        if pre_state == "PLAYING":
+            print(f"  sonos: snapshot taken (was PLAYING, will resume after)")
+    except Exception as exc:
+        print(f"  sonos: snapshot failed (continuing without resume): {exc!r}")
+        snap = None
+
     try:
         sonos.unjoin()
     except Exception:
@@ -1679,6 +1698,17 @@ def _stream_on_sonos_impl(sonos, sentences, host_ip, http_port, turn_n,
     _jarvis_speaking = False
     # Bound memory: drop old turns' WAV chunks.
     stash.clear_older_than(turn_n)
+
+    # Resume whatever was playing before JARVIS interrupted. Only fire
+    # restore if there was actually something playing — restoring a
+    # STOPPED state is wasted SOAP traffic. fade=True ramps volume back
+    # so resumed music doesn't jolt back at JARVIS's higher voice level.
+    if snap is not None and pre_state == "PLAYING":
+        try:
+            snap.restore(fade=True)
+            print(f"  sonos: restored prior playback (was {pre_state})")
+        except Exception as exc:
+            print(f"  sonos: restore failed: {exc!r}")
     return timings
 
 
