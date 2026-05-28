@@ -40,6 +40,9 @@ _SCOPES = " ".join([
     "user-read-playback-state",
     "user-read-recently-played",
     "user-top-read",
+    # Playback control — required for spotify_play_track etc.
+    # If user has an old token without these, re-run `auth` to re-grant.
+    "user-modify-playback-state",
 ])
 _HTTP_TIMEOUT = 12
 _UA = "JARVIS-spotify/0.1"
@@ -61,8 +64,13 @@ def _client_id() -> str:
 
 # ── HTTP via curl (system trust store; python.org Python 3.12 SSL is unreliable)
 def _curl(method: str, url: str, *, data: Optional[dict] = None,
-          headers: Optional[dict] = None) -> Tuple[int, str]:
-    """Run curl, return (http_code, body). 0 means transport failure."""
+          headers: Optional[dict] = None,
+          json_body: Optional[dict] = None) -> Tuple[int, str]:
+    """Run curl, return (http_code, body). 0 means transport failure.
+    Pass `data` for form-encoded body (legacy auth flow).
+    Pass `json_body` for JSON body (Spotify Web API playback endpoints).
+    Caller is responsible for the corresponding Content-Type header
+    when using json_body; if absent, we add it."""
     args = ["curl", "-sS", "--max-time", str(_HTTP_TIMEOUT),
             "-A", _UA, "-X", method, "-w", "\n%{http_code}", url]
     if headers:
@@ -71,6 +79,12 @@ def _curl(method: str, url: str, *, data: Optional[dict] = None,
     if data is not None:
         args += ["-H", "Content-Type: application/x-www-form-urlencoded",
                  "--data", urllib.parse.urlencode(data)]
+    elif json_body is not None:
+        ct_already = headers and any(k.lower() == "content-type"
+                                      for k in headers)
+        if not ct_already:
+            args += ["-H", "Content-Type: application/json"]
+        args += ["--data", json.dumps(json_body)]
     try:
         r = subprocess.run(args, capture_output=True, text=True,
                            timeout=_HTTP_TIMEOUT + 2)
@@ -144,7 +158,8 @@ def _refresh_if_needed() -> Optional[str]:
 
 
 # ── Thin Spotify Web API wrapper ─────────────────────────────────────────
-def _api(path: str, params: Optional[dict] = None) -> dict:
+def _api(path: str, params: Optional[dict] = None,
+         method: str = "GET", body: Optional[dict] = None) -> dict:
     tok = _refresh_if_needed()
     if not tok:
         return {"status": "unauthorized",
@@ -152,15 +167,18 @@ def _api(path: str, params: Optional[dict] = None) -> dict:
     url = "https://api.spotify.com/v1" + path
     if params:
         url += "?" + urllib.parse.urlencode(params)
-    code, body = _curl("GET", url, headers={"Authorization": f"Bearer {tok}"})
-    if code == 204:
-        return {"status": "ok", "data": None}
-    if code != 200:
-        return {"status": "error", "code": code, "detail": body[:200]}
-    try:
-        return {"status": "ok", "data": json.loads(body)}
-    except ValueError:
-        return {"status": "error", "code": code, "detail": "invalid json"}
+    headers = {"Authorization": f"Bearer {tok}"}
+    code, raw = _curl(method, url, headers=headers, json_body=body)
+    # 200 = OK with body, 202/204 = OK no body (playback endpoints
+    # typically respond 204 on success).
+    if code in (200, 201, 202, 204):
+        if not raw:
+            return {"status": "ok", "data": None}
+        try:
+            return {"status": "ok", "data": json.loads(raw)}
+        except ValueError:
+            return {"status": "ok", "data": None}
+    return {"status": "error", "code": code, "detail": (raw or "")[:200]}
 
 
 # ── Public functions (consumed by the MCP server + the CLI) ──────────────
@@ -225,6 +243,112 @@ def current_track() -> dict:
             "artists": [a["name"] for a in t.get("artists", [])],
             "album": (t.get("album") or {}).get("name", ""),
             "progress_ms": d.get("progress_ms")}
+
+
+# ── Playback control (requires user-modify-playback-state scope) ─────────
+def search_tracks(query: str, limit: int = 5) -> dict:
+    """Search Spotify for tracks matching `query`. Returns list of
+    candidates with name, artists, album, URI, and id."""
+    res = _api("/search",
+               {"q": query, "type": "track",
+                "limit": max(1, min(20, int(limit)))})
+    if res.get("status") != "ok":
+        return res
+    items = ((res.get("data") or {}).get("tracks") or {}).get("items") or []
+    return {"status": "ok",
+            "tracks": [{
+                "name": t["name"],
+                "artists": [a["name"] for a in t.get("artists", [])],
+                "album": (t.get("album") or {}).get("name", ""),
+                "uri": t["uri"],
+                "id": t["id"],
+                "duration_ms": t.get("duration_ms"),
+            } for t in items]}
+
+
+def devices() -> dict:
+    """List Spotify Connect devices the user can play on (Sonos, phones,
+    laptops, etc.). Each entry has id, name, type, is_active, volume."""
+    res = _api("/me/player/devices")
+    if res.get("status") != "ok":
+        return res
+    return {"status": "ok",
+            "devices": (res.get("data") or {}).get("devices") or []}
+
+
+def _find_device(name_or_id: str) -> Optional[str]:
+    """Resolve a user-friendly device name (substring, case-insensitive)
+    or accept a literal device id. Returns the device id or None."""
+    if not name_or_id:
+        return None
+    d = devices()
+    if d.get("status") != "ok":
+        return None
+    target = name_or_id.lower().strip()
+    for dev in d.get("devices", []):
+        if dev["id"] == name_or_id:
+            return dev["id"]
+        if target in (dev.get("name") or "").lower():
+            return dev["id"]
+    return None
+
+
+def play_track(uri: str, device: Optional[str] = None) -> dict:
+    """Start playback of a Spotify track URI on `device` (name or id).
+    If device is None, plays on the user's currently-active device.
+    Pass a URI like `spotify:track:...` from search_tracks results."""
+    params = {}
+    if device:
+        did = _find_device(device)
+        if not did:
+            return {"status": "error",
+                    "detail": f"no Spotify Connect device matching {device!r}"}
+        params["device_id"] = did
+    body = {"uris": [uri]} if uri.startswith("spotify:track:") else {"context_uri": uri}
+    res = _api("/me/player/play", params=params or None,
+               method="PUT", body=body)
+    if res.get("status") != "ok":
+        return res
+    return {"status": "ok", "uri": uri, "device": device or "<active>"}
+
+
+def search_and_play(query: str, device: Optional[str] = None) -> dict:
+    """One-shot: search Spotify, pick the top hit, play it on `device`.
+    Convenience wrapper for the common voice path."""
+    s = search_tracks(query, limit=1)
+    if s.get("status") != "ok":
+        return s
+    tracks = s.get("tracks") or []
+    if not tracks:
+        return {"status": "error", "detail": f"no Spotify results for {query!r}"}
+    top = tracks[0]
+    p = play_track(top["uri"], device=device)
+    if p.get("status") != "ok":
+        return p
+    return {"status": "ok",
+            "playing": top["name"],
+            "artists": top["artists"],
+            "device": device or "<active>"}
+
+
+def pause() -> dict:
+    res = _api("/me/player/pause", method="PUT")
+    return res if res.get("status") == "ok" else res
+
+
+def resume() -> dict:
+    res = _api("/me/player/play", method="PUT")
+    return res if res.get("status") == "ok" else res
+
+
+def skip_next() -> dict:
+    res = _api("/me/player/next", method="POST")
+    return res if res.get("status") == "ok" else res
+
+
+def skip_previous() -> dict:
+    res = _api("/me/player/previous", method="POST")
+    return res if res.get("status") == "ok" else res
 
 
 # ── Interactive OAuth bootstrap ──────────────────────────────────────────
