@@ -31,7 +31,20 @@ import urllib.parse
 import webbrowser
 from typing import Optional, Tuple
 
-_TOKENS_PATH = os.path.expanduser("~/.openjarvis/spotify_tokens.json")
+# Writable token store on the jarvis-state PVC. Survives pod restarts.
+# When this file is missing (cold start), we seed from the secret-mounted
+# bootstrap path (_BOOTSTRAP_TOKENS_PATH) below — that's where the initial
+# user-auth-flow token lands via the K8s Secret. Going forward, refreshed
+# tokens write here and stick across pod restarts.
+_TOKENS_PATH = os.environ.get(
+    "SPOTIFY_TOKENS_PATH", "/state/spotify_tokens.json"
+)
+# Read-only bootstrap source — the K8s Secret jarvis-secrets's projected
+# spotify_tokens.json. Used ONLY to seed _TOKENS_PATH on cold start.
+_BOOTSTRAP_TOKENS_PATH = os.environ.get(
+    "SPOTIFY_BOOTSTRAP_TOKENS_PATH",
+    os.path.expanduser("~/.openjarvis/spotify_tokens.json"),
+)
 _CONFIG_PATH = os.path.expanduser("~/.openjarvis/config.toml")
 _REDIRECT_URI = "http://127.0.0.1:8888/callback"
 _REDIRECT_PORT = 8888
@@ -109,23 +122,66 @@ def _pkce_pair() -> Tuple[str, str]:
 
 
 # ── Token storage + refresh ──────────────────────────────────────────────
+# In-memory token cache. Authoritative once populated — the file at
+# _TOKENS_PATH is only used as a bootstrap source (and may be read-only,
+# e.g. when the file is projected from a Kubernetes Secret). Without
+# this cache the running pod would loop on "refresh succeeds but save
+# fails (read-only fs); next call re-reads expired token; repeat".
+_TOKEN_CACHE: dict = {}
+
+
 def _save_tokens(d: dict) -> None:
-    os.makedirs(os.path.dirname(_TOKENS_PATH), exist_ok=True)
     d.setdefault("saved_at", int(time.time()))
     if "expires_in" in d and "expires_at" not in d:
         # 30s safety margin so we never present a soon-to-expire token
         d["expires_at"] = int(time.time()) + int(d["expires_in"]) - 30
-    with open(_TOKENS_PATH, "w") as f:
-        json.dump(d, f, indent=2)
-    os.chmod(_TOKENS_PATH, 0o600)
+    # In-memory cache is authoritative. Disk write is best-effort —
+    # we don't want a read-only filesystem (Secret projection) to
+    # break refresh loops mid-process.
+    global _TOKEN_CACHE
+    _TOKEN_CACHE = dict(d)
+    try:
+        os.makedirs(os.path.dirname(_TOKENS_PATH), exist_ok=True)
+        with open(_TOKENS_PATH, "w") as f:
+            json.dump(d, f, indent=2)
+        os.chmod(_TOKENS_PATH, 0o600)
+    except OSError:
+        # Read-only filesystem (K8s Secret mount) — cache is enough.
+        pass
 
 
 def _load_tokens() -> dict:
+    # Order of preference:
+    #   1. In-process cache (set by the most recent refresh)
+    #   2. _TOKENS_PATH on the writable PVC (persists across restarts)
+    #   3. _BOOTSTRAP_TOKENS_PATH from the K8s Secret (read-only seed)
+    # On first load when PVC is empty, we copy the bootstrap into the
+    # PVC so subsequent refreshes have somewhere to land.
+    if _TOKEN_CACHE:
+        return _TOKEN_CACHE
     try:
         with open(_TOKENS_PATH) as f:
             return json.load(f)
     except (OSError, ValueError):
+        pass
+    # PVC empty — try to seed from the bootstrap Secret path.
+    try:
+        with open(_BOOTSTRAP_TOKENS_PATH) as f:
+            seed = json.load(f)
+    except (OSError, ValueError):
         return {}
+    # Persist the bootstrap into the PVC so future refreshes work.
+    try:
+        os.makedirs(os.path.dirname(_TOKENS_PATH), exist_ok=True)
+        with open(_TOKENS_PATH, "w") as f:
+            json.dump(seed, f, indent=2)
+        os.chmod(_TOKENS_PATH, 0o600)
+        print(f"jarvis_spotify: seeded {_TOKENS_PATH} from bootstrap",
+              flush=True)
+    except OSError as exc:
+        print(f"jarvis_spotify: PVC seed failed (continuing): {exc!r}",
+              flush=True)
+    return seed
 
 
 def _refresh_if_needed() -> Optional[str]:
