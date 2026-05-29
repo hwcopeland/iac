@@ -31,7 +31,7 @@ spec:
       serviceAccountName: ci-deployer
       containers:
         - name: runner
-          image: ghcr.io/actions/actions-runner:2.333.0
+          image: ghcr.io/actions/actions-runner:2.334.0
           imagePullPolicy: IfNotPresent
           env:
             - name: GITHUB_PAT
