@@ -57,14 +57,16 @@ jobs:
           context: rke2/monitor/spotify-exporter
           file: rke2/monitor/spotify-exporter/Dockerfile
           platforms: linux/amd64
-          push: true
           provenance: false
           sbom: false
+          # zot accepts only OCI manifest media types — a Docker schema-2
+          # manifest is rejected with HTTP 415. Force OCI on push. (Do not add
+          # cache-to type=registry: inline cache export reverts buildkit to
+          # Docker media types and 415s.)
+          outputs: type=image,oci-mediatypes=true,push=true
           tags: |
             zot.hwcopeland.net/monitor/spotify-exporter:${{ steps.tags.outputs.sha_tag }}
             zot.hwcopeland.net/monitor/spotify-exporter:latest
-          cache-from: type=registry,ref=zot.hwcopeland.net/monitor/spotify-exporter:cache
-          cache-to: type=registry,ref=zot.hwcopeland.net/monitor/spotify-exporter:cache,mode=max
 
   deploy:
     name: Deploy to Kubernetes
