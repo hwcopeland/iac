@@ -50,7 +50,7 @@ import tokenstore
 # ── Config ────────────────────────────────────────────────────────────────
 STATE_DIR = os.environ.get("SPOTIFY_STATE_DIR", "/state")
 PLAYS_PATH = os.path.join(STATE_DIR, "plays.json")
-PORT = int(os.environ.get("SPOTIFY_EXPORTER_PORT", "9112"))
+PORT = int(os.environ.get("METRICS_PORT", "9112"))
 
 # Poll cadences (seconds)
 NOW_PLAYING_INTERVAL = int(os.environ.get("NOW_PLAYING_INTERVAL", "15"))
