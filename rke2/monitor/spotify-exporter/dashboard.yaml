@@ -1,0 +1,162 @@
+# Grafana dashboard for the Spotify exporter. Loaded by the kube-prometheus
+# stack Grafana sidecar (label grafana_dashboard="1"); lands in the "Spotify"
+# folder. Datasource uid "prometheus" matches the stack default.
+#
+# Applied by the build-spotify-exporter deploy job (kubectl apply).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-spotify
+  namespace: monitor
+  labels:
+    grafana_dashboard: "1"
+  annotations:
+    grafana_folder: "Spotify"
+data:
+  spotify-overview.json: |-
+    {
+      "uid": "spotify-overview",
+      "title": "Spotify",
+      "schemaVersion": 38,
+      "version": 1,
+      "refresh": "30s",
+      "time": { "from": "now-30d", "to": "now" },
+      "tags": ["spotify", "music"],
+      "templating": {
+        "list": [
+          {
+            "name": "range",
+            "label": "Time range",
+            "type": "custom",
+            "query": "All-time (years) : long, 6 months : medium, 4 weeks : short",
+            "current": { "text": "All-time (years)", "value": "long" },
+            "options": [
+              { "text": "All-time (years)", "value": "long", "selected": true },
+              { "text": "6 months", "value": "medium", "selected": false },
+              { "text": "4 weeks", "value": "short", "selected": false }
+            ],
+            "includeAll": false,
+            "multi": false
+          }
+        ]
+      },
+      "panels": [
+        { "id": 1, "type": "row", "title": "Now Playing", "gridPos": { "x": 0, "y": 0, "w": 24, "h": 1 } },
+        {
+          "id": 2, "type": "table", "title": "Now Playing",
+          "gridPos": { "x": 0, "y": 1, "w": 12, "h": 5 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [ { "refId": "A", "expr": "spotify_now_playing_info", "instant": true, "format": "table" } ],
+          "transformations": [
+            { "id": "organize", "options": {
+              "excludeByName": { "Time": true, "Value": true, "__name__": true, "job": true, "instance": true, "namespace": true, "pod": true, "container": true, "endpoint": true, "service": true, "prometheus": true },
+              "renameByName": { "track": "Track", "artist": "Artist", "album": "Album" } } }
+          ],
+          "options": { "showHeader": true }
+        },
+        {
+          "id": 3, "type": "stat", "title": "Playback",
+          "gridPos": { "x": 12, "y": 1, "w": 4, "h": 5 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [ { "refId": "A", "expr": "spotify_now_playing", "instant": true } ],
+          "fieldConfig": { "defaults": { "mappings": [
+            { "type": "value", "options": { "1": { "text": "Playing", "color": "green" }, "0": { "text": "Paused / Idle", "color": "orange" } } }
+          ], "color": { "mode": "thresholds" } } },
+          "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } }
+        },
+        {
+          "id": 4, "type": "gauge", "title": "Track Progress",
+          "gridPos": { "x": 16, "y": 1, "w": 8, "h": 5 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [ { "refId": "A", "expr": "spotify_now_playing_progress_ratio", "instant": true } ],
+          "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1 } },
+          "options": { "reduceOptions": { "calcs": ["lastNotNull"] } }
+        },
+
+        { "id": 10, "type": "row", "title": "Top Artists & Tracks  ($range)", "gridPos": { "x": 0, "y": 6, "w": 24, "h": 1 } },
+        {
+          "id": 11, "type": "table", "title": "Top Artists",
+          "gridPos": { "x": 0, "y": 7, "w": 8, "h": 13 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [ { "refId": "A", "expr": "spotify_top_artist_rank{range=\"$range\"}", "instant": true, "format": "table" } ],
+          "transformations": [
+            { "id": "organize", "options": {
+              "excludeByName": { "Time": true, "__name__": true, "range": true, "job": true, "instance": true, "namespace": true, "pod": true, "container": true, "endpoint": true, "service": true, "prometheus": true },
+              "renameByName": { "artist": "Artist", "genre": "Genre", "Value": "Rank" } } },
+            { "id": "sortBy", "options": { "fields": {}, "sort": [ { "field": "Rank", "desc": false } ] } }
+          ],
+          "fieldConfig": { "defaults": {}, "overrides": [ { "matcher": { "id": "byName", "options": "Rank" }, "properties": [ { "id": "custom.width", "value": 60 } ] } ] }
+        },
+        {
+          "id": 12, "type": "bargauge", "title": "Artist Popularity (Spotify 0–100)",
+          "gridPos": { "x": 8, "y": 7, "w": 8, "h": 13 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [ { "refId": "A", "expr": "topk(15, spotify_artist_popularity{range=\"$range\"})", "instant": true, "legendFormat": "{{artist}}" } ],
+          "fieldConfig": { "defaults": { "min": 0, "max": 100, "color": { "mode": "continuous-GrYlRd" } } },
+          "options": { "displayMode": "gradient", "orientation": "horizontal", "reduceOptions": { "calcs": ["lastNotNull"] } }
+        },
+        {
+          "id": 13, "type": "table", "title": "Top Tracks",
+          "gridPos": { "x": 16, "y": 7, "w": 8, "h": 13 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [ { "refId": "A", "expr": "spotify_top_track_rank{range=\"$range\"}", "instant": true, "format": "table" } ],
+          "transformations": [
+            { "id": "organize", "options": {
+              "excludeByName": { "Time": true, "__name__": true, "range": true, "job": true, "instance": true, "namespace": true, "pod": true, "container": true, "endpoint": true, "service": true, "prometheus": true },
+              "renameByName": { "track": "Track", "artist": "Artist", "Value": "Rank" } } },
+            { "id": "sortBy", "options": { "fields": {}, "sort": [ { "field": "Rank", "desc": false } ] } }
+          ],
+          "fieldConfig": { "defaults": {}, "overrides": [ { "matcher": { "id": "byName", "options": "Rank" }, "properties": [ { "id": "custom.width", "value": 60 } ] } ] }
+        },
+
+        { "id": 20, "type": "row", "title": "Genres  ($range)", "gridPos": { "x": 0, "y": 20, "w": 24, "h": 1 } },
+        {
+          "id": 21, "type": "piechart", "title": "Genre Share",
+          "gridPos": { "x": 0, "y": 21, "w": 8, "h": 9 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [ { "refId": "A", "expr": "spotify_genre_score{range=\"$range\"}", "instant": true, "legendFormat": "{{genre}}" } ],
+          "fieldConfig": { "defaults": { "unit": "percent" } },
+          "options": { "pieType": "donut", "legend": { "displayMode": "table", "placement": "right", "values": ["value"] }, "reduceOptions": { "calcs": ["lastNotNull"] } }
+        },
+        {
+          "id": 22, "type": "bargauge", "title": "Genre Share (ranked)",
+          "gridPos": { "x": 8, "y": 21, "w": 16, "h": 9 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [ { "refId": "A", "expr": "topk(15, spotify_genre_score{range=\"$range\"})", "instant": true, "legendFormat": "{{genre}}" } ],
+          "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "color": { "mode": "continuous-BlPu" } } },
+          "options": { "displayMode": "gradient", "orientation": "horizontal", "reduceOptions": { "calcs": ["lastNotNull"] } }
+        },
+
+        { "id": 30, "type": "row", "title": "Listening Over Time", "gridPos": { "x": 0, "y": 30, "w": 24, "h": 1 } },
+        {
+          "id": 31, "type": "stat", "title": "Plays Observed (since exporter start)",
+          "gridPos": { "x": 0, "y": 31, "w": 4, "h": 6 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [ { "refId": "A", "expr": "spotify_plays_total{artist=\"__all__\"}", "instant": true } ],
+          "fieldConfig": { "defaults": { "color": { "mode": "fixed", "fixedColor": "green" } } },
+          "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } }
+        },
+        {
+          "id": 32, "type": "timeseries", "title": "Plays per Hour",
+          "gridPos": { "x": 4, "y": 31, "w": 12, "h": 6 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [ { "refId": "A", "expr": "sum(increase(spotify_plays_total{artist=\"__all__\"}[1h]))", "legendFormat": "plays/h" } ],
+          "fieldConfig": { "defaults": { "custom": { "drawStyle": "bars", "fillOpacity": 40 } } }
+        },
+        {
+          "id": 33, "type": "bargauge", "title": "Most Played in Window",
+          "gridPos": { "x": 16, "y": 31, "w": 8, "h": 6 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [ { "refId": "A", "expr": "topk(10, increase(spotify_plays_total{artist!=\"__all__\"}[$__range]))", "instant": true, "legendFormat": "{{artist}}" } ],
+          "fieldConfig": { "defaults": { "min": 0, "color": { "mode": "continuous-GrYlRd" } } },
+          "options": { "displayMode": "gradient", "orientation": "horizontal", "reduceOptions": { "calcs": ["lastNotNull"] } }
+        },
+        {
+          "id": 34, "type": "timeseries", "title": "Plays Over Time by Artist (top movers)",
+          "gridPos": { "x": 0, "y": 37, "w": 24, "h": 8 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [ { "refId": "A", "expr": "topk(8, increase(spotify_plays_total{artist!=\"__all__\"}[1h]) > 0)", "legendFormat": "{{artist}}" } ],
+          "fieldConfig": { "defaults": { "custom": { "drawStyle": "bars", "stacking": { "mode": "normal" }, "fillOpacity": 70 } } }
+        }
+      ]
+    }
