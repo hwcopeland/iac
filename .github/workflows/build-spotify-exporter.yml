@@ -94,8 +94,9 @@ jobs:
 
           cd rke2/monitor/spotify-exporter
 
-          # Credentials come from Bitwarden via ExternalSecret (not GH secrets).
+          # Credentials + zot pull creds come from Bitwarden via ExternalSecrets.
           /tmp/kubectl apply -f external-secret.yaml
+          /tmp/kubectl apply -f zot-pull-secret.yaml
           /tmp/kubectl apply -f deployment.yaml
           /tmp/kubectl apply -f dashboard.yaml
 

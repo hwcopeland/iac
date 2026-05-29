@@ -78,6 +78,11 @@ spec:
         app: spotify-exporter
     spec:
       serviceAccountName: spotify-exporter
+      # Don't inject SVC env vars (the Service "spotify-exporter" would set
+      # SPOTIFY_EXPORTER_PORT=tcp://… and clobber our int port config).
+      enableServiceLinks: false
+      imagePullSecrets:
+        - name: zot-pull-secret      # zot is private; creds from zot-pull-secret.yaml
       securityContext:
         runAsNonRoot: true
         runAsUser: 10001
