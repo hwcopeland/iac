@@ -1,0 +1,155 @@
+# Spotify → Prometheus exporter. Deployed by the build-spotify-exporter
+# workflow's deploy job (kubectl apply + rollout), mirroring build-jarvis-edge.
+#
+# Two Secrets:
+#   spotify-exporter  — bootstrap creds (client_id, refresh_token), seeded by
+#                       the deploy job from GitHub Actions secrets. Not in git.
+#   spotify-token     — the SHARED, rotating Spotify token (key tokens.json),
+#                       the single source of truth co-owned with JARVIS. The
+#                       exporter reads/patches it via the ServiceAccount + Role
+#                       below; JARVIS reads/patches the same Secret via kubectl.
+# The bootstrap refresh token only seeds spotify-token when it is empty;
+# steady-state never depends on it (Spotify rotates refresh tokens on use).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: spotify-exporter
+  namespace: monitor
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: spotify-exporter-token
+  namespace: monitor
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: ["spotify-token"]
+    verbs: ["get", "update", "patch"]
+  # create needs cluster-list at the collection level, so allow create
+  # separately (cannot be restricted by resourceName).
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: spotify-exporter-token
+  namespace: monitor
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: spotify-exporter-token
+subjects:
+  - kind: ServiceAccount
+    name: spotify-exporter
+    namespace: monitor
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: spotify-exporter-state
+  namespace: monitor
+spec:
+  accessModes: ["ReadWriteOnce"]
+  storageClassName: longhorn
+  resources:
+    requests:
+      storage: 64Mi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: spotify-exporter
+  namespace: monitor
+  labels:
+    app: spotify-exporter
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate          # single RWO volume — never two pods at once
+  selector:
+    matchLabels:
+      app: spotify-exporter
+  template:
+    metadata:
+      labels:
+        app: spotify-exporter
+    spec:
+      serviceAccountName: spotify-exporter
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        fsGroup: 10001        # make the longhorn PVC writable by the exporter uid
+      containers:
+        - name: spotify-exporter
+          image: zot.hwcopeland.net/monitor/spotify-exporter:latest
+          imagePullPolicy: Always
+          ports:
+            - name: http-metrics
+              containerPort: 9112
+          env:
+            - name: SPOTIFY_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: spotify-exporter
+                  key: client_id
+            - name: SPOTIFY_REFRESH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: spotify-exporter
+                  key: refresh_token
+            - name: SPOTIFY_STATE_DIR
+              value: /state
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 250m
+              memory: 128Mi
+          livenessProbe:
+            httpGet:
+              path: /metrics
+              port: http-metrics
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          volumeMounts:
+            - name: state
+              mountPath: /state
+      volumes:
+        - name: state
+          persistentVolumeClaim:
+            claimName: spotify-exporter-state
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: spotify-exporter
+  namespace: monitor
+  labels:
+    app: spotify-exporter
+spec:
+  selector:
+    app: spotify-exporter
+  ports:
+    - name: http-metrics
+      port: 9112
+      targetPort: http-metrics
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: spotify-exporter
+  namespace: monitor
+  labels:
+    release: kube-prometheus-stack    # matched by the stack's podMonitorSelector
+spec:
+  selector:
+    matchLabels:
+      app: spotify-exporter
+  podMetricsEndpoints:
+    - port: http-metrics
+      interval: 30s
+      path: /metrics
