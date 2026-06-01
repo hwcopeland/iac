@@ -7,7 +7,7 @@ import Header from '../components/Header.astro';
 
 type Props = CollectionEntry<'blog'>['data'];
 
-const { title, description, pubDate, updatedDate, heroImage } = Astro.props;
+const { title, description, pubDate, updatedDate, heroImage, minutesRead } = Astro.props;
 ---
 
 <html lang="en">
@@ -22,6 +22,7 @@ const { title, description, pubDate, updatedDate, heroImage } = Astro.props;
 					<h1>{title}</h1>
 					<div class="meta">
 						<FormattedDate date={pubDate} />
+						{minutesRead && <span class="reading-time">· {minutesRead}</span>}
 						{updatedDate && (
 							<span class="updated">
 								· updated <FormattedDate date={updatedDate} />
