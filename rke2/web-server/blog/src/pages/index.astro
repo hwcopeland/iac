@@ -1,0 +1,88 @@
+---
+import { getCollection } from 'astro:content';
+import BaseHead from '../components/BaseHead.astro';
+import Footer from '../components/Footer.astro';
+import FormattedDate from '../components/FormattedDate.astro';
+import Header from '../components/Header.astro';
+import { SITE_DESCRIPTION, SITE_TITLE } from '../consts';
+
+const posts = (await getCollection('blog'))
+	.sort((a, b) => b.data.pubDate.valueOf() - a.data.pubDate.valueOf())
+	.slice(0, 5);
+---
+
+<!doctype html>
+<html lang="en">
+	<head>
+		<BaseHead title={SITE_TITLE} description={SITE_DESCRIPTION} />
+	</head>
+	<body>
+		<Header />
+		<main>
+			<section class="intro">
+				<h1>{SITE_TITLE}</h1>
+				<p>{SITE_DESCRIPTION}</p>
+			</section>
+			<section class="recent">
+				<h2>Recent</h2>
+				<ul class="post-list">
+					{posts.map((post) => (
+						<li>
+							<a href={`/blog/${post.id}/`}>
+								<span class="title">{post.data.title}</span>
+								<span class="date">
+									<FormattedDate date={post.data.pubDate} />
+								</span>
+							</a>
+						</li>
+					))}
+				</ul>
+			</section>
+		</main>
+		<Footer />
+		<style>
+			.intro { margin-bottom: 3rem; }
+			.intro h1 {
+				font-size: 2rem;
+				margin: 0 0 0.5rem;
+				letter-spacing: -0.02em;
+			}
+			.intro p {
+				color: var(--fg-dim);
+				margin: 0;
+				font-size: 1.05rem;
+				line-height: 1.55;
+			}
+			.recent h2 {
+				font-size: 0.75rem;
+				text-transform: uppercase;
+				letter-spacing: 0.1em;
+				color: var(--fg-dim);
+				margin: 0 0 0.75rem;
+				font-weight: 500;
+			}
+			.post-list { list-style: none; padding: 0; margin: 0; }
+			.post-list li + li { border-top: 1px solid var(--border); }
+			.post-list a {
+				display: flex;
+				justify-content: space-between;
+				align-items: baseline;
+				gap: 1.5rem;
+				padding: 0.85rem 0;
+				color: var(--fg);
+				text-decoration: none;
+			}
+			.post-list a:hover .title { color: var(--accent); }
+			.post-list .title {
+				font-size: 0.98rem;
+				font-weight: 500;
+			}
+			.post-list .date {
+				color: var(--fg-dim);
+				font-size: 0.82rem;
+				white-space: nowrap;
+				font-variant-numeric: tabular-nums;
+			}
+		</style>
+	</body>
+</html>

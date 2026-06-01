@@ -1,0 +1,8 @@
+node_modules
+dist
+.astro
+.git
+.vscode
+.claude
+npm-debug.log*
+.DS_Store

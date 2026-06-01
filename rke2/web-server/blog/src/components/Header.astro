@@ -1,0 +1,64 @@
+---
+import { SITE_TITLE } from '../consts';
+import HeaderLink from './HeaderLink.astro';
+---
+
+<header>
+	<nav>
+		<a href="/" class="site-title">{SITE_TITLE}</a>
+		<div class="internal-links">
+			<HeaderLink href="/">Home</HeaderLink>
+			<HeaderLink href="/blog">Blog</HeaderLink>
+			<HeaderLink href="/about">About</HeaderLink>
+		</div>
+	</nav>
+</header>
+<style>
+	header {
+		border-bottom: 1px solid var(--border);
+		background: var(--bg);
+		position: sticky;
+		top: 0;
+		z-index: 10;
+		backdrop-filter: saturate(140%) blur(6px);
+		-webkit-backdrop-filter: saturate(140%) blur(6px);
+		background: rgba(13, 15, 19, 0.85);
+	}
+	nav {
+		max-width: var(--content-width);
+		margin: 0 auto;
+		padding: 0.9rem var(--content-pad);
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 1rem;
+	}
+	.site-title {
+		font-weight: 600;
+		color: #fff;
+		font-size: 0.95rem;
+		text-decoration: none;
+		letter-spacing: -0.01em;
+	}
+	.internal-links {
+		display: flex;
+		gap: 0.25rem;
+	}
+	nav :global(a) {
+		color: var(--fg-dim);
+		text-decoration: none;
+		font-size: 0.9rem;
+		padding: 0.3rem 0.65rem;
+		border-radius: 4px;
+		transition: color 0.15s ease, background 0.15s ease;
+	}
+	nav :global(a:hover),
+	nav :global(a.active) {
+		color: #fff;
+		background: var(--bg-elev);
+	}
+	.site-title:hover {
+		color: #fff;
+		background: transparent !important;
+	}
+</style>

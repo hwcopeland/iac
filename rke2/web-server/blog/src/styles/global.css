@@ -1,0 +1,146 @@
+:root {
+	--bg: #0d0f13;
+	--bg-elev: #15181f;
+	--fg: #d7dae0;
+	--fg-dim: #8a8f98;
+	--border: #23262e;
+	--accent: #7aa2f7;
+	--accent-hover: #9ab8ff;
+	--code-bg: #1a1d24;
+	--content-width: 720px;
+	--content-pad: 1.25rem;
+}
+
+html {
+	color-scheme: dark;
+}
+
+* {
+	box-sizing: border-box;
+}
+
+body {
+	font-family:
+		-apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', system-ui,
+		sans-serif;
+	margin: 0;
+	padding: 0;
+	background: var(--bg);
+	color: var(--fg);
+	font-size: 16px;
+	line-height: 1.6;
+	-webkit-font-smoothing: antialiased;
+	text-rendering: optimizeLegibility;
+}
+
+main {
+	max-width: var(--content-width);
+	margin: 0 auto;
+	padding: 3rem var(--content-pad) 4rem;
+}
+
+.prose {
+	max-width: none;
+	line-height: 1.7;
+}
+
+h1, h2, h3, h4, h5, h6 {
+	margin: 1.75rem 0 0.6rem;
+	color: #fff;
+	line-height: 1.25;
+	font-weight: 600;
+}
+
+h1 { font-size: 1.7rem; }
+h2 { font-size: 1.35rem; }
+h3 { font-size: 1.15rem; }
+h4 { font-size: 1rem; }
+h5, h6 { font-size: 0.95rem; }
+
+p {
+	margin: 0 0 1rem;
+}
+
+.prose p {
+	margin-bottom: 1rem;
+}
+
+a {
+	color: var(--accent);
+	text-decoration: none;
+}
+a:hover {
+	color: var(--accent-hover);
+	text-decoration: underline;
+}
+
+strong, b { font-weight: 600; color: #fff; }
+
+hr {
+	border: none;
+	border-top: 1px solid var(--border);
+	margin: 2rem 0;
+}
+
+img {
+	max-width: 100%;
+	height: auto;
+	border-radius: 6px;
+	display: block;
+}
+
+code {
+	font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+	font-size: 0.88em;
+	padding: 1px 5px;
+	background: var(--code-bg);
+	border: 1px solid var(--border);
+	border-radius: 4px;
+}
+
+pre {
+	padding: 0.9rem 1rem;
+	border-radius: 6px;
+	border: 1px solid var(--border);
+	overflow-x: auto;
+	font-size: 0.88rem;
+	line-height: 1.55;
+}
+pre > code {
+	all: unset;
+	font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+}
+
+blockquote {
+	border-left: 3px solid var(--accent);
+	padding: 0.25rem 0 0.25rem 1rem;
+	margin: 1rem 0;
+	color: var(--fg-dim);
+	font-size: 1rem;
+}
+
+table {
+	width: 100%;
+	border-collapse: collapse;
+	font-size: 0.9rem;
+}
+th, td {
+	border-bottom: 1px solid var(--border);
+	padding: 0.4rem 0.6rem;
+	text-align: left;
+}
+
+textarea, input { font-size: 14px; }
+
+.sr-only {
+	border: 0;
+	padding: 0;
+	margin: 0;
+	position: absolute !important;
+	height: 1px;
+	width: 1px;
+	overflow: hidden;
+	clip: rect(1px, 1px, 1px, 1px);
+	clip-path: inset(50%);
+	white-space: nowrap;
+}
