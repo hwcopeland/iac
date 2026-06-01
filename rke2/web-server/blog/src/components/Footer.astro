@@ -1,9 +1,14 @@
 ---
+import { GITHUB_URL, SITE_TITLE } from '../consts';
 const today = new Date();
 ---
 
 <footer>
-	<span>&copy; {today.getFullYear()}</span>
+	<span>&copy; {today.getFullYear()} {SITE_TITLE}</span>
+	<nav class="links">
+		<a href={GITHUB_URL} rel="me noopener" target="_blank">GitHub</a>
+		<a href="/rss.xml">RSS</a>
+	</nav>
 </footer>
 <style>
 	footer {
@@ -13,5 +18,21 @@ const today = new Date();
 		color: var(--fg-dim);
 		font-size: 0.82rem;
 		border-top: 1px solid var(--border);
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 1rem;
+	}
+	.links {
+		display: flex;
+		gap: 1rem;
+	}
+	.links a {
+		color: var(--fg-dim);
+		text-decoration: none;
+		transition: color 0.15s ease;
+	}
+	.links a:hover {
+		color: var(--accent);
 	}
 </style>

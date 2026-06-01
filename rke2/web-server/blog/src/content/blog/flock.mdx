@@ -1,0 +1,122 @@
+---
+title: 'Americans of Interest'
+description: "A private company built a nationwide surveillance network with no vote, no hearing, and no warrant requirement. Here's the documented record."
+pubDate: 'Jun 01 2026'
+draft: false
+heroImage: '../../assets/flock-cameras-us.png'
+tags: ['surveillance', 'flock', 'privacy', 'fourth-amendment']
+---
+
+I was born in 1999, right at the turn of the millennium. This new era has pushed the limits of what's possible so far past what our parents — and their parents before them — could ever fathom. During my life, humanity has proved the six degrees of separation, a distance that's actively shrinking as the world grows more connected. The NSA built, and Congress quietly waved through, a series of surveillance programs sitting on top of American cyberspace. Social networks and targeted advertising have spent years collecting metadata and tying it back to individual Americans.
+
+My problem with all of it? You only found out _after_ it had already started.
+
+My favorite show of all time is, hands down, _Person of Interest_. It follows a reclusive software genius who builds an automated "AI" system to surveil an entire population and predict the probability of violent crime before it happens. I found it fascinating — loved the story, loved the cast. The idea of a system like that always struck me as possible, but never probable.
+
+Then I learned about Flock Safety. The Machine is real.
+
+As of June 1st, 2026, the crowdsourced project [DeFlock](https://deflock.org) has mapped over 90,000 automated license plate readers across the United States — and by its own estimate, that's only about half of what's actually out there. Don't let the ALPR branding fool you; this system is much more capable than Flock lets on. Currently Flock is able to read, tag, and aggregate vehicle movements. They are also implementing audio features to detect gunshots. There is nothing stopping Flock engineers from implementing statistical aggregations for person/driver tracking — or anything else they, or the government, want. It doesn't ultimately matter whether you think this is morally or legally right or wrong. What matters is that it happened with no legislative oversight and no public discourse. A private company built a national surveillance grid, and the rest of us are finding out after the fact. The result is a system that creates national security vulnerabilities, runs headfirst into the Fourth Amendment, and gives every reason for suspicion precisely because nobody is regulating it.
+
+![A heatmap of automated license plate readers across the United States, crowdsourced by DeFlock — the dense yellow corridors trace wherever Americans drive.](/flock-cameras-us.png)
+
+---
+
+**TL;DR:** A private company has quietly assembled the closest thing we have to the Machine — a nationwide, AI-driven camera network that logs the movements of people who've done nothing wrong. No one voted for it. There was no public debate and no federal law authorizing it. It's already been used to hunt a woman over an abortion and to feed data to ICE, almost always without a warrant. Its cameras have been left open to the internet, and its own logs show the vendor's sales staff watching live feeds — while the company insists, in writing, that it's never been breached. This is what it looks like when surveillance infrastructure outruns the law.
+
+---
+
+## The architecture is the point
+
+Flock will tell you the cameras exist to find stolen cars and missing kids, and they do. But intent doesn't constrain capability. Once you've strung a nationwide mesh of plate-readers across the country and wired them into one searchable cloud, the question stops being _what was this for_ and becomes _what can it do — and who gets to ask._
+
+The answer to "what can it do" is on the record. Working from search logs it obtained, the [Electronic Frontier Foundation found](https://www.eff.org/deeplinks/2025/12/effs-investigations-expose-flock-safetys-surveillance-abuses-2025-review) that a single query reaches more than 83,000 cameras spanning almost the entire nation. The same dataset captured more than 12 million searches logged by over 3,900 agencies between December 2024 and October 2025. That's the Machine, minus the screenwriters — except no one decided we should have it. It accreted, camera by camera, contract by contract, while city councils approved "free trials."
+
+## It was never just plates
+
+Here's what the city-council fight always misses: the license plate reader is the wedge, not the product. Flock has spent its camera money buying its way into everything that sits next to a plate.
+
+In October 2024 it paid [more than $300 million for Aerodome](https://techcrunch.com/2024/10/23/flock-safety-paid-over-300-million-for-17-month-old-drone-startup-aerodome/), a seventeen-month-old drone startup, and launched a "drone as first responder" program — surveillance that doesn't wait on a pole but flies to you. Its gunshot-detection product, Raven, is a grid of always-on microphones; in 2025 the EFF reported those mics were being [reworked to listen for human voices](https://www.eff.org/deeplinks/2025/10/flocks-gunshot-detection-microphones-will-start-listening-human-voices), not just gunfire. A plate reader says a car passed here. A microphone that flags a raised voice says what happened on the sidewalk.
+
+Then there's Nova. A 2025 leak showed Flock building a [people-search tool designed to "jump from LPR to person"](https://www.404media.co/license-plate-reader-company-flock-is-building-a-massive-people-lookup-tool-leak-shows/) by fusing camera data with data-broker records — and, in an internal build, data pulled from hacked breaches. After the reporting, Flock said Nova [would not use breached data](https://www.404media.co/flock-decides-not-to-use-hacked-data-in-people-search-tool/). But the platform itself — one searchable place that stitches together license plates, public records, and third-party data on top of the largest camera network in the country — is shipping. The plate was always just the doorway.
+
+## They never had to ask a judge
+
+Here's the part that should keep you up at night: almost none of this requires a warrant — a gap [Congress's own research service has flagged](/documents/crs-alpr-fourth-amendment-IF13068.pdf) but not closed.
+
+When a law enforcement officer or case detective wants to read your mail, search your house, or stick a GPS tracker on your car, the Fourth Amendment makes them go to a judge first and show probable cause. The Supreme Court has been clear about the direction of travel. In [_United States v. Jones_](https://www.law.cornell.edu/supremecourt/text/10-1259) (2012), it held that attaching a GPS tracker to a car is a search. In [_Carpenter v. United States_](https://www.law.cornell.edu/supremecourt/text/16-402) (2018), it held that pulling months of someone's cell-phone location history is a search too — because enough location points, stitched together, reveal the whole of a person's movements. Both methods are useful tools to law enforcement and are actively being used to solve crimes, but these court precedents require them to do so within the lines of the constitution. By the logic of those precedents, Flock is violating millions of Americans' Fourth Amendment right against unreasonable searches.
+
+A nationwide network of plate-readers does exactly that. It logs where your car was, when, and builds a searchable history of it. The only difference Flock and the police lean on is that the cameras sit on public roads — so, they argue, no warrant needed. A cop three states away can pull your movements with a few clicks and a free-text "reason" box. No judge. No probable cause. And there have been bad actors in law enforcement and from Flock itself who have inappropriately accessed information they had no legal right to.
+
+The courts haven't settled this, and most that have ruled so far have sided with the surveillance. In January 2026, a federal judge in [_Schmidt v. City of Norfolk_](/documents/schmidt-v-norfolk-opinion.pdf) held that Norfolk's system isn't a search, because plaintiffs couldn't demonstrate the system is capable of tracking the whole of a person's movements. Washington's Court of Appeals reached a similar result in _State v. Simonson_ days later. Flock cites these constantly.
+
+But the dissent is on the record, and it's growing. A [Virginia court threw out plate-reader evidence](https://www.govtech.com/public-safety/virginia-judge-rejects-alpr-evidence-without-warrant) gathered without a warrant, the judge writing that a person does not surrender all Fourth Amendment protection by venturing into the public (a ruling later reversed on appeal — but the reasoning is exactly what the higher courts are now fighting over). New suits in [San Jose, California](https://www.eff.org/press/releases/lawsuit-challenges-san-joses-warrantless-alpr-mass-surveillance) and [Boulder, Colorado](https://boulderreportinglab.org/2026/05/28/boulder-residents-sue-police-chief-over-alleged-mass-surveillance-by-flock-cameras/) are pressing the _Carpenter_ analogy head-on. And there's a detail from Boulder that tells you everything about the asymmetry: when the founder of DeFlock asked his own police department for the records of what Flock had captured about _his_ car, they refused — saying a search for his vehicle would not fall under allowable "law enforcement purposes". They'll log your movements without a warrant. You can't even see your own.
+
+I want to emphasize here: a warrant isn't red tape. It's the thing that forces the government to say, in front of a judge, _why_ it wants to watch you. Build a system where the watching happens by default and the asking happens never, and "is it legal" stops being the interesting question. The interesting question is why we let it get built before anyone had to answer it.
+
+## What it does when someone asks
+
+The answer to "who gets to ask" is worse than the doctrine.
+
+In May 2025, an official in Johnson County, Texas [ran two searches](https://www.404media.co/a-texas-cop-searched-license-plate-cameras-nationwide-for-a-woman-who-got-an-abortion/) through the ALPR database. The reason logged in the system was, plainly: "had an abortion, search for female." The second search reached 83,345 cameras across 6,809 networks — including Washington and Illinois, where abortion is legal.
+
+Flock Safety called the reporting "false," "misleading" and "clickbait," and the sheriff insisted the woman was never under criminal investigation, only being sought as a missing person. But the documents say otherwise. [According to a sworn affidavit by the lead detective](https://www.eff.org/deeplinks/2025/10/flock-safety-and-texas-sheriff-claimed-license-plate-search-was-missing-person-it), the case was a death investigation in response to a report of an abortion, and deputies collected documentation of the abortion from the reporting person — her alleged partner. Deputies later consulted the DA about charging her. (For what it's worth on the sheriff's credibility: King has since been [indicted on unrelated perjury and sexual-harassment charges](https://www.fox4news.com/news/johnson-county-sheriff-adam-king-re-indicted-perjury-charge-sexual-harassment-case).)
+
+It's not just abortion. The same kind of access has gone to immigration enforcement. An [Illinois audit found Flock had given U.S. Customs and Border Protection access](https://web.archive.org/web/20260601220650/https://www.ilsos.gov/news/2025/august-25-2025-giannoulias-audit-finds-license-plate-reader-company-in-violation-of-state-law.html) to Illinois ALPR data in violation of state law, and that [Mount Prospect — a single Chicago suburb — logged 262 immigration-related searches](https://www.fox32chicago.com/news/texas-sheriffs-office-accessed-mount-prospect-license-plate-data-in-immigration-searches-police-say) between January 14 and April 30, 2025. None of this is a rogue cop. It's the architecture working as designed.
+
+If we step into fairy-tale land for a second — because, of course, this would never happen in real life — what's to stop a rogue cop from accessing the system? The answer is nothing. Police already abuse the databases they have — an [AP investigation documented officers across the country using confidential systems to stalk exes, neighbors, and journalists](https://www.cbsnews.com/news/police-sometimes-misuse-confidential-work-databases-for-personal-gain-ap/). Flock just built them a far bigger one.
+
+## "We've never been hacked"
+
+On January 6, 2026, Flock published a post titled [_Has Flock Been Hacked?_](https://www.flocksafety.com/blog/has-flock-been-hacked) The answer, in their own words: Flock has never been hacked, and there has not been a leak of Flock information.
+
+Three days later, on January 9, [Flock confirmed to a Florida news station](https://www.wflx.com/2026/01/09/flock-safety-exposed-live-police-camera-feeds-internet-data-breach-company-says/) that outsiders had been able to view and manipulate police video feeds from its Condor cameras — reachable over the open internet, with no physical access, found by a YouTuber poking around. Researchers separately found [67 cameras streaming live with no authentication at all](https://gainsec.com/2026/01/09/bird-hunting-season-finding-67-live-camera-feeds-and-debug-web-interfaces-accidentally-exposed-by-flock-safety/). Seventy-two hours between "never been breached" and "yes, that was breached."
+
+The company's standard defense is that the disclosed vulnerabilities would have required physical access to a device along with detailed knowledge of its internal hardware. That's true for the device-level flaws — independent researchers registered real CVEs through MITRE, including [development Wi-Fi credentials stored in cleartext](https://nvd.nist.gov/vuln/detail/CVE-2025-59409) in production firmware and a [hard-coded password](https://nvd.nist.gov/vuln/detail/CVE-2025-47823) — and one team showed they could [get full root access in under 30 seconds](https://gainsec.com/wp-content/uploads/2025/06/flock-safety-researcher-summary.pdf) with physical access. But the Condor exposure needed none of that. Flock uses the "physical access" line to make every finding sound harmless. It isn't.
+
+Then there's the credential problem. Security researchers found [Flock logins in infostealer malware infections and for sale on a Russian cybercrime forum](https://www.404media.co/flock-logins-exposed-in-malware-infections-senator-asks-ftc-to-investigate-the-company/). I want to be fair here, because it matters for credibility: those credentials were stolen from users' own infected machines, not from Flock's servers. So Flock can technically say it wasn't "hacked." The real indictment is what made the stolen logins so dangerous — Flock didn't require multi-factor authentication. [Lawmakers asked the FTC to investigate](/documents/wyden-krishnamoorthi-ftc-letter-2025-11-03.pdf) exactly that — and [House members formally demanded answers from the company](/documents/garcia-krishnamoorthi-flock-letter-2025-08-06.pdf) — and in one documented case the DEA used a local officer's password to search Flock's cameras without that officer's knowledge. The lock was optional, and the keys were lying around. Flock is playing fast and loose here. 
+
+## Who's actually watching
+
+If you want to know how little oversight there really is, look at Dunwoody, Georgia, where a [resident pulled the city's own Flock event logs through open-records requests](https://jasonhunyar.substack.com/p/why-are-flock-employees-watching-720) and read them.
+
+A police lieutenant had told the public that only two outside agencies could view the city's live feeds. The logs showed that since the start of 2025, 1,271 external agencies had been granted permission to view live streams and 358 to record them. The records also showed Flock's _own employees_ — sales and business-development staff, not police — holding owner-level access and watching live and recorded footage.
+
+The audit trail is the real scandal. According to that analysis, Flock employees were disabling multi-factor authentication for users, disabling users' searches from showing up in audits, and creating APIs to third-party companies the city had no contract with. Accounts existed in the system that never appeared in the official user export. And an account literally named "Auto-approved" performed 1,931 data shares with no human review. This is the same company that markets "audit logs" and "role-based access controls" as its safeguards. Its own logs show the safeguards being switched off from the inside.
+
+That's the whole problem with "trust us, there are guardrails." You can't audit a system whose audit log is editable by the vendor.
+
+## Follow the money
+
+None of this is charity. Flock has raised [more than $950 million](https://techcrunch.com/2025/03/13/y-combinators-police-surveillance-darling-flock-safety-raises-275m-at-7-5b-valuation/), including a $275 million round in March 2025 backed by Andreessen Horowitz and Bedrock. Its valuation climbed from $4.8 billion in 2024 to $7.5 billion in 2025 to [$8.4 billion in 2026](https://techstartups.com/2026/04/17/flock-safety-hits-8-4b-valuation-as-ai-powered-police-tech-sparks-nationwide-protests/), on roughly $300 million in annual recurring revenue. To protect that, it spent about [$690,000 on federal lobbying](https://www.opensecrets.org/federal-lobbying/clients/summary?cycle=2025&id=D000116304) in just the first three quarters of 2025 — roughly $920,000 across the full year, on top of $90,000 in late 2024 — through the firms Mercury Public Affairs, BGR Government Affairs, and BGR's subcontractor Carlough Solutions. Here's the part worth being precise about, because it's the question everyone asks: there is no list of legislators "on Flock's payroll." Flock has no federal PAC and made no corporate campaign contributions; the only candidate money traceable to it is personal — CEO Garrett Langley's $1,000 to the Ossoff Victory Fund and $1,000 to a leadership PAC in April 2024, plus small personal donations from employees. What Flock buys federally is *lobbying* — aimed at the House, the Senate, and the Office of Administration, on homeland-security and criminal-justice issues and the FY 2026 appropriations bill — not a roster of bought officials. The influence is structural, not a check with a name on it.
+
+The growth engine is a procurement playbook so consistent you could set a clock by it: offer a city free hardware, let officers and dispatch build it into daily operations during the trial, then send the invoice once it's load-bearing. In Oakland County, Michigan, a "free" nine-month drone trial [converts into a roughly $2.5 million two-year contract](https://www.fox2detroit.com/news/oakland-county-approves-flock-drone-pilot-program-despite-strong-opposition-from-some-residents) once the trial ends. Often the deals are no-bid. By the time the public hears about it, the cameras are already up.
+
+
+## No one voted for this
+
+Go back to where I started. The NSA's programs, the ad-tech dragnet — every one of them is a thing we learned about after it was already running. Flock is the same story, except the cameras are on the pole outside your kid's school and the database is one query away from a cop or flock employee in another state who never had to convince a judge of anything.
+
+I don't actually need you to agree that this is unconstitutional. The courts are still fighting that out, and they're split. What I need you to sit with is simpler: the most powerful domestic surveillance network in the country was assembled by a private company, paid for with public money, and pointed at all of us — and there was never a vote, a hearing, or a moment where the public got to say no. Now, a good portion of the public is saying no without being asked.
+
+In the show, the Machine was built in secret because its creator believed people couldn't be trusted to consent to it. Turns out you don't need a genius and a secret. You just need free trials, municipal contracts, and a team of vibe coding idiots to glue it together. Even if the American public were to consent to such a machine, I for one would only want the sharpest individuals of our generation to build it. And they would need to build it in a way where issues are addressed before the cameras hit the streets.
+
+If there's a camera near you, which there most likely is, it's on DeFlock's map. Go look. Then ask your city council the one question Flock has spent $8.4 billion making sure you never got to ask first.
+
+*What the hell are you thinking?*
+
+As a final footnote: this system will be a reality at some point. There's no way around it. Other countries' surveillance systems already make this look like child's play, and are significantly more dangerous. My focus here is that it needs to be discussed before America has its own social credit system — and that Flock Safety needs to exist in a glass house. This issue is far too important, and far too little light has been cast on it. Illegal immigration, the forever-war in the Middle East, and federal polarization are on the national stage, when it should be Flock. This system has been far too recklessly implemented, and the whole thing needs to get blown open into the public domain before it gets integrated any deeper. *The People v. Flock Safety (2026).*
+
+---
+
+## Stay informed
+
+This moves fast, and most of it never reaches the news. A few places worth watching:
+
+- **[DeFlock](https://deflock.org)** — a crowdsourced map of ALPR locations. Find the cameras near you.
+- **[Stop Flock](https://stopflock.com)** — organizing resources for pushing back at the local level.
+- **[Footnote 4A](https://footnote4a.org/news/false-webinars)** — investigative reporting on Flock and the Fourth Amendment.
+- **[Malwarebytes: "What the Flock is happening with license plate readers?"](https://www.malwarebytes.com/blog/privacy/2025/11/what-the-flock-is-happening-with-license-plate-readers)** — a plain-English explainer to send to people who aren't sold yet.
+
+---
+
+_Primary documents referenced here are mirrored on this site: the [Schmidt v. City of Norfolk opinion](/documents/schmidt-v-norfolk-opinion.pdf), the [CRS report on ALPRs and the Fourth Amendment](/documents/crs-alpr-fourth-amendment-IF13068.pdf), [Sen. Wyden's letter to the FTC](/documents/wyden-krishnamoorthi-ftc-letter-2025-11-03.pdf), and the [House oversight letter to Flock](/documents/garcia-krishnamoorthi-flock-letter-2025-08-06.pdf). Reporting referenced includes the Electronic Frontier Foundation, 404 Media, WFLX, the CVE/NVD vulnerability registry, OpenSecrets, the U.S. Senate lobbying-disclosure database, and open-records analysis of the Dunwoody, GA Flock system. California's separate enforcement action over illegal data-sharing is People v. City of El Cajon._
