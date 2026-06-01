@@ -22,3 +22,7 @@ pnpm-debug.log*
 
 # jetbrains setting folder
 .idea/
+
+# private evidence captures (never serve/commit)
+archive/
+wayback-snapshots.txt
