@@ -1,0 +1,85 @@
+---
+# Build and deploy the Astro blog (blog.hwcopeland.net).
+#
+# Runner: self-hosted ARC runner on the RKE2 cluster.
+# Registry: zot.hwcopeland.net/web-server/blog.
+#
+# Pushing a new post (or any change) under rke2/web-server/blog/ triggers a
+# rebuild, then a rollout restart of the blog Deployment in the web-server ns.
+# Same secret conventions as the other build workflows
+# (ZOT_USERNAME / ZOT_PASSWORD / KUBECONFIG_BASE64).
+
+name: Build and Deploy Blog
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'rke2/web-server/blog/**'
+      - '.github/workflows/build-blog.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build blog image
+    runs-on: arc-chem
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@b5ca514318bd6ebac0fb2aedd5d36ec1b5c232a2  # v3.10.0
+
+      - name: Log in to Zot registry
+        uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772  # v3.4.0
+        with:
+          registry: zot.hwcopeland.net
+          username: ${{ secrets.ZOT_USERNAME }}
+          password: ${{ secrets.ZOT_PASSWORD }}
+
+      - name: Compute image tag
+        id: tags
+        run: |
+          SHORT_SHA="${GITHUB_SHA::7}"
+          echo "sha_tag=sha-${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push
+        uses: docker/build-push-action@14487ce63c7a62a4a324b0bfb37086795e31c6c1  # v6.16.0
+        with:
+          context: rke2/web-server/blog
+          platforms: linux/amd64
+          push: true
+          tags: |
+            zot.hwcopeland.net/web-server/blog:${{ steps.tags.outputs.sha_tag }}
+            zot.hwcopeland.net/web-server/blog:latest
+          cache-from: type=registry,ref=zot.hwcopeland.net/web-server/blog:cache
+          cache-to: type=registry,ref=zot.hwcopeland.net/web-server/blog:cache,mode=max
+
+  deploy:
+    name: Deploy to Kubernetes
+    needs: build
+    runs-on: arc-chem
+
+    steps:
+      - name: Restart deployment and wait for rollout
+        env:
+          KUBECONFIG_BASE64: ${{ secrets.KUBECONFIG_BASE64 }}
+        run: |
+          set -euo pipefail
+
+          KUBECTL_VERSION="v1.31.2"
+          curl -fsSL -o /tmp/kubectl \
+            "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl"
+          chmod +x /tmp/kubectl
+
+          mkdir -p "$HOME/.kube"
+          echo "$KUBECONFIG_BASE64" | base64 -d > "$HOME/.kube/config"
+          chmod 600 "$HOME/.kube/config"
+
+          /tmp/kubectl -n web-server rollout restart deployment/blog
+          /tmp/kubectl -n web-server rollout status deployment/blog --timeout=300s

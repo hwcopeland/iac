@@ -1,0 +1,17 @@
+---
+const today = new Date();
+---
+
+<footer>
+	<span>&copy; {today.getFullYear()}</span>
+</footer>
+<style>
+	footer {
+		max-width: var(--content-width);
+		margin: 3rem auto 0;
+		padding: 1.5rem var(--content-pad) 2.5rem;
+		color: var(--fg-dim);
+		font-size: 0.82rem;
+		border-top: 1px solid var(--border);
+	}
+</style>
