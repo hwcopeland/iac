@@ -52,19 +52,33 @@ spec:
       rules:
         # Inert until SNMP is enabled on the DSM; activates automatically once
         # syno_* metrics start flowing.
-        - alert: SynologyDiskNotHealthy
-          expr: syno_disk_status != 1
+        # diskStatus: 1=Normal 2=Initialized 3=NotInitialized(empty bay)
+        # 4=SystemPartitionFailed 5=Crashed. Only 4/5 are real failures —
+        # empty bays report 3 and must NOT alert.
+        - alert: SynologyDiskFailed
+          expr: syno_disk_status >= 4
           for: 10m
           labels:
             severity: critical
           annotations:
-            summary: "Synology disk not healthy ({{ $labels.disk_index }})"
-            description: "syno_disk_status={{ $value }} (1=Normal) on the NAS."
-        - alert: SynologyRaidNotNormal
-          expr: syno_raid_status != 1
+            summary: "Synology disk failed (bay {{ $labels.disk_index }})"
+            description: "syno_disk_status={{ $value }} (4=SystemPartitionFailed, 5=Crashed)."
+        # raidStatus: 1=Normal; 2-8 are transient ops (repair/migrate/expand/
+        # sync/parity-check) and benign; 11=Degraded 12=Crashed are failures.
+        - alert: SynologyRaidDegraded
+          expr: syno_raid_status >= 11
           for: 10m
           labels:
             severity: critical
           annotations:
-            summary: "Synology RAID/volume not normal"
-            description: "syno_raid_status={{ $value }} (1=Normal). Volume may be degraded/rebuilding."
+            summary: "Synology RAID degraded/crashed"
+            description: "syno_raid_status={{ $value }} (11=Degraded, 12=Crashed)."
+        # Catch a transient op that never finishes (stuck rebuild/parity check).
+        - alert: SynologyRaidNotNormalProlonged
+          expr: syno_raid_status != 1 and syno_raid_status < 11
+          for: 24h
+          labels:
+            severity: warning
+          annotations:
+            summary: "Synology RAID busy >24h (status {{ $value }})"
+            description: "A RAID background op (rebuild/parity check) has run >24h — may be stuck."
