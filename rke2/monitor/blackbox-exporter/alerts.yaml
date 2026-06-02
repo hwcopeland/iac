@@ -1,0 +1,70 @@
+# Alert rules for NAS/host reachability and Synology health. Routed to the
+# existing Alertmanager `email-operator` receiver (→ hampton888@gmail.com).
+# Labeled release: kube-prometheus-stack so the stack's ruleSelector loads it.
+#
+# The reachability rules need only the blackbox probes (no SNMP). The Synology
+# disk/RAID rules stay inert until SNMP is enabled on the DSM, then activate.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: nas-and-reachability
+  namespace: monitor
+  labels:
+    release: kube-prometheus-stack
+spec:
+  groups:
+    - name: reachability
+      rules:
+        - alert: SynologyNASUnreachable
+          expr: probe_success{host="synology-nas"} == 0
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Synology NAS is unreachable ({{ $labels.instance }})"
+            description: >-
+              Blackbox probe to the NAS has failed for >2m
+              (job {{ $labels.job }}). iSCSI-backed PVCs will hang. This is the
+              alert that was missing during the last outage.
+        - alert: BlackboxProbeFailing
+          expr: probe_success == 0
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Blackbox probe failing: {{ $labels.instance }}"
+            description: "probe_success=0 for >5m (job {{ $labels.job }})."
+
+    - name: monitoring-targets
+      rules:
+        - alert: SnmpExporterTargetDown
+          expr: up{job="snmp-exporter-synology"} == 0
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Synology SNMP target is down"
+            description: >-
+              Prometheus cannot scrape the snmp-exporter for the NAS for >5m —
+              either the exporter is down or SNMP is disabled/unreachable on the DSM.
+
+    - name: synology-health
+      rules:
+        # Inert until SNMP is enabled on the DSM; activates automatically once
+        # syno_* metrics start flowing.
+        - alert: SynologyDiskNotHealthy
+          expr: syno_disk_status != 1
+          for: 10m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Synology disk not healthy ({{ $labels.disk_index }})"
+            description: "syno_disk_status={{ $value }} (1=Normal) on the NAS."
+        - alert: SynologyRaidNotNormal
+          expr: syno_raid_status != 1
+          for: 10m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Synology RAID/volume not normal"
+            description: "syno_raid_status={{ $value }} (1=Normal). Volume may be degraded/rebuilding."
