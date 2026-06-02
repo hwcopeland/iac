@@ -1,0 +1,9 @@
+# Compiled binaries from a local `go build ./cmd/...` — never commit these.
+# Images are built on the arc-chem ARC runner, NEVER on a workstation
+# (CONVENTIONS.md §6). The bare cmd-name binaries land at the module root.
+/agency-resolve
+/camera-spine
+/funding-federal
+/geocode
+/match
+/tiger-load

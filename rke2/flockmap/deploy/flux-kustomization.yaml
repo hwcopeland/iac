@@ -1,0 +1,18 @@
+---
+# Flux Kustomization that reconciles the flockmap deploy/ directory.
+# Add this to the GitOps tree (it points the cluster at ./rke2/flockmap/deploy).
+# Source is the shared `tooling` GitRepository (branch main), matching the
+# chem/garage Flux wiring.
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: flockmap
+  namespace: flockmap
+spec:
+  interval: 5m
+  path: ./rke2/flockmap/deploy
+  prune: true
+  sourceRef:
+    kind: GitRepository
+    name: tooling
+    namespace: tooling

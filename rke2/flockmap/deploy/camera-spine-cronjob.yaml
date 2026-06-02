@@ -1,0 +1,60 @@
+---
+# Weekly camera-spine refresh: pulls the Flock ALPR spine from OSM Overpass,
+# saves the verbatim response via store.SaveRawDocument (ODbL recorded), and
+# upserts cameras ON CONFLICT (osm_type, osm_id).
+#
+# Image cmd: camera-spine (zot.hwcopeland.net/flockmap/camera-spine:latest).
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: camera-spine
+  namespace: flockmap
+  labels:
+    app.kubernetes.io/name: camera-spine
+    app.kubernetes.io/component: ingest
+    app.kubernetes.io/part-of: flockmap
+spec:
+  schedule: "0 4 * * 1" # weekly, Monday 04:00
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      ttlSecondsAfterFinished: 604800 # 7 days
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: camera-spine
+        spec:
+          restartPolicy: OnFailure
+          imagePullSecrets:
+            - name: zot-pull-secret
+          containers:
+            - name: camera-spine
+              image: zot.hwcopeland.net/flockmap/camera-spine:latest
+              imagePullPolicy: Always
+              env:
+                - name: POSTGRES_HOST
+                  value: "flockmap-postgres.flockmap.svc.cluster.local"
+                - name: POSTGRES_PORT
+                  value: "5432"
+                - name: POSTGRES_DB
+                  value: "flockmap"
+                - name: POSTGRES_USER
+                  valueFrom:
+                    secretKeyRef:
+                      name: flockmap-postgres-secret
+                      key: username
+                - name: POSTGRES_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: flockmap-postgres-secret
+                      key: password
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 256Mi
+                limits:
+                  cpu: "1"
+                  memory: 1Gi

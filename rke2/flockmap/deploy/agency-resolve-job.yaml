@@ -1,0 +1,58 @@
+---
+# One-off Job: resolve each camera to an operating agency using the static
+# alias crosswalk + fixed-threshold deterministic string matching (no ML),
+# upserting agencies/aliases and stamping cameras.agency_id + agency_confidence.
+#
+# Image cmd: agency-resolve (zot.hwcopeland.net/flockmap/agency-resolve:latest).
+#
+# Usage:
+#   kubectl apply -f deploy/agency-resolve-job.yaml
+#   kubectl logs -f -n flockmap job/agency-resolve
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: agency-resolve
+  namespace: flockmap
+  labels:
+    app.kubernetes.io/name: agency-resolve
+    app.kubernetes.io/component: resolve
+    app.kubernetes.io/part-of: flockmap
+spec:
+  backoffLimit: 2
+  ttlSecondsAfterFinished: 604800 # 7 days
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: agency-resolve
+    spec:
+      restartPolicy: OnFailure
+      imagePullSecrets:
+        - name: zot-pull-secret
+      containers:
+        - name: agency-resolve
+          image: zot.hwcopeland.net/flockmap/agency-resolve:latest
+          imagePullPolicy: Always
+          env:
+            - name: POSTGRES_HOST
+              value: "flockmap-postgres.flockmap.svc.cluster.local"
+            - name: POSTGRES_PORT
+              value: "5432"
+            - name: POSTGRES_DB
+              value: "flockmap"
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: flockmap-postgres-secret
+                  key: username
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: flockmap-postgres-secret
+                  key: password
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi

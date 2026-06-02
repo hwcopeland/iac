@@ -1,0 +1,59 @@
+---
+# One-off Job: load Census TIGER geographies (places, county subdivisions,
+# counties, states) into jurisdictions, then point-in-polygon stamp every
+# camera with place/county GEOID + state FIPS (PostGIS, deterministic).
+# Saves the TIGER source bytes via store.SaveRawDocument first.
+#
+# Image cmd: tiger-load (zot.hwcopeland.net/flockmap/tiger-load:latest).
+#
+# Usage:
+#   kubectl apply -f deploy/tiger-load-job.yaml
+#   kubectl logs -f -n flockmap job/tiger-load
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: tiger-load
+  namespace: flockmap
+  labels:
+    app.kubernetes.io/name: tiger-load
+    app.kubernetes.io/component: geocode
+    app.kubernetes.io/part-of: flockmap
+spec:
+  backoffLimit: 2
+  ttlSecondsAfterFinished: 604800 # 7 days
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: tiger-load
+    spec:
+      restartPolicy: OnFailure
+      imagePullSecrets:
+        - name: zot-pull-secret
+      containers:
+        - name: tiger-load
+          image: zot.hwcopeland.net/flockmap/tiger-load:latest
+          imagePullPolicy: Always
+          env:
+            - name: POSTGRES_HOST
+              value: "flockmap-postgres.flockmap.svc.cluster.local"
+            - name: POSTGRES_PORT
+              value: "5432"
+            - name: POSTGRES_DB
+              value: "flockmap"
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: flockmap-postgres-secret
+                  key: username
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: flockmap-postgres-secret
+                  key: password
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "2"
+              memory: 2Gi

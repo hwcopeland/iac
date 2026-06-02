@@ -1,0 +1,61 @@
+---
+# Weekly federal-funding refresh: pulls federal award data (e.g. USAspending /
+# Grants.gov), saves verbatim responses via store.SaveRawDocument, and upserts
+# funding_records (extraction='deterministic') ON CONFLICT (channel, external_id).
+# Every row carries a source_doc_id — firewall mandatory.
+#
+# Image cmd: funding-federal (zot.hwcopeland.net/flockmap/funding-federal:latest).
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: funding-federal
+  namespace: flockmap
+  labels:
+    app.kubernetes.io/name: funding-federal
+    app.kubernetes.io/component: ingest
+    app.kubernetes.io/part-of: flockmap
+spec:
+  schedule: "0 5 * * 1" # weekly, Monday 05:00 (after camera-spine)
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      ttlSecondsAfterFinished: 604800 # 7 days
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: funding-federal
+        spec:
+          restartPolicy: OnFailure
+          imagePullSecrets:
+            - name: zot-pull-secret
+          containers:
+            - name: funding-federal
+              image: zot.hwcopeland.net/flockmap/funding-federal:latest
+              imagePullPolicy: Always
+              env:
+                - name: POSTGRES_HOST
+                  value: "flockmap-postgres.flockmap.svc.cluster.local"
+                - name: POSTGRES_PORT
+                  value: "5432"
+                - name: POSTGRES_DB
+                  value: "flockmap"
+                - name: POSTGRES_USER
+                  valueFrom:
+                    secretKeyRef:
+                      name: flockmap-postgres-secret
+                      key: username
+                - name: POSTGRES_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: flockmap-postgres-secret
+                      key: password
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 256Mi
+                limits:
+                  cpu: "1"
+                  memory: 1Gi

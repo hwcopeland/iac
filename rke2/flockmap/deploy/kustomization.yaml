@@ -1,0 +1,18 @@
+---
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: flockmap
+resources:
+  - namespace.yaml
+  - zot-pull-secret.yaml
+  - postgres-secret.yaml
+  - postgres.yaml
+  - camera-spine-cronjob.yaml
+  - funding-federal-cronjob.yaml
+  # One-off pipeline Jobs. Job pod templates are immutable, so re-applying an
+  # unchanged Job is a no-op and changing one requires delete+recreate. Listed
+  # here for GitOps visibility; run a fresh pass by deleting then re-applying
+  # (e.g. `kubectl -n flockmap delete job tiger-load` then Flux reconcile).
+  - tiger-load-job.yaml
+  - agency-resolve-job.yaml
+  - match-job.yaml

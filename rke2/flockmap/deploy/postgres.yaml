@@ -1,0 +1,100 @@
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: pvc-flockmap-postgres
+  namespace: flockmap
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: longhorn
+  resources:
+    requests:
+      storage: 20Gi
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: flockmap-postgres
+  namespace: flockmap
+  labels:
+    app: flockmap-postgres
+    app.kubernetes.io/part-of: flockmap
+spec:
+  selector:
+    matchLabels:
+      app: flockmap-postgres
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: flockmap-postgres
+    spec:
+      containers:
+        - name: postgres
+          # PostGIS-enabled Postgres 16. The schema does
+          # `CREATE EXTENSION IF NOT EXISTS postgis` (db/schema.sql).
+          image: postgis/postgis:16-3.4
+          env:
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: flockmap-postgres-secret
+                  key: username
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: flockmap-postgres-secret
+                  key: password
+            - name: POSTGRES_DB
+              value: flockmap
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          ports:
+            - containerPort: 5432
+              name: postgres
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "$(POSTGRES_USER)", "-d", "flockmap"]
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-U", "$(POSTGRES_USER)", "-d", "flockmap"]
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 5
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: 2000m
+              memory: 4Gi
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: pvc-flockmap-postgres
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: flockmap-postgres
+  namespace: flockmap
+  labels:
+    app: flockmap-postgres
+spec:
+  selector:
+    app: flockmap-postgres
+  ports:
+    - port: 5432
+      targetPort: 5432
+      protocol: TCP
+  type: ClusterIP

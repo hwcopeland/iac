@@ -1,0 +1,58 @@
+---
+# One-off Job: join cameras to funding_records, writing camera_funding_matches
+# with a fixed-lookup confidence (exact_agency_keyword 0.95 / agency_only 0.70 /
+# jurisdiction_keyword 0.55 / jurisdiction_only 0.30). Deterministic, no ML.
+#
+# Image cmd: match (zot.hwcopeland.net/flockmap/match:latest).
+#
+# Usage:
+#   kubectl apply -f deploy/match-job.yaml
+#   kubectl logs -f -n flockmap job/match
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: match
+  namespace: flockmap
+  labels:
+    app.kubernetes.io/name: match
+    app.kubernetes.io/component: match
+    app.kubernetes.io/part-of: flockmap
+spec:
+  backoffLimit: 2
+  ttlSecondsAfterFinished: 604800 # 7 days
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: match
+    spec:
+      restartPolicy: OnFailure
+      imagePullSecrets:
+        - name: zot-pull-secret
+      containers:
+        - name: match
+          image: zot.hwcopeland.net/flockmap/match:latest
+          imagePullPolicy: Always
+          env:
+            - name: POSTGRES_HOST
+              value: "flockmap-postgres.flockmap.svc.cluster.local"
+            - name: POSTGRES_PORT
+              value: "5432"
+            - name: POSTGRES_DB
+              value: "flockmap"
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: flockmap-postgres-secret
+                  key: username
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: flockmap-postgres-secret
+                  key: password
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi

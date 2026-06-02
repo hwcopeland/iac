@@ -1,0 +1,165 @@
+---
+# Build and push the flockmap pipeline command images to zot.hwcopeland.net/flockmap/.
+#
+# flockmap is the deterministic, ML-free Flock-ALPR funding-provenance pipeline
+# (module github.com/hwcopeland/flockmap, rke2/flockmap/). Each pipeline stage is
+# a cmd/<name> binary; all five share one go.mod. Four pure-Go stages build from a
+# single shared multi-stage Dockerfile (rke2/flockmap/Dockerfile) parameterised by
+# the CMD build-arg. geocode is the exception — it shells out to ogr2ogr (GDAL) at
+# runtime, so it builds from cmd/geocode/Dockerfile (a GDAL runtime image) and is
+# also published under the tiger-load image name (the TIGER load Job pulls that).
+# The build context is always the module root so internal/store and db/ are
+# present for `go build ./cmd/<name>`.
+#
+# Runner: self-hosted ARC scale-set labeled arc-chem. The runner pod lives on the
+# cluster LAN and so can reach the private zot.hwcopeland.net registry (GitHub
+# cloud runners cannot). No Mac builds, ever.
+#
+# Cache: registry-based layer cache (type=registry, mode=max) — type=gha does not
+# work from on-cluster runners. provenance:false / sbom:false for zot compat.
+#
+# Image tag format: sha-<7-char-sha> (Flux ImagePolicy compatible) plus :latest.
+#
+# Secrets (encrypted GitHub Actions repo secrets, same convention as build-blog.yml
+# and the chem build-and-push.yml):
+#   ZOT_USERNAME / ZOT_PASSWORD — zot.hwcopeland.net registry creds (Bitwarden)
+#   KUBECONFIG_BASE64           — base64 kubeconfig for the deploy job
+
+name: Build and Deploy flockmap
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'rke2/flockmap/**'
+      - '.github/workflows/build-flockmap.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build ${{ matrix.name }}
+    runs-on: arc-chem
+    strategy:
+      fail-fast: false
+      matrix:
+        # Each entry is a cmd/<name> stage. image == zot.hwcopeland.net/flockmap/<name>.
+        # Build context is always rke2/flockmap (so go.mod, internal/store, db/ are
+        # in scope). Pure-Go stages use the shared Dockerfile parameterised by the
+        # CMD build-arg. geocode is the exception: it shells out to ogr2ogr at
+        # runtime, so it builds from cmd/geocode/Dockerfile (GDAL runtime image)
+        # and ignores the CMD build-arg. extra_tags carries any alias tags (the
+        # geocode image is also published as tiger-load, which the one-shot TIGER
+        # load Job references).
+        include:
+          - name: camera-spine
+            dockerfile: rke2/flockmap/Dockerfile
+          - name: geocode
+            dockerfile: rke2/flockmap/cmd/geocode/Dockerfile
+            # geocode is also published under the tiger-load name (the TIGER load
+            # Job pulls flockmap/tiger-load). alias_image is suffixed with the
+            # sha-tag + :latest in the build step below.
+            alias_image: tiger-load
+          - name: agency-resolve
+            dockerfile: rke2/flockmap/Dockerfile
+          - name: funding-federal
+            dockerfile: rke2/flockmap/Dockerfile
+          - name: match
+            dockerfile: rke2/flockmap/Dockerfile
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@b5ca514318bd6ebac0fb2aedd5d36ec1b5c232a2  # v3.10.0
+
+      - name: Log in to Zot registry
+        uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772  # v3.4.0
+        with:
+          registry: zot.hwcopeland.net
+          username: ${{ secrets.ZOT_USERNAME }}
+          password: ${{ secrets.ZOT_PASSWORD }}
+
+      - name: Compute image tags
+        id: tags
+        env:
+          IMAGE: zot.hwcopeland.net/flockmap/${{ matrix.name }}
+          ALIAS_IMAGE: ${{ matrix.alias_image }}
+        run: |
+          SHORT_SHA="${GITHUB_SHA::7}"
+          SHA_TAG="sha-${SHORT_SHA}"
+          echo "Building ${{ matrix.name }} with tag: ${SHA_TAG}"
+
+          # Primary image tags (sha + latest), plus any alias image (e.g. geocode
+          # is also published as tiger-load for the one-shot TIGER load Job).
+          {
+            echo "tag_list<<EOF"
+            echo "${IMAGE}:${SHA_TAG}"
+            echo "${IMAGE}:latest"
+            if [ -n "${ALIAS_IMAGE}" ]; then
+              echo "zot.hwcopeland.net/flockmap/${ALIAS_IMAGE}:${SHA_TAG}"
+              echo "zot.hwcopeland.net/flockmap/${ALIAS_IMAGE}:latest"
+            fi
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Build and push ${{ matrix.name }}
+        uses: docker/build-push-action@14487ce63c7a62a4a324b0bfb37086795e31c6c1  # v6.16.0
+        with:
+          context: rke2/flockmap
+          file: ${{ matrix.dockerfile }}
+          # CMD selects the cmd/<name> dir for the shared Dockerfile; the geocode
+          # Dockerfile ignores it (it hard-codes ./cmd/geocode), so passing it is
+          # harmless.
+          build-args: |
+            CMD=${{ matrix.name }}
+          platforms: linux/amd64
+          push: true
+          provenance: false
+          sbom: false
+          tags: ${{ steps.tags.outputs.tag_list }}
+          cache-from: type=registry,ref=zot.hwcopeland.net/flockmap/${{ matrix.name }}:cache
+          cache-to: type=registry,ref=zot.hwcopeland.net/flockmap/${{ matrix.name }}:cache,mode=max
+
+  deploy:
+    name: Deploy to Kubernetes
+    needs: build
+    runs-on: arc-chem
+
+    steps:
+      - name: Roll out flockmap workloads
+        env:
+          KUBECONFIG_BASE64: ${{ secrets.KUBECONFIG_BASE64 }}
+        run: |
+          set -euo pipefail
+
+          KUBECTL_VERSION="v1.31.2"
+          curl -fsSL -o /tmp/kubectl \
+            "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl"
+          chmod +x /tmp/kubectl
+
+          mkdir -p "$HOME/.kube"
+          echo "$KUBECONFIG_BASE64" | base64 -d > "$HOME/.kube/config"
+          chmod 600 "$HOME/.kube/config"
+
+          # The pipeline stages may be deployed as Deployments (long-running /
+          # scheduled connectors) or as CronJobs/Jobs (one-shot ingests), and not
+          # every stage's manifest exists yet while components land incrementally.
+          # Restart any Deployment that exists for each image; skip absent ones so
+          # a partially-deployed pipeline does not fail the workflow.
+          NS="flockmap"
+          STAGES="camera-spine geocode agency-resolve funding-federal match"
+
+          for stage in $STAGES; do
+            if /tmp/kubectl -n "$NS" get deployment "$stage" >/dev/null 2>&1; then
+              echo "==> rollout restart deployment/$stage"
+              /tmp/kubectl -n "$NS" rollout restart "deployment/$stage"
+              /tmp/kubectl -n "$NS" rollout status "deployment/$stage" --timeout=300s
+            else
+              echo "==> deployment/$stage not found in ns/$NS — skipping (Job/CronJob or not yet deployed)"
+            fi
+          done
