@@ -1,0 +1,96 @@
+# mc-router (itzg/mc-router) — single TCP/25565 ingress for every Minecraft
+# server in the homelab. Routes by the hostname the client connects with
+# (handshake SNI) to a cluster-internal backend.
+#
+# One LoadBalancer on the Cilium pool IP 10.44.0.40 (verified unused: in-use
+# 10.44.0.x are .0-.18,.20,.32,.33,.34 and .44.44). The MikroTik forwards WAN
+# tcp/25565 -> 10.44.0.40 (see README.md — human step, not applied here).
+#
+# Mappings are STATIC ONLY via the MAPPING env (deterministic). We deliberately
+# do NOT pass --in-kube-cluster: the existing atm9skies-external Service carries
+# mc-router.itzg.me/{externalServerName,defaultServer} annotations, and enabling
+# auto-discovery would let those annotations silently override our explicit
+# MAPPING + DEFAULT. Static-only means no Service watch and therefore no RBAC.
+# Image pinned to 1.42.1.
+#
+# CUTOVER SAFETY: applying the LoadBalancer below claims 10.44.0.40 only — it
+# does NOT touch the existing atm9skies-local (10.44.0.5) or
+# atm9skies-island-lb (10.44.0.34) LBs, so current direct-connect players are
+# unaffected until the MikroTik NAT is repointed. See README.md.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mc-router
+  namespace: game-server
+  labels:
+    app: mc-router
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mc-router
+  template:
+    metadata:
+      labels:
+        app: mc-router
+    spec:
+      containers:
+        - name: mc-router
+          image: itzg/mc-router:1.42.1
+          args:
+            - "--api-binding=:8080"
+          env:
+            # Static hostname -> backend mappings. Newline-separated host=addr.
+            # earth  -> internal ClusterIP service mc-earth
+            # sky    -> island ("skyblocker") internal ClusterIP service
+            # atm9   -> existing atm9skies-external ClusterIP service
+            - name: MAPPING
+              value: |
+                earth.mc.hwcopeland.net=mc-earth.game-server.svc.cluster.local:25565
+                sky.mc.hwcopeland.net=atm9skies-island.game-server.svc.cluster.local:25565
+                atm9.mc.hwcopeland.net=atm9skies-external.game-server.svc.cluster.local:25565
+            # Fall back to atm9skies for any unmapped/no-SNI connection so a bare
+            # IP connect still lands somewhere sensible (matches the existing
+            # atm9skies-external defaultServer annotation).
+            - name: DEFAULT
+              value: "atm9skies-external.game-server.svc.cluster.local:25565"
+          ports:
+            - name: minecraft
+              containerPort: 25565
+            - name: api
+              containerPort: 8080
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "64Mi"
+            limits:
+              cpu: "250m"
+              memory: "128Mi"
+          readinessProbe:
+            tcpSocket:
+              port: 25565
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: 25565
+            periodSeconds: 30
+---
+# THE single external entrypoint for all Minecraft traffic. Cilium assigns the
+# requested pool IP 10.44.0.40.
+apiVersion: v1
+kind: Service
+metadata:
+  name: mc-router
+  namespace: game-server
+  labels:
+    app: mc-router
+spec:
+  type: LoadBalancer
+  loadBalancerIP: 10.44.0.40
+  selector:
+    app: mc-router
+  ports:
+    - name: minecraft
+      protocol: TCP
+      port: 25565
+      targetPort: 25565
