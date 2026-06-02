@@ -21,3 +21,6 @@ rke2/ai/invokeai/
 
 # Project specs — keep local, do not ship to GitHub
 **/docs/spec/
+
+# shelved WIP — local only, never tracked
+scraps/
