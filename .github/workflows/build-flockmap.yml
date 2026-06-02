@@ -118,12 +118,14 @@ jobs:
           build-args: |
             CMD=${{ matrix.name }}
           platforms: linux/amd64
-          push: true
           provenance: false
           sbom: false
           tags: ${{ steps.tags.outputs.tag_list }}
-          cache-from: type=registry,ref=zot.hwcopeland.net/flockmap/${{ matrix.name }}:cache
-          cache-to: type=registry,ref=zot.hwcopeland.net/flockmap/${{ matrix.name }}:cache,mode=max
+          # zot rejects the Docker-format manifest that a `cache-to type=registry`
+          # export forces buildkit back into ("manifest invalid"). Force OCI
+          # mediatypes on push and drop the registry cache (same fix as
+          # build-spotify-exporter.yml).
+          outputs: type=image,oci-mediatypes=true,push=true
 
   deploy:
     name: Deploy to Kubernetes
