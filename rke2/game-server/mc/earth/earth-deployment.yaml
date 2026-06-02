@@ -48,6 +48,14 @@ spec:
               value: "1.12.2"
             - name: FORGE_VERSION
               value: "14.23.5.2847"
+            # CRITICAL: Terra++ registers the "EarthCubic" world type. Without
+            # this the server silently generates a vanilla world. LEVEL forces a
+            # fresh world name so it regenerates as Earth (an existing DEFAULT
+            # world dir is NOT converted by changing level-type).
+            - name: LEVEL_TYPE
+              value: "EarthCubic"
+            - name: LEVEL
+              value: "earth"
             # Xmx/Xms. Kept below the 12Gi cgroup limit (see header).
             - name: MEMORY
               value: "10G"
