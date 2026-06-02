@@ -1,0 +1,69 @@
+---
+# Build the Terra++ 1:1 Earth Minecraft server image on the arc-chem self-hosted
+# runner (LAN access to zot.hwcopeland.net + internet for the Jenkins mod jars),
+# then push to zot. Mirrors build-spotify-exporter.yml.
+#
+# Required GitHub Actions secrets:
+#   ZOT_USERNAME / ZOT_PASSWORD   — zot.hwcopeland.net push creds
+#
+# NOTE: there is intentionally NO deploy job. Bringing up mc-earth (and the
+# mc-router LoadBalancer that fronts it on tcp/25565) changes routing for the
+# already-running atm9skies / island servers, so the apply is left for human
+# review. See rke2/game-server/mc/earth/README.md for the cutover plan.
+
+name: Build MC Earth
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'rke2/game-server/mc/earth/Dockerfile'
+      - '.github/workflows/build-mc-earth.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build mc-earth image
+    runs-on: arc-chem
+    outputs:
+      sha_tag: ${{ steps.tags.outputs.sha_tag }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@b5ca514318bd6ebac0fb2aedd5d36ec1b5c232a2  # v3.10.0
+
+      - name: Log in to Zot registry
+        uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772  # v3.4.0
+        with:
+          registry: zot.hwcopeland.net
+          username: ${{ secrets.ZOT_USERNAME }}
+          password: ${{ secrets.ZOT_PASSWORD }}
+
+      - name: Compute image tags
+        id: tags
+        run: |
+          SHORT_SHA="${GITHUB_SHA::7}"
+          echo "sha_tag=sha-${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push mc-earth image
+        uses: docker/build-push-action@14487ce63c7a62a4a324b0bfb37086795e31c6c1  # v6.16.0
+        with:
+          context: rke2/game-server/mc/earth
+          file: rke2/game-server/mc/earth/Dockerfile
+          platforms: linux/amd64
+          provenance: false
+          sbom: false
+          # zot accepts only OCI manifest media types — a Docker schema-2
+          # manifest is rejected with HTTP 415. Force OCI on push. (Do not add
+          # cache-to type=registry: inline cache export reverts buildkit to
+          # Docker media types and 415s.)
+          outputs: type=image,oci-mediatypes=true,push=true
+          tags: |
+            zot.hwcopeland.net/game-server/mc-earth:${{ steps.tags.outputs.sha_tag }}
+            zot.hwcopeland.net/game-server/mc-earth:latest

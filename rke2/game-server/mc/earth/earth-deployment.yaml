@@ -1,0 +1,120 @@
+# Terra++ 1:1-scale Earth server (Forge 1.12.2).
+#
+# Single replica, RWO Longhorn PVC for the world (Terra++ accumulates terrain as
+# players explore, so it is sized large up front). Internal ClusterIP service
+# only — mc-router fronts tcp/25565 and routes earth.mc.hwcopeland.net here.
+#
+# RAM: Terra++ on 1.12.2 is heap-heavy. requests 6Gi / limits 12Gi, with the JVM
+# Xmx pinned to 10G (itzg MEMORY) so the heap stays comfortably under the 12Gi
+# cgroup limit (leaving headroom for metaspace, mod off-heap tile caches, and
+# the JVM itself — exceeding the limit would OOMKill the pod).
+#
+# image: stamped to the immutable sha tag by .github/workflows/build-mc-earth.yml
+# (`kubectl set image` in a deploy step, or a human `set image` during cutover).
+# `latest` here is a bootstrap placeholder only.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mc-earth
+  namespace: game-server
+  labels:
+    app: mc-earth
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate            # RWO volume — never run two pods against one world
+  selector:
+    matchLabels:
+      app: mc-earth
+  template:
+    metadata:
+      labels:
+        app: mc-earth
+    spec:
+      imagePullSecrets:
+        - name: zot-pull-secret
+      containers:
+        - name: mc-earth-server
+          image: zot.hwcopeland.net/game-server/mc-earth:latest
+          ports:
+            - containerPort: 25565
+              name: minecraft
+          env:
+            - name: EULA
+              value: "TRUE"
+            - name: TYPE
+              value: "FORGE"
+            - name: VERSION
+              value: "1.12.2"
+            - name: FORGE_VERSION
+              value: "14.23.5.2847"
+            # Xmx/Xms. Kept below the 12Gi cgroup limit (see header).
+            - name: MEMORY
+              value: "10G"
+            # Terra++ tile fetches can be slow on first gen; give Forge room.
+            - name: MAX_TICK_TIME
+              value: "-1"
+          resources:
+            requests:
+              cpu: "2"
+              memory: "6Gi"
+            limits:
+              cpu: "4"
+              memory: "12Gi"
+          volumeMounts:
+            - name: mc-earth-data
+              mountPath: /data
+          # itzg exposes an mc-health helper on tcp/25565; use a TCP probe so we
+          # don't depend on the (slow) Terra++ first-gen for readiness.
+          startupProbe:
+            tcpSocket:
+              port: 25565
+            failureThreshold: 60      # up to 10 min for Forge + mods to boot
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: 25565
+            initialDelaySeconds: 0    # gated by startupProbe
+            periodSeconds: 30
+            failureThreshold: 6
+          readinessProbe:
+            tcpSocket:
+              port: 25565
+            periodSeconds: 15
+            failureThreshold: 3
+      volumes:
+        - name: mc-earth-data
+          persistentVolumeClaim:
+            claimName: mc-earth-data
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mc-earth-data
+  namespace: game-server
+spec:
+  accessModes: ["ReadWriteOnce"]
+  storageClassName: longhorn
+  resources:
+    requests:
+      storage: 200Gi
+---
+# Internal-only service. mc-router resolves earth.mc.hwcopeland.net to this
+# cluster DNS name (mc-earth.game-server.svc.cluster.local:25565). No external
+# IP — all WAN ingress for Minecraft goes through the single mc-router LB.
+apiVersion: v1
+kind: Service
+metadata:
+  name: mc-earth
+  namespace: game-server
+  labels:
+    app: mc-earth
+spec:
+  type: ClusterIP
+  selector:
+    app: mc-earth
+  ports:
+    - name: minecraft
+      protocol: TCP
+      port: 25565
+      targetPort: 25565

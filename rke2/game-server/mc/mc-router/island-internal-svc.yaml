@@ -1,0 +1,23 @@
+# Stable cluster-internal ClusterIP for the island ("skyblocker") server so
+# mc-router can route sky.mc.hwcopeland.net to a DNS name rather than to the
+# LoadBalancer IP. The live deployment `atm9skies-island` (selector
+# app=atm9skies-island) today only has the LoadBalancer svc atm9skies-island-lb
+# (10.44.0.34); this adds the headless-of-sorts internal endpoint.
+#
+# Existing atm9skies-island-lb is left untouched.
+apiVersion: v1
+kind: Service
+metadata:
+  name: atm9skies-island
+  namespace: game-server
+  labels:
+    app: atm9skies-island
+spec:
+  type: ClusterIP
+  selector:
+    app: atm9skies-island
+  ports:
+    - name: minecraft
+      protocol: TCP
+      port: 25565
+      targetPort: 25565
