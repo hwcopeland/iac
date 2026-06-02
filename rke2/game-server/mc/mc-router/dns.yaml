@@ -1,0 +1,48 @@
+---
+# Public hostnames for the Minecraft servers fronted by mc-router. All resolve
+# to the WAN IP (CNAME -> hwcopeland.net, like the other records) and are NOT
+# Cloudflare-proxied (raw TCP/25565 can't be proxied). mc-router splits them by
+# the hostname the client connects with:
+#   atm9.mc.hwcopeland.net  -> atm9skies (main)
+#   earth.mc.hwcopeland.net -> Terra++ Earth
+#   sky.mc.hwcopeland.net   -> atm9skies-island
+# Default (bare IP) also lands on atm9skies. MikroTik must dst-nat WAN tcp/25565
+# -> 10.44.0.40 (mc-router LB) for these to work externally.
+apiVersion: cloudflare-operator.io/v1
+kind: DNSRecord
+metadata:
+  name: mc-atm9
+  namespace: game-server
+spec:
+  name: atm9.mc.hwcopeland.net
+  type: CNAME
+  content: hwcopeland.net
+  proxied: false
+  ttl: 1
+  interval: 5m
+---
+apiVersion: cloudflare-operator.io/v1
+kind: DNSRecord
+metadata:
+  name: mc-earth
+  namespace: game-server
+spec:
+  name: earth.mc.hwcopeland.net
+  type: CNAME
+  content: hwcopeland.net
+  proxied: false
+  ttl: 1
+  interval: 5m
+---
+apiVersion: cloudflare-operator.io/v1
+kind: DNSRecord
+metadata:
+  name: mc-sky
+  namespace: game-server
+spec:
+  name: sky.mc.hwcopeland.net
+  type: CNAME
+  content: hwcopeland.net
+  proxied: false
+  ttl: 1
+  interval: 5m
