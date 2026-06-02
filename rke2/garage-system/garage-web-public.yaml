@@ -1,0 +1,35 @@
+---
+# Public read-only web access to the garage `public` bucket at
+# https://s3.hwcopeland.net/<key>. Routes ONLY this hostname to garage's web
+# endpoint (:3903), which serves only website-enabled buckets (just `public`)
+# matched by Host == bucket global-alias. The S3 API (:3900) and admin (:3902)
+# stay ClusterIP-only — nothing else in garage is exposed.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: garage-public-web
+  namespace: garage-system
+spec:
+  parentRefs:
+    - name: hwcopeland-gateway
+      namespace: kube-system
+      sectionName: https
+  hostnames:
+    - "s3.hwcopeland.net"
+  rules:
+    - backendRefs:
+        - name: garage
+          port: 3903
+---
+apiVersion: cloudflare-operator.io/v1
+kind: DNSRecord
+metadata:
+  name: s3-public
+  namespace: garage-system
+spec:
+  name: s3.hwcopeland.net
+  type: CNAME
+  content: hwcopeland.net
+  proxied: false
+  ttl: 1
+  interval: 5m

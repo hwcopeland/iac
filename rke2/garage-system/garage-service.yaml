@@ -21,3 +21,7 @@ spec:
       targetPort: 3902
       protocol: TCP
       name: admin
+    - port: 3903
+      targetPort: 3903
+      protocol: TCP
+      name: web
