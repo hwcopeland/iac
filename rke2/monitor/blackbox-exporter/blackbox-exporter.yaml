@@ -1,0 +1,78 @@
+# Blackbox exporter for reachability probing (ICMP + TCP). Lets Prometheus
+# detect when a host like the Synology NAS goes off the network — independent
+# of SNMP. Probes are defined via Probe CRDs (probes.yaml); alerts in alerts.yaml.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: blackbox-exporter-config
+  namespace: monitor
+data:
+  blackbox.yml: |
+    modules:
+      icmp:
+        prober: icmp
+        timeout: 5s
+        icmp:
+          preferred_ip_protocol: ip4
+      tcp_connect:
+        prober: tcp
+        timeout: 5s
+        tcp:
+          preferred_ip_protocol: ip4
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: blackbox-exporter
+  namespace: monitor
+  labels:
+    app: blackbox-exporter
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: blackbox-exporter
+  template:
+    metadata:
+      labels:
+        app: blackbox-exporter
+    spec:
+      containers:
+        - name: blackbox-exporter
+          image: quay.io/prometheus/blackbox-exporter:v0.26.0
+          args:
+            - --config.file=/etc/blackbox/blackbox.yml
+          ports:
+            - name: http
+              containerPort: 9115
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            capabilities:
+              add: ["NET_RAW"]   # required for ICMP raw sockets
+              drop: ["ALL"]
+          resources:
+            requests: { cpu: 10m, memory: 24Mi }
+            limits:   { cpu: 100m, memory: 64Mi }
+          volumeMounts:
+            - name: config
+              mountPath: /etc/blackbox
+      volumes:
+        - name: config
+          configMap:
+            name: blackbox-exporter-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: blackbox-exporter
+  namespace: monitor
+  labels:
+    app: blackbox-exporter
+spec:
+  selector:
+    app: blackbox-exporter
+  ports:
+    - name: http
+      port: 9115
+      targetPort: http

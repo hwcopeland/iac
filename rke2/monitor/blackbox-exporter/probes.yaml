@@ -1,0 +1,46 @@
+# Probe CRDs — Prometheus Operator scrapes the blackbox exporter against these
+# targets and emits probe_success{instance=...}. Labeled release:
+# kube-prometheus-stack so the stack's probeSelector picks them up.
+#
+# NAS: ICMP (is it on the network) + TCP 3260 (iSCSI — the port whose loss
+# actually breaks cluster storage). Either failing fires the alert.
+apiVersion: monitoring.coreos.com/v1
+kind: Probe
+metadata:
+  name: nas-reachability
+  namespace: monitor
+  labels:
+    release: kube-prometheus-stack
+spec:
+  jobName: blackbox-nas-icmp
+  interval: 30s
+  module: icmp
+  prober:
+    url: blackbox-exporter.monitor.svc.cluster.local:9115
+  targets:
+    staticConfig:
+      static:
+        - 10.41.0.200
+      labels:
+        host: synology-nas
+---
+apiVersion: monitoring.coreos.com/v1
+kind: Probe
+metadata:
+  name: nas-iscsi-tcp
+  namespace: monitor
+  labels:
+    release: kube-prometheus-stack
+spec:
+  jobName: blackbox-nas-iscsi
+  interval: 30s
+  module: tcp_connect
+  prober:
+    url: blackbox-exporter.monitor.svc.cluster.local:9115
+  targets:
+    staticConfig:
+      static:
+        - 10.41.0.200:3260
+      labels:
+        host: synology-nas
+        service: iscsi
