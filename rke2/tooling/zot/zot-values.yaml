@@ -26,12 +26,36 @@ mountConfig: true
 configFiles:
   config.json: |-
     {
-      "storage": { "rootDirectory": "/var/lib/registry" },
+      "storage": {
+        "rootDirectory": "/var/lib/registry",
+        "dedupe": true,
+        "gc": true,
+        "gcDelay": "1h",
+        "gcInterval": "24h",
+        "retention": {
+          "dryRun": false,
+          "policies": [
+            {
+              "repositories": ["**"],
+              "deleteReferrers": true,
+              "deleteUntagged": true,
+              "keepTags": [
+                { "patterns": ["^latest$", "^stable$", "^release-.*$", "^v?[0-9]+\\.[0-9]+\\.[0-9]+.*$"] },
+                { "patterns": [".*"], "mostRecentlyPushedCount": 5 },
+                { "patterns": [".*"], "pushedWithin": "720h" }
+              ]
+            }
+          ]
+        }
+      },
       "http": {
         "address": "0.0.0.0",
         "port": "5000",
         "externalUrl": "https://zot.hwcopeland.net",
         "auth": {
+          "htpasswd": {
+            "path": "/secrets/zot-metrics/htpasswd"
+          },
           "openid": {
             "providers": {
               "oidc": {
@@ -43,6 +67,9 @@ configFiles:
           }
         },
         "accessControl": {
+          "metrics": {
+            "users": ["prom-scraper"]
+          },
           "repositories": {
             "**": {
               "defaultPolicy": ["read", "create", "update", "delete"]
@@ -68,6 +95,8 @@ configFiles:
 externalSecrets:
   - secretName: "zot-oidc-secret"
     mountPath: "/secrets/zot-oidc"
+  - secretName: "zot-metrics-auth"
+    mountPath: "/secrets/zot-metrics"
 
 persistence: true
 pvc:
@@ -88,7 +117,8 @@ dnsConfig: {}
 dnsPolicy: "ClusterFirst"
 metrics:
   enabled: true
+  # Chart-managed ServiceMonitor is disabled — its labels don't match the
+  # kube-prometheus-stack release selector, and it can't carry basicAuth.
+  # The hand-rolled ServiceMonitor lives at rke2/monitor/zot-servicemonitor.yaml.
   serviceMonitor:
-    enabled: true
-    interval: "30s"
-    path: "/metrics"
+    enabled: false
