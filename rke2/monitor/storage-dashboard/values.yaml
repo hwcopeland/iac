@@ -1,0 +1,56 @@
+# AppMana kubernetes-storage-dashboard-grafana
+# https://github.com/AppMana/kubernetes-storage-dashboard-grafana
+#
+# Three-part project: per-node storage breakdown exporter (DaemonSet) +
+# custom Grafana panel plugin + Grafana dashboard.
+#
+# The panel plugin itself is preinstalled via GF_PLUGINS_PREINSTALL in
+# `monitor/kube-prometheus-stack-values.yaml` (Grafana 12.3+ ingest
+# path). This values file installs only the exporter + dashboard
+# ConfigMap.
+
+exporter:
+  metricPrefix: nsd
+  intervalSeconds: 300
+
+# ServiceMonitor needs the kps release label or Prometheus won't
+# pick it up (see monitor/README.md → "New scrape target").
+serviceMonitor:
+  enabled: true
+  interval: 60s
+  additionalLabels:
+    release: kube-prometheus-stack
+
+# Longhorn is installed cluster-wide — enable the supplemental
+# ServiceMonitor so the dashboard's `longhorn` segment populates.
+longhorn:
+  serviceMonitor:
+    enabled: true
+    namespace: longhorn-system
+    additionalLabels:
+      release: kube-prometheus-stack
+
+# Dashboard is owned by us (monitor/dashboards/storage-usage.yaml) so we
+# can fix the broken Longhorn target and add PV/Synology panels. Leaving
+# the chart's copy enabled would provision a SECOND ConfigMap on the same
+# uid (storage-usage) and clash. Keep this false; the chart still ships the
+# exporter DaemonSet + panel plugin + longhorn ServiceMonitor.
+dashboard:
+  enabled: false
+  sidecarLabel:
+    name: grafana_dashboard
+    value: "1"
+  datasourceUid: prometheus
+  # Plugin URL kept in sync with GF_PLUGINS_PREINSTALL in
+  # kube-prometheus-stack-values.yaml. Bump both together.
+  plugin:
+    id: appmana-storage-breakdown-panel
+    version: 0.1.1
+
+# Tolerate every taint so the exporter runs on every node, including
+# control-plane and nixos-gpu (which carries the gpu taint).
+tolerations:
+  - operator: Exists
+    effect: NoSchedule
+  - operator: Exists
+    effect: NoExecute

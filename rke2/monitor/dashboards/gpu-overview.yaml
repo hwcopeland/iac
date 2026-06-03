@@ -1,0 +1,192 @@
+# GPU overview dashboard. Sourced from DCGM exporter
+# (rke2/kube-system/dcgm-exporter). Single-GPU cluster today (nixos-gpu
+# RTX 3070) — panels filter by gpu/UUID so they scale cleanly if more
+# cards join later.
+#
+# Per-pod attribution requires DCGM_EXPORTER_KUBERNETES=true on the
+# exporter, which is on. Metrics gain `pod`/`namespace`/`container`
+# labels for any GPU process under the kubelet pod-resources API.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: gpu-overview-dashboard
+  namespace: monitor
+  labels:
+    grafana_dashboard: "1"
+  annotations:
+    grafana_folder: Platform
+data:
+  gpu-overview.json: |-
+    {
+      "uid": "gpu-overview",
+      "title": "GPU Overview",
+      "tags": ["platform", "gpu", "nvidia"],
+      "timezone": "browser",
+      "refresh": "15s",
+      "schemaVersion": 39,
+      "time": {"from": "now-3h", "to": "now"},
+      "editable": true,
+      "panels": [
+        {
+          "type": "stat",
+          "title": "GPU utilization",
+          "gridPos": {"x": 0, "y": 0, "w": 4, "h": 4},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"expr": "avg(DCGM_FI_DEV_GPU_UTIL)", "refId": "A"}],
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "textMode": "value"},
+          "fieldConfig": {"defaults": {"unit": "percent", "min": 0, "max": 100, "color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "blue"}, {"color": "green", "value": 10}, {"color": "orange", "value": 80}, {"color": "red", "value": 95}]}}}
+        },
+        {
+          "type": "stat",
+          "title": "VRAM used",
+          "gridPos": {"x": 4, "y": 0, "w": 4, "h": 4},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"expr": "sum(DCGM_FI_DEV_FB_USED) * 1024 * 1024", "refId": "A"}],
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "textMode": "value"},
+          "fieldConfig": {"defaults": {"unit": "bytes", "color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "green"}, {"color": "orange", "value": 6442450944}, {"color": "red", "value": 7516192768}]}}}
+        },
+        {
+          "type": "stat",
+          "title": "VRAM free",
+          "gridPos": {"x": 8, "y": 0, "w": 4, "h": 4},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"expr": "sum(DCGM_FI_DEV_FB_FREE) * 1024 * 1024", "refId": "A"}],
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "textMode": "value"},
+          "fieldConfig": {"defaults": {"unit": "bytes", "color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "red"}, {"color": "orange", "value": 536870912}, {"color": "green", "value": 1073741824}]}}}
+        },
+        {
+          "type": "stat",
+          "title": "Power draw",
+          "gridPos": {"x": 12, "y": 0, "w": 4, "h": 4},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"expr": "sum(DCGM_FI_DEV_POWER_USAGE)", "refId": "A"}],
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "textMode": "value"},
+          "fieldConfig": {"defaults": {"unit": "watt", "color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "green"}, {"color": "orange", "value": 180}, {"color": "red", "value": 220}]}}}
+        },
+        {
+          "type": "stat",
+          "title": "Temperature",
+          "gridPos": {"x": 16, "y": 0, "w": 4, "h": 4},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"expr": "max(DCGM_FI_DEV_GPU_TEMP)", "refId": "A"}],
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "textMode": "value"},
+          "fieldConfig": {"defaults": {"unit": "celsius", "color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "green"}, {"color": "orange", "value": 75}, {"color": "red", "value": 85}]}}}
+        },
+        {
+          "type": "stat",
+          "title": "SM clock",
+          "gridPos": {"x": 20, "y": 0, "w": 4, "h": 4},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"expr": "avg(DCGM_FI_DEV_SM_CLOCK)", "refId": "A"}],
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "textMode": "value"},
+          "fieldConfig": {"defaults": {"unit": "rotmhz", "decimals": 0, "color": {"mode": "fixed", "fixedColor": "blue"}}}
+        },
+        {
+          "type": "timeseries",
+          "title": "GPU & memory-copy utilization",
+          "gridPos": {"x": 0, "y": 4, "w": 12, "h": 8},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [
+            {"expr": "DCGM_FI_DEV_GPU_UTIL", "legendFormat": "{{Hostname}} gpu%", "refId": "A"},
+            {"expr": "DCGM_FI_DEV_MEM_COPY_UTIL", "legendFormat": "{{Hostname}} memcpy%", "refId": "B"}
+          ],
+          "fieldConfig": {"defaults": {"unit": "percent", "min": 0, "max": 100, "custom": {"fillOpacity": 10, "lineWidth": 2}}}
+        },
+        {
+          "type": "timeseries",
+          "title": "VRAM used / free",
+          "gridPos": {"x": 12, "y": 4, "w": 12, "h": 8},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [
+            {"expr": "DCGM_FI_DEV_FB_USED * 1024 * 1024", "legendFormat": "{{Hostname}} used", "refId": "A"},
+            {"expr": "DCGM_FI_DEV_FB_FREE * 1024 * 1024", "legendFormat": "{{Hostname}} free", "refId": "B"}
+          ],
+          "fieldConfig": {"defaults": {"unit": "bytes", "custom": {"fillOpacity": 15, "lineWidth": 1, "stacking": {"mode": "normal"}}}}
+        },
+        {
+          "type": "timeseries",
+          "title": "Power draw (W)",
+          "gridPos": {"x": 0, "y": 12, "w": 8, "h": 8},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"expr": "DCGM_FI_DEV_POWER_USAGE", "legendFormat": "{{Hostname}}", "refId": "A"}],
+          "fieldConfig": {"defaults": {"unit": "watt", "custom": {"fillOpacity": 10, "lineWidth": 2}}}
+        },
+        {
+          "type": "timeseries",
+          "title": "Temperature (°C)",
+          "gridPos": {"x": 8, "y": 12, "w": 8, "h": 8},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"expr": "DCGM_FI_DEV_GPU_TEMP", "legendFormat": "{{Hostname}} gpu", "refId": "A"}],
+          "fieldConfig": {"defaults": {"unit": "celsius", "custom": {"fillOpacity": 10, "lineWidth": 2}}}
+        },
+        {
+          "type": "timeseries",
+          "title": "SM / memory clocks (MHz)",
+          "gridPos": {"x": 16, "y": 12, "w": 8, "h": 8},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [
+            {"expr": "DCGM_FI_DEV_SM_CLOCK", "legendFormat": "{{Hostname}} sm", "refId": "A"},
+            {"expr": "DCGM_FI_DEV_MEM_CLOCK", "legendFormat": "{{Hostname}} mem", "refId": "B"}
+          ],
+          "fieldConfig": {"defaults": {"unit": "rotmhz", "decimals": 0, "custom": {"fillOpacity": 5, "lineWidth": 1}}}
+        },
+        {
+          "type": "row",
+          "title": "Per-pod attribution (requires DCGM_EXPORTER_KUBERNETES=true)",
+          "gridPos": {"x": 0, "y": 20, "w": 24, "h": 1},
+          "collapsed": false
+        },
+        {
+          "type": "bargauge",
+          "title": "VRAM by container (live)",
+          "gridPos": {"x": 0, "y": 21, "w": 12, "h": 10},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"expr": "topk(20, sort_desc(sum by (namespace, pod, container) (DCGM_FI_DEV_FB_USED{pod!=\"\"} * 1024 * 1024)))", "legendFormat": "{{namespace}}/{{pod}} {{container}}", "instant": true, "refId": "A"}],
+          "options": {"displayMode": "gradient", "orientation": "horizontal", "showUnfilled": true},
+          "fieldConfig": {"defaults": {"unit": "bytes", "color": {"mode": "continuous-GrYlRd"}, "noValue": "no per-pod data (need kubelet pod-resources integration)"}}
+        },
+        {
+          "type": "timeseries",
+          "title": "GPU utilization by container",
+          "gridPos": {"x": 12, "y": 21, "w": 12, "h": 10},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"expr": "sum by (namespace, pod, container) (DCGM_FI_DEV_GPU_UTIL{pod!=\"\"})", "legendFormat": "{{namespace}}/{{pod}} {{container}}", "refId": "A"}],
+          "fieldConfig": {"defaults": {"unit": "percent", "min": 0, "max": 100, "custom": {"fillOpacity": 5, "lineWidth": 1}}}
+        },
+        {
+          "type": "row",
+          "title": "PCIe & ECC",
+          "gridPos": {"x": 0, "y": 31, "w": 24, "h": 1},
+          "collapsed": false
+        },
+        {
+          "type": "timeseries",
+          "title": "PCIe TX / RX throughput",
+          "gridPos": {"x": 0, "y": 32, "w": 12, "h": 8},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [
+            {"expr": "DCGM_FI_DEV_PCIE_TX_THROUGHPUT * 1024", "legendFormat": "{{Hostname}} tx", "refId": "A"},
+            {"expr": "DCGM_FI_DEV_PCIE_RX_THROUGHPUT * 1024", "legendFormat": "{{Hostname}} rx", "refId": "B"}
+          ],
+          "fieldConfig": {"defaults": {"unit": "Bps", "custom": {"fillOpacity": 5, "lineWidth": 1}}}
+        },
+        {
+          "type": "stat",
+          "title": "Allocated GPU slots (timeslicing, 10 max)",
+          "gridPos": {"x": 12, "y": 32, "w": 6, "h": 4},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"expr": "sum(kube_pod_container_resource_requests{resource=\"nvidia_com_gpu\",node=\"nixos-gpu\"})", "refId": "A"}],
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "textMode": "value"},
+          "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "green"}, {"color": "orange", "value": 7}, {"color": "red", "value": 9}]}, "unit": "none", "max": 10}}
+        },
+        {
+          "type": "stat",
+          "title": "ECC errors (uncorrected)",
+          "gridPos": {"x": 18, "y": 32, "w": 6, "h": 4},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"expr": "sum(DCGM_FI_DEV_ECC_DBE_VOL_TOTAL) or vector(0)", "refId": "A"}],
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "textMode": "value"},
+          "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "green"}, {"color": "red", "value": 1}]}, "unit": "none"}}
+        }
+      ]
+    }

@@ -1,0 +1,22 @@
+# Scrape the ARC controller's /metrics endpoint (port 8080).
+# Exposes gha_controller_running_ephemeral_runners and friends — useful
+# even though the active runner pool is the KEDA-scaled arc-chem-runner
+# Deployment (read via kube-state-metrics).
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: arc-controller
+  namespace: monitor
+  labels:
+    release: kube-prometheus-stack
+spec:
+  namespaceSelector:
+    matchNames:
+      - arc-system
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: gha-rs-controller
+  podMetricsEndpoints:
+    - port: metrics
+      path: /metrics
+      interval: 30s
