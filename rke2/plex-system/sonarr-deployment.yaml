@@ -18,6 +18,10 @@ spec:
       labels:
         app: sonarr
     spec:
+      # All plex-system pods must run on the same node — plex-media and servarr-downloads
+      # PVCs are RWO (ReadWriteOnce) and cannot be attached to multiple nodes simultaneously.
+      nodeSelector:
+        kubernetes.io/hostname: microedge2
       securityContext:
         fsGroup: 1000
         fsGroupChangePolicy: OnRootMismatch

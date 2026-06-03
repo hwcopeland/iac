@@ -18,6 +18,9 @@ spec:
       labels:
         app: overseerr
     spec:
+      # Pinned to microedge2 to match the rest of plex-system.
+      nodeSelector:
+        kubernetes.io/hostname: microedge2
       securityContext:
         runAsUser: 1000
         runAsGroup: 1000
