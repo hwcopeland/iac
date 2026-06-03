@@ -1,0 +1,187 @@
+# CI/CD overview: registry storage (Zot) + self-hosted runner activity.
+# Runner panels work today via kube-state-metrics.
+# Zot panels need the zot ServiceMonitor relabeled to release=kube-prometheus-stack
+# AND a basic-auth credential reachable by Prom (zot /metrics requires auth).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cicd-overview-dashboard
+  namespace: monitor
+  labels:
+    grafana_dashboard: "1"
+  annotations:
+    grafana_folder: Platform
+data:
+  cicd-overview.json: |-
+    {
+      "uid": "cicd-overview",
+      "title": "CI/CD Overview",
+      "tags": ["platform", "cicd", "registry", "runners"],
+      "timezone": "browser",
+      "refresh": "30s",
+      "schemaVersion": 39,
+      "time": {"from": "now-24h", "to": "now"},
+      "editable": true,
+      "panels": [
+        {
+          "type": "row",
+          "title": "Self-Hosted Runners (arc-chem)",
+          "gridPos": {"x": 0, "y": 0, "w": 24, "h": 1},
+          "collapsed": false
+        },
+        {
+          "type": "stat",
+          "title": "Current runners (desired)",
+          "gridPos": {"x": 0, "y": 1, "w": 4, "h": 4},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"expr": "kube_deployment_spec_replicas{namespace=\"arc-system\",deployment=\"arc-chem-runner\"}", "refId": "A"}],
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "textMode": "value"},
+          "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "blue"}, {"color": "green", "value": 1}, {"color": "orange", "value": 5}]}, "unit": "none"}}
+        },
+        {
+          "type": "stat",
+          "title": "Runners available",
+          "gridPos": {"x": 4, "y": 1, "w": 4, "h": 4},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"expr": "kube_deployment_status_replicas_available{namespace=\"arc-system\",deployment=\"arc-chem-runner\"}", "refId": "A"}],
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "textMode": "value"},
+          "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "red"}, {"color": "green", "value": 1}]}, "unit": "none"}}
+        },
+        {
+          "type": "stat",
+          "title": "Runner pods running",
+          "gridPos": {"x": 8, "y": 1, "w": 4, "h": 4},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"expr": "count(kube_pod_status_phase{namespace=\"arc-system\",pod=~\"arc-chem-runner-.*\",phase=\"Running\"} == 1)", "refId": "A"}],
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "textMode": "value"},
+          "fieldConfig": {"defaults": {"color": {"mode": "fixed", "fixedColor": "blue"}, "unit": "none"}}
+        },
+        {
+          "type": "stat",
+          "title": "Scale-up events (24h)",
+          "gridPos": {"x": 12, "y": 1, "w": 4, "h": 4},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"expr": "sum(changes(kube_deployment_spec_replicas{namespace=\"arc-system\",deployment=\"arc-chem-runner\"}[24h]))", "refId": "A"}],
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "textMode": "value"},
+          "fieldConfig": {"defaults": {"color": {"mode": "fixed", "fixedColor": "purple"}, "unit": "none"}}
+        },
+        {
+          "type": "stat",
+          "title": "Runner restarts (24h)",
+          "gridPos": {"x": 16, "y": 1, "w": 4, "h": 4},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"expr": "sum(increase(kube_pod_container_status_restarts_total{namespace=\"arc-system\",pod=~\"arc-chem-runner-.*\"}[24h]))", "refId": "A"}],
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "textMode": "value"},
+          "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "green"}, {"color": "orange", "value": 1}, {"color": "red", "value": 5}]}, "unit": "none"}}
+        },
+        {
+          "type": "stat",
+          "title": "Max runners (cap)",
+          "gridPos": {"x": 20, "y": 1, "w": 4, "h": 4},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"expr": "max(kube_horizontalpodautoscaler_spec_max_replicas{namespace=\"arc-system\"} or kube_deployment_spec_replicas{namespace=\"arc-system\",deployment=\"arc-chem-runner\"})", "refId": "A"}],
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "textMode": "value"},
+          "fieldConfig": {"defaults": {"color": {"mode": "fixed", "fixedColor": "gray"}, "unit": "none"}}
+        },
+        {
+          "type": "timeseries",
+          "title": "Runner replicas over time (desired vs available)",
+          "gridPos": {"x": 0, "y": 5, "w": 16, "h": 8},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [
+            {"expr": "kube_deployment_spec_replicas{namespace=\"arc-system\",deployment=\"arc-chem-runner\"}", "legendFormat": "desired", "refId": "A"},
+            {"expr": "kube_deployment_status_replicas_available{namespace=\"arc-system\",deployment=\"arc-chem-runner\"}", "legendFormat": "available", "refId": "B"}
+          ],
+          "fieldConfig": {"defaults": {"unit": "none", "custom": {"fillOpacity": 10, "lineWidth": 2, "drawStyle": "line", "lineInterpolation": "stepAfter"}}}
+        },
+        {
+          "type": "timeseries",
+          "title": "Runner pod CPU usage",
+          "gridPos": {"x": 16, "y": 5, "w": 8, "h": 8},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"expr": "sum by (pod) (rate(container_cpu_usage_seconds_total{namespace=\"arc-system\",pod=~\"arc-chem-runner-.*\",container!=\"\"}[2m]))", "legendFormat": "{{pod}}", "refId": "A"}],
+          "fieldConfig": {"defaults": {"unit": "short", "custom": {"fillOpacity": 5, "lineWidth": 1}}}
+        },
+        {
+          "type": "row",
+          "title": "Registry (Zot)",
+          "gridPos": {"x": 0, "y": 13, "w": 24, "h": 1},
+          "collapsed": false
+        },
+        {
+          "type": "stat",
+          "title": "Repositories",
+          "gridPos": {"x": 0, "y": 14, "w": 4, "h": 4},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"expr": "count(count by (repo) (zot_repo_storage_bytes))", "refId": "A"}],
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "textMode": "value"},
+          "fieldConfig": {"defaults": {"color": {"mode": "fixed", "fixedColor": "blue"}, "unit": "none", "noValue": "scrape not wired"}}
+        },
+        {
+          "type": "stat",
+          "title": "Total storage",
+          "gridPos": {"x": 4, "y": 14, "w": 4, "h": 4},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"expr": "sum(zot_repo_storage_bytes)", "refId": "A"}],
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "textMode": "value"},
+          "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "green"}, {"color": "orange", "value": 214748364800}, {"color": "red", "value": 245366784000}]}, "unit": "bytes", "noValue": "scrape not wired"}}
+        },
+        {
+          "type": "stat",
+          "title": "Disk used (PVC, 248Gi)",
+          "gridPos": {"x": 8, "y": 14, "w": 4, "h": 4},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"expr": "kubelet_volume_stats_used_bytes{namespace=\"tooling\",persistentvolumeclaim=~\".*zot.*\"} / kubelet_volume_stats_capacity_bytes{namespace=\"tooling\",persistentvolumeclaim=~\".*zot.*\"}", "refId": "A"}],
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "textMode": "value"},
+          "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "green"}, {"color": "orange", "value": 0.8}, {"color": "red", "value": 0.95}]}, "unit": "percentunit", "max": 1}}
+        },
+        {
+          "type": "stat",
+          "title": "Pulls (24h)",
+          "gridPos": {"x": 12, "y": 14, "w": 4, "h": 4},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"expr": "sum(increase(zot_http_requests_total{method=\"GET\",code=~\"2..\"}[24h]))", "refId": "A"}],
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "textMode": "value"},
+          "fieldConfig": {"defaults": {"color": {"mode": "fixed", "fixedColor": "green"}, "unit": "none"}}
+        },
+        {
+          "type": "stat",
+          "title": "Pushes (24h)",
+          "gridPos": {"x": 16, "y": 14, "w": 4, "h": 4},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"expr": "sum(increase(zot_http_requests_total{method=~\"PUT|POST|PATCH\",code=~\"2..\"}[24h]))", "refId": "A"}],
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "textMode": "value"},
+          "fieldConfig": {"defaults": {"color": {"mode": "fixed", "fixedColor": "purple"}, "unit": "none"}}
+        },
+        {
+          "type": "stat",
+          "title": "HTTP errors (24h)",
+          "gridPos": {"x": 20, "y": 14, "w": 4, "h": 4},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"expr": "sum(increase(zot_http_requests_total{code=~\"5..\"}[24h])) or vector(0)", "refId": "A"}],
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "textMode": "value"},
+          "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "green"}, {"color": "orange", "value": 1}, {"color": "red", "value": 10}]}, "unit": "none"}}
+        },
+        {
+          "type": "bargauge",
+          "title": "Storage per repository",
+          "gridPos": {"x": 0, "y": 18, "w": 12, "h": 10},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"expr": "topk(20, sort_desc(zot_repo_storage_bytes))", "legendFormat": "{{repo}}", "instant": true, "refId": "A"}],
+          "options": {"displayMode": "gradient", "orientation": "horizontal", "showUnfilled": true},
+          "fieldConfig": {"defaults": {"unit": "bytes", "color": {"mode": "continuous-GrYlRd"}, "noValue": "scrape not wired"}}
+        },
+        {
+          "type": "timeseries",
+          "title": "Pulls & pushes over time",
+          "gridPos": {"x": 12, "y": 18, "w": 12, "h": 10},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [
+            {"expr": "sum(rate(zot_http_requests_total{method=\"GET\",code=~\"2..\"}[5m]))", "legendFormat": "pulls/s", "refId": "A"},
+            {"expr": "sum(rate(zot_http_requests_total{method=~\"PUT|POST|PATCH\",code=~\"2..\"}[5m]))", "legendFormat": "pushes/s", "refId": "B"},
+            {"expr": "sum(rate(zot_http_requests_total{code=~\"5..\"}[5m]))", "legendFormat": "5xx/s", "refId": "C"}
+          ],
+          "fieldConfig": {"defaults": {"unit": "ops", "custom": {"fillOpacity": 10, "lineWidth": 2}}}
+        }
+      ]
+    }

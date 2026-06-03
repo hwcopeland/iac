@@ -17,6 +17,7 @@ Last touched: 2026-05-23 (observability cleanup project — see
 | **Garage** (out of ns) | `rke2/garage-system/` | S3-compatible object store; Loki chunks live here, bucket `loki-chunks` |
 | **snmp-exporter-synology** | raw manifests `synology-exporter/` | NAS metrics over SNMPv2c. Requires SNMP enabled in DSM |
 | **mktxp-exporter** | raw manifests `mikrotik-exporter/` | RouterOS metrics from CCR-2004. cAP via CAPsMAN on the CCR |
+| **kubernetes-storage-dashboard-grafana** | helm OCI, `storage-dashboard/values.yaml` | AppMana per-node disk-usage breakdown (DaemonSet exporter + custom Grafana panel + dashboard). Panel plugin preinstalled via `GF_PLUGINS_PREINSTALL` in kps values |
 
 ## Data paths
 
@@ -163,11 +164,26 @@ rke2/monitor/dashboards/
   loki-log-health.yaml       → Platform
   mikrotik-network.yaml      → Platform
   power-overview.yaml        → Platform
+  cicd-overview.yaml         → Platform
+  gpu-overview.yaml          → Platform
+  storage-breakdown.yaml     → Platform
+  storage-usage.yaml         → Platform
+  grafana-self-perf.yaml     → Platform
+  kubetest-power.yaml        → Platform
 ```
 
-Two older dashboards (`grafana-self-perf-dashboard.yaml`,
-`kubetest-power-dashboard.yaml`) still live at `rke2/monitor/` root from
-their original commits; move to `dashboards/` opportunistically.
+All dashboards now live under `dashboards/` (the two older
+root-level dashboards were moved here 2026-06-03; ConfigMap names
+unchanged so the live provisioning was unaffected). The `spotify-exporter`
+dashboard intentionally stays beside its exporter at
+`spotify-exporter/dashboard.yaml`.
+
+The AppMana `Storage Usage` dashboard is now an OWNED copy at
+`dashboards/storage-usage.yaml` (Platform folder). The chart's own copy
+is disabled (`dashboard.enabled: false` in `storage-dashboard/values.yaml`)
+so the two don't provision the same uid. The chart still ships the
+exporter DaemonSet + panel plugin + longhorn ServiceMonitor. See the
+Storage section below for what was fixed/added.
 
 ## Storage
 
@@ -178,6 +194,53 @@ their original commits; move to `dashboards/` opportunistically.
 | Loki WAL + cache | Longhorn PVC | `storage-loki-0` (20Gi) | n/a (transient) |
 | Tempo traces | Local PVC | `tempo-storage-0` | 7d (`compactor.compaction.block_retention: 168h`) |
 | Alertmanager | Longhorn PVC | `alertmanager-...-0` (chart default) | n/a (state) |
+
+### Storage dashboards
+
+Two dashboards cover storage, both in the Platform folder:
+
+- **`dashboards/storage-usage.yaml`** ("Storage Usage", uid `storage-usage`)
+  — the owned copy of the AppMana custom panel + the PV/Synology panels
+  appended beneath it. The stock chart shipped this with a **broken
+  Longhorn target**: it queried `longhorn_replica_info` / `disk_path`,
+  neither of which exists here, so the "Longhorn data" band was always
+  empty. Fixed to `longhorn_disk_usage_bytes{job="longhorn-backend"}` with
+  `label_replace` mapping disk name → data path (`default-disk-*` →
+  `/var/lib/longhorn` → `/`; `nvme-4tb-data` / `old-data-disk` →
+  `/mnt/longhorn`). The custom panel folds all Longhorn into one category
+  band by design, so per-PV detail is in the appended table/bargauge.
+- **`dashboards/storage-breakdown.yaml`** ("Storage Breakdown") — a
+  standalone PV + Synology breakdown (same panels, no AppMana dependency).
+
+Non-obvious things baked into the Longhorn queries on both:
+
+- **Longhorn is double-scraped.** Both `longhorn-backend` and
+  `longhorn-manager` jobs hit the same `:9500` endpoint (the supplemental
+  ServiceMonitor from `storage-dashboard/values.yaml` overlaps Longhorn's
+  own). Every panel filters `job="longhorn-backend"` so values aren't
+  counted twice. Cleaning up the duplicate scrape is tracked separately.
+- **`longhorn_disk_usage_bytes` only means "Longhorn data" on a DEDICATED
+  mount.** It reports the used space of whatever filesystem the disk path
+  sits on. The auto-created `default-disk-*` lives at `/var/lib/longhorn`
+  on the root fs, so its "usage" is the whole OS disk (containerd images,
+  journald, etc.), not Longhorn data — and control-plane nodes hold **zero
+  Longhorn replicas**, so their default-disk usage is pure noise. All
+  disk-footprint panels filter `disk!~"default-disk-.*"` to count only the
+  real dedicated disks (`nvme-4tb-data` on microedge, `old-data-disk` on
+  microedge2, both at `/mnt/longhorn`).
+- **Disk footprint > sum of active PVs.** The dedicated mounts hold ~3.4 TB
+  but active volumes are only ~0.8 TB unique (~1.6 TB across replicas). The
+  rest is snapshots + orphaned/detached volumes (e.g. the detached Minecraft
+  PVC on `old-data-disk`). The per-node footprint panel and the PV table
+  intentionally won't reconcile to the same number.
+- **PV-per-node is attached-node attribution.** `longhorn_volume_actual_size_bytes`
+  labels a volume with the node its engine is attached to, not where each
+  replica physically lives. So the PV table/bargauge group by attached node,
+  not literal replica placement.
+- **Synology capacity needs unit scaling.** hrStorage `used`/`total` are in
+  allocation units; the dashboard multiplies by `syno_storage_allocation_units`
+  (OID `.25.2.3.1.4`, added to `synology-exporter/snmp-config.yaml`) and
+  filters `syno_storage_descr=~"/volume.*"` to drop RAM/swap/tmpfs rows.
 
 ## Helm release reconciliation
 
@@ -199,6 +262,7 @@ Pinned chart versions (keep these in sync with reality):
 | `kube-prometheus-stack` | `prometheus-community/kube-prometheus-stack` | `82.14.1` |
 | `loki` | `grafana/loki` | `6.51.0` |
 | `alloy` | `grafana/alloy` | (latest tracked in alloy-values.yaml) |
+| `kubernetes-storage-dashboard-grafana` | `oci://ghcr.io/appmana/charts/kubernetes-storage-dashboard-grafana` | `0.1.1` (panel plugin pinned to same in kps values) |
 
 ## Known operational gotchas
 

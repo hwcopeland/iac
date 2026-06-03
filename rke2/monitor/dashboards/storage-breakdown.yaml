@@ -1,0 +1,240 @@
+# Storage Breakdown dashboard — maps /mnt/longhorn on each node down to
+# the individual PVs that consume it, plus the Synology NAS.
+#
+# DATA SOURCES & GOTCHAS (verified live 2026-06-01):
+#
+# Longhorn — longhorn_volume_actual_size_bytes carries node / pvc /
+#   pvc_namespace / volume labels. TWO jobs scrape the longhorn-backend
+#   endpoint (longhorn-backend AND longhorn-manager), so EVERY query
+#   filters job="longhorn-backend" or it double-counts. The `node` label
+#   is the volume's ATTACHED (engine) node, not per-replica placement —
+#   so the PV breakdown is an attribution view. longhorn_disk_usage_bytes
+#   is the ground-truth per-node /mnt/longhorn footprint (all replicas);
+#   the "Per-node usage" panel plots that for reconciliation.
+#
+# Synology — hrStorage via snmp-exporter-synology. used/total are in
+#   ALLOCATION UNITS; multiply by syno_storage_allocation_units for bytes
+#   (added to synology-exporter/snmp-config.yaml). Filter on
+#   syno_storage_descr=~"/volume.*" to drop RAM/swap/tmpfs segments.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: storage-breakdown-dashboard
+  namespace: monitor
+  labels:
+    grafana_dashboard: "1"
+  annotations:
+    grafana_folder: Platform
+data:
+  storage-breakdown.json: |-
+    {
+      "uid": "storage-breakdown",
+      "title": "Storage Breakdown",
+      "tags": ["platform", "storage", "longhorn", "synology"],
+      "timezone": "browser",
+      "refresh": "1m",
+      "schemaVersion": 39,
+      "time": {"from": "now-24h", "to": "now"},
+      "editable": true,
+      "panels": [
+        {
+          "type": "row",
+          "title": "Longhorn — /mnt/longhorn by PV",
+          "gridPos": {"x": 0, "y": 0, "w": 24, "h": 1},
+          "collapsed": false
+        },
+        {
+          "type": "stat",
+          "title": "Longhorn used (all nodes)",
+          "gridPos": {"x": 0, "y": 1, "w": 6, "h": 4},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"expr": "sum(longhorn_disk_usage_bytes{job=\"longhorn-backend\", disk!~\"default-disk-.*\"})", "refId": "A"}],
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "textMode": "value", "colorMode": "value"},
+          "fieldConfig": {"defaults": {"unit": "bytes", "color": {"mode": "fixed", "fixedColor": "blue"}}}
+        },
+        {
+          "type": "stat",
+          "title": "Longhorn capacity (all nodes)",
+          "gridPos": {"x": 6, "y": 1, "w": 6, "h": 4},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"expr": "sum(longhorn_disk_capacity_bytes{job=\"longhorn-backend\", disk!~\"default-disk-.*\"})", "refId": "A"}],
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "textMode": "value", "colorMode": "value"},
+          "fieldConfig": {"defaults": {"unit": "bytes", "color": {"mode": "fixed", "fixedColor": "purple"}}}
+        },
+        {
+          "type": "stat",
+          "title": "Longhorn used %",
+          "gridPos": {"x": 12, "y": 1, "w": 6, "h": 4},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"expr": "100 * sum(longhorn_disk_usage_bytes{job=\"longhorn-backend\", disk!~\"default-disk-.*\"}) / sum(longhorn_disk_capacity_bytes{job=\"longhorn-backend\", disk!~\"default-disk-.*\"})", "refId": "A"}],
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "textMode": "value", "colorMode": "value"},
+          "fieldConfig": {"defaults": {"unit": "percent", "min": 0, "max": 100, "color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "green"}, {"color": "orange", "value": 75}, {"color": "red", "value": 90}]}}}
+        },
+        {
+          "type": "stat",
+          "title": "PVs / volumes",
+          "gridPos": {"x": 18, "y": 1, "w": 6, "h": 4},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"expr": "count(count by(volume)(longhorn_volume_actual_size_bytes{job=\"longhorn-backend\"}))", "refId": "A"}],
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "textMode": "value", "colorMode": "value"},
+          "fieldConfig": {"defaults": {"unit": "short", "color": {"mode": "fixed", "fixedColor": "text"}}}
+        },
+        {
+          "type": "timeseries",
+          "title": "Per-node Longhorn disk footprint (dedicated /mnt/longhorn mounts)",
+          "description": "longhorn_disk_usage_bytes on dedicated Longhorn mounts only (disk!~'default-disk-.*'). The auto-created default-disk lives on the root fs, so its 'usage' is the whole OS disk, not Longhorn data — excluded here. Control-plane nodes hold zero Longhorn replicas and so don't appear. Includes snapshots + orphaned/detached volumes, so this exceeds the sum of active PVs below.",
+          "gridPos": {"x": 0, "y": 5, "w": 12, "h": 9},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"expr": "sum by(node)(longhorn_disk_usage_bytes{job=\"longhorn-backend\", disk!~\"default-disk-.*\"})", "refId": "A", "legendFormat": "{{node}}"}],
+          "options": {"legend": {"displayMode": "table", "placement": "right", "calcs": ["lastNotNull"]}, "tooltip": {"mode": "multi", "sort": "desc"}},
+          "fieldConfig": {"defaults": {"unit": "bytes", "custom": {"drawStyle": "line", "fillOpacity": 30, "stacking": {"mode": "normal"}, "lineWidth": 1}}}
+        },
+        {
+          "type": "bargauge",
+          "title": "PVs by actual size (attributed to attached node)",
+          "description": "Top PVs by longhorn_volume_actual_size_bytes. Attributed to the node the volume is attached to, not per-replica.",
+          "gridPos": {"x": 12, "y": 5, "w": 12, "h": 9},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"expr": "topk(15, sum by(node, pvc_namespace, pvc)(longhorn_volume_actual_size_bytes{job=\"longhorn-backend\"}))", "refId": "A", "legendFormat": "{{node}} · {{pvc_namespace}}/{{pvc}}", "instant": true}],
+          "options": {"displayMode": "gradient", "orientation": "horizontal", "valueMode": "color", "reduceOptions": {"calcs": ["lastNotNull"]}},
+          "fieldConfig": {"defaults": {"unit": "bytes", "color": {"mode": "continuous-GrYlRd"}}}
+        },
+        {
+          "type": "table",
+          "title": "PV breakdown — used vs capacity",
+          "gridPos": {"x": 0, "y": 14, "w": 24, "h": 11},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [
+            {"expr": "sum by(node, pvc_namespace, pvc, volume)(longhorn_volume_actual_size_bytes{job=\"longhorn-backend\"})", "refId": "A", "format": "table", "instant": true},
+            {"expr": "sum by(node, pvc_namespace, pvc, volume)(longhorn_volume_capacity_bytes{job=\"longhorn-backend\"})", "refId": "B", "format": "table", "instant": true}
+          ],
+          "transformations": [
+            {"id": "merge", "options": {}},
+            {"id": "organize", "options": {
+              "excludeByName": {"Time": true},
+              "renameByName": {
+                "node": "Node",
+                "pvc_namespace": "Namespace",
+                "pvc": "PVC",
+                "volume": "Volume",
+                "Value #A": "Used",
+                "Value #B": "Capacity"
+              },
+              "indexByName": {"node": 0, "pvc_namespace": 1, "pvc": 2, "volume": 3, "Value #A": 4, "Value #B": 5}
+            }}
+          ],
+          "fieldConfig": {
+            "defaults": {"custom": {"align": "left", "filterable": true}},
+            "overrides": [
+              {"matcher": {"id": "byName", "options": "Used"}, "properties": [{"id": "unit", "value": "bytes"}, {"id": "custom.cellOptions", "value": {"type": "gauge", "mode": "gradient"}}, {"id": "custom.align", "value": "right"}]},
+              {"matcher": {"id": "byName", "options": "Capacity"}, "properties": [{"id": "unit", "value": "bytes"}, {"id": "custom.align", "value": "right"}]}
+            ]
+          },
+          "options": {"sortBy": [{"displayName": "Used", "desc": true}], "showHeader": true}
+        },
+        {
+          "type": "row",
+          "title": "Synology NAS",
+          "gridPos": {"x": 0, "y": 25, "w": 24, "h": 1},
+          "collapsed": false
+        },
+        {
+          "type": "stat",
+          "title": "/volume1 used",
+          "gridPos": {"x": 0, "y": 26, "w": 5, "h": 4},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"expr": "(syno_storage_used * on(storage_index) group_left() syno_storage_allocation_units) * on(storage_index) group_left() (syno_storage_descr{syno_storage_descr=~\"/volume.*\"})", "refId": "A"}],
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "textMode": "value", "colorMode": "value"},
+          "fieldConfig": {"defaults": {"unit": "bytes", "color": {"mode": "fixed", "fixedColor": "blue"}}}
+        },
+        {
+          "type": "gauge",
+          "title": "/volume1 used %",
+          "gridPos": {"x": 5, "y": 26, "w": 5, "h": 4},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"expr": "100 * (syno_storage_used * on(storage_index) group_left() (syno_storage_descr{syno_storage_descr=~\"/volume.*\"})) / (syno_storage_total * on(storage_index) group_left() (syno_storage_descr{syno_storage_descr=~\"/volume.*\"}))", "refId": "A"}],
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "showThresholdLabels": false, "showThresholdMarkers": true},
+          "fieldConfig": {"defaults": {"unit": "percent", "min": 0, "max": 100, "color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "green"}, {"color": "orange", "value": 75}, {"color": "red", "value": 90}]}}}
+        },
+        {
+          "type": "stat",
+          "title": "System",
+          "gridPos": {"x": 10, "y": 26, "w": 4, "h": 4},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"expr": "syno_system_status", "refId": "A"}],
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "textMode": "value", "colorMode": "background"},
+          "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "red"}, {"color": "green", "value": 1}]}, "mappings": [{"type": "value", "options": {"1": {"text": "Normal", "color": "green"}}}]}}
+        },
+        {
+          "type": "stat",
+          "title": "Power",
+          "gridPos": {"x": 14, "y": 26, "w": 3, "h": 4},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"expr": "syno_system_power_status", "refId": "A"}],
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "textMode": "value", "colorMode": "background"},
+          "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "red"}, {"color": "green", "value": 1}]}, "mappings": [{"type": "value", "options": {"1": {"text": "OK", "color": "green"}}}]}}
+        },
+        {
+          "type": "stat",
+          "title": "RAID",
+          "gridPos": {"x": 17, "y": 26, "w": 3, "h": 4},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"expr": "min(syno_raid_status)", "refId": "A"}],
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "textMode": "value", "colorMode": "background"},
+          "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "red"}, {"color": "green", "value": 1}]}, "mappings": [{"type": "value", "options": {"1": {"text": "Normal", "color": "green"}}}]}}
+        },
+        {
+          "type": "stat",
+          "title": "Max disk temp",
+          "gridPos": {"x": 20, "y": 26, "w": 4, "h": 4},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"expr": "max(syno_disk_temperature)", "refId": "A"}],
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "textMode": "value", "colorMode": "value"},
+          "fieldConfig": {"defaults": {"unit": "celsius", "color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "green"}, {"color": "orange", "value": 45}, {"color": "red", "value": 55}]}}}
+        },
+        {
+          "type": "timeseries",
+          "title": "/volume1 used over time",
+          "gridPos": {"x": 0, "y": 30, "w": 12, "h": 8},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [
+            {"expr": "(syno_storage_used * on(storage_index) group_left() syno_storage_allocation_units) * on(storage_index) group_left() (syno_storage_descr{syno_storage_descr=~\"/volume.*\"})", "refId": "A", "legendFormat": "used"},
+            {"expr": "(syno_storage_total * on(storage_index) group_left() syno_storage_allocation_units) * on(storage_index) group_left() (syno_storage_descr{syno_storage_descr=~\"/volume.*\"})", "refId": "B", "legendFormat": "capacity"}
+          ],
+          "options": {"legend": {"displayMode": "list", "placement": "bottom", "calcs": ["lastNotNull"]}, "tooltip": {"mode": "multi"}},
+          "fieldConfig": {"defaults": {"unit": "bytes", "custom": {"drawStyle": "line", "fillOpacity": 10, "lineWidth": 1}}, "overrides": [{"matcher": {"id": "byName", "options": "capacity"}, "properties": [{"id": "custom.fillOpacity", "value": 0}, {"id": "color", "value": {"mode": "fixed", "fixedColor": "red"}}]}]}
+        },
+        {
+          "type": "table",
+          "title": "Disks — health & temperature",
+          "gridPos": {"x": 12, "y": 30, "w": 12, "h": 8},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [
+            {"expr": "syno_disk_status", "refId": "A", "format": "table", "instant": true},
+            {"expr": "syno_disk_temperature", "refId": "B", "format": "table", "instant": true},
+            {"expr": "syno_disk_name", "refId": "C", "format": "table", "instant": true}
+          ],
+          "transformations": [
+            {"id": "merge", "options": {}},
+            {"id": "organize", "options": {
+              "excludeByName": {"Time": true, "__name__": true, "container": true, "endpoint": true, "instance": true, "job": true, "namespace": true, "pod": true, "service": true, "Value #C": true},
+              "renameByName": {
+                "syno_disk_name": "Disk",
+                "disk_index": "Index",
+                "Value #A": "Status",
+                "Value #B": "Temp"
+              },
+              "indexByName": {"syno_disk_name": 0, "disk_index": 1, "Value #A": 2, "Value #B": 3}
+            }}
+          ],
+          "fieldConfig": {
+            "defaults": {"custom": {"align": "left"}},
+            "overrides": [
+              {"matcher": {"id": "byName", "options": "Status"}, "properties": [{"id": "mappings", "value": [{"type": "value", "options": {"1": {"text": "Normal", "color": "green"}}}]}, {"id": "custom.cellOptions", "value": {"type": "color-text"}}]},
+              {"matcher": {"id": "byName", "options": "Temp"}, "properties": [{"id": "unit", "value": "celsius"}]}
+            ]
+          },
+          "options": {"showHeader": true, "sortBy": [{"displayName": "Index", "desc": false}]}
+        }
+      ]
+    }

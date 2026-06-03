@@ -1,0 +1,32 @@
+# Hand-rolled ServiceMonitor for zot. The chart-managed one was disabled in
+# zot-values.yaml because (a) its labels don't match the Prom selector
+# release=kube-prometheus-stack, and (b) zot's /metrics requires basic auth.
+#
+# Credentials live in the zot-metrics-auth Secret in the tooling namespace
+# (keys: htpasswd, username, password). zot reads the htpasswd file; Prom
+# scrapes using username/password.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: zot
+  namespace: monitor
+  labels:
+    release: kube-prometheus-stack
+spec:
+  namespaceSelector:
+    matchNames:
+      - tooling
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: zot
+  endpoints:
+    - port: zot
+      path: /metrics
+      interval: 30s
+      basicAuth:
+        username:
+          name: zot-metrics-auth
+          key: username
+        password:
+          name: zot-metrics-auth
+          key: password

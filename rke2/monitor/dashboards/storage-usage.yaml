@@ -1,0 +1,1142 @@
+# Storage Usage dashboard — OWNED COPY.
+#
+# This is the AppMana "Storage Usage" dashboard (the custom
+# appmana-storage-breakdown-panel) taken under IaC control so we can fix
+# and extend it. The chart's own copy is disabled via
+# `dashboard.enabled: false` in storage-dashboard/values.yaml — otherwise
+# two ConfigMaps would provision the same uid (storage-usage) and clash.
+#
+# CHANGES vs the chart's stock dashboard:
+#  1. Fixed the Longhorn target. Stock used longhorn_replica_info / disk_path
+#     which DO NOT EXIST here -> the "Longhorn data" band was always empty.
+#     Replaced with longhorn_disk_usage_bytes filtered to DEDICATED mounts
+#     (disk!~"default-disk-.*"). The auto-created default-disk lives on the
+#     root fs, so its "usage" is the whole OS disk (containerd images, logs,
+#     etc.), NOT Longhorn data — and control-plane nodes hold zero replicas.
+#     Counting it produced phantom multi-GB "Longhorn" bands on nodes with no
+#     Longhorn data. Only nvme-4tb-data (microedge) and old-data-disk
+#     (microedge2), both at /mnt/longhorn, are real dedicated Longhorn disks.
+#  2. Added a Longhorn-by-PV breakdown + Synology NAS section below the
+#     custom panel. The custom panel folds all Longhorn into ONE category
+#     band by design, so per-PV detail lives in the added table/bargauge.
+#
+# NOTE: disk footprint (~3.4TB) > sum of active PVs (~0.8TB unique) because
+# it includes replica copies, snapshots, and orphaned/detached volumes.
+#
+# See README.md for the job="longhorn-backend" dedup and attached-node
+# attribution caveats (same queries apply here).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: storage-usage-dashboard
+  namespace: monitor
+  labels:
+    grafana_dashboard: "1"
+  annotations:
+    grafana_folder: Platform
+data:
+  storage-usage.json: |-
+    {
+     "annotations": {
+      "list": []
+     },
+     "editable": false,
+     "fiscalYearStartMonth": 0,
+     "graphTooltip": 0,
+     "uid": "storage-usage",
+     "title": "Storage Usage",
+     "tags": [
+      "longhorn",
+      "nodes",
+      "storage",
+      "synology"
+     ],
+     "timezone": "browser",
+     "schemaVersion": 39,
+     "version": 1,
+     "refresh": "1m",
+     "time": {
+      "from": "now-5m",
+      "to": "now"
+     },
+     "timepicker": {
+      "refresh_intervals": [
+       "1m",
+       "5m"
+      ],
+      "time_options": [
+       "5m"
+      ]
+     },
+     "templating": {
+      "list": []
+     },
+     "panels": [
+      {
+       "id": 1,
+       "type": "appmana-storage-breakdown-panel",
+       "pluginVersion": "0.1.0",
+       "title": "",
+       "transparent": true,
+       "gridPos": {
+        "h": 26,
+        "w": 24,
+        "x": 0,
+        "y": 0
+       },
+       "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+       },
+       "options": {
+        "metricPrefix": "nsd",
+        "categories": [
+         {
+          "color": "#3B82F6",
+          "id": "containerd-images",
+          "label": "Containerd images"
+         },
+         {
+          "color": "#10B981",
+          "id": "longhorn",
+          "label": "Longhorn data"
+         },
+         {
+          "color": "#A855F7",
+          "id": "pod-ephemeral",
+          "label": "Pod ephemeral"
+         },
+         {
+          "color": "#64748B",
+          "id": "local-path-pvc",
+          "label": "Local-path PVCs"
+         },
+         {
+          "color": "#22D3EE",
+          "id": "local-path-cache",
+          "label": "Local-path caches"
+         },
+         {
+          "color": "#FBBF24",
+          "id": "buildkit",
+          "label": "BuildKit"
+         },
+         {
+          "color": "#F97316",
+          "id": "dockerd",
+          "label": "Dockerd"
+         },
+         {
+          "color": "#B877D9",
+          "id": "fscache",
+          "label": "NFS/SMB cache"
+         },
+         {
+          "color": "#73BF69",
+          "id": "apt-cache",
+          "label": "APT cache"
+         },
+         {
+          "color": "#F59E0B",
+          "id": "journald",
+          "label": "Journald logs"
+         },
+         {
+          "color": "#FFB357",
+          "id": "snap",
+          "label": "Snap"
+         },
+         {
+          "color": "#EF4444",
+          "id": "home",
+          "label": "Home"
+         },
+         {
+          "color": "#FF7383",
+          "id": "crash-dumps",
+          "label": "Kernel crash dumps"
+         },
+         {
+          "color": "#6B7280",
+          "id": "swap",
+          "label": "Swap"
+         }
+        ],
+        "showFree": true,
+        "showOther": true,
+        "rowHeight": 22,
+        "sortMode": "node-asc"
+       },
+       "targets": [
+        {
+         "refId": "size",
+         "expr": "nsd_node_filesystem_size_bytes",
+         "instant": true,
+         "datasource": {
+          "type": "prometheus",
+          "uid": "prometheus"
+         }
+        },
+        {
+         "refId": "used",
+         "expr": "nsd_node_filesystem_used_bytes",
+         "instant": true,
+         "datasource": {
+          "type": "prometheus",
+          "uid": "prometheus"
+         }
+        },
+        {
+         "refId": "categories",
+         "expr": "nsd_node_storage_bytes",
+         "instant": true,
+         "datasource": {
+          "type": "prometheus",
+          "uid": "prometheus"
+         }
+        },
+        {
+         "refId": "longhorn",
+         "expr": "sum by (node, disk_path) (label_replace(longhorn_disk_usage_bytes{job=\"longhorn-backend\", disk!~\"default-disk-.*\"}, \"disk_path\", \"/mnt/longhorn\", \"disk\", \".*\"))",
+         "instant": true,
+         "datasource": {
+          "type": "prometheus",
+          "uid": "prometheus"
+         }
+        }
+       ]
+      },
+      {
+       "type": "row",
+       "title": "Longhorn \u2014 /mnt/longhorn by PV",
+       "gridPos": {
+        "x": 0,
+        "y": 26,
+        "w": 24,
+        "h": 1
+       },
+       "collapsed": false,
+       "id": 100
+      },
+      {
+       "type": "stat",
+       "title": "Longhorn used (all nodes)",
+       "gridPos": {
+        "x": 0,
+        "y": 27,
+        "w": 6,
+        "h": 4
+       },
+       "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+       },
+       "targets": [
+        {
+         "expr": "sum(longhorn_disk_usage_bytes{job=\"longhorn-backend\", disk!~\"default-disk-.*\"})",
+         "refId": "A"
+        }
+       ],
+       "options": {
+        "reduceOptions": {
+         "calcs": [
+          "lastNotNull"
+         ]
+        },
+        "textMode": "value",
+        "colorMode": "value"
+       },
+       "fieldConfig": {
+        "defaults": {
+         "unit": "bytes",
+         "color": {
+          "mode": "fixed",
+          "fixedColor": "blue"
+         }
+        }
+       },
+       "id": 101
+      },
+      {
+       "type": "stat",
+       "title": "Longhorn capacity (all nodes)",
+       "gridPos": {
+        "x": 6,
+        "y": 27,
+        "w": 6,
+        "h": 4
+       },
+       "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+       },
+       "targets": [
+        {
+         "expr": "sum(longhorn_disk_capacity_bytes{job=\"longhorn-backend\", disk!~\"default-disk-.*\"})",
+         "refId": "A"
+        }
+       ],
+       "options": {
+        "reduceOptions": {
+         "calcs": [
+          "lastNotNull"
+         ]
+        },
+        "textMode": "value",
+        "colorMode": "value"
+       },
+       "fieldConfig": {
+        "defaults": {
+         "unit": "bytes",
+         "color": {
+          "mode": "fixed",
+          "fixedColor": "purple"
+         }
+        }
+       },
+       "id": 102
+      },
+      {
+       "type": "stat",
+       "title": "Longhorn used %",
+       "gridPos": {
+        "x": 12,
+        "y": 27,
+        "w": 6,
+        "h": 4
+       },
+       "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+       },
+       "targets": [
+        {
+         "expr": "100 * sum(longhorn_disk_usage_bytes{job=\"longhorn-backend\", disk!~\"default-disk-.*\"}) / sum(longhorn_disk_capacity_bytes{job=\"longhorn-backend\", disk!~\"default-disk-.*\"})",
+         "refId": "A"
+        }
+       ],
+       "options": {
+        "reduceOptions": {
+         "calcs": [
+          "lastNotNull"
+         ]
+        },
+        "textMode": "value",
+        "colorMode": "value"
+       },
+       "fieldConfig": {
+        "defaults": {
+         "unit": "percent",
+         "min": 0,
+         "max": 100,
+         "color": {
+          "mode": "thresholds"
+         },
+         "thresholds": {
+          "mode": "absolute",
+          "steps": [
+           {
+            "color": "green"
+           },
+           {
+            "color": "orange",
+            "value": 75
+           },
+           {
+            "color": "red",
+            "value": 90
+           }
+          ]
+         }
+        }
+       },
+       "id": 103
+      },
+      {
+       "type": "stat",
+       "title": "PVs / volumes",
+       "gridPos": {
+        "x": 18,
+        "y": 27,
+        "w": 6,
+        "h": 4
+       },
+       "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+       },
+       "targets": [
+        {
+         "expr": "count(count by(volume)(longhorn_volume_actual_size_bytes{job=\"longhorn-backend\"}))",
+         "refId": "A"
+        }
+       ],
+       "options": {
+        "reduceOptions": {
+         "calcs": [
+          "lastNotNull"
+         ]
+        },
+        "textMode": "value",
+        "colorMode": "value"
+       },
+       "fieldConfig": {
+        "defaults": {
+         "unit": "short",
+         "color": {
+          "mode": "fixed",
+          "fixedColor": "text"
+         }
+        }
+       },
+       "id": 104
+      },
+      {
+       "type": "timeseries",
+       "title": "Per-node Longhorn disk footprint (dedicated /mnt/longhorn mounts)",
+       "description": "longhorn_disk_usage_bytes on dedicated Longhorn mounts only (disk!~'default-disk-.*'). The auto-created default-disk lives on the root fs, so its 'usage' is the whole OS disk, not Longhorn data \u2014 excluded here. Control-plane nodes hold zero Longhorn replicas and so don't appear. Includes snapshots + orphaned/detached volumes, so this exceeds the sum of active PVs below.",
+       "gridPos": {
+        "x": 0,
+        "y": 31,
+        "w": 12,
+        "h": 9
+       },
+       "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+       },
+       "targets": [
+        {
+         "expr": "sum by(node)(longhorn_disk_usage_bytes{job=\"longhorn-backend\", disk!~\"default-disk-.*\"})",
+         "refId": "A",
+         "legendFormat": "{{node}}"
+        }
+       ],
+       "options": {
+        "legend": {
+         "displayMode": "table",
+         "placement": "right",
+         "calcs": [
+          "lastNotNull"
+         ]
+        },
+        "tooltip": {
+         "mode": "multi",
+         "sort": "desc"
+        }
+       },
+       "fieldConfig": {
+        "defaults": {
+         "unit": "bytes",
+         "custom": {
+          "drawStyle": "line",
+          "fillOpacity": 30,
+          "stacking": {
+           "mode": "normal"
+          },
+          "lineWidth": 1
+         }
+        }
+       },
+       "id": 105
+      },
+      {
+       "type": "bargauge",
+       "title": "PVs by actual size (attributed to attached node)",
+       "description": "Top PVs by longhorn_volume_actual_size_bytes. Attributed to the node the volume is attached to, not per-replica.",
+       "gridPos": {
+        "x": 12,
+        "y": 31,
+        "w": 12,
+        "h": 9
+       },
+       "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+       },
+       "targets": [
+        {
+         "expr": "topk(15, sum by(node, pvc_namespace, pvc)(longhorn_volume_actual_size_bytes{job=\"longhorn-backend\"}))",
+         "refId": "A",
+         "legendFormat": "{{node}} \u00b7 {{pvc_namespace}}/{{pvc}}",
+         "instant": true
+        }
+       ],
+       "options": {
+        "displayMode": "gradient",
+        "orientation": "horizontal",
+        "valueMode": "color",
+        "reduceOptions": {
+         "calcs": [
+          "lastNotNull"
+         ]
+        }
+       },
+       "fieldConfig": {
+        "defaults": {
+         "unit": "bytes",
+         "color": {
+          "mode": "continuous-GrYlRd"
+         }
+        }
+       },
+       "id": 106
+      },
+      {
+       "type": "table",
+       "title": "PV breakdown \u2014 used vs capacity",
+       "gridPos": {
+        "x": 0,
+        "y": 40,
+        "w": 24,
+        "h": 11
+       },
+       "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+       },
+       "targets": [
+        {
+         "expr": "sum by(node, pvc_namespace, pvc, volume)(longhorn_volume_actual_size_bytes{job=\"longhorn-backend\"})",
+         "refId": "A",
+         "format": "table",
+         "instant": true
+        },
+        {
+         "expr": "sum by(node, pvc_namespace, pvc, volume)(longhorn_volume_capacity_bytes{job=\"longhorn-backend\"})",
+         "refId": "B",
+         "format": "table",
+         "instant": true
+        }
+       ],
+       "transformations": [
+        {
+         "id": "merge",
+         "options": {}
+        },
+        {
+         "id": "organize",
+         "options": {
+          "excludeByName": {
+           "Time": true
+          },
+          "renameByName": {
+           "node": "Node",
+           "pvc_namespace": "Namespace",
+           "pvc": "PVC",
+           "volume": "Volume",
+           "Value #A": "Used",
+           "Value #B": "Capacity"
+          },
+          "indexByName": {
+           "node": 0,
+           "pvc_namespace": 1,
+           "pvc": 2,
+           "volume": 3,
+           "Value #A": 4,
+           "Value #B": 5
+          }
+         }
+        }
+       ],
+       "fieldConfig": {
+        "defaults": {
+         "custom": {
+          "align": "left",
+          "filterable": true
+         }
+        },
+        "overrides": [
+         {
+          "matcher": {
+           "id": "byName",
+           "options": "Used"
+          },
+          "properties": [
+           {
+            "id": "unit",
+            "value": "bytes"
+           },
+           {
+            "id": "custom.cellOptions",
+            "value": {
+             "type": "gauge",
+             "mode": "gradient"
+            }
+           },
+           {
+            "id": "custom.align",
+            "value": "right"
+           }
+          ]
+         },
+         {
+          "matcher": {
+           "id": "byName",
+           "options": "Capacity"
+          },
+          "properties": [
+           {
+            "id": "unit",
+            "value": "bytes"
+           },
+           {
+            "id": "custom.align",
+            "value": "right"
+           }
+          ]
+         }
+        ]
+       },
+       "options": {
+        "sortBy": [
+         {
+          "displayName": "Used",
+          "desc": true
+         }
+        ],
+        "showHeader": true
+       },
+       "id": 107
+      },
+      {
+       "type": "row",
+       "title": "Synology NAS",
+       "gridPos": {
+        "x": 0,
+        "y": 51,
+        "w": 24,
+        "h": 1
+       },
+       "collapsed": false,
+       "id": 108
+      },
+      {
+       "type": "stat",
+       "title": "/volume1 used",
+       "gridPos": {
+        "x": 0,
+        "y": 52,
+        "w": 5,
+        "h": 4
+       },
+       "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+       },
+       "targets": [
+        {
+         "expr": "(syno_storage_used * on(storage_index) group_left() syno_storage_allocation_units) * on(storage_index) group_left() (syno_storage_descr{syno_storage_descr=~\"/volume.*\"})",
+         "refId": "A"
+        }
+       ],
+       "options": {
+        "reduceOptions": {
+         "calcs": [
+          "lastNotNull"
+         ]
+        },
+        "textMode": "value",
+        "colorMode": "value"
+       },
+       "fieldConfig": {
+        "defaults": {
+         "unit": "bytes",
+         "color": {
+          "mode": "fixed",
+          "fixedColor": "blue"
+         }
+        }
+       },
+       "id": 109
+      },
+      {
+       "type": "gauge",
+       "title": "/volume1 used %",
+       "gridPos": {
+        "x": 5,
+        "y": 52,
+        "w": 5,
+        "h": 4
+       },
+       "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+       },
+       "targets": [
+        {
+         "expr": "100 * (syno_storage_used * on(storage_index) group_left() (syno_storage_descr{syno_storage_descr=~\"/volume.*\"})) / (syno_storage_total * on(storage_index) group_left() (syno_storage_descr{syno_storage_descr=~\"/volume.*\"}))",
+         "refId": "A"
+        }
+       ],
+       "options": {
+        "reduceOptions": {
+         "calcs": [
+          "lastNotNull"
+         ]
+        },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true
+       },
+       "fieldConfig": {
+        "defaults": {
+         "unit": "percent",
+         "min": 0,
+         "max": 100,
+         "color": {
+          "mode": "thresholds"
+         },
+         "thresholds": {
+          "mode": "absolute",
+          "steps": [
+           {
+            "color": "green"
+           },
+           {
+            "color": "orange",
+            "value": 75
+           },
+           {
+            "color": "red",
+            "value": 90
+           }
+          ]
+         }
+        }
+       },
+       "id": 110
+      },
+      {
+       "type": "stat",
+       "title": "System",
+       "gridPos": {
+        "x": 10,
+        "y": 52,
+        "w": 4,
+        "h": 4
+       },
+       "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+       },
+       "targets": [
+        {
+         "expr": "syno_system_status",
+         "refId": "A"
+        }
+       ],
+       "options": {
+        "reduceOptions": {
+         "calcs": [
+          "lastNotNull"
+         ]
+        },
+        "textMode": "value",
+        "colorMode": "background"
+       },
+       "fieldConfig": {
+        "defaults": {
+         "color": {
+          "mode": "thresholds"
+         },
+         "thresholds": {
+          "mode": "absolute",
+          "steps": [
+           {
+            "color": "red"
+           },
+           {
+            "color": "green",
+            "value": 1
+           }
+          ]
+         },
+         "mappings": [
+          {
+           "type": "value",
+           "options": {
+            "1": {
+             "text": "Normal",
+             "color": "green"
+            }
+           }
+          }
+         ]
+        }
+       },
+       "id": 111
+      },
+      {
+       "type": "stat",
+       "title": "Power",
+       "gridPos": {
+        "x": 14,
+        "y": 52,
+        "w": 3,
+        "h": 4
+       },
+       "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+       },
+       "targets": [
+        {
+         "expr": "syno_system_power_status",
+         "refId": "A"
+        }
+       ],
+       "options": {
+        "reduceOptions": {
+         "calcs": [
+          "lastNotNull"
+         ]
+        },
+        "textMode": "value",
+        "colorMode": "background"
+       },
+       "fieldConfig": {
+        "defaults": {
+         "color": {
+          "mode": "thresholds"
+         },
+         "thresholds": {
+          "mode": "absolute",
+          "steps": [
+           {
+            "color": "red"
+           },
+           {
+            "color": "green",
+            "value": 1
+           }
+          ]
+         },
+         "mappings": [
+          {
+           "type": "value",
+           "options": {
+            "1": {
+             "text": "OK",
+             "color": "green"
+            }
+           }
+          }
+         ]
+        }
+       },
+       "id": 112
+      },
+      {
+       "type": "stat",
+       "title": "RAID",
+       "gridPos": {
+        "x": 17,
+        "y": 52,
+        "w": 3,
+        "h": 4
+       },
+       "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+       },
+       "targets": [
+        {
+         "expr": "min(syno_raid_status)",
+         "refId": "A"
+        }
+       ],
+       "options": {
+        "reduceOptions": {
+         "calcs": [
+          "lastNotNull"
+         ]
+        },
+        "textMode": "value",
+        "colorMode": "background"
+       },
+       "fieldConfig": {
+        "defaults": {
+         "color": {
+          "mode": "thresholds"
+         },
+         "thresholds": {
+          "mode": "absolute",
+          "steps": [
+           {
+            "color": "red"
+           },
+           {
+            "color": "green",
+            "value": 1
+           }
+          ]
+         },
+         "mappings": [
+          {
+           "type": "value",
+           "options": {
+            "1": {
+             "text": "Normal",
+             "color": "green"
+            }
+           }
+          }
+         ]
+        }
+       },
+       "id": 113
+      },
+      {
+       "type": "stat",
+       "title": "Max disk temp",
+       "gridPos": {
+        "x": 20,
+        "y": 52,
+        "w": 4,
+        "h": 4
+       },
+       "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+       },
+       "targets": [
+        {
+         "expr": "max(syno_disk_temperature)",
+         "refId": "A"
+        }
+       ],
+       "options": {
+        "reduceOptions": {
+         "calcs": [
+          "lastNotNull"
+         ]
+        },
+        "textMode": "value",
+        "colorMode": "value"
+       },
+       "fieldConfig": {
+        "defaults": {
+         "unit": "celsius",
+         "color": {
+          "mode": "thresholds"
+         },
+         "thresholds": {
+          "mode": "absolute",
+          "steps": [
+           {
+            "color": "green"
+           },
+           {
+            "color": "orange",
+            "value": 45
+           },
+           {
+            "color": "red",
+            "value": 55
+           }
+          ]
+         }
+        }
+       },
+       "id": 114
+      },
+      {
+       "type": "timeseries",
+       "title": "/volume1 used over time",
+       "gridPos": {
+        "x": 0,
+        "y": 56,
+        "w": 12,
+        "h": 8
+       },
+       "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+       },
+       "targets": [
+        {
+         "expr": "(syno_storage_used * on(storage_index) group_left() syno_storage_allocation_units) * on(storage_index) group_left() (syno_storage_descr{syno_storage_descr=~\"/volume.*\"})",
+         "refId": "A",
+         "legendFormat": "used"
+        },
+        {
+         "expr": "(syno_storage_total * on(storage_index) group_left() syno_storage_allocation_units) * on(storage_index) group_left() (syno_storage_descr{syno_storage_descr=~\"/volume.*\"})",
+         "refId": "B",
+         "legendFormat": "capacity"
+        }
+       ],
+       "options": {
+        "legend": {
+         "displayMode": "list",
+         "placement": "bottom",
+         "calcs": [
+          "lastNotNull"
+         ]
+        },
+        "tooltip": {
+         "mode": "multi"
+        }
+       },
+       "fieldConfig": {
+        "defaults": {
+         "unit": "bytes",
+         "custom": {
+          "drawStyle": "line",
+          "fillOpacity": 10,
+          "lineWidth": 1
+         }
+        },
+        "overrides": [
+         {
+          "matcher": {
+           "id": "byName",
+           "options": "capacity"
+          },
+          "properties": [
+           {
+            "id": "custom.fillOpacity",
+            "value": 0
+           },
+           {
+            "id": "color",
+            "value": {
+             "mode": "fixed",
+             "fixedColor": "red"
+            }
+           }
+          ]
+         }
+        ]
+       },
+       "id": 115
+      },
+      {
+       "type": "table",
+       "title": "Disks \u2014 health & temperature",
+       "gridPos": {
+        "x": 12,
+        "y": 56,
+        "w": 12,
+        "h": 8
+       },
+       "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+       },
+       "targets": [
+        {
+         "expr": "syno_disk_status",
+         "refId": "A",
+         "format": "table",
+         "instant": true
+        },
+        {
+         "expr": "syno_disk_temperature",
+         "refId": "B",
+         "format": "table",
+         "instant": true
+        },
+        {
+         "expr": "syno_disk_name",
+         "refId": "C",
+         "format": "table",
+         "instant": true
+        }
+       ],
+       "transformations": [
+        {
+         "id": "merge",
+         "options": {}
+        },
+        {
+         "id": "organize",
+         "options": {
+          "excludeByName": {
+           "Time": true,
+           "__name__": true,
+           "container": true,
+           "endpoint": true,
+           "instance": true,
+           "job": true,
+           "namespace": true,
+           "pod": true,
+           "service": true,
+           "Value #C": true
+          },
+          "renameByName": {
+           "syno_disk_name": "Disk",
+           "disk_index": "Index",
+           "Value #A": "Status",
+           "Value #B": "Temp"
+          },
+          "indexByName": {
+           "syno_disk_name": 0,
+           "disk_index": 1,
+           "Value #A": 2,
+           "Value #B": 3
+          }
+         }
+        }
+       ],
+       "fieldConfig": {
+        "defaults": {
+         "custom": {
+          "align": "left"
+         }
+        },
+        "overrides": [
+         {
+          "matcher": {
+           "id": "byName",
+           "options": "Status"
+          },
+          "properties": [
+           {
+            "id": "mappings",
+            "value": [
+             {
+              "type": "value",
+              "options": {
+               "1": {
+                "text": "Normal",
+                "color": "green"
+               }
+              }
+             }
+            ]
+           },
+           {
+            "id": "custom.cellOptions",
+            "value": {
+             "type": "color-text"
+            }
+           }
+          ]
+         },
+         {
+          "matcher": {
+           "id": "byName",
+           "options": "Temp"
+          },
+          "properties": [
+           {
+            "id": "unit",
+            "value": "celsius"
+           }
+          ]
+         }
+        ]
+       },
+       "options": {
+        "showHeader": true,
+        "sortBy": [
+         {
+          "displayName": "Index",
+          "desc": false
+         }
+        ]
+       },
+       "id": 116
+      }
+     ]
+    }
