@@ -36,7 +36,7 @@ data:
             icon: longhorn.png
             href: https://longhorn.hwcopeland.net
             description: Cloud-Native Storage
-            siteMonitor: https://longhorn.hwcopeland.net
+            siteMonitor: http://longhorn-frontend.longhorn-system.svc.cluster.local
         - Hubble:
             icon: cilium.png
             href: https://hubble.hwcopeland.net
@@ -47,22 +47,17 @@ data:
             href: https://auth.hwcopeland.net
             description: Identity & SSO Provider
             siteMonitor: https://auth.hwcopeland.net
-            widget:
-              type: authentik
-              url: https://auth.hwcopeland.net
-              key: "{{HOMEPAGE_VAR_AUTHENTIK_TOKEN}}"
         - Vaultwarden:
             icon: bitwarden.png
             href: https://vault.hwcopeland.net
             description: Password Manager
             siteMonitor: https://vault.hwcopeland.net
+        - Synology NAS:
+            icon: synology.png
+            href: https://nas.hwcopeland.net
+            description: Network Attached Storage
 
     - Automation:
-        - Openclaw:
-            icon: https://raw.githubusercontent.com/phosphor-icons/core/main/assets/regular/robot.svg
-            href: https://claw.hwcopeland.net
-            description: AI Agent System
-            siteMonitor: https://claw.hwcopeland.net
         - Home Assistant:
             icon: home-assistant.png
             href: https://ha.hwcopeland.net
@@ -80,32 +75,8 @@ data:
             href: https://seerr.hwcopeland.net
             description: Media Requests
             siteMonitor: https://seerr.hwcopeland.net
-    - Web & Apps:
-        - Personal Site:
-            icon: globe.png
-            href: https://info.hwcopeland.net
-            siteMonitor: https://info.hwcopeland.net
-        - Excalidraw:
-            icon: excalidraw.png
-            href: https://draw.hwcopeland.net
-            description: Virtual Whiteboard
-            siteMonitor: https://draw.hwcopeland.net
-        - Jupyter:
-            icon: jupyter.png
-            href: https://jupyter.hwcopeland.net
-            description: Chemistry Notebooks
-            siteMonitor: https://jupyter.hwcopeland.net
 
-    - Game Servers:
-        - CS2 Server:
-            icon: counter-strike-2.png
-            href: steam://connect/10.44.0.2:27015
-            description: Counter-Strike 2 Modded
-        - Minecraft (ATM9 Skies):
-            icon: minecraft.png
-            description: All The Mods 9 Skies
-
-    - LB Services:
+    - Media Management:
         - Sonarr:
             icon: sonarr.png
             href: http://10.44.0.9:8989
@@ -136,11 +107,44 @@ data:
             href: http://10.44.0.14:17442
             description: YouTube Downloader
             siteMonitor: http://10.44.0.14:17442
-        - SpotDL:
-            icon: spotify.png
-            href: http://10.44.0.4:8080
-            description: Spotify Downloader
-            siteMonitor: http://10.44.0.4:8080
+
+    - Web & Apps:
+        - Excalidraw:
+            icon: excalidraw.png
+            href: https://draw.hwcopeland.net
+            description: Virtual Whiteboard
+            siteMonitor: https://draw.hwcopeland.net
+        - Zot:
+            icon: https://raw.githubusercontent.com/project-zot/zot/main/assets/dark-zot-logo.svg
+            href: https://zot.hwcopeland.net
+            description: OCI Container Registry
+            siteMonitor: https://zot.hwcopeland.net
+
+    - Game Servers:
+        - CS2 Surf:
+            icon: counter-strike-2.png
+            href: steam://connect/10.44.0.32:27015
+            description: Counter-Strike 2 Surf
+        - Minecraft (ATM9 Skies):
+            icon: minecraft.png
+            href: minecraft://10.44.0.5:25565
+            description: All The Mods 9 Skies
+        - Satisfactory:
+            icon: satisfactory.png
+            href: steam://connect/10.44.0.33:7777
+            description: Factory Builder
+
+    - Projects:
+        - Khemeia:
+            icon: https://raw.githubusercontent.com/phosphor-icons/core/main/assets/regular/flask.svg
+            href: https://khemeia.net
+            description: Computational Chemistry Platform
+            siteMonitor: https://khemeia.net
+        - U4U Engine:
+            icon: https://raw.githubusercontent.com/phosphor-icons/core/main/assets/regular/globe.svg
+            href: https://flmanbiosci.net
+            description: flmanbiosci.net
+            siteMonitor: https://flmanbiosci.net
 
   settings.yaml: |
     ---
@@ -155,19 +159,22 @@ data:
         columns: 6
       Automation:
         style: row
-        columns: 3
+        columns: 2
       Media:
         style: row
         columns: 3
+      Media Management:
+        style: row
+        columns: 4
       Web & Apps:
         style: row
         columns: 3
       Game Servers:
         style: row
-        columns: 2
-      LB Services:
+        columns: 3
+      Projects:
         style: row
-        columns: 4
+        columns: 2
     showStats: true
     providers:
       longhorn:
