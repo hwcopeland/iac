@@ -14,3 +14,24 @@ spec:
   ingress:
   - fromEntities:
     - ingress
+---
+# Allow kube-prometheus-stack Prometheus (in the monitor namespace) to scrape
+# zot's /metrics on port 5000. The Flux-managed allow-scraping NetworkPolicy
+# only opens port 8080.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-prom-scrape
+  namespace: tooling
+spec:
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: zot
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        k8s:io.kubernetes.pod.namespace: monitor
+    toPorts:
+    - ports:
+      - port: "5000"
+        protocol: TCP
