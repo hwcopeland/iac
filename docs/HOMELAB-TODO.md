@@ -34,9 +34,9 @@ forensic capability for any pod outside the currently-scraped set. When
 something breaks, "check Loki" should be the first move; today it isn't
 because the data isn't there.
 
-**Related**: `docs/HOMELAB-TODO.md#tempo--distributed-tracing`,
-`rke2/game-server/cs2/cs2-surf/INCIDENT-2026-04-14-rcon-spam.md` (the
-incident that surfaced this gap).
+**Related**: `docs/HOMELAB-TODO.md#tempo--distributed-tracing`. The gap was
+surfaced by the 2026-04-14 cs2-surf RCON chat-spam incident (incident doc
+since removed).
 
 ---
 
@@ -77,4 +77,17 @@ actually in Loki.
 
 ## Other open items
 
-(none yet — add freely)
+### chem databases → consolidate onto a Postgres container
+
+**Status**: `chem/chembl-mysql` has been in `Init:CrashLoopBackOff` for
+days (~1900+ restarts) — its init container looks for a DB dump that
+isn't present ("ERROR: No dump file found"). It is hand-applied (not in
+git). Left running for now rather than deleted.
+
+**Goal**: migrate ChEMBL (and the other chem datastores currently on
+ad-hoc MySQL) onto a single managed Postgres container, then fix the
+load/restore path from there. Removes the crashlooping MySQL orphan and
+gives the chem stack one coherent database backend.
+
+**Why it matters**: the current MySQL pod is dead weight (perpetual
+crashloop, no data) and untracked, so it's both noise and drift.
