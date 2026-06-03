@@ -30,6 +30,20 @@ loki:
   auth_enabled: false
   commonConfig:
     replication_factor: 1
+  # 14-day retention — sized for the broadened cluster-wide scrape so the
+  # Garage chunks bucket doesn't grow without bound. The compactor enforces
+  # deletion; delete requests are tracked in the same S3 store.
+  limits_config:
+    retention_period: 336h
+    # Accept entries up to 14d old so the first pass over pre-existing
+    # on-disk log files (rotated/old pods) backfills instead of 400ing
+    # with "timestamp too old". Matches retention_period.
+    reject_old_samples: true
+    reject_old_samples_max_age: 336h
+  compactor:
+    retention_enabled: true
+    retention_delete_delay: 2h
+    delete_request_store: s3
   storage:
     type: 's3'
     bucketNames:
