@@ -19,8 +19,10 @@ rke2/theswamp/u4u-engine/
 rke2/ai/comfyui/
 rke2/ai/invokeai/
 
-# Project specs — keep local, do not ship to GitHub
+# Project specs + Claude-generated planning docs — keep local, do not ship to GitHub
 **/docs/spec/
+docs/prd/
+docs/tdd/
 
 # shelved WIP — local only, never tracked
 scraps/
