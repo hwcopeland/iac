@@ -14,7 +14,7 @@ data:
       "title": "Khemeia Overview",
       "schemaVersion": 38,
       "version": 1,
-      "refresh": "30s",
+      "refresh": "1m",
       "time": { "from": "now-6h", "to": "now" },
       "timepicker": {},
       "tags": ["khemeia", "chem"],
@@ -41,7 +41,7 @@ data:
           "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" },
           "fieldConfig": { "defaults": { "color": { "mode": "fixed", "fixedColor": "green" }, "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] } } },
           "options": { "reduceOptions": { "calcs": ["sum"] }, "colorMode": "background" },
-          "targets": [{ "refId": "A", "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" }, "expr": "count_over_time({namespace=\"chem\"} |= \"completed successfully\" [24h])", "queryType": "instant" }]
+          "targets": [{ "refId": "A", "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" }, "expr": "count_over_time({namespace=\"chem\"} |= \"completed successfully\" [$__range])", "queryType": "instant" }]
         },
         {
           "id": 3, "type": "stat", "title": "Jobs Failed (24h)",
@@ -49,7 +49,7 @@ data:
           "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" },
           "fieldConfig": { "defaults": { "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 1 }] }, "color": { "mode": "thresholds" } } },
           "options": { "reduceOptions": { "calcs": ["sum"] }, "colorMode": "background" },
-          "targets": [{ "refId": "A", "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" }, "expr": "count_over_time({namespace=\"chem\"} |= \"FAILED:\" [24h])", "queryType": "instant" }]
+          "targets": [{ "refId": "A", "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" }, "expr": "count_over_time({namespace=\"chem\"} |= \"FAILED:\" [$__range])", "queryType": "instant" }]
         },
         {
           "id": 4, "type": "stat", "title": "Critical Errors (24h)",
@@ -57,7 +57,7 @@ data:
           "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" },
           "fieldConfig": { "defaults": { "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 1 }] }, "color": { "mode": "thresholds" } } },
           "options": { "reduceOptions": { "calcs": ["sum"] }, "colorMode": "background" },
-          "targets": [{ "refId": "A", "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" }, "expr": "count_over_time({namespace=\"chem\"} |= \"CRITICAL:\" [24h])", "queryType": "instant" }]
+          "targets": [{ "refId": "A", "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" }, "expr": "count_over_time({namespace=\"chem\"} |= \"CRITICAL:\" [$__range])", "queryType": "instant" }]
         },
         {
           "id": 5, "type": "stat", "title": "Docking Workers Running",
