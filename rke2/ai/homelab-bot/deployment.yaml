@@ -1,0 +1,154 @@
+---
+# Red-DiscordBot running the labbotbrain cog from
+# hwcopeland/LabBot-Cogs (fork of rHomelab/LabBot-Cogs).
+# Branch name `feat/homelab_jarvis` is legacy from the previous cog
+# name — branch holds labbotbrain now.
+#
+# Uses rHomelab's own published image (ghcr.io/rhomelab/red-discordbot)
+# which expects TOKEN + PREFIX envs and auto-creates the Red instance
+# on first start. Init container clones the fork into the cogs path so
+# Red can [p]load the cog.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: homelab-bot
+  namespace: ai
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: homelab-bot
+  template:
+    metadata:
+      labels:
+        app: homelab-bot
+    spec:
+      # Pin to nixos-gpu so we colocate with the standalone ollama pod.
+      # nixos-gpu's pod-network egress is currently broken (Cilium quirk
+      # specific to that node — pods can't make outbound DNS or HTTP
+      # calls). Same workaround jarvis-stack uses: hostNetwork=true,
+      # which uses the node's own network stack instead of the pod
+      # network plane.
+      nodeSelector:
+        kubernetes.io/hostname: nixos-gpu
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      tolerations:
+        # nixos-gpu has a `gpu=true:NoSchedule` taint to keep general
+        # workloads off. We don't need a GPU ourselves but we DO need
+        # to schedule here for the network co-location.
+        - key: gpu
+          operator: Equal
+          value: "true"
+          effect: NoSchedule
+      securityContext:
+        # rHomelab image runs as uid 1024 (reduser). Match PVC owner.
+        fsGroup: 1024
+      initContainers:
+        # Clone (or update) the LabBot-Cogs fork into the cogs path so
+        # Red can find labbotbrain when it does [p]load. Also sweeps the
+        # old homelab_jarvis directory left from the previous name so
+        # Red doesn't try to load it (cog persisted in Red's config).
+        - name: clone-cogs
+          image: alpine/git:latest
+          command:
+            - sh
+            - -c
+            - |
+              set -eu
+              # The hostPath dir starts root-owned. Red runs as uid 1024,
+              # so chown the whole data tree on every start (cheap; small).
+              chown -R 1024:1024 /redbot-data
+              chmod 0775 /redbot-data
+              COG_DIR=/redbot-data/cogs/CogManager/cogs
+              mkdir -p "$COG_DIR"
+              cd /tmp
+              rm -rf labbot-cogs
+              git clone --branch feat/homelab_jarvis --depth 1 \
+                  https://github.com/hwcopeland/LabBot-Cogs.git labbot-cogs
+              # Sweep the old cog name so Red can't accidentally load it.
+              rm -rf "$COG_DIR/homelab_jarvis"
+              # Place the new cog under its new name.
+              rm -rf "$COG_DIR/labbotbrain"
+              cp -R labbot-cogs/labbotbrain "$COG_DIR/labbotbrain"
+              chown -R 1024:1024 "$COG_DIR/labbotbrain"
+              ls -la "$COG_DIR/labbotbrain"
+          volumeMounts:
+            - name: data
+              mountPath: /redbot-data
+      containers:
+        - name: red
+          image: ghcr.io/rhomelab/red-discordbot:latest
+          imagePullPolicy: Always
+          env:
+            - name: INSTANCE_NAME
+              value: "homelab"
+            - name: PREFIX
+              value: "!"
+            - name: TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: homelab-bot-credentials
+                  key: DISCORD_BOT_TOKEN
+            # Pip-install runtime deps the cog needs (aiohttp is also
+            # already pulled in by Red itself, but be explicit).
+            - name: PIP_REQUIREMENTS
+              value: "aiohttp"
+            # Cog runtime config — xAI Grok is the active brain backend.
+            # 131K context, cloud GPUs, RLHF-tuned to deploy ragebait
+            # takes (qwen3:8b kept refusing on certain prompts). Local
+            # ollama remains as fallback if BRAIN_BACKEND=ollama is set.
+            - name: BRAIN_BACKEND
+              value: "xai"
+            - name: XAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: homelab-bot-credentials
+                  key: XAI_API_KEY
+            - name: XAI_MODEL
+              value: "grok-3-mini"
+            # Ollama fallback (localhost works because both pods are
+            # hostNetwork on nixos-gpu).
+            - name: OLLAMA_URL
+              value: "http://localhost:11434"
+            - name: OLLAMA_MODEL
+              value: "qwen3:8b"
+            - name: LABBOTBRAIN_MAX_TURNS
+              value: "3"
+            - name: LABBOTBRAIN_MAX_REPLY_CHARS
+              value: "1800"
+            - name: LABBOTBRAIN_BAIT_PROB
+              value: "0.005"
+            # CSV of Discord role IDs allowed to invoke !ask or @mention
+            # the bot. Empty/unset => owner-only (fail closed). Fill in
+            # the role IDs from Discord: enable Developer Mode, right-
+            # click the role, Copy Role ID. Comma-separate multiple IDs.
+            - name: LABBOTBRAIN_ALLOWED_ROLES
+              value: "423905846032859136"  # @everyone of test server (role ID == guild ID)
+          # Append --owner so Red knows whose [p]load command to honour
+          # without an interactive setup prompt. start-red.sh appends $@
+          # to its redbot CLI invocation.
+          args:
+            - "--owner"
+            - "321477012713635841"
+          volumeMounts:
+            - name: data
+              mountPath: /redbot/data
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+      volumes:
+        # nixos-gpu has no CSI drivers installed (Longhorn excludes it),
+        # so we can't attach a PVC here. Use a node-local hostPath
+        # directory — survives pod restarts as long as we stay pinned
+        # to this node (which we do via the nodeSelector above).
+        - name: data
+          hostPath:
+            path: /var/lib/homelab-bot
+            type: DirectoryOrCreate
