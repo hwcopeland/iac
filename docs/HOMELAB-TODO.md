@@ -5,34 +5,31 @@ project's scope. Newest items at the top.
 
 ## Observability
 
-### Loki — broad log aggregation
+### Loki — broad log aggregation ✅ RESOLVED 2026-06-03
 
-**Status**: Loki + Alloy already deployed at `rke2/monitor/loki/`. Alloy
-is currently only scraping a small slice of namespaces — verified during
-the 2026-04-14 cs2-surf RCON spam incident: querying Loki for
-`{pod=~"cs2-surf-server.*"}` returned zero streams, and the entire
-`pod` label only had ~2 distinct values cluster-wide. Whatever Alloy is
-configured to scrape, it is not the `game-server`, `chem`, or other
-application namespaces.
+**Status**: DONE. Root cause was **not** a namespace allowlist — the
+config used `loki.source.kubernetes`, which tails logs through the
+Kubernetes **API** and saturated the API client rate limiter cluster-wide
+(`client rate limiter Wait ... context canceled`), silently dropping
+almost every stream (hence ~2 pod label values). Two further gaps: Alloy
+had **no tolerations** so it only ran on the 2 untainted workers, and
+there was no retention policy.
 
-**Goal**: every container log in the cluster is shipped to Loki with
-useful labels (`namespace`, `pod`, `container`, `app`) and queryable from
-Grafana for at least 14 days. After-the-fact forensics on any incident
-should be possible without needing to have already shelled into the pod.
+**Fix** (`rke2/monitor/loki/`): switched Alloy to **node-local file
+tailing** of `/var/log/pods` (`local.file_match` + `loki.source.file` +
+`stage.cri`, filtered to each node via `NODENAME`), mounted host
+`/var/log`, added `tolerations: operator Exists` (now on all 6 nodes),
+and added 14d retention (`compactor.retention_enabled` +
+`reject_old_samples_max_age=336h`). Chunks live in Garage S3, so no PVC
+sizing concern. **Verified: 19 namespaces / ~450 pods now ingested
+(was ~2).**
 
-**Blocking**:
-- `rke2/monitor/loki/alloy-values.yaml` likely has a restrictive
-  `loki.source.kubernetes` discovery selector or namespace allowlist.
-  Audit and broaden.
-- Loki retention period needs to be sized against expected log volume
-  for the broader scrape (currently sized for the small set).
-- Storage backend / chunks-cache PVC sizing should be reviewed before
-  flipping the firehose on.
-
-**Why it matters**: the cs2-surf incident showed we have zero post-hoc
-forensic capability for any pod outside the currently-scraped set. When
-something breaks, "check Loki" should be the first move; today it isn't
-because the data isn't there.
+**Follow-up**: on **nixos-gpu**, the alloy pod's kubelet readiness probe
+(`:12345/-/ready`) times out, so the pod shows NotReady and the DaemonSet
+rollout stays parked — even though `/-/ready` answers fine from a peer pod
+and logs ship normally. This is a host(kubelet)→pod reachability quirk
+specific to nixos-gpu (same symptom as the storage-exporter probe on that
+node); it needs the nixos-gpu CNI/networking fix, not an Alloy change.
 
 **Related**: `docs/HOMELAB-TODO.md#tempo--distributed-tracing`. The gap was
 surfaced by the 2026-04-14 cs2-surf RCON chat-spam incident (incident doc
