@@ -24,12 +24,44 @@ and added 14d retention (`compactor.retention_enabled` +
 sizing concern. **Verified: 19 namespaces / ~450 pods now ingested
 (was ~2).**
 
-**Follow-up**: on **nixos-gpu**, the alloy pod's kubelet readiness probe
-(`:12345/-/ready`) times out, so the pod shows NotReady and the DaemonSet
-rollout stays parked — even though `/-/ready` answers fine from a peer pod
-and logs ship normally. This is a host(kubelet)→pod reachability quirk
-specific to nixos-gpu (same symptom as the storage-exporter probe on that
-node); it needs the nixos-gpu CNI/networking fix, not an Alloy change.
+**Follow-up — UNRESOLVED: nixos-gpu host→pod datapath is broken.**
+On nixos-gpu only, the node's host netns **cannot reach its own local pods**
+(pod CIDR `10.42.5.0/24`): ICMP + TCP, any payload size, 100% dropped. This
+kills every kubelet httpGet readiness/liveness probe for pod-network pods on
+the node (alloy `1/2`, storage-exporter `0/1`) and cilium's own
+`cilium-health-ep`. Logs still ship (egress works), so this is *only* the
+readiness flag + the parked DaemonSet rollout — not a data outage. Affects
+any pod-network pod here with an httpGet probe; hostNetwork pods
+(node-exporter) and probe-less pods (dcgm) are unaffected.
+
+Investigated 2026-06-03, **ruled out**: rp_filter (0 on cilium ifaces),
+MTU (uniform 1500), host firewall (INPUT/FORWARD policy accept), routing
+(`ip route get` to a local pod correctly returns `dev cilium_host`), kernel
+(6.12.74, modern), BPF program load (attaches via tcx, no errors). Key clue:
+host→`cilium_host` (10.42.5.35) **works**, but host→any pod endpoint
+(10.42.5.x) **fails** — traffic dies between `cilium_host` and the pod `lxc`
+veths. Cross-node pod→pod works fine (remote→nixos-gpu pods OK).
+
+**Tried, did NOT fix**: (a) removing the bogus `enp15s0` `/8` address —
+that *is* a real separate bug (the `10.0.0.0/8` link route swallows the
+service CIDR `10.43.0.0/16`, so host→Service escapes to the LAN; and it
+ARP-FAILs cluster IPs on the NIC) but it is NOT the probe cause, and the
+`/8` turns out to be **load-bearing for pod external egress** (removing it
+live broke the geoip init-container download), so it can't just be dropped
+without also fixing pod egress/masquerade. (b) `enable-host-legacy-routing`
+per-node via CiliumNodeConfig + agent restart + endpoint rebuild — host→pod
+still 100% dropped under Legacy host routing too.
+
+**Next ideas** (needs deeper session): inspect the `cilium_host`→`lxc` BPF
+redirect with `cilium-dbg monitor --type drop` while pinging a local pod;
+check `bpf-lb-sock`/socketLB host-ns behavior; try `routingMode: tunnel`
+(vxlan) for this node vs native; or compare a `cilium-dbg bpf endpoint list`
+/ `cilium-dbg map get cilium_lxc` against a healthy node. The multi-homed
+flat-`10.0.0.0/8` LAN (home 10.0.x + k8s 10.41.x sharing one L2, colliding
+with pod 10.42 / svc 10.43) is the likely underlying culprit and probably
+needs the host re-addressed onto non-overlapping prefixes
+(`enp15s0` → `/24` + explicit home route) *together with* a pod-egress
+masquerade fix, not piecemeal.
 
 **Related**: `docs/HOMELAB-TODO.md#tempo--distributed-tracing`. The gap was
 surfaced by the 2026-04-14 cs2-surf RCON chat-spam incident (incident doc
