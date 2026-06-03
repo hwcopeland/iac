@@ -1,0 +1,106 @@
+# Zero-to-JupyterHub values for the chem namespace.
+# Deployed by hand (like authentik):
+#   helm upgrade --install jupyterhub jupyterhub/jupyterhub \
+#     --version 4.3.5 -n chem -f values.yaml
+#
+# Pull the singleuser (and any chart) images from the private zot registry.
+imagePullSecrets:
+  - name: zot-pull-secret
+
+# Auth: Authentik OIDC (confidential client "jupyterhub"), restricted to the
+# Infrastructure group. The OIDC client id/secret come from Bitwarden via ESO
+# (see external-secret.yaml -> Secret `jupyterhub-oidc`, item 7c8baa14).
+# Singleuser image is the chem jupyter-chem image (RDKit/openbabel/vina).
+
+hub:
+  config:
+    JupyterHub:
+      authenticator_class: generic-oauth
+    GenericOAuthenticator:
+      # client_id / client_secret are injected from env in extraConfig below
+      authorize_url: https://auth.hwcopeland.net/application/o/authorize/
+      token_url: https://auth.hwcopeland.net/application/o/token/
+      userdata_url: https://auth.hwcopeland.net/application/o/userinfo/
+      oauth_callback_url: https://jupyter.hwcopeland.net/hub/oauth_callback
+      login_service: Authentik
+      username_claim: preferred_username
+      scope:
+        - openid
+        - profile
+        - email
+        - groups
+      # Group gating (Authentik emits group names via the `groups` scope mapping)
+      manage_groups: true
+      claim_groups_key: groups
+      allowed_groups:
+        - Infrastructure
+      admin_groups:
+        - Infrastructure
+  extraEnv:
+    OAUTH_CLIENT_ID:
+      valueFrom:
+        secretKeyRef:
+          name: jupyterhub-oidc
+          key: client-id
+    OAUTH_CLIENT_SECRET:
+      valueFrom:
+        secretKeyRef:
+          name: jupyterhub-oidc
+          key: client-secret
+  extraConfig:
+    oidc-secret-from-env: |
+      import os
+      c.GenericOAuthenticator.client_id = os.environ["OAUTH_CLIENT_ID"]
+      c.GenericOAuthenticator.client_secret = os.environ["OAUTH_CLIENT_SECRET"]
+  # Hub state on Longhorn (default StorageClass)
+  db:
+    pvc:
+      storageClassName: longhorn
+      storage: 2Gi
+
+# We front the hub with the Cilium Gateway (HTTPRoute), not a LoadBalancer/Ingress.
+proxy:
+  service:
+    type: ClusterIP
+
+ingress:
+  enabled: false
+
+singleuser:
+  image:
+    name: zot.hwcopeland.net/chem/jupyter-chem
+    tag: sha-067c21a
+    pullPolicy: IfNotPresent
+  defaultUrl: /lab
+  storage:
+    type: dynamic
+    capacity: 10Gi
+    dynamic:
+      storageClass: longhorn
+  # CPU-only default profile. (No GPU requested; add a GPU profile later if needed.)
+  cpu:
+    guarantee: 0.5
+    limit: 2
+  memory:
+    guarantee: 1G
+    limit: 4G
+  startTimeout: 600
+
+# Cull idle single-user servers to reclaim node + Longhorn capacity.
+cull:
+  enabled: true
+  timeout: 3600
+  every: 600
+
+prePuller:
+  hook:
+    enabled: false
+  continuous:
+    enabled: false
+
+scheduling:
+  userScheduler:
+    enabled: false
+
+debug:
+  enabled: false
