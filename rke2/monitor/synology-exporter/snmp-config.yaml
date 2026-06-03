@@ -74,6 +74,10 @@ data:
             indexes:
               - labelname: raid_index
                 type: Integer
+          # hrStorageUsed/Size are in ALLOCATION UNITS, not bytes. Multiply
+          # by syno_storage_allocation_units (hrStorageAllocationUnits) in the
+          # dashboard to get bytes. hrStorage also lists RAM/swap segments —
+          # filter on syno_storage_descr (=~"/volume.*") for real volumes.
           - name: syno_storage_used
             oid: 1.3.6.1.2.1.25.2.3.1.6
             type: gauge
@@ -85,6 +89,20 @@ data:
             oid: 1.3.6.1.2.1.25.2.3.1.5
             type: gauge
             help: Storage total allocation units
+            indexes:
+              - labelname: storage_index
+                type: Integer
+          - name: syno_storage_allocation_units
+            oid: 1.3.6.1.2.1.25.2.3.1.4
+            type: gauge
+            help: Bytes per allocation unit (multiply used/total by this for bytes)
+            indexes:
+              - labelname: storage_index
+                type: Integer
+          - name: syno_storage_descr
+            oid: 1.3.6.1.2.1.25.2.3.1.3
+            type: DisplayString
+            help: Storage mount description (e.g. /volume1, Physical memory)
             indexes:
               - labelname: storage_index
                 type: Integer
