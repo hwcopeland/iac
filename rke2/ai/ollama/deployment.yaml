@@ -6,6 +6,11 @@ metadata:
   namespace: ai
 spec:
   replicas: 1
+  # nvidia.com/gpu: 1 is exclusive — RollingUpdate would try to start
+  # the new pod before terminating the old, both compete for the GPU,
+  # new pod sits Pending forever. Recreate forces old → new ordering.
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: ollama
@@ -14,6 +19,13 @@ spec:
       labels:
         app: ollama
     spec:
+      # Cilium routing into the pod network plane on nixos-gpu is
+      # currently broken (host → pod IP / Service ClusterIP both time
+      # out). Run hostNetwork so any pod (or host process) on this node
+      # can reach ollama via localhost:11434, and so the LoadBalancer
+      # Service still resolves the endpoint correctly (Cilium L2 announce).
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
       nodeSelector:
         gpu: rtx3070
       tolerations:
