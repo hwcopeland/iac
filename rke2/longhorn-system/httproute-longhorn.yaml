@@ -4,6 +4,8 @@ kind: HTTPRoute
 metadata:
   name: longhorn
   namespace: longhorn-system
+  annotations:
+    authentik.home.arpa/enabled: "true"
 spec:
   parentRefs:
     - name: hwcopeland-gateway
@@ -12,17 +14,6 @@ spec:
   hostnames:
     - "longhorn.hwcopeland.net"
   rules:
-    - matches:
-        - path:
-            type: PathPrefix
-            value: /if/
-      filters:
-        - type: RequestRedirect
-          requestRedirect:
-            path:
-              type: ReplaceFullPath
-              replaceFullPath: /
-            statusCode: 302
     - backendRefs:
         - name: authentik-server
           namespace: authentik
