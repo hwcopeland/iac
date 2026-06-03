@@ -21,8 +21,8 @@ rke2/ai/invokeai/
 
 # Project specs + Claude-generated planning docs — keep local, do not ship to GitHub
 **/docs/spec/
-docs/prd/
-docs/tdd/
+**/docs/prd/
+**/docs/tdd/
 
 # shelved WIP — local only, never tracked
 scraps/
