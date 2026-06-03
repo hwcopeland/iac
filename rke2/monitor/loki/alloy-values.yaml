@@ -41,9 +41,12 @@ alloy:
       }
 
       // ─── Kubernetes container logs ──────────────────────────────────
-      // Discover all pods on this node and ship their container logs to
-      // Loki with namespace/pod/container/app labels. Runs as a
-      // DaemonSet so every node's /var/log/pods is covered.
+      // Node-local file tailing of /var/log/pods. Each DaemonSet pod
+      // tails only the containers scheduled on its own node (filtered by
+      // NODENAME) by reading log files directly off disk. This replaces
+      // the old loki.source.kubernetes (API-based) tailer, which saturated
+      // the Kubernetes API client rate limiter cluster-wide and silently
+      // dropped almost every stream — see HOMELAB-TODO "Loki broad-scrape".
       discovery.kubernetes "pods" {
         role = "pod"
       }
@@ -51,6 +54,12 @@ alloy:
       discovery.relabel "pod_logs" {
         targets = discovery.kubernetes.pods.targets
 
+        // Only this node's pods (file tailing is inherently node-local).
+        rule {
+          source_labels = ["__meta_kubernetes_pod_node_name"]
+          regex         = sys.env("NODENAME")
+          action        = "keep"
+        }
         rule {
           source_labels = ["__meta_kubernetes_namespace"]
           target_label  = "namespace"
@@ -67,10 +76,30 @@ alloy:
           source_labels = ["__meta_kubernetes_pod_label_app"]
           target_label  = "app"
         }
+        // Build the on-disk path to each container's log files:
+        //   /var/log/pods/<namespace>_<pod>_<uid>/<container>/*.log
+        rule {
+          source_labels = ["__meta_kubernetes_pod_uid", "__meta_kubernetes_pod_container_name"]
+          separator     = "/"
+          action        = "replace"
+          replacement   = "/var/log/pods/*$1/*.log"
+          target_label  = "__path__"
+        }
       }
 
-      loki.source.kubernetes "pod_logs" {
-        targets    = discovery.relabel.pod_logs.output
+      local.file_match "pod_logs" {
+        path_targets = discovery.relabel.pod_logs.output
+      }
+
+      loki.source.file "pod_logs" {
+        targets    = local.file_match.pod_logs.targets
+        forward_to = [loki.process.pod_logs.receiver]
+      }
+
+      // RKE2/containerd writes CRI-format log lines; parse them so the
+      // message, stream (stdout/stderr), and timestamp are extracted.
+      loki.process "pod_logs" {
+        stage.cri {}
         forward_to = [loki.write.local.receiver]
       }
 
@@ -82,17 +111,35 @@ alloy:
           url = "http://loki.monitor.svc.cluster.local:3100/loki/api/v1/push"
         }
       }
+  # varlog mounts the host /var/log so loki.source.file can tail
+  # /var/log/pods/*/*/*.log directly (no Kubernetes API involved).
   mounts:
+    varlog: true
     extra:
       - name: geoip-db
         mountPath: /var/lib/geoip
         readOnly: true
+  # NODENAME lets the pod_logs relabel keep only this node's containers.
+  extraEnv:
+    - name: NODENAME
+      valueFrom:
+        fieldRef:
+          fieldPath: spec.nodeName
+  # nixos-gpu's /-/ready can exceed the default 1s under GPU load + the
+  # initial /var/log/pods file scan; widen the readiness probe timeout so
+  # the DaemonSet rolls cleanly on every node.
+  timeoutSeconds: 5
 
 # DaemonSet so every node's /var/log/pods is accessible for the
 # kubernetes log source. The syslog listener still runs on every node
 # but only the one with the LoadBalancer IP actually receives traffic.
 controller:
   type: daemonset
+
+  # Run on every node — control-plane and the gpu-tainted nixos-gpu
+  # included — so no node's container logs are missed.
+  tolerations:
+    - operator: Exists
 
   # Define the emptyDir volume to store downloaded databases
   volumes:
