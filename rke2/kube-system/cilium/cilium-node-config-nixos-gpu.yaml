@@ -1,13 +1,10 @@
 ---
 # Per-node Cilium override for the NixOS GPU agent (nixos-gpu, 10.41.0.10).
 #
-# The cluster-wide cilium-config sets `devices: enp+ eth+ ens+`, matching the
-# Ubuntu nodes' interface names. The NixOS desktop's NIC is `eno2`, which none
-# of those patterns match, so Cilium fails on this node with:
-#   "unable to determine direct routing device"
-#
-# This CiliumNodeConfig scopes a fix to just nixos-gpu. Other nodes are
-# unaffected because the nodeSelector matches by hostname.
+# The NixOS desktop's physical NIC is enp15s0. The cluster-wide pattern
+# `enp+` already matches it, so no device override is needed. This
+# CiliumNodeConfig pins the direct-routing-device explicitly to avoid
+# any ambiguity if additional NICs are added later.
 #
 # Apply with: kubectl apply -f cilium-node-config-nixos-gpu.yaml
 apiVersion: cilium.io/v2
@@ -20,5 +17,5 @@ spec:
     matchLabels:
       kubernetes.io/hostname: nixos-gpu
   defaults:
-    devices: "eno+"
-    direct-routing-device: "eno2"
+    devices: "enp15s0"
+    direct-routing-device: "enp15s0"
