@@ -1,10 +1,37 @@
 ---
-# PVC for Vina-GPU OpenCL kernel cache.
+# Static PV + PVC for Vina-GPU OpenCL kernel cache on nixos-gpu.
 # Stores Kernel1_Opt.bin and Kernel2_Opt.bin across pod restarts so the
 # ~7-minute JIT warmup only runs once rather than on every job pod cold start.
 # Mounted read-write into gpu-class pods at /opt/vina-gpu/kernels via the
 # gpu compute class. dock_batch.py restores from this cache before warmup
 # and saves to it after a successful compile.
+#
+# hostPath because Longhorn CSI is not installed on nixos-gpu. The kernel
+# cache is node-specific (OpenCL PTX binaries compiled against the host
+# driver), so local storage is correct regardless.
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: vina-gpu-kernel-cache
+spec:
+  capacity:
+    storage: 100Mi
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: local-vina-kernels
+  hostPath:
+    path: /var/cache/vina-gpu-kernels
+    type: DirectoryOrCreate
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: In
+              values:
+                - nixos-gpu
+---
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -16,7 +43,8 @@ metadata:
 spec:
   accessModes:
     - ReadWriteOnce
-  storageClassName: longhorn
+  storageClassName: local-vina-kernels
+  volumeName: vina-gpu-kernel-cache
   resources:
     requests:
       storage: 100Mi
