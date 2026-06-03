@@ -8,7 +8,20 @@ grafana:
   envFromSecrets:
     - name: grafana-oidc-secret
       optional: false
+  # Clear the chart's GF_INSTALL_PLUGINS so Grafana 12.3+ uses the
+  # GF_PLUGINS_PREINSTALL path below instead.
+  plugins: []
+  env:
+    # appmana-storage-breakdown-panel — custom panel for the
+    # AppMana storage-usage dashboard (monitor/storage-dashboard/).
+    # Comma-separate to add more: <id>@<version>@<url> for external
+    # .zip, bare <id> for Grafana catalog plugins.
+    GF_PLUGINS_PREINSTALL: "appmana-storage-breakdown-panel@0.1.1@https://github.com/AppMana/kubernetes-storage-dashboard-grafana/releases/download/v0.1.1/appmana-storage-breakdown-panel-0.1.1.zip"
   grafana.ini:
+    plugins:
+      # v0.1.x of the AppMana panel ships unsigned. Comma-separate
+      # additional unsigned plugin IDs as you add them.
+      allow_loading_unsigned_plugins: appmana-storage-breakdown-panel
     server:
       root_url: https://grafana.hwcopeland.net
     auth:
