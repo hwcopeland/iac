@@ -71,6 +71,10 @@ metadata:
   namespace: game-server
 spec:
   type: LoadBalancer
+  # Pinned so the router's MINECRAFT dst-nat rule can't drift. Every other
+  # game/ingress LB here pins its IP (Plex .3, CS2 .32, Satisfactory .33);
+  # this was the lone dynamic one and drifted onto prowlarr's .12.
+  loadBalancerIP: 10.44.0.5
   selector:
     app: atm9skies
   ports:
