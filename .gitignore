@@ -24,3 +24,16 @@ rke2/ai/invokeai/
 
 # shelved WIP — local only, never tracked
 scraps/
+
+# BFG Repo-Cleaner output (history-rewrite logs) — local only
+..bfg-report/
+
+# Cluster reconciliation snapshots — point-in-time, go stale immediately
+docs/audits/
+
+# Python bytecode caches
+__pycache__/
+*.pyc
+
+# Compiled job binaries — built in CI, never tracked (see commit ccb9ebc2)
+rke2/chem/compute-infrastructure/k8s-jobs/result-writer/result-writer
