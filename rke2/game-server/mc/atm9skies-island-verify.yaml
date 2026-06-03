@@ -1,0 +1,96 @@
+# TEMPORARY island-verification server.
+#
+# Purpose: bring the orphaned island (PVC mc-data-pvc / PV mc-restored-pv,
+# ATM9-Sky 1.1.8) up on its OWN LoadBalancer IP so the world can be walked /
+# verified WITHOUT touching the live atm9skies server or the pristine backup.
+#
+# Safety: this runs on a CLONE of mc-data-pvc (island-verify-data), so the
+# original backup volume is never written to. Delete this whole file's objects
+# (incl. the clone PVC) once verification is done.
+#
+# Pinned to modpack 1.1.8 (the version the island was built on); the clone
+# already has 1.1.8 installed so itzg won't re-download.
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: island-verify-data
+  namespace: game-server
+spec:
+  storageClassName: longhorn
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 20Gi
+  dataSource:
+    kind: PersistentVolumeClaim
+    name: mc-data-pvc        # CSI clone of the island backup
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: atm9skies-island
+  namespace: game-server
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: atm9skies-island
+  template:
+    metadata:
+      labels:
+        app: atm9skies-island
+    spec:
+      containers:
+        - name: atm9skies-server
+          image: itzg/minecraft-server:java21-alpine
+          ports:
+            - containerPort: 25565
+          env:
+            - name: EULA
+              value: "true"
+            - name: MODPACK_PLATFORM
+              value: "AUTO_CURSEFORGE"
+            - name: CF_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: curseforge-secret
+                  key: CF_API_KEY
+            - name: CF_SLUG
+              value: "all-the-mods-9-to-the-sky"
+            - name: CF_FILENAME_MATCHER       # upgrade island clone to current pack (matches live + client)
+              value: "1.1.9"
+            - name: CF_EXCLUDE_MODS
+              value: "particle-effects-reforged"
+            - name: MEMORY
+              value: "6G"
+            - name: ALLOW_FLIGHT              # avoid the floating-kick while verifying
+              value: "TRUE"
+          resources:
+            requests:
+              memory: "6Gi"
+              cpu: "1"
+            limits:
+              memory: "8Gi"
+          volumeMounts:
+            - name: mc-data
+              mountPath: /data
+      volumes:
+        - name: mc-data
+          persistentVolumeClaim:
+            claimName: island-verify-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: atm9skies-island-lb
+  namespace: game-server
+spec:
+  type: LoadBalancer
+  loadBalancerIP: 10.44.0.34
+  selector:
+    app: atm9skies-island
+  ports:
+    - protocol: TCP
+      port: 25565
+      targetPort: 25565
