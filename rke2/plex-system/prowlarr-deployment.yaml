@@ -18,6 +18,9 @@ spec:
       labels:
         app: prowlarr
     spec:
+      # Pinned to microedge2 to match the rest of plex-system.
+      nodeSelector:
+        kubernetes.io/hostname: microedge2
       securityContext:
         fsGroup: 1000
       initContainers:

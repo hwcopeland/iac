@@ -3,7 +3,7 @@ image:
   registry: index.docker.io
   repository: plexinc/pms-docker
   # If unset use "latest"
-  tag: "plexpass"
+  tag: "latest"
   sha: ""
   pullPolicy: IfNotPresent
 
@@ -68,6 +68,8 @@ service:
   annotations:
     io.cilium/lb-ipam-ips: "10.44.0.3"
 
+# All plex-system pods must run on the same node — plex-media and servarr-downloads
+# PVCs are RWO (ReadWriteOnce) and cannot be attached to multiple nodes simultaneously.
 nodeSelector:
   kubernetes.io/hostname: microedge2
 
