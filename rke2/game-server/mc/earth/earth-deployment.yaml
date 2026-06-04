@@ -1,28 +1,28 @@
-# Terra++ 1:1-scale Earth server (Forge 1.12.2).
+# Terra++ 1:1-scale Earth server (Forge 1.12.2). SCALE-TO-ZERO via mc-router.
 #
-# Single replica, RWO Longhorn PVC for the world (Terra++ accumulates terrain as
-# players explore, so it is sized large up front). Internal ClusterIP service
-# only — mc-router fronts tcp/25565 and routes earth.mc.hwcopeland.net here.
+# Converted Deployment -> StatefulSet so mc-router can autoscale it. The name
+# trio MUST match for the autoscale mapping: Service.metadata.name ==
+# StatefulSet.metadata.name == StatefulSet.spec.serviceName == "mc-earth".
+# A StatefulSet with a single replica + RWO volume is inherently "never two pods
+# against one world" (ordered, at-most-one), so the old Deployment Recreate
+# strategy is no longer needed.
 #
-# RAM: Terra++ on 1.12.2 is heap-heavy. requests 6Gi / limits 12Gi, with the JVM
-# Xmx pinned to 10G (itzg MEMORY) so the heap stays comfortably under the 12Gi
-# cgroup limit (leaving headroom for metaspace, mod off-heap tile caches, and
-# the JVM itself — exceeding the limit would OOMKill the pod).
+# Storage: keeps the EXISTING standalone 200Gi PVC mc-earth-data, mounted as a
+# normal volume (NOT a volumeClaimTemplate) so the accumulated Terra++ world is
+# preserved byte-for-byte across the Deployment->StatefulSet swap.
 #
-# image: stamped to the immutable sha tag by .github/workflows/build-mc-earth.yml
-# (`kubectl set image` in a deploy step, or a human `set image` during cutover).
+# image: stamped to the immutable sha tag by .github/workflows/build-mc-earth.yml.
 # `latest` here is a bootstrap placeholder only.
 apiVersion: apps/v1
-kind: Deployment
+kind: StatefulSet
 metadata:
   name: mc-earth
   namespace: game-server
   labels:
     app: mc-earth
 spec:
-  replicas: 1
-  strategy:
-    type: Recreate            # RWO volume — never run two pods against one world
+  replicas: 0                 # asleep by default; mc-router scales 0<->1
+  serviceName: mc-earth       # MUST equal metadata.name (autoscale mapping)
   selector:
     matchLabels:
       app: mc-earth
@@ -107,9 +107,9 @@ spec:
     requests:
       storage: 200Gi
 ---
-# Internal-only service. mc-router resolves earth.mc.hwcopeland.net to this
-# cluster DNS name (mc-earth.game-server.svc.cluster.local:25565). No external
-# IP — all WAN ingress for Minecraft goes through the single mc-router LB.
+# Routing + autoscale Service. Named "mc-earth" to match the StatefulSet.
+# externalServerName makes mc-router route earth.mc.hwcopeland.net here. No
+# external IP — all WAN ingress goes through the single mc-router LB.
 apiVersion: v1
 kind: Service
 metadata:
@@ -117,6 +117,8 @@ metadata:
   namespace: game-server
   labels:
     app: mc-earth
+  annotations:
+    "mc-router.itzg.me/externalServerName": "earth.mc.hwcopeland.net"
 spec:
   type: ClusterIP
   selector:

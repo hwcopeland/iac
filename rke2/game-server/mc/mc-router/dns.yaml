@@ -2,19 +2,23 @@
 # Public hostnames for the Minecraft servers fronted by mc-router. All resolve
 # to the WAN IP (CNAME -> hwcopeland.net, like the other records) and are NOT
 # Cloudflare-proxied (raw TCP/25565 can't be proxied). mc-router splits them by
-# the hostname the client connects with:
-#   atm9.mc.hwcopeland.net  -> atm9skies (main)
-#   earth.mc.hwcopeland.net -> Terra++ Earth
-#   sky.mc.hwcopeland.net   -> atm9skies-island
+# the hostname the client connects with (Service externalServerName annotations):
+#   skies.mc.hwcopeland.net  -> atm9skies (ATM9-Sky main, also the default)
+#   skies2.mc.hwcopeland.net -> atm9skies-island (ATM9-Sky island)
+#   earth.mc.hwcopeland.net  -> Terra++ Earth
 # Default (bare IP) also lands on atm9skies. MikroTik must dst-nat WAN tcp/25565
 # -> 10.44.0.40 (mc-router LB) for these to work externally.
+#
+# Renamed 2026-06 from atm9.mc -> skies.mc and sky.mc -> skies2.mc. The old
+# DNSRecord CRs (mc-atm9, mc-sky) must be deleted so the stale hostnames are
+# removed from Cloudflare — see runbook.
 apiVersion: cloudflare-operator.io/v1
 kind: DNSRecord
 metadata:
-  name: mc-atm9
+  name: mc-skies
   namespace: game-server
 spec:
-  name: atm9.mc.hwcopeland.net
+  name: skies.mc.hwcopeland.net
   type: CNAME
   content: hwcopeland.net
   proxied: false
@@ -37,10 +41,10 @@ spec:
 apiVersion: cloudflare-operator.io/v1
 kind: DNSRecord
 metadata:
-  name: mc-sky
+  name: mc-skies2
   namespace: game-server
 spec:
-  name: sky.mc.hwcopeland.net
+  name: skies2.mc.hwcopeland.net
   type: CNAME
   content: hwcopeland.net
   proxied: false

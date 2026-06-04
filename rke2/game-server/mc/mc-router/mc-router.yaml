@@ -1,22 +1,61 @@
 # mc-router (itzg/mc-router) — single TCP/25565 ingress for every Minecraft
-# server in the homelab. Routes by the hostname the client connects with
-# (handshake SNI) to a cluster-internal backend.
+# server in the homelab, NOW WITH SCALE-TO-ZERO.
 #
-# One LoadBalancer on the Cilium pool IP 10.44.0.40 (verified unused: in-use
-# 10.44.0.x are .0-.18,.20,.32,.33,.34 and .44.44). The MikroTik forwards WAN
-# tcp/25565 -> 10.44.0.40 (see README.md — human step, not applied here).
+# One LoadBalancer on the Cilium pool IP 10.44.0.5 — the SINGLE Minecraft
+# ingress (all direct-connect per-server LBs were removed). The MikroTik forwards
+# WAN tcp/25565 -> 10.44.0.5 (see README.md — human step, not applied here).
 #
-# Mappings are STATIC ONLY via the MAPPING env (deterministic). We deliberately
-# do NOT pass --in-kube-cluster: the existing atm9skies-external Service carries
-# mc-router.itzg.me/{externalServerName,defaultServer} annotations, and enabling
-# auto-discovery would let those annotations silently override our explicit
-# MAPPING + DEFAULT. Static-only means no Service watch and therefore no RBAC.
+# ROUTING MODEL (changed 2026-06): we now run with --in-kube-cluster and route
+# purely by Kubernetes Service DISCOVERY, not the old static MAPPING env. A
+# backend is routed iff its Service carries mc-router.itzg.me/externalServerName.
+# We switched away from static MAPPING because AUTO-SCALE ONLY WORKS FOR
+# DISCOVERED backends — mc-router never scales a statically-mapped target. The
+# old fear (annotations silently overriding MAPPING) is gone precisely because
+# there is no MAPPING anymore: discovery is the single source of truth per host.
+#
+#   skies.mc.hwcopeland.net  -> svc/atm9skies         (ATM9-Sky main, default)
+#   skies2.mc.hwcopeland.net -> svc/atm9skies-island  (ATM9-Sky island)
+#   earth.mc.hwcopeland.net  -> svc/mc-earth          (Terra++ Earth)
+#
+# AUTO-SCALE: --auto-scale-up wakes a replicas:0 StatefulSet to 1 when a player
+# connects (mc-router holds the handshake up to ~60s showing a "starting" MOTD).
+# --auto-scale-down returns it to 0 after --auto-scale-down-after of no
+# connections. mc-router maps a routed Service to the StatefulSet it scales BY
+# NAME, so for every backend: Service.metadata.name == StatefulSet.metadata.name
+# == StatefulSet.spec.serviceName (see each backend manifest).
+#
+# BOOT-TIME CAVEAT: cold boot is ~2 min but mc-router only holds for ~60s, so the
+# FIRST join after sleep times out at the "waking up" screen; the player simply
+# reconnects once (the scale-up already fired) and gets in. Direct-connect LB IPs
+# (atm9skies-local 10.44.0.5 etc.) do NOT trigger wake — only traffic through
+# mc-router does. Connect via the hostname to wake a sleeping server.
+#
 # Image pinned to 1.42.1.
-#
-# CUTOVER SAFETY: applying the LoadBalancer below claims 10.44.0.40 only — it
-# does NOT touch the existing atm9skies-local (10.44.0.5) or
-# atm9skies-island-lb (10.44.0.34) LBs, so current direct-connect players are
-# unaffected until the MikroTik NAT is repointed. See README.md.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: mc-router
+  namespace: game-server
+---
+# Binds the cluster's existing `serverless-watcher` ClusterRole (defined in
+# atm9skies-deployment.yaml: services watch/list + statefulsets[/scale]
+# watch/list/get/update/patch). MUST be a ClusterRoleBinding (not RoleBinding):
+# mc-router --in-kube-cluster lists/watches Services + StatefulSets at CLUSTER
+# scope, so namespaced RBAC is rejected. This is the RBAC that lets the router
+# patch replicas 0<->1.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: mc-router-serverless-watcher
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: serverless-watcher
+subjects:
+  - kind: ServiceAccount
+    name: mc-router
+    namespace: game-server
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -34,26 +73,23 @@ spec:
       labels:
         app: mc-router
     spec:
+      serviceAccountName: mc-router
       containers:
         - name: mc-router
           image: itzg/mc-router:1.42.1
           args:
             - "--api-binding=:8080"
-          env:
-            # Static hostname -> backend mappings. Newline-separated host=addr.
-            # earth  -> internal ClusterIP service mc-earth
-            # sky    -> island ("skyblocker") internal ClusterIP service
-            # atm9   -> existing atm9skies-external ClusterIP service
-            - name: MAPPING
-              value: |
-                earth.mc.hwcopeland.net=mc-earth.game-server.svc.cluster.local:25565
-                sky.mc.hwcopeland.net=atm9skies-island.game-server.svc.cluster.local:25565
-                atm9.mc.hwcopeland.net=atm9skies-external.game-server.svc.cluster.local:25565
-            # Fall back to atm9skies for any unmapped/no-SNI connection so a bare
-            # IP connect still lands somewhere sensible (matches the existing
-            # atm9skies-external defaultServer annotation).
-            - name: DEFAULT
-              value: "atm9skies-external.game-server.svc.cluster.local:25565"
+            # Discover backends from annotated Services in-cluster.
+            - "--in-kube-cluster"
+            # Wake a sleeping (replicas:0) StatefulSet on first connect...
+            - "--auto-scale-up"
+            # ...and put it back to sleep after 15m of no connections.
+            - "--auto-scale-down"
+            - "--auto-scale-down-after=15m"
+            # Optional friendlier MOTDs exist (--auto-scale-asleep-motd /
+            # --auto-scale-loading-motd). Verify exact flag spelling against
+            # `mc-router --help` for 1.42.1 before adding — a bad flag crashes
+            # the router. Defaults are fine; left off to keep boot bulletproof.
           ports:
             - name: minecraft
               containerPort: 25565
@@ -76,7 +112,7 @@ spec:
             periodSeconds: 30
 ---
 # THE single external entrypoint for all Minecraft traffic. Cilium assigns the
-# requested pool IP 10.44.0.40.
+# requested pool IP 10.44.0.5 (matches the MikroTik WAN dst-nat target).
 apiVersion: v1
 kind: Service
 metadata:
@@ -86,7 +122,7 @@ metadata:
     app: mc-router
 spec:
   type: LoadBalancer
-  loadBalancerIP: 10.44.0.40
+  loadBalancerIP: 10.44.0.5
   selector:
     app: mc-router
   ports:

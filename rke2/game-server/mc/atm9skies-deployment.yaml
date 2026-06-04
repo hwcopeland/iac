@@ -1,11 +1,18 @@
+# ATM9-Sky main server. SCALE-TO-ZERO via mc-router auto-scale.
+#
+# For autoscale to work, mc-router maps the routed Service to this StatefulSet
+# BY NAME, so all three of these MUST match: Service.metadata.name ==
+# StatefulSet.metadata.name == StatefulSet.spec.serviceName == "atm9skies".
+# replicas starts at 0; mc-router wakes it to 1 on the first connect to
+# skies.mc.hwcopeland.net (or any no-SNI/default connect).
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
   name: atm9skies
   namespace: game-server
 spec:
-  replicas: 1
-  serviceName: atm9skies-service
+  replicas: 0                 # asleep by default; mc-router scales 0<->1
+  serviceName: atm9skies      # MUST equal metadata.name (autoscale mapping)
   selector:
     matchLabels:
       app: atm9skies
@@ -48,14 +55,20 @@ spec:
           requests:
             storage: 50Gi
 ---
+# Routing + autoscale Service. Named "atm9skies" to match the StatefulSet (the
+# autoscale mapping is name-based). externalServerName makes mc-router route
+# skies.mc.hwcopeland.net here; defaultServer makes this the bare-IP/no-SNI
+# fallback. (Renamed from the old "atm9skies-external" — delete that orphan
+# Service after applying; see README/runbook.) This is ClusterIP only: mc-router
+# (10.44.0.5) is the single ingress, no per-server LBs.
 apiVersion: v1
 kind: Service
 metadata:
-  name: atm9skies-external
+  name: atm9skies
   namespace: game-server
   annotations:
+    "mc-router.itzg.me/externalServerName": "skies.mc.hwcopeland.net"
     "mc-router.itzg.me/defaultServer": "true"
-    "mc-router.itzg.me/externalServerName": "atm9skies.hwcopeland.net"
 spec:
   type: ClusterIP
   selector:
@@ -63,25 +76,10 @@ spec:
   ports:
     - protocol: TCP
       port: 25565
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: atm9skies-local
-  namespace: game-server
-spec:
-  type: LoadBalancer
-  # Pinned so the router's MINECRAFT dst-nat rule can't drift. Every other
-  # game/ingress LB here pins its IP (Plex .3, CS2 .32, Satisfactory .33);
-  # this was the lone dynamic one and drifted onto prowlarr's .12.
-  loadBalancerIP: 10.44.0.5
-  selector:
-    app: atm9skies
-  ports:
-    - protocol: TCP
-      port: 25565
       targetPort: 25565
 ---
+# RBAC for mc-router's auto-scaler. Bound to the mc-router SA by a RoleBinding in
+# mc-router/mc-router.yaml. Grants the scale 0<->1 patching on StatefulSets.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -92,4 +90,4 @@ rules:
     verbs: ["watch", "list"]
   - apiGroups: ["apps"]
     resources: ["statefulsets", "statefulsets/scale"]
-    verbs: ["watch", "list", "get", "update"]
+    verbs: ["watch", "list", "get", "update", "patch"]
