@@ -33,6 +33,10 @@ template:
         env:
           - name: DOCKER_HOST
             value: tcp://localhost:2375
+          # Run JavaScript actions on Node 24 (silences the Node 20 deprecation
+          # annotation runner-wide). Mirrors the persistent runner-deployment.
+          - name: FORCE_JAVASCRIPT_ACTIONS_TO_NODE24
+            value: "true"
         volumeMounts:
           - name: work
             mountPath: /home/runner/_work

@@ -45,6 +45,11 @@ spec:
               value: "1"
             - name: DOCKER_CERT_PATH
               value: /certs/client
+            # Run JavaScript actions on Node 24. Silences the runner-wide
+            # "Node.js 20 actions are deprecated" annotation without bumping
+            # every action SHA across all workflows.
+            - name: FORCE_JAVASCRIPT_ACTIONS_TO_NODE24
+              value: "true"
           command:
             - sh
             - -c
