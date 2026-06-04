@@ -119,6 +119,11 @@ data:
             href: https://zot.hwcopeland.net
             description: OCI Container Registry
             siteMonitor: https://zot.hwcopeland.net
+        - Periodic Table:
+            icon: https://raw.githubusercontent.com/phosphor-icons/core/main/assets/regular/atom.svg
+            href: https://ptable.hwcopeland.net
+            description: Interactive graduate-level periodic table
+            siteMonitor: https://ptable.hwcopeland.net
 
     - Game Servers:
         - CS2 Surf:
