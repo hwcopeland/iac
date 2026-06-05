@@ -7,9 +7,13 @@
     "node": ">=20"
   },
   "scripts": {
+    "data:build": "node scripts/prune-data.mjs",
+    "predev": "npm run data:build",
     "dev": "vite",
+    "prebuild": "npm run data:build",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview --host",
+    "pretest": "npm run data:build",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit"

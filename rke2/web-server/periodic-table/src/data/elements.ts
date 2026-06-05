@@ -2,7 +2,11 @@
 // into the normalized `Element[]` the UI consumes. Element 119 (Uue) is
 // hypothetical and excluded; the canonical table is Z = 1..118.
 
-import raw from "./periodic-table.json";
+// elements.slim.json is generated from periodic-table.json by scripts/prune-data.mjs
+// (npm run data:build, also wired as predev/prebuild). It carries only the fields
+// the UI renders, keeping the raw dataset's unused image/spectra/source bytes out
+// of the bundle.
+import raw from "./elements.slim.json";
 import type { Block, Element, RawElement } from "../types";
 import {
   OXIDATION_STATES,

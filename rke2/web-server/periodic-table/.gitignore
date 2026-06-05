@@ -3,3 +3,6 @@ dist
 coverage
 *.local
 .DS_Store
+
+# Generated from periodic-table.json by scripts/prune-data.mjs (pre* hooks).
+src/data/elements.slim.json
