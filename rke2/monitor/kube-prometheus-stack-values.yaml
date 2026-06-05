@@ -24,6 +24,14 @@ grafana:
       allow_loading_unsigned_plugins: appmana-storage-breakdown-panel
     server:
       root_url: https://grafana.hwcopeland.net
+    security:
+      # Allow embedding Grafana panels in iframes (the Home Assistant dashboard
+      # MikroTik card). Without this, Grafana sends X-Frame-Options: deny.
+      allow_embedding: true
+      # ha.hwcopeland.net iframing grafana.hwcopeland.net is cross-site, so the
+      # Grafana session cookie needs SameSite=None (over HTTPS) to be sent inside
+      # the iframe — otherwise the embed hits a login wall.
+      cookie_samesite: none
     auth:
       disable_login_form: true
     auth.generic_oauth:
