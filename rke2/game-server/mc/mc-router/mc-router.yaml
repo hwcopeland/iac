@@ -86,10 +86,24 @@ spec:
             # ...and put it back to sleep after 15m of no connections.
             - "--auto-scale-down"
             - "--auto-scale-down-after=15m"
-            # Optional friendlier MOTDs exist (--auto-scale-asleep-motd /
-            # --auto-scale-loading-motd). Verify exact flag spelling against
-            # `mc-router --help` for 1.42.1 before adding — a bad flag crashes
-            # the router. Defaults are fine; left off to keep boot bulletproof.
+            # Status-ping responses for autoscaled servers. These DO work on
+            # k8s — the connector's serveStatus() picks loading-vs-asleep
+            # regardless of platform (server/connector.go); the "Docker servers"
+            # wording in mc-router's --help for loading-motd is stale doc text.
+            #   asleep  : server idle at 0 replicas
+            #   loading : a wake is in progress (booting after someone triggered it)
+            # § = Minecraft color codes.
+            - "--auto-scale-asleep-motd=§b§l💤 Sleeping §r§7— join once to wake it"
+            - "--auto-scale-loading-motd=§e§l⏳ Starting up… §r§7~60s, then reconnect"
+          env:
+            # Bare-IP / unknown-host connects (most players connect by the raw
+            # WAN IP, not a hostname) carry no matchable serverAddress. The
+            # mc-router.itzg.me/defaultServer annotation is NOT honored in
+            # discovery mode on 1.42.1, so we pin the default statically to the
+            # atm9skies backend. Points at the discovered atm9skies Service so the
+            # auto-scaler still wakes it on a default-routed connect.
+            - name: DEFAULT
+              value: "atm9skies.game-server.svc.cluster.local:25565"
           ports:
             - name: minecraft
               containerPort: 25565
