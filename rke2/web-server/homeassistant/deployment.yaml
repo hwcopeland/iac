@@ -5,6 +5,9 @@ metadata:
   namespace: web-server
 spec:
   replicas: 1
+  strategy:
+    type: Recreate          # RWO Longhorn PVC — never run two pods at once
+                            # (RollingUpdate deadlocks on Multi-Attach)
   selector:
     matchLabels:
       app: home-assistant
@@ -15,6 +18,35 @@ spec:
     spec:
       securityContext:
           fsGroup: 1000
+      # Declarative custom_components — installed on every start, version-pinned.
+      # Replaces HACS/manual UI installs entirely and SELF-HEALS after a /config
+      # wipe (the failure that started all this). Add a component = one line here.
+      #   auth_oidc      -> Authentik OIDC SSO login (public client + PKCE)
+      #   flightradar24  -> flights-in-area sensors for the dashboard
+      # (Sonos is native; MikroTik stats come from Grafana, so no components.)
+      initContainers:
+        - name: install-custom-components
+          image: alpine:3.20
+          command: ["/bin/sh", "-ec"]
+          args:
+            - |
+              apk add --no-cache curl tar >/dev/null
+              mkdir -p /config/custom_components
+              install() {   # $1=repo  $2=tag  $3=component
+                echo "installing $3 @ $2"
+                t=$(mktemp -d)
+                curl -fsSL "https://github.com/$1/archive/refs/tags/$2.tar.gz" \
+                  | tar -xz -C "$t" --strip-components=1
+                rm -rf "/config/custom_components/$3"
+                cp -r "$t/custom_components/$3" "/config/custom_components/$3"
+                rm -rf "$t"
+              }
+              install christiaangoossens/hass-oidc-auth          v1.1.0   auth_oidc
+              install AlexandrErohin/home-assistant-flightradar24 v1.34.1  flightradar24
+              echo "installed:"; ls -1 /config/custom_components
+          volumeMounts:
+            - name: ha-config-volume
+              mountPath: /config
       containers:
         - name: home-assistant-container
           image: homeassistant/home-assistant # Using the official image
@@ -26,10 +58,21 @@ spec:
           volumeMounts:
             - name: ha-config-volume
               mountPath: /config
+            # Git-managed config + dashboard overlaid as single files (subPath),
+            # so a /config wipe can't lose them. Source: ha-gitconfig.yaml.
+            - name: ha-gitconfig
+              mountPath: /config/configuration.yaml
+              subPath: configuration.yaml
+            - name: ha-gitconfig
+              mountPath: /config/dashboards/main.yaml
+              subPath: main.yaml
       volumes:
         - name: ha-config-volume
           persistentVolumeClaim:
             claimName: home-assistant-pvc
+        - name: ha-gitconfig
+          configMap:
+            name: ha-gitconfig
 ---
 apiVersion: v1
 kind: Service

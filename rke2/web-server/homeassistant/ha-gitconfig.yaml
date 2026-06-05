@@ -1,0 +1,95 @@
+# GIT-MANAGED Home Assistant config + dashboard.
+#
+# WHY: a /config wipe previously took out the dashboard (and HACS/integrations)
+# with nothing in git to restore from. These two files are mounted read-only
+# from this ConfigMap into the pod (see deployment.yaml), so they live in git and
+# survive any future wipe of the Longhorn PVC. Edit them HERE, not in the HA UI
+# (UI edits to these files won't persist — that's the trade-off for durability).
+#
+# configuration.yaml  -> /config/configuration.yaml
+# main.yaml           -> /config/dashboards/main.yaml  (the "Home" YAML dashboard)
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ha-gitconfig
+  namespace: web-server
+data:
+  configuration.yaml: |
+    # Loads default set of integrations. Do not remove.
+    default_config:
+
+    # Frontend. NOTE: the themes/ dir was wiped; re-add the include below once
+    # you restore themes, otherwise HA logs an error for a missing dir.
+    frontend:
+      # themes: !include_dir_merge_named themes
+
+    automation: !include automations.yaml
+    script: !include scripts.yaml
+    scene: !include scenes.yaml
+
+    # HTTP Configuration for reverse proxy
+    http:
+      use_x_forwarded_for: true
+      trusted_proxies:
+        - 10.42.0.0/16
+
+    # External URL so OIDC builds the correct https redirect behind the ingress.
+    homeassistant:
+      external_url: https://ha.hwcopeland.net
+
+    # OIDC SSO via Authentik. Component custom_components/auth_oidc is installed by
+    # the initContainer; the Authentik OAuth2 provider/application (client_id +
+    # slug "homeassistant", PUBLIC client + PKCE, no secret) is defined in
+    # rke2/authentik/blueprints/providers-homeassistant.yaml. Adds an
+    # "OpenID Connect (SSO)" button to the HA login screen.
+    auth_oidc:
+      client_id: homeassistant
+      discovery_url: https://auth.hwcopeland.net/application/o/homeassistant/.well-known/openid-configuration
+      features:
+        force_https: true            # nginx terminates TLS; force https redirect_uri
+      roles:
+        admin: "authentik Admins"    # Authentik group granted HA admin (adjust to yours)
+
+    # Git-managed YAML dashboard, added ALONGSIDE the default storage-mode UI
+    # dashboard (so the UI one keeps working too). Sourced from the ConfigMap
+    # mount at /config/dashboards/main.yaml.
+    lovelace:
+      mode: storage
+      dashboards:
+        home-git:
+          mode: yaml
+          title: Home
+          icon: mdi:home
+          show_in_sidebar: true
+          filename: dashboards/main.yaml
+
+  main.yaml: |
+    # "Home" dashboard — GIT-MANAGED. Edit in rke2/web-server/homeassistant/ha-gitconfig.yaml.
+    title: Home
+    views:
+      - title: Home
+        path: home
+        icon: mdi:home
+        cards:
+          # ===== MikroTik stats — embeds your EXISTING Grafana dashboard =====
+          # Uses mktxp -> Prometheus -> Grafana (no HACS, no new exporter).
+          # Requires Grafana allow_embedding=true (see kube-prometheus-stack-values.yaml)
+          # and a session/anon access so the iframe renders without a login wall.
+          - type: iframe
+            title: MikroTik — Network Overview
+            url: https://grafana.hwcopeland.net/d/mikrotik-network/mikrotik-network-overview?kiosk&theme=dark&refresh=30s
+            aspect_ratio: 100%
+
+          # ===== Sonos — NATIVE HA integration (no HACS) =====
+          # Add via Settings > Devices & Services > Add Integration > Sonos (auto-discovers;
+          # Service already exposes port 1400). Then replace the entity_id with your room player.
+          - type: media-control
+            entity: media_player.sonos
+
+          # ===== Flightradar24 — HACS integration (AlexandrErohin/flightradar24) =====
+          # Install HACS, then this integration, then configure lat/long + radius.
+          # Entity names below are the integration defaults; adjust after setup.
+          - type: entities
+            title: Flights in area
+            entities:
+              - sensor.flightradar24_current_in_area
