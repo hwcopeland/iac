@@ -21,8 +21,11 @@ spec:
       storageMinimalAvailablePercentage: 15
       storageOverProvisioningPercentage: 100
 
-      backupTarget: ""
-      backupTargetCredentialSecret: ""
+      # Backblaze B2 (S3). Bucket "longhorn-hwcoplenad" (note the typo in the
+      # actual bucket name). Endpoint comes from AWS_ENDPOINTS in the secret.
+      # Recovered from the *-restored-pv volumes' spec.fromBackup.
+      backupTarget: "s3://longhorn-hwcoplenad@s3.us-east-005.backblazeb2.com/"
+      backupTargetCredentialSecret: "b2-backup-secret"
 
       # Auto-delete workload pod when volume is detached unexpectedly
       autoDeletePodWhenVolumeDetachedUnexpectedly: true

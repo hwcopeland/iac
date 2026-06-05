@@ -1,0 +1,48 @@
+# Longhorn recurring SNAPSHOTS (free, local, copy-on-write).
+#
+# Bound to the "default" group, which every PVC is already tagged into
+# (recurring-job-group.longhorn.io/default: enabled) — so this protects the
+# WHOLE cluster. Snapshots cost ~nothing (CoW + local pool, no egress) and cover
+# the failure that actually happened: the HA /config wipe would have been a
+# one-command revert with these in place.
+#
+# NOTE: this is SNAPSHOTS ONLY — no Backblaze B2 backup job here on purpose.
+# Off-cluster B2 backups cost storage/egress and the hardware rarely fails, so
+# B2 is reserved as a last resort for a tiny curated set of irreplaceable
+# volumes only (see b2-backup commented block below) — never the whole cluster.
+---
+apiVersion: longhorn.io/v1beta2
+kind: RecurringJob
+metadata:
+  name: default-snapshot
+  namespace: longhorn-system
+spec:
+  name: default-snapshot   # REQUIRED by Longhorn, must match metadata.name
+  cron: "0 3 * * *"        # daily at 03:00
+  task: snapshot
+  groups:
+    - default
+  retain: 7                # a week of daily restore points
+  concurrency: 2
+  labels: {}
+---
+# Daily off-cluster backup to Backblaze B2 — CURATED group only.
+# Targets the "b2-backup" group (NOT default): only volumes explicitly labelled
+# recurring-job-group.longhorn.io/b2-backup=enabled get uploaded. The curated set
+# is the irreplaceable ~110 GB (DBs, configs, game worlds, HA, vaultwarden,
+# garage) — the 688 GB of rebuildable registry/downloads/logs/public-data is
+# deliberately excluded. ≈ $1/month in B2 storage.
+# Requires backupTarget set in rke2-longhorn-config.yaml (s3://<bucket>@us-east-005/).
+apiVersion: longhorn.io/v1beta2
+kind: RecurringJob
+metadata:
+  name: b2-backup
+  namespace: longhorn-system
+spec:
+  name: b2-backup            # REQUIRED, must match metadata.name
+  cron: "0 4 * * *"          # daily at 04:00 (after the 03:00 snapshot)
+  task: backup
+  groups:
+    - b2-backup
+  retain: 7                  # 7 daily off-cluster restore points
+  concurrency: 1
