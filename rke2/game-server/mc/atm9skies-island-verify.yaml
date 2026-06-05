@@ -77,6 +77,24 @@ spec:
           volumeMounts:
             - name: mc-data
               mountPath: /data
+          # See atm9skies-deployment.yaml: gate "ready" on MC actually listening
+          # on 25565 so mc-router holds (loading) instead of proxying to a dead
+          # port during the ~2 min boot.
+          startupProbe:
+            tcpSocket:
+              port: 25565
+            failureThreshold: 60      # up to 5 min to listen
+            periodSeconds: 5
+          readinessProbe:
+            tcpSocket:
+              port: 25565
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: 25565
+            initialDelaySeconds: 0     # gated by startupProbe
+            periodSeconds: 30
+            failureThreshold: 6
       volumes:
         - name: mc-data
           persistentVolumeClaim:

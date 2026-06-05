@@ -11,7 +11,12 @@ metadata:
   name: atm9skies
   namespace: game-server
 spec:
-  replicas: 0                 # asleep by default; mc-router scales 0<->1
+  replicas: 0                 # asleep by default; mc-router scales 0<->1 on
+                              # connect. NOTE: ATM9 boots ~62s > mc-router's
+                              # hardcoded 60s wake timeout, so the FIRST connect
+                              # after sleep times out at "server starting" —
+                              # reconnect ~once (~70s later) and you're in.
+                              # Accepted tradeoff to reclaim the 10G RAM.
   serviceName: atm9skies      # MUST equal metadata.name (autoscale mapping)
   selector:
     matchLabels:
@@ -45,6 +50,26 @@ spec:
           volumeMounts:
             - name: mc-data
               mountPath: /data
+          # CRITICAL for autoscale: without these, k8s marks the pod "ready" the
+          # instant the container starts (~6s) while Minecraft is still booting
+          # (~2 min) and NOT listening on 25565. mc-router would then proxy a
+          # connection to a dead port -> client gets "connection refused". The
+          # tcpSocket probe holds "ready" until MC actually accepts on 25565.
+          startupProbe:
+            tcpSocket:
+              port: 25565
+            failureThreshold: 60      # up to 5 min for ATM9 + mods to listen
+            periodSeconds: 5
+          readinessProbe:
+            tcpSocket:
+              port: 25565
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: 25565
+            initialDelaySeconds: 0     # gated by startupProbe
+            periodSeconds: 30
+            failureThreshold: 6
   volumeClaimTemplates:
     - metadata:
         name: mc-data
