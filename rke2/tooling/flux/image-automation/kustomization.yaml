@@ -8,3 +8,6 @@ resources:
   - image-repository-frontend.yaml
   - image-policy-frontend.yaml
   - image-update-automation-frontend.yaml
+  - image-repository-website.yaml
+  - image-policy-website.yaml
+  - image-update-automation-website.yaml

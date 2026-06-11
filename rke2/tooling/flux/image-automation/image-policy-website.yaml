@@ -1,0 +1,19 @@
+---
+# Track the "main" branch tag pushed by docker/metadata-action.
+# Digest reflection detects when the image behind "main" changes,
+# triggering an update even though the tag name stays the same.
+apiVersion: image.toolkit.fluxcd.io/v1beta2
+kind: ImagePolicy
+metadata:
+  name: fmb-website
+  namespace: tooling
+spec:
+  imageRepositoryRef:
+    name: fmb-website
+  filterTags:
+    pattern: '^main$'
+  policy:
+    alphabetical:
+      order: asc
+  digestReflectionPolicy: Always
+  interval: 1m0s
