@@ -1,16 +1,22 @@
 ---
+# Tracking app + API at app.flmanbiosci.net
+#   /api/v1/*  → u4u-engine (FastAPI) with /api/v1 stripped
+#   /          → u4u-engine-frontend (Next.js)
+#
+# Attached to the wildcard *.flmanbiosci.net listener on the shared gateway
+# so the same cf-flmanbiosci-wildcard-cert covers it automatically.
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
-  name: u4u-engine
+  name: u4u-engine-app
   namespace: theswamp
 spec:
   parentRefs:
     - name: hwcopeland-gateway
       namespace: kube-system
-      sectionName: flmanbiosci-root-https
+      sectionName: flmanbiosci-https
   hostnames:
-    - "flmanbiosci.net"
+    - "app.flmanbiosci.net"
   rules:
     - matches:
         - path:
