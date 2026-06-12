@@ -50,6 +50,14 @@ data:
       roles:
         admin: "authentik Admins"    # Authentik group granted HA admin (adjust to yours)
 
+    # Sonos — auto-discovered via SSDP once HA is on the speakers' WiFi L2
+    # (hostNetwork + the node's wlp0s20f3 joined to kuber-my-netes). This stanza
+    # imports the integration so there's no UI click. If the speakers don't get
+    # HA's event callbacks, set advertise_addr to HA's WiFi IP.
+    sonos:
+      media_player:
+        # advertise_addr: "10.0.0.x"   # uncomment + set to HA's WiFi IP if needed
+
     # Git-managed YAML dashboard, added ALONGSIDE the default storage-mode UI
     # dashboard (so the UI one keeps working too). Sourced from the ConfigMap
     # mount at /config/dashboards/main.yaml.
