@@ -49,6 +49,10 @@ var registeredCRDs = map[string]schema.GroupVersionResource{
 	"DockJob":     {Group: khemeiaGroup, Version: khemeiaVersion, Resource: "dockjobs"},
 	"RefineJob":   {Group: khemeiaGroup, Version: khemeiaVersion, Resource: "refinejobs"},
 	"ADMETJob":    {Group: khemeiaGroup, Version: khemeiaVersion, Resource: "admetjobs"},
+	// GenomeJob: genomics structural-biophysics stage (GEN-02). The image is
+	// selected by spec.calculation via genomeCalcImages (genome_images.go),
+	// not by crdImageMapping. Reconcile body is GEN-12.
+	"GenomeJob": {Group: khemeiaGroup, Version: khemeiaVersion, Resource: "genomejobs"},
 }
 
 // defaultComputeClassForKind maps CRD kinds to their default compute class.
@@ -59,6 +63,7 @@ var defaultComputeClassForKind = map[string]string{
 	"DockJob":            "gpu",
 	"RefineJob":          "gpu",
 	"ADMETJob":           "cpu",
+	"GenomeJob":          "gpu", // overridden per-calc in reconcile (GEN-12)
 	"GenerateJob":        "gpu",
 	"LinkJob":            "gpu",
 	"SelectivityJob":     "cpu-high-mem",
@@ -68,6 +73,17 @@ var defaultComputeClassForKind = map[string]string{
 	"ReportJob":          "cpu",
 }
 
+// crdSpecEnvAliases overrides the default strings.ToUpper(specKey) env-name
+// translation in buildCRDJobEnv for the few spec scalars whose worker expects a
+// snake_cased env var. Plain ToUpper("resolutionId") yields RESOLUTIONID, but the
+// esmfold worker (containers/esmfold/scripts/fold.py) reads RESOLUTION_ID, and a
+// resolve_fallback child has no variant_calc_jobs row to recover the id from, so
+// this alias is load-bearing. Other CRDs' camelCase scalars are intentionally
+// left to the ToUpper default to preserve their existing worker env contract.
+var crdSpecEnvAliases = map[string]string{
+	"resolutionId": "RESOLUTION_ID",
+}
+
 // crdImageMapping maps CRD kinds to their container image.
 var crdImageMapping = map[string]string{
 	"TargetPrep":  "zot.hwcopeland.net/chem/target-prep:latest",
@@ -75,6 +91,11 @@ var crdImageMapping = map[string]string{
 	"DockJob":     "zot.hwcopeland.net/chem/vina:1.2",
 	"RefineJob":   "zot.hwcopeland.net/chem/refine:latest",
 	"ADMETJob":    "zot.hwcopeland.net/chem/admet:latest",
+	// GenomeJob has no kind-level image: the worker image is selected by
+	// spec.calculation via genomeCalcImages (genome_images.go). GEN-12's
+	// reconcile resolves it with genomeCalcImageFor(); buildJobForCRD must
+	// branch on this empty entry rather than failing on a missing mapping.
+	"GenomeJob": "",
 }
 
 // ComputeClass defines the scheduling and resource configuration for a job.
@@ -295,6 +316,15 @@ func (c *CRDController) reconcile(u *unstructured.Unstructured) {
 	name := u.GetName()
 	phase := getPhase(u)
 
+	// GenomeJob has a two-stage (resolve -> dispatch) lifecycle that the generic
+	// phase switch cannot express, so it owns its own reconcile (GEN-12,
+	// genome_reconcile.go). The generic createAndTrackJob/buildJobForCRD path is
+	// still reused for stage-2 calc dispatch and Job monitoring.
+	if kind == "GenomeJob" {
+		c.reconcileGenomeJob(u)
+		return
+	}
+
 	switch phase {
 	case "Pending":
 		gate := getSpecString(u, "gate")
@@ -444,11 +474,33 @@ func (c *CRDController) buildJobForCRD(u *unstructured.Unstructured) (*batchv1.J
 	if !ok {
 		return nil, fmt.Errorf("no image mapping for CRD kind %q", kind)
 	}
+	// kindComputeDefault is the default compute class for this kind. Most kinds
+	// use defaultComputeClassForKind[kind]; GenomeJob overrides it per-calculation
+	// (esmfold/pgx -> gpu, ddg -> cpu-high-mem, pocket -> cpu) just below.
+	kindComputeDefault := defaultComputeClassForKind[kind]
 
-	// Resolve compute class.
+	// GenomeJob carries an empty kind-level image on purpose: its worker image is
+	// selected by spec.calculation, not by kind (GEN-02 genomeCalcImages).
+	// buildJobForCRD is reached for a GenomeJob only after the GEN-12 resolve
+	// stage has gated dispatch (reconcileGenomeJob -> createAndTrackJob), so here
+	// we resolve the per-calc worker image + compute class. "resolve" has no
+	// worker pod (its cached/AlphaFold-hit path and esmfold fallback run inside
+	// reconcile), so reaching dispatch with calculation=="resolve" is a bug.
+	if kind == "GenomeJob" {
+		calculation := getSpecString(u, "calculation")
+		calcImage, ok := genomeCalcImageFor(calculation)
+		if !ok {
+			return nil, fmt.Errorf("GenomeJob %s: no worker image for calculation %q "+
+				"(resolve is controller-internal and must not reach dispatch)", name, calculation)
+		}
+		image = calcImage
+		kindComputeDefault = genomeCalcComputeClass(calculation)
+	}
+
+	// Resolve compute class (an explicit spec.computeClass always wins).
 	className := getSpecString(u, "computeClass")
 	if className == "" {
-		className = defaultComputeClassForKind[kind]
+		className = kindComputeDefault
 	}
 	if className == "" {
 		className = "cpu" // ultimate fallback
@@ -602,6 +654,21 @@ func (c *CRDController) buildCRDJobEnv(kind, name string, spec map[string]interf
 	}
 
 	// Pass CRD spec fields as uppercase env vars for the job container.
+	//
+	// The default translation is a plain strings.ToUpper(k): every existing CRD's
+	// camelCase scalars (DockJob.receptorRef -> RECEPTORREF, TargetPrep.pdbId ->
+	// PDBID, etc.) reach their workers under that exact name, so the default MUST
+	// stay ToUpper or those workers break. A few fields whose worker expects a
+	// snake_cased env name (GenomeJob.resolutionId, which fold.py reads as
+	// RESOLUTION_ID) are aliased explicitly below rather than by changing the
+	// global rule -- the resolve_fallback esmfold child has no variant_calc_jobs
+	// row to recover the id from, so RESOLUTION_ID env is its only source.
+	envNameFor := func(k string) string {
+		if alias, ok := crdSpecEnvAliases[k]; ok {
+			return alias
+		}
+		return strings.ToUpper(k)
+	}
 	for k, v := range spec {
 		// Skip complex fields.
 		switch k {
@@ -610,17 +677,17 @@ func (c *CRDController) buildCRDJobEnv(kind, name string, spec map[string]interf
 		}
 		if s, ok := v.(string); ok {
 			envs = append(envs, corev1.EnvVar{
-				Name:  strings.ToUpper(k),
+				Name:  envNameFor(k),
 				Value: s,
 			})
 		} else if n, ok := v.(int64); ok {
 			envs = append(envs, corev1.EnvVar{
-				Name:  strings.ToUpper(k),
+				Name:  envNameFor(k),
 				Value: fmt.Sprintf("%d", n),
 			})
 		} else if f, ok := v.(float64); ok {
 			envs = append(envs, corev1.EnvVar{
-				Name:  strings.ToUpper(k),
+				Name:  envNameFor(k),
 				Value: fmt.Sprintf("%g", f),
 			})
 		}

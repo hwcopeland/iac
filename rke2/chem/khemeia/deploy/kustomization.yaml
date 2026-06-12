@@ -6,6 +6,8 @@ resources:
   - rbac-crds.yaml
   - compute-classes.yaml
   - vina-gpu-kernel-cache-pvc.yaml
+  - esmfold-weights-pvc.yaml
+  - esmfold-weights-warm-job.yaml
   - plugins-configmap.yaml
   - api-deployment.yaml
   - web-deployment.yaml

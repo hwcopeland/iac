@@ -1,0 +1,216 @@
+---
+# GenomeJob CRD — genomics structural-biophysics stage.
+# One CRD whose spec.calculation discriminator selects a biophysical calculation
+# (resolve | esmfold | ddg_stability | pocket_proximity | pgx_docking) over a
+# resolved genomic variant. Variant resolution is a shared controller-internal
+# stage; per-calc params are loosely typed under spec.params and validated by the
+# controller at submit time (mirrors DockJob.spec.engine / ADMETJob.spec.engines).
+# See docs/tdd/khemeia-genomics-core.md section 5.1 for the authoritative contract.
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: genomejobs.khemeia.io
+  labels:
+    app.kubernetes.io/name: khemeia
+    app.kubernetes.io/component: crd
+spec:
+  group: khemeia.io
+  names:
+    kind: GenomeJob
+    listKind: GenomeJobList
+    plural: genomejobs
+    singular: genomejob
+    shortNames:
+      - gj
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              required: ["calculation", "variant"]
+              properties:
+                calculation:
+                  type: string
+                  enum: ["resolve", "esmfold", "ddg_stability", "pocket_proximity", "pgx_docking"]
+                  description: "Which biophysical calculation to run. 'resolve' is the adapter-only stage."
+                variant:
+                  type: object
+                  required: ["mode"]
+                  properties:
+                    mode:
+                      type: string
+                      enum: ["protein_change", "hgvs", "rsid"]
+                      description: "How the variant is specified"
+                    gene:
+                      type: string
+                      description: "HGNC gene symbol (protein_change mode)"
+                    transcript:
+                      type: string
+                      description: "Ensembl/RefSeq transcript, optional pin"
+                    proteinChange:
+                      type: string
+                      description: "e.g. p.Arg117His or p.R117H"
+                    hgvs:
+                      type: string
+                      description: "HGVS protein or coding string"
+                    rsid:
+                      type: string
+                      description: "dbSNP rsID"
+                    uniprotAcc:
+                      type: string
+                      description: "Optional override to pin resolution to a UniProt accession"
+                resolvedVariantRef:
+                  type: string
+                  description: "variant_resolutions.resolution_id; populated by the resolve stage, consumed by calc stages"
+                resolutionId:
+                  type: string
+                  description: >-
+                    variant_resolutions.resolution_id set on esmfold children so the
+                    worker reads RESOLUTION_ID env (buildCRDJobEnv uppercases). The
+                    WT-fallback child has no variant_calc_jobs row to recover it from,
+                    so this scalar is the only source — without it fold.py dies
+                    E_RESOLVE_UPSTREAM. Must be an explicit property (not under the
+                    preserve-unknown params block) or the apiserver prunes it.
+                role:
+                  type: string
+                  enum: ["resolve_fallback", "calc"]
+                  description: >-
+                    ESMFold sub-role -> ROLE env (workers §4.0/§4.2). resolve_fallback
+                    folds WT only (AlphaFold-miss fallback); calc folds WT+mut. Explicit
+                    property so the apiserver does not prune it, collapsing the two roles.
+                model:
+                  type: string
+                  enum: ["wt_only", "wt_and_mut"]
+                  description: >-
+                    ESMFold model -> MODEL env (workers §4.0/§4.2). wt_only pairs with
+                    role=resolve_fallback; wt_and_mut pairs with role=calc (produces mut.pdb).
+                    Explicit property so the apiserver preserves it through pruning.
+                params:
+                  type: object
+                  description: >-
+                    Per-calculation parameters; validated by the controller at submit time.
+                    For ddg_stability, params.engine selects the ΔΔG engine — one of
+                    thermompnn|ddgun|foldx|rosetta (default thermompnn; see plan tweak T1).
+                    For pgx_docking, params carries drugs/engines/pocket_strategy/exhaustiveness.
+                    For pocket_proximity, params carries detector/cutoff_ang.
+                  x-kubernetes-preserve-unknown-fields: true
+                # -- Common fields (identical to DockJob/ADMETJob) --
+                computeClass:
+                  type: string
+                  default: "gpu"
+                  description: "Compute class: cpu, cpu-high-mem, or gpu. Overridden per-calc in reconcile."
+                timeout:
+                  type: string
+                  default: "24h"
+                  description: "Maximum wall-clock time"
+                retryPolicy:
+                  type: string
+                  default: "on-failure"
+                  enum: ["never", "on-failure", "always"]
+                maxRetries:
+                  type: integer
+                  default: 3
+                gate:
+                  type: string
+                  default: "auto"
+                  enum: ["auto", "manual"]
+                parentJob:
+                  type: object
+                  properties:
+                    kind:
+                      type: string
+                    name:
+                      type: string
+                    selectedArtifactIds:
+                      type: array
+                      items:
+                        type: string
+            status:
+              type: object
+              properties:
+                phase:
+                  type: string
+                  default: "Pending"
+                  enum: ["Pending", "Running", "Succeeded", "Failed"]
+                startTime:
+                  type: string
+                  format: date-time
+                completionTime:
+                  type: string
+                  format: date-time
+                provenanceRef:
+                  type: string
+                  description: "Provenance artifact_id of this job's output"
+                resolvedVariantRef:
+                  type: string
+                  description: "variant_resolutions.resolution_id; set by the resolve stage"
+                structureSource:
+                  type: string
+                  enum: ["alphafold", "esmfold", "pdb"]
+                  description: "Origin of the resolved structure; set by the resolve stage"
+                resultRef:
+                  type: string
+                  description: "variant_results.result_id for this calc"
+                artifactIds:
+                  type: array
+                  description: "S3 keys of this job's output artifacts"
+                  items:
+                    type: string
+                parentJob:
+                  type: object
+                  properties:
+                    kind:
+                      type: string
+                    name:
+                      type: string
+                retryCount:
+                  type: integer
+                  default: 0
+                conditions:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      type:
+                        type: string
+                      status:
+                        type: string
+                        enum: ["True", "False", "Unknown"]
+                      reason:
+                        type: string
+                      message:
+                        type: string
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+                events:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      timestamp:
+                        type: string
+                        format: date-time
+                      message:
+                        type: string
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Phase
+          type: string
+          jsonPath: .status.phase
+        - name: Calc
+          type: string
+          jsonPath: .spec.calculation
+        - name: Source
+          type: string
+          jsonPath: .status.structureSource
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp

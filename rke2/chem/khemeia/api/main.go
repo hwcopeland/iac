@@ -292,7 +292,10 @@ func (c *Controller) initPluginDB(plugins []Plugin) error {
 	if err := EnsureMDSchema(db); err != nil {
 		log.Printf("Warning: failed to create md tables: %v", err)
 	}
-	log.Println("Shared tables initialized (api_tokens, basis_sets, provenance, target_prep_results, library_prep, docking_v2, admet, md)")
+	if err := EnsureGenomeSchema(db); err != nil {
+		log.Printf("Warning: failed to create genome tables: %v", err)
+	}
+	log.Println("Shared tables initialized (api_tokens, basis_sets, provenance, target_prep_results, library_prep, docking_v2, admet, md, genome)")
 
 	return nil
 }
@@ -334,8 +337,10 @@ func (c *Controller) Run(ctx context.Context) error {
 	} else {
 		defer shutdown()
 	}
-	if err := initMetrics(); err != nil {
+	if meter, err := initMetrics(); err != nil {
 		log.Printf("Warning: metrics init failed: %v", err)
+	} else if err := InitGenomeMetrics(meter); err != nil {
+		log.Printf("Warning: genome metrics init failed: %v", err)
 	}
 
 	// Recover any jobs orphaned by a previous controller restart.
@@ -619,6 +624,20 @@ func (c *Controller) startAPIServer() error {
 	mux.HandleFunc("/api/v1/docking/v2/", wrap(handler.DockingV2Dispatch))
 	log.Println("Registered docking v2 routes: /api/v1/docking/v2/{submit,jobs/{name},jobs/{name}/results}")
 
+	// Genomics structural-biophysics endpoints (u4u-facing, core TDD §5.4).
+	// Gated behind GENOME_ENABLED (mirrors the AUTH_ENABLED flag pattern) so the
+	// surface stays dark until the worker images + buckets exist (core §7.2).
+	// POST /api/v1/genome/variant/submit                     — batch submit (202)
+	// GET  /api/v1/genome/jobs/{group_name}                  — group status rollup
+	// GET  /api/v1/genome/jobs/{group_name}/results          — paginated per-calc results
+	// GET  /api/v1/genome/variant/{resolution_id}/structure  — presigned structure URL
+	if os.Getenv("GENOME_ENABLED") == "true" {
+		mux.HandleFunc("/api/v1/genome/", wrap(handler.GenomeDispatch))
+		log.Println("Registered genome routes: /api/v1/genome/{variant/submit,jobs/{group},jobs/{group}/results,variant/{rid}/structure}")
+	} else {
+		log.Println("Genome routes disabled (GENOME_ENABLED != \"true\")")
+	}
+
 	// ADMET prediction endpoints (WP-4).
 	// POST /api/v1/admet/predict                        — submit an ADMET prediction job
 	// GET  /api/v1/admet/jobs/{name}                    — get ADMET job status
@@ -668,9 +687,9 @@ func (c *Controller) startAPIServer() error {
 
 // allowedOrigins is the set of origins permitted by the CORS policy.
 var allowedOrigins = map[string]bool{
-	"https://khemeia.net":             true,
-	"https://khemeia.hwcopeland.net":  true,
-	"http://localhost:5174":           true,
+	"https://khemeia.net":            true,
+	"https://khemeia.hwcopeland.net": true,
+	"http://localhost:5174":          true,
 }
 
 // bodySizeMiddleware limits the maximum request body size to prevent abuse.

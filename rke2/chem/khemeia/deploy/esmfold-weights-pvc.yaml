@@ -1,0 +1,53 @@
+---
+# Static PV + PVC for the ESMFold model-weight cache on nixos-gpu.
+# Stores the esmfold_v1 checkpoint + the ESM-2 t36_3B backbone (~few GB)
+# across pod restarts so the first real fold isn't a cold multi-GB download.
+# Mounted into gpu-class pods (and the esmfold-weights-warm Job) at the
+# container's $TORCH_HOME (/opt/esmfold/weights) — read-write for the warm
+# Job that populates it, read at fold time. fold.py loads weights from this
+# cache and only downloads on a miss.
+#
+# hostPath because Longhorn CSI is not installed on nixos-gpu (mirrors the
+# vina-gpu-kernel-cache decision). The weights are large derived/downloaded
+# artifacts; node-local caching on the single GPU node is correct since only
+# nixos-gpu ever folds. 8Gi capacity covers esmfold_v1 + the t36_3B backbone
+# with headroom for the torch hub layout.
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: esmfold-weights
+spec:
+  capacity:
+    storage: 8Gi
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: local-esmfold-weights
+  hostPath:
+    path: /var/cache/esmfold-weights
+    type: DirectoryOrCreate
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: In
+              values:
+                - nixos-gpu
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: esmfold-weights
+  namespace: chem
+  labels:
+    app.kubernetes.io/name: khemeia
+    app.kubernetes.io/component: esmfold
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-esmfold-weights
+  volumeName: esmfold-weights
+  resources:
+    requests:
+      storage: 8Gi

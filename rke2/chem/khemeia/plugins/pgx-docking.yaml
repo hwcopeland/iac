@@ -1,0 +1,69 @@
+name: pgx-docking
+slug: pgx_docking
+version: "1.0"
+# REUSED image — pgx_docking is an orchestrator that ships in the existing gnina
+# container (gnina is the default docking engine). No new compute image
+# (workers TDD §7.2 / GEN-40). Ships in gnina's next build-* tag.
+image: zot.hwcopeland.net/chem/gnina:latest
+type: job
+database: khemeia
+visible: false
+
+input:
+  - name: resolution_id
+    type: string
+    required: true
+    description: "ResolvedVariant id (variant_resolutions.resolution_id) to dock"
+  - name: group_name
+    type: string
+    required: true
+    description: "Owning genome group name"
+  - name: variant_key
+    type: string
+    required: true
+    description: "Per-variant key within the group"
+  - name: drugs
+    type: list
+    required: true
+    description: "Explicit drug list — names | SMILES | library refs (core R4: no implicit panel)"
+  - name: engine
+    type: string
+    default: "gnina"
+    description: "Docking engine: gnina (default, in-image) | vina | diffdock (separate images)"
+  - name: pocket_strategy
+    type: string
+    default: "p2rank"
+    description: "Pocket boxing strategy on WT+mutant: p2rank (default) | fpocket | explicit"
+  - name: exhaustiveness
+    type: int
+    default: 32
+    description: "Docking search exhaustiveness per pose"
+
+output:
+  - name: ddg_bind
+    type: float
+    parse: 'metric:.*"ddg_bind_kcal_mol":([-\d.]+)'
+    reduce: max
+  - name: tanimoto
+    type: float
+    parse: 'metric:.*"tanimoto":([-\d.]+)'
+    reduce: min
+  - name: log
+    type: text
+
+artifacts:
+  - name: poses
+    pattern: "*pose*.pdbqt"
+    content_type: "chemical/x-pdbqt"
+    description: "WT and mutant docked drug poses"
+  - name: fingerprints
+    pattern: "*ifp*.json"
+    content_type: "application/json"
+    description: "ProLIF interaction fingerprints (WT, mutant) and the delta"
+
+resources:
+  computeClass: gpu
+  timeout: 24h
+
+command: |
+  cd /scripts && python3 pgx_docking.py 2>&1

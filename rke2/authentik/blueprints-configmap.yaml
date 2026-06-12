@@ -159,6 +159,30 @@ data:
       model: authentik_core.group
       permissions: []
       state: present
+    # Florida Man Bioscience (FMB) — genomics collaborators (Curtis, Tom).
+    # Grants Grafana Editor org-role (via kube-prometheus-stack role_attribute_path,
+    # name-based) + interactive Khemeia web OIDC access. Admin-on-Swamp-folder is a
+    # one-time Grafana folder permission, NOT derivable from the OIDC claim — see
+    # rke2/chem/khemeia/docs/swamp-management-runbook.md. Per khemeia-genomics-platform TDD §4.1.
+    # attributes are forward-looking metadata; Grafana maps on group NAME today (§4.2).
+    # MIRROR of blueprints/groups.yaml — keep both in sync (configmap is what is mounted).
+    # Membership is intentionally deferred: Curtis/Tom self-enroll via GitHub OAuth
+    # (pending-approval) first; add them later with a one-line !Find under users:, e.g.
+    #     users:
+    #     - !Find [authentik_core.user, [username, CURTIS_USERNAME_TBD]]
+    # (do NOT invent usernames — see runbook + TDD §4.3).
+    - attrs:
+        attributes:
+          grafana_role: Editor
+          swamp_admin: true
+          org: Florida Man Bioscience
+        name: Florida Man Bioscience
+      conditions: []
+      identifiers:
+        pk: 5f7efde0-fe9b-48f1-b443-e42947bf7f2e
+      model: authentik_core.group
+      permissions: []
+      state: present
   notifications.yaml: |
     version: 1
     metadata:

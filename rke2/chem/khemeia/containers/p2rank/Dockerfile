@@ -1,5 +1,11 @@
 # P2Rank — machine-learning pocket prediction for binding-site definition (WP-1)
 # Downloads a P2Rank release and wraps it in a Flask REST API.
+#
+# Dual role (GEN-31): the DEFAULT entrypoint (gunicorn, app:app) is the unchanged
+# P2Rank Flask sidecar. The genomics `pocket_proximity` worker
+# (scripts/pocket_proximity.py) is baked in as an ALTERNATE entrypoint, selected
+# by the plugin command override (`cd /opt/p2rank && python3 scripts/pocket_proximity.py`).
+# Reuses this same image — no new image, no new science.
 
 FROM ubuntu:22.04
 
@@ -32,6 +38,13 @@ COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app.py ./
+
+# Genomics pocket_proximity worker (GEN-31): baked into the P2Rank home so the
+# plugin command (`cd /opt/p2rank && python3 scripts/pocket_proximity.py`) finds
+# it. Pure stdlib + psycopg2-binary + boto3 (the PDB distance math is ported from
+# api/handlers_pocket.go, no extra structural libs). Does NOT change the default
+# gunicorn entrypoint below, so the existing P2Rank sidecar usage is unaffected.
+COPY scripts/ /opt/p2rank/scripts/
 
 EXPOSE 8000
 

@@ -8,3 +8,7 @@ resources:
   - garage-statefulset.yaml
   - garage-service.yaml
   - garage-lifecycle-cronjob.yaml
+  # Genomics (GEN-03): one-shot Job that creates the khemeia-structures and
+  # khemeia-fingerprints buckets and grants them to the existing khemeia-app
+  # key. Idempotent; safe to leave applied. See garage-genome-buckets-job.yaml.
+  - garage-genome-buckets-job.yaml
