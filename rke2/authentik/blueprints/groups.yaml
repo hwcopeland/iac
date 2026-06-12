@@ -28,17 +28,19 @@ entries:
 # one-time Grafana folder permission, NOT derivable from the OIDC claim — see
 # rke2/chem/khemeia/docs/swamp-management-runbook.md. Per khemeia-genomics-platform TDD §4.1.
 # attributes are forward-looking metadata; Grafana maps on group NAME today (§4.2).
-# Membership is intentionally deferred: Curtis/Tom self-enroll via GitHub OAuth
-# (pending-approval) first; add them later with a one-line !Find under users:, e.g.
-#     users:
-#     - !Find [authentik_core.user, [username, CURTIS_USERNAME_TBD]]
-# (do NOT invent usernames — see runbook + TDD §4.3).
+# Members: curtisdearing, jonesnoaht (provided 2026-06-12). !Find requires the
+# user to already exist in Authentik (they must have logged in / enrolled once);
+# if a blueprint apply errors "user not found", have them sign in to
+# auth.hwcopeland.net once, then re-run update.sh.
 - attrs:
     attributes:
       grafana_role: Editor
       swamp_admin: true
       org: Florida Man Bioscience
     name: Florida Man Bioscience
+    users:
+    - !Find [authentik_core.user, [username, curtisdearing]]
+    - !Find [authentik_core.user, [username, jonesnoaht]]
   conditions: []
   identifiers:
     pk: 5f7efde0-fe9b-48f1-b443-e42947bf7f2e
