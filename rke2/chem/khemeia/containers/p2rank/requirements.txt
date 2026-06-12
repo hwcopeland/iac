@@ -1,3 +1,9 @@
 flask
 gunicorn
 numpy
+# Genomics pocket_proximity worker deps (GEN-31). The worker
+# (scripts/pocket_proximity.py) runs as an ALTERNATE entrypoint in this same
+# image; it talks to Postgres + Garage S3. The Flask sidecar (app.py, the
+# default CMD) does NOT import these, so the existing p2rank usage is unaffected.
+psycopg2-binary
+boto3

@@ -1,0 +1,22 @@
+# ddG-stability CPU worker deps. torch (CPU wheel) + numpy<2 are installed
+# earlier in the Dockerfile (pinned, CPU index). ThermoMPNN / ProteinMPNN /
+# DDGun engine code + checkpoints are git-cloned in the Dockerfile from their
+# pinned MIT/GPL sources (no PyPI release). This file holds the rest.
+#
+# Versions pinned for reproducible cluster (Kaniko) builds. `latest` is not a
+# version.
+
+# PDB I/O + mutation application + structural superposition. biotite parses the
+# WT PDB and lets us build the ProteinMPNN feature dict; biopython is the
+# fallback parser, matching the esmfold/diffdock worker stack.
+biotite==0.40.0
+biopython==1.79
+
+# ThermoMPNN / ProteinMPNN runtime helpers.
+ml-collections==0.1.1
+scipy==1.10.1
+
+# Garage S3 (WT structure in, report.json out) + Postgres (job row + resolution
+# + staging).
+boto3==1.34.0
+psycopg2-binary==2.9.9

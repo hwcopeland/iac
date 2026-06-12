@@ -1,0 +1,86 @@
+---
+# One-shot Job that pre-populates the esmfold-weights PVC on nixos-gpu so the
+# first real fold isn't a cold multi-GB download (R-W1, workers TDD §4.1).
+#
+# Analogous to the vina-gpu kernel-cache warmup: run once at rollout, it
+# downloads esmfold_v1 + the ESM-2 t36_3B backbone into the node-local weights
+# cache. Idempotent — if the checkpoint is already present in $TORCH_HOME the
+# Job exits 0 without re-downloading, so it is safe to re-apply.
+#
+# Pinned to nixos-gpu because the weights PVC is a node-local hostPath there.
+# No GPU device is requested (weights only need to land on disk), but the
+# NixOS driver mounts are unnecessary for a pure download — we mount only the
+# weights PVC. Uses the esmfold image (which carries fair-esm + torch) so the
+# download path is identical to the one fold.py uses at runtime.
+#
+# Usage:
+#   kubectl apply -f deploy/esmfold-weights-warm-job.yaml
+#   kubectl logs -f -n chem job/esmfold-weights-warm
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: esmfold-weights-warm
+  namespace: chem
+  labels:
+    app.kubernetes.io/name: esmfold-weights-warm
+    app.kubernetes.io/component: esmfold
+    app.kubernetes.io/part-of: khemeia
+spec:
+  backoffLimit: 3
+  ttlSecondsAfterFinished: 86400  # Clean up 24h after completion
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: esmfold-weights-warm
+    spec:
+      restartPolicy: OnFailure
+      serviceAccountName: khemeia-controller
+      imagePullSecrets:
+        - name: zot-pull-secret
+      # Pin to the GPU node: the weights PVC is a node-local hostPath on nixos-gpu.
+      nodeSelector:
+        kubernetes.io/hostname: nixos-gpu
+      tolerations:
+        - key: "gpu"
+          value: "true"
+          effect: "NoSchedule"
+      containers:
+        - name: warm
+          image: zot.hwcopeland.net/chem/esmfold:latest
+          imagePullPolicy: Always
+          env:
+            - name: TORCH_HOME
+              value: /opt/esmfold/weights
+            # Force the download path even though no GenomeJob is being served.
+            - name: WEIGHTS_PRELOAD
+              value: "true"
+          # Idempotent guard: only fetch when the esmfold_v1 checkpoint is
+          # absent. torch.hub stores downloads under $TORCH_HOME/hub/checkpoints.
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+              echo "=== ESMFold weights warm ==="
+              if ls "$TORCH_HOME"/hub/checkpoints/esmfold_*.pt >/dev/null 2>&1 \
+                 || ls "$TORCH_HOME"/hub/checkpoints/esm2_*.pt >/dev/null 2>&1; then
+                echo "Weights already present in $TORCH_HOME — nothing to do."
+                exit 0
+              fi
+              echo "Cache empty — downloading esmfold_v1 + ESM-2 backbone into $TORCH_HOME ..."
+              python3 -c "import torch; import esm; esm.pretrained.esmfold_v1()"
+              echo "=== Warm complete ==="
+          volumeMounts:
+            - name: esmfold-weights
+              mountPath: /opt/esmfold/weights
+          resources:
+            requests:
+              cpu: "1"
+              memory: 4Gi
+            limits:
+              cpu: "2"
+              memory: 16Gi
+      volumes:
+        - name: esmfold-weights
+          persistentVolumeClaim:
+            claimName: esmfold-weights

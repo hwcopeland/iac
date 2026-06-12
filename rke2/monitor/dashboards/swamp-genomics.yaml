@@ -1,0 +1,297 @@
+# The "Swamp" — Khemeia genomics activity dashboard (platform TDD §5, GEN-51).
+#
+# Auto-loaded by the kube-prometheus-stack Grafana sidecar (searchNamespace: ALL)
+# from any namespace; lands in a dedicated "Swamp" folder. Mirrors the structure,
+# labels, and JSON-model style of rke2/chem/khemeia/deploy/grafana-dashboard-khemeia.yaml.
+#
+# DATA-SOURCE REALITY (read before "why is this No data?"):
+#   - Prometheus uid="prometheus", Loki uid="P8E80F9AEF21F6940" (verified estate UIDs).
+#   - The genome metric names below are FROZEN (Phase 0, api/genome_metrics.go) but are
+#     NOT EMITTED until GEN-12 (controller reconcile lifecycle counters) and GEN-22
+#     (result-writer drain distributions) land. Those panels render "No data" cleanly
+#     by design until emission arrives — that is expected, not a bug.
+#   - Day-one working panels: #14 REST latency (existing http_server_request_duration_seconds_*),
+#     #15 Loki failure tail, and the Loki FALLBACK rows on #1 and #8.
+#   - No Postgres datasource exists in the monitor stack (verified — none in rke2/monitor/).
+#     The TDD's SQL sketches for panels 9/10 are therefore NOT wired; those panels use the
+#     Prometheus histogram path only. Do NOT add a datasource here (parallel-peer scope).
+#   - All Prom queries filter job="khemeia-controller" (verified ServiceMonitor scrape job).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: swamp-genomics-dashboard
+  namespace: monitor
+  labels:
+    grafana_dashboard: "1"
+  annotations:
+    grafana_folder: "Swamp"
+data:
+  swamp-genomics.json: |-
+    {
+      "uid": "swamp-genomics",
+      "title": "The Swamp — Genomics Activity",
+      "schemaVersion": 38,
+      "version": 1,
+      "refresh": "1m",
+      "time": { "from": "now-6h", "to": "now" },
+      "timepicker": {},
+      "tags": ["khemeia", "genomics", "swamp"],
+      "panels": [
+        {
+          "id": 100, "type": "row", "title": "Throughput & Health", "collapsed": false,
+          "gridPos": { "x": 0, "y": 0, "w": 24, "h": 1 }, "panels": []
+        },
+        {
+          "id": 1, "type": "timeseries", "title": "GenomeJob throughput (by calc / status)",
+          "description": "Job rate split by calculation and status. NEW metric khemeia_genome_calc_jobs_total (GEN-12) — 'No data' until controller emits.",
+          "gridPos": { "x": 0, "y": 1, "w": 12, "h": 8 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": { "defaults": { "unit": "short", "custom": { "lineWidth": 2, "fillOpacity": 10 } } },
+          "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull"] } },
+          "targets": [
+            { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" },
+              "expr": "sum by (calculation, status) (rate(khemeia_genome_calc_jobs_total{job=\"khemeia-controller\"}[$__rate_interval]))",
+              "legendFormat": "{{calculation}} / {{status}}" }
+          ]
+        },
+        {
+          "id": 2, "type": "timeseries", "title": "GenomeJob throughput — Loki FALLBACK (works today)",
+          "description": "Coarse Loki count of genome_calc Completed/Failed lines until the Prometheus metric lands. No per-calc/status split.",
+          "gridPos": { "x": 12, "y": 1, "w": 12, "h": 8 },
+          "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" },
+          "fieldConfig": { "defaults": { "unit": "short", "custom": { "lineWidth": 2, "fillOpacity": 10 } } },
+          "options": { "legend": { "displayMode": "list", "placement": "bottom" } },
+          "targets": [
+            { "refId": "A", "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" },
+              "expr": "sum(count_over_time({namespace=\"chem\"} |= \"genome_calc\" |~ \"Completed|Failed\" [$__interval]))",
+              "legendFormat": "genome_calc terminal events" }
+          ]
+        },
+        {
+          "id": 3, "type": "stat", "title": "In-flight GenomeJobs",
+          "description": "NEW gauge khemeia_genome_calc_jobs_inflight (GEN-12).",
+          "gridPos": { "x": 0, "y": 9, "w": 6, "h": 5 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "fixed", "fixedColor": "blue" }, "thresholds": { "mode": "absolute", "steps": [{ "color": "blue", "value": null }] } } },
+          "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background" },
+          "targets": [
+            { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" },
+              "expr": "sum(khemeia_genome_calc_jobs_inflight{job=\"khemeia-controller\"})" }
+          ]
+        },
+        {
+          "id": 4, "type": "stat", "title": "Group success rate (1h)",
+          "description": "NEW counter khemeia_genome_groups_total{status} (GEN-12).",
+          "gridPos": { "x": 6, "y": 9, "w": 6, "h": 5 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1, "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "yellow", "value": 0.8 }, { "color": "green", "value": 0.95 }] }, "color": { "mode": "thresholds" } } },
+          "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background" },
+          "targets": [
+            { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" },
+              "expr": "sum(rate(khemeia_genome_groups_total{job=\"khemeia-controller\",status=\"Completed\"}[1h])) / clamp_min(sum(rate(khemeia_genome_groups_total{job=\"khemeia-controller\"}[1h])), 1)" }
+          ]
+        },
+        {
+          "id": 5, "type": "timeseries", "title": "Per-calc failure rate",
+          "description": "Fraction of jobs Failed per calc. NEW khemeia_genome_calc_jobs_total (GEN-12).",
+          "gridPos": { "x": 12, "y": 9, "w": 12, "h": 5 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": { "defaults": { "unit": "percentunit", "custom": { "lineWidth": 2, "fillOpacity": 10 } } },
+          "options": { "legend": { "displayMode": "list", "placement": "bottom" } },
+          "targets": [
+            { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" },
+              "expr": "sum by (calculation) (rate(khemeia_genome_calc_jobs_total{job=\"khemeia-controller\",status=\"Failed\"}[10m])) / clamp_min(sum by (calculation) (rate(khemeia_genome_calc_jobs_total{job=\"khemeia-controller\"}[10m])), 1)",
+              "legendFormat": "{{calculation}}" }
+          ]
+        },
+        {
+          "id": 200, "type": "row", "title": "Variant Resolution (adapter)", "collapsed": false,
+          "gridPos": { "x": 0, "y": 14, "w": 24, "h": 1 }, "panels": []
+        },
+        {
+          "id": 6, "type": "timeseries", "title": "Variants processed (submitted / resolved / rejected)",
+          "description": "NEW khemeia_variants_submitted_total + khemeia_variant_resolutions_total{outcome} (GEN-10/11).",
+          "gridPos": { "x": 0, "y": 15, "w": 12, "h": 8 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": { "defaults": { "unit": "short", "custom": { "lineWidth": 2, "fillOpacity": 10 } } },
+          "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull"] } },
+          "targets": [
+            { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" },
+              "expr": "sum(rate(khemeia_variants_submitted_total{job=\"khemeia-controller\"}[$__rate_interval]))",
+              "legendFormat": "submitted" },
+            { "refId": "B", "datasource": { "type": "prometheus", "uid": "prometheus" },
+              "expr": "sum by (outcome) (rate(khemeia_variant_resolutions_total{job=\"khemeia-controller\"}[$__rate_interval]))",
+              "legendFormat": "{{outcome}}" }
+          ]
+        },
+        {
+          "id": 7, "type": "stat", "title": "Resolution cache-hit ratio (30m)",
+          "description": "NEW khemeia_variant_resolution_cache_total{result} (GEN-10).",
+          "gridPos": { "x": 12, "y": 15, "w": 6, "h": 8 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1, "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "yellow", "value": 0.5 }, { "color": "green", "value": 0.8 }] }, "color": { "mode": "thresholds" } } },
+          "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background" },
+          "targets": [
+            { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" },
+              "expr": "sum(rate(khemeia_variant_resolution_cache_total{job=\"khemeia-controller\",result=\"hit\"}[30m])) / clamp_min(sum(rate(khemeia_variant_resolution_cache_total{job=\"khemeia-controller\"}[30m])), 1)" }
+          ]
+        },
+        {
+          "id": 8, "type": "piechart", "title": "Structure source mix (6h)",
+          "description": "AlphaFold vs ESMFold-fallback vs PDB. NEW khemeia_variant_resolutions_total{structure_source} (GEN-10/12).",
+          "gridPos": { "x": 18, "y": 15, "w": 6, "h": 8 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": { "defaults": { "unit": "short", "custom": { "hideFrom": { "legend": false, "tooltip": false, "viz": false } } } },
+          "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "pieType": "donut", "legend": { "displayMode": "list", "placement": "right", "values": ["value"] } },
+          "targets": [
+            { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" },
+              "expr": "sum by (structure_source) (increase(khemeia_variant_resolutions_total{job=\"khemeia-controller\",outcome=\"resolved\"}[6h]))",
+              "legendFormat": "{{structure_source}}" }
+          ]
+        },
+        {
+          "id": 9, "type": "table", "title": "Resolution rejections by error code (6h)",
+          "description": "NEW khemeia_variant_resolution_errors_total{code} (GEN-10). FALLBACK: Loki on E_* patterns (see panel 10).",
+          "gridPos": { "x": 0, "y": 23, "w": 12, "h": 7 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": { "defaults": { "unit": "short", "custom": { "align": "auto" } } },
+          "options": { "showHeader": true },
+          "targets": [
+            { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" },
+              "expr": "sum by (code) (increase(khemeia_variant_resolution_errors_total{job=\"khemeia-controller\"}[6h]))",
+              "legendFormat": "{{code}}", "format": "table", "instant": true }
+          ]
+        },
+        {
+          "id": 10, "type": "timeseries", "title": "Rejection codes — Loki FALLBACK (works today)",
+          "description": "Counts E_* error-code log lines until the Prometheus error counter lands.",
+          "gridPos": { "x": 12, "y": 23, "w": 12, "h": 7 },
+          "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" },
+          "fieldConfig": { "defaults": { "unit": "short", "custom": { "lineWidth": 2, "fillOpacity": 10 } } },
+          "options": { "legend": { "displayMode": "list", "placement": "bottom" } },
+          "targets": [
+            { "refId": "A", "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" },
+              "expr": "sum by (code) (count_over_time({namespace=\"chem\"} |~ \"E_(WT_MISMATCH|VARIANT_NOT_MISSENSE|RESOLVE_UPSTREAM|UNIPROT_NOT_FOUND)\" | regexp \"(?P<code>E_[A-Z_]+)\" [$__interval]))",
+              "legendFormat": "{{code}}" }
+          ]
+        },
+        {
+          "id": 300, "type": "row", "title": "Result Distributions (science signal)", "collapsed": false,
+          "gridPos": { "x": 0, "y": 30, "w": 24, "h": 1 }, "panels": []
+        },
+        {
+          "id": 11, "type": "heatmap", "title": "ΔΔG-fold distribution (kcal/mol)",
+          "description": "NEW histogram khemeia_genome_ddg_fold_kcal_mol (GEN-22, result-writer drain).",
+          "gridPos": { "x": 0, "y": 31, "w": 8, "h": 8 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": { "defaults": { "unit": "short", "custom": { "hideFrom": { "legend": false, "tooltip": false, "viz": false } } } },
+          "options": { "calculate": false, "cellGap": 1, "color": { "scheme": "Spectral", "mode": "scheme" }, "yAxis": { "unit": "short" } },
+          "targets": [
+            { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" },
+              "expr": "sum by (le) (rate(khemeia_genome_ddg_fold_kcal_mol_bucket{job=\"khemeia-controller\"}[1h]))",
+              "legendFormat": "{{le}}", "format": "heatmap" }
+          ]
+        },
+        {
+          "id": 12, "type": "heatmap", "title": "PGx ΔΔG_bind distribution (kcal/mol)",
+          "description": "NEW histogram khemeia_genome_ddg_bind_kcal_mol (GEN-22).",
+          "gridPos": { "x": 8, "y": 31, "w": 8, "h": 8 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": { "defaults": { "unit": "short" } },
+          "options": { "calculate": false, "cellGap": 1, "color": { "scheme": "Spectral", "mode": "scheme" }, "yAxis": { "unit": "short" } },
+          "targets": [
+            { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" },
+              "expr": "sum by (le) (rate(khemeia_genome_ddg_bind_kcal_mol_bucket{job=\"khemeia-controller\"}[1h]))",
+              "legendFormat": "{{le}}", "format": "heatmap" }
+          ]
+        },
+        {
+          "id": 13, "type": "stat", "title": "Binding-altering variants (tanimoto < 0.7, 6h)",
+          "description": "Low-tanimoto fingerprint-delta mass. NEW histogram khemeia_genome_fp_delta_tanimoto (GEN-22).",
+          "gridPos": { "x": 16, "y": 31, "w": 8, "h": 8 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "fixed", "fixedColor": "orange" }, "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "orange", "value": 1 }] } } },
+          "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background" },
+          "targets": [
+            { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" },
+              "expr": "sum(increase(khemeia_genome_fp_delta_tanimoto_bucket{job=\"khemeia-controller\",le=\"0.7\"}[6h]))" }
+          ]
+        },
+        {
+          "id": 14, "type": "stat", "title": "Pocket-proximity hit rate (6h)",
+          "description": "Fraction of mutations within pocket cutoff. NEW khemeia_genome_pocket_proximity_total{within_cutoff} (GEN-22).",
+          "gridPos": { "x": 0, "y": 39, "w": 8, "h": 7 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1, "thresholds": { "mode": "absolute", "steps": [{ "color": "blue", "value": null }] }, "color": { "mode": "thresholds" } } },
+          "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background" },
+          "targets": [
+            { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" },
+              "expr": "sum(rate(khemeia_genome_pocket_proximity_total{job=\"khemeia-controller\",within_cutoff=\"true\"}[6h])) / clamp_min(sum(rate(khemeia_genome_pocket_proximity_total{job=\"khemeia-controller\"}[6h])), 1)" }
+          ]
+        },
+        {
+          "id": 15, "type": "heatmap", "title": "ESMFold pLDDT distribution",
+          "description": "NEW histogram khemeia_genome_esmfold_plddt (GEN-22). Low-pLDDT mass flags low-confidence models.",
+          "gridPos": { "x": 8, "y": 39, "w": 16, "h": 7 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": { "defaults": { "unit": "short" } },
+          "options": { "calculate": false, "cellGap": 1, "color": { "scheme": "RdYlGn", "mode": "scheme" }, "yAxis": { "unit": "short" } },
+          "targets": [
+            { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" },
+              "expr": "sum by (le) (rate(khemeia_genome_esmfold_plddt_bucket{job=\"khemeia-controller\"}[1h]))",
+              "legendFormat": "{{le}}", "format": "heatmap" }
+          ]
+        },
+        {
+          "id": 400, "type": "row", "title": "Timing & Latency", "collapsed": false,
+          "gridPos": { "x": 0, "y": 46, "w": 24, "h": 1 }, "panels": []
+        },
+        {
+          "id": 16, "type": "timeseries", "title": "Per-calc job duration p50 / p95",
+          "description": "NEW histogram khemeia_genome_calc_duration_seconds{calculation} (GEN-12). PGx p95 is the GPU-cost watch signal.",
+          "gridPos": { "x": 0, "y": 47, "w": 12, "h": 8 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": { "defaults": { "unit": "s", "custom": { "lineWidth": 2 } } },
+          "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull"] } },
+          "targets": [
+            { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" },
+              "expr": "histogram_quantile(0.50, sum by (le, calculation) (rate(khemeia_genome_calc_duration_seconds_bucket{job=\"khemeia-controller\"}[10m])))",
+              "legendFormat": "p50 {{calculation}}" },
+            { "refId": "B", "datasource": { "type": "prometheus", "uid": "prometheus" },
+              "expr": "histogram_quantile(0.95, sum by (le, calculation) (rate(khemeia_genome_calc_duration_seconds_bucket{job=\"khemeia-controller\"}[10m])))",
+              "legendFormat": "p95 {{calculation}}" }
+          ]
+        },
+        {
+          "id": 17, "type": "timeseries", "title": "REST latency /api/v1/genome/* p50 / p99 (works today)",
+          "description": "EXISTING http_server_request_duration_seconds_* (otelhttp). Day-one panel; requires http_route to be route-templated.",
+          "gridPos": { "x": 12, "y": 47, "w": 12, "h": 8 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": { "defaults": { "unit": "ms", "custom": { "lineWidth": 2 } } },
+          "options": { "legend": { "displayMode": "list", "placement": "bottom" } },
+          "targets": [
+            { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" },
+              "expr": "histogram_quantile(0.50, sum by (le) (rate(http_server_request_duration_seconds_bucket{job=\"khemeia-controller\",http_route=~\"/api/v1/genome.*\"}[$__rate_interval]))) * 1000",
+              "legendFormat": "p50" },
+            { "refId": "B", "datasource": { "type": "prometheus", "uid": "prometheus" },
+              "expr": "histogram_quantile(0.99, sum by (le) (rate(http_server_request_duration_seconds_bucket{job=\"khemeia-controller\",http_route=~\"/api/v1/genome.*\"}[$__rate_interval]))) * 1000",
+              "legendFormat": "p99" }
+          ]
+        },
+        {
+          "id": 500, "type": "row", "title": "Live Failure Tail", "collapsed": false,
+          "gridPos": { "x": 0, "y": 55, "w": 24, "h": 1 }, "panels": []
+        },
+        {
+          "id": 18, "type": "logs", "title": "Recent genome failures (live tail, works today)",
+          "description": "EXISTING Loki stream. The 3am triage panel — always works.",
+          "gridPos": { "x": 0, "y": 56, "w": 24, "h": 9 },
+          "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" },
+          "options": { "showTime": true, "showLabels": false, "wrapLogMessage": true, "prettifyLogMessage": false, "enableLogDetails": true, "dedupStrategy": "none", "sortOrder": "Descending" },
+          "targets": [
+            { "refId": "A", "datasource": { "type": "loki", "uid": "P8E80F9AEF21F6940" },
+              "expr": "{namespace=\"chem\"} |~ \"genome\" |~ \"FAILED:|E_[A-Z_]+\"" }
+          ]
+        }
+      ]
+    }

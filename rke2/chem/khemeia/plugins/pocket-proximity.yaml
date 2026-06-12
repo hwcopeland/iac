@@ -1,0 +1,56 @@
+name: pocket-proximity
+slug: pocket_proximity
+version: "1.0"
+# REUSES the existing P2Rank image — no new image is built (GEN-31). The
+# pocket_proximity worker ships in this image's next build of zot/chem/p2rank
+# alongside the unchanged Flask sidecar; the command override below selects the
+# worker entrypoint instead of gunicorn.
+image: zot.hwcopeland.net/chem/p2rank:latest
+type: job
+database: khemeia
+visible: false
+
+input:
+  - name: resolution_id
+    type: string
+    required: true
+    description: "ResolvedVariant id (variant_resolutions.resolution_id) to analyze"
+  - name: group_name
+    type: string
+    required: true
+    description: "Owning genome group name"
+  - name: variant_key
+    type: string
+    required: true
+    description: "Per-variant key within the group"
+  - name: detector
+    type: string
+    default: "p2rank"
+    description: "Pocket detector: p2rank (fpocket is a documented alt, not wired here)"
+  - name: cutoff_ang
+    type: float
+    default: 6.0
+    description: "Proximity cutoff (Angstrom) for pocket_proximity_flag"
+
+output:
+  - name: distance_ang
+    type: float
+    parse: 'metric:.*"distance_ang":([-\d.]+)'
+  - name: in_pocket
+    type: string
+    parse: 'metric:.*"in_pocket":(true|false)'
+  - name: log
+    type: text
+
+artifacts:
+  - name: pockets
+    pattern: "*.csv"
+    content_type: "text/csv"
+    description: "p2rank pocket set (pocket_proximity/{rid}/pockets.csv)"
+
+resources:
+  computeClass: cpu
+  timeout: 1h
+
+command: |
+  cd /opt/p2rank && python3 scripts/pocket_proximity.py 2>&1

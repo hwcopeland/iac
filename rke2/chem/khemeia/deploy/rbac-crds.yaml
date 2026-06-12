@@ -30,6 +30,7 @@ rules:
       - librarypreps
       - ingeststructurejobs
       - reportjobs
+      - genomejobs
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   # Status subresource updates — required for the controller to write phase,
   # conditions, events, and stage-specific status fields.
@@ -47,6 +48,7 @@ rules:
       - librarypreps/status
       - ingeststructurejobs/status
       - reportjobs/status
+      - genomejobs/status
     verbs: ["get", "update", "patch"]
 ---
 # Bind the ClusterRole to the khemeia-controller ServiceAccount in chem namespace.

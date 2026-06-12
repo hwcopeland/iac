@@ -6,3 +6,4 @@ resources:
   - dockjob.yaml
   - refinejob.yaml
   - admetjob.yaml
+  - genomejob.yaml
