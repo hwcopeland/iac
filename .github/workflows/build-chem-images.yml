@@ -82,6 +82,22 @@ jobs:
                   "prefixes": ["rke2/chem/khemeia/result-writer/"],
               },
               {
+                  "key": "esmfold",
+                  "name": "esmfold",
+                  "image": "zot.hwcopeland.net/chem/esmfold",
+                  "dockerfile": "rke2/chem/khemeia/containers/esmfold/Dockerfile",
+                  "context": "rke2/chem/khemeia/containers/esmfold/",
+                  "prefixes": ["rke2/chem/khemeia/containers/esmfold/"],
+              },
+              {
+                  "key": "ddg",
+                  "name": "ddg",
+                  "image": "zot.hwcopeland.net/chem/ddg",
+                  "dockerfile": "rke2/chem/khemeia/containers/ddg/Dockerfile",
+                  "context": "rke2/chem/khemeia/containers/ddg/",
+                  "prefixes": ["rke2/chem/khemeia/containers/ddg/"],
+              },
+              {
                   "key": "dfratom",
                   "name": "dfratom",
                   "image": "zot.hwcopeland.net/chem/dfratom",
