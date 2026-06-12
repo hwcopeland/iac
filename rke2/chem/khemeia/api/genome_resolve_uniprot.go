@@ -96,6 +96,13 @@ func (rsv *Resolver) resolveUniProt(ctx context.Context, in VariantInput, norm n
 		}
 	}
 
+	// A caller may pass an isoform-suffixed accession (e.g. "P51580-2"); strip to
+	// the bare accession before deriving the canonical isoform and fetching the
+	// sequence — otherwise we'd build "P51580-2-1" and query a non-existent
+	// isoform / break the upstream lookups. (Copilot review)
+	if i := strings.IndexByte(acc, '-'); i > 0 {
+		acc = acc[:i]
+	}
 	isoform = acc + "-1" // canonical isoform by default (core §5.2)
 
 	sequence, err = rsv.uniprot.CanonicalSequence(ctx, acc)

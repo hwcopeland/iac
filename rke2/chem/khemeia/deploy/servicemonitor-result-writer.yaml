@@ -1,0 +1,24 @@
+# Scrapes the result-writer's /metrics (port 8081 via the result-writer Service).
+# The genome distribution histograms (ddg_fold/ddg_bind/fp_delta/esmfold_plddt/
+# pocket_proximity) are emitted at the result-writer drain choke-point, NOT the
+# controller — so the controller ServiceMonitor (servicemonitor.yaml) does not
+# cover them. Without this, those Swamp-dashboard panels never get data.
+# (Copilot review)
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: khemeia-result-writer
+  namespace: chem
+  labels:
+    release: kube-prometheus-stack
+spec:
+  selector:
+    matchLabels:
+      app: result-writer
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 30s
+  namespaceSelector:
+    matchNames:
+      - chem
