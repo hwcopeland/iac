@@ -5,6 +5,13 @@ grafana:
     enabled: true
     existingClaim: kube-prometheus-stack-grafana
     type: pvc
+  # The Grafana PVC is ReadWriteOnce. With the chart default RollingUpdate, a
+  # rollout schedules the new pod before terminating the old one, and the two
+  # cannot both attach the RWO volume -> Multi-Attach deadlock (the new pod
+  # hangs in Init forever). Recreate terminates the old pod first so the volume
+  # is free for the replacement. Required for any single-replica RWO Grafana.
+  deploymentStrategy:
+    type: Recreate
   envFromSecrets:
     - name: grafana-oidc-secret
       optional: false
