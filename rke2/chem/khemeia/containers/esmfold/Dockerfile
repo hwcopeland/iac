@@ -68,9 +68,18 @@ RUN pip3 install --no-cache-dir -r requirements.txt
 ENV CUDA_HOME=/usr/local/cuda
 ENV TORCH_CUDA_ARCH_LIST="8.6"
 ENV FORCE_CUDA=1
-RUN pip3 install --no-cache-dir \
-    'dllogger @ git+https://github.com/NVIDIA/dllogger.git@0478734ff7be75adde8d160e04872664d1c62e5f' \
-    'openfold @ git+https://github.com/aqlaboratory/openfold.git@42e71db7fa327e0810eb0e371abc9f82aa9b7a6a'
+# dllogger installs cleanly via pip. openfold v1.0.1 hardcodes `-std=c++14` in
+# its CUDA-extension build, but torch 2.1.2's headers require C++17 — so clone at
+# the pinned SHA, patch c++14->c++17 in setup.py, then install from the local
+# tree (keeps the supply-chain pin; only the C++ standard changes). ninja speeds
+# the extension compile and avoids the slow/flaky distutils fallback.
+RUN pip3 install --no-cache-dir ninja \
+    'dllogger @ git+https://github.com/NVIDIA/dllogger.git@0478734ff7be75adde8d160e04872664d1c62e5f'
+RUN git clone https://github.com/aqlaboratory/openfold.git /tmp/openfold \
+    && git -C /tmp/openfold checkout 42e71db7fa327e0810eb0e371abc9f82aa9b7a6a \
+    && sed -i 's/c++14/c++17/g' /tmp/openfold/setup.py \
+    && pip3 install --no-cache-dir /tmp/openfold \
+    && rm -rf /tmp/openfold
 
 # NOTE: no model-weight download here. Weights load at runtime from the PVC
 # ($TORCH_HOME), populated by the GEN-21 warm Job. This keeps the image lean and
