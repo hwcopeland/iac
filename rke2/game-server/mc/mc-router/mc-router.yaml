@@ -17,12 +17,20 @@
 #   skies2.mc.hwcopeland.net -> svc/atm9skies-island  (ATM9-Sky island)
 #   earth.mc.hwcopeland.net  -> svc/mc-earth          (Terra++ Earth)
 #
-# AUTO-SCALE: --auto-scale-up wakes a replicas:0 StatefulSet to 1 when a player
-# connects (mc-router holds the handshake up to ~60s showing a "starting" MOTD).
-# --auto-scale-down returns it to 0 after --auto-scale-down-after of no
-# connections. mc-router maps a routed Service to the StatefulSet it scales BY
-# NAME, so for every backend: Service.metadata.name == StatefulSet.metadata.name
-# == StatefulSet.spec.serviceName (see each backend manifest).
+# AUTO-SCALE (UP ONLY): --auto-scale-up wakes a replicas:0 StatefulSet to 1 when
+# a player connects (mc-router holds the handshake up to ~60s showing a "starting"
+# MOTD). mc-router maps a routed Service to the StatefulSet it scales BY NAME, so
+# for every backend: Service.metadata.name == StatefulSet.metadata.name ==
+# StatefulSet.spec.serviceName (see each backend manifest).
+#
+# SCALE-DOWN IS DELIBERATELY NOT mc-router's job (see mc-autosleep.yaml).
+# mc-router's --auto-scale-down is connection-AGE based, not player-presence
+# based: it arms --auto-scale-down-after on connect and fires it regardless of
+# whether anyone is still online, so any session longer than the timer gets
+# force-kicked at the timer mark (hit in prod 2026-06-07). We removed those flags
+# and moved scale-down to the mc-autosleep CronJob, which scales to 0 only after
+# RCON reports zero players for 15m. Re-adding --auto-scale-down here will
+# reintroduce the mid-session kicks — don't.
 #
 # BOOT-TIME CAVEAT: cold boot is ~2 min but mc-router only holds for ~60s, so the
 # FIRST join after sleep times out at the "waking up" screen; the player simply
@@ -81,11 +89,10 @@ spec:
             - "--api-binding=:8080"
             # Discover backends from annotated Services in-cluster.
             - "--in-kube-cluster"
-            # Wake a sleeping (replicas:0) StatefulSet on first connect...
+            # Wake a sleeping (replicas:0) StatefulSet on first connect.
+            # Scale-DOWN is handled by the mc-autosleep CronJob (player-count
+            # aware), NOT by --auto-scale-down — see the AUTO-SCALE header note.
             - "--auto-scale-up"
-            # ...and put it back to sleep after 15m of no connections.
-            - "--auto-scale-down"
-            - "--auto-scale-down-after=15m"
             # Status-ping responses for autoscaled servers. These DO work on
             # k8s — the connector's serveStatus() picks loading-vs-asleep
             # regardless of platform (server/connector.go); the "Docker servers"
