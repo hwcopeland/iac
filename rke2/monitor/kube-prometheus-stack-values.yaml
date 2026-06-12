@@ -32,6 +32,12 @@ grafana:
       # Grafana session cookie needs SameSite=None (over HTTPS) to be sent inside
       # the iframe — otherwise the embed hits a login wall.
       cookie_samesite: none
+      # SameSite=None cookies are REJECTED by browsers unless also marked Secure.
+      # Without this, Grafana's transient oauth_state cookie is dropped, the OAuth
+      # callback fails "missing state cookie", and auto_login loops -> the user
+      # hits ERR_TOO_MANY_REDIRECTS. Required whenever cookie_samesite is none.
+      # Traffic is HTTPS at the browser<->Cloudflare edge, so Secure is correct.
+      cookie_secure: true
     auth:
       disable_login_form: true
     auth.generic_oauth:
