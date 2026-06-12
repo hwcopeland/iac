@@ -17,7 +17,7 @@ spec:
         - name: zot-pull-secret
       containers:
         - name: u4u-engine-frontend
-          image: zot.hwcopeland.net/florida-man-bioscience/u4u-engine-frontend:main@sha256:48cd6615f26daec3e232731b9ea62d45dc060fbb349b87c589263a92adca7cc8 # {"$imagepolicy": "tooling:u4u-engine-frontend"}
+          image: zot.hwcopeland.net/florida-man-bioscience/u4u-engine-frontend:main@sha256:97c8af0ce35993d86f21425a464aba3e294c2599d3ee33fd8cb85ddf6c861856 # {"$imagepolicy": "tooling:u4u-engine-frontend"}
           ports:
             - containerPort: 3000
           livenessProbe:
