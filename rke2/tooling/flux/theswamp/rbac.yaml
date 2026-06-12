@@ -1,0 +1,61 @@
+---
+# Florida Man Bioscience collaborator access — SCOPED TO theswamp ONLY.
+#
+# Every binding here is a RoleBinding (namespace-scoped), so NOTHING grants any
+# access outside theswamp. Two ways in, both landing on the built-in in-namespace
+# `admin` ClusterRole (full control of workloads/config/secrets/etc. within the
+# namespace, but cannot touch other namespaces, nodes, or cluster resources):
+#
+#   1. OIDC group — members of the Authentik "Florida Man Bioscience" group
+#      (curtisdearing, jonesnoaht) get admin when they kubectl via SSO.
+#   2. API key — the `swamp-dev` ServiceAccount token is a static credential a
+#      collaborator drops into a kubeconfig (no browser). See ACCESS.md.
+#
+# To tighten later, swap `admin` -> `edit` (removes in-namespace RBAC management).
+
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: fmb-swamp-admin
+  namespace: theswamp
+subjects:
+  - kind: Group
+    name: "oidc:Florida Man Bioscience"
+    apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: ClusterRole
+  name: admin
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: swamp-dev
+  namespace: theswamp
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: swamp-dev-admin
+  namespace: theswamp
+subjects:
+  - kind: ServiceAccount
+    name: swamp-dev
+    namespace: theswamp
+roleRef:
+  kind: ClusterRole
+  name: admin
+  apiGroup: rbac.authorization.k8s.io
+---
+# Static, long-lived token for swamp-dev — this Secret's `token` IS the "API key"
+# handed to collaborators. K8s 1.24+ no longer auto-creates SA token Secrets, so
+# request one explicitly. Treat it like a namespace-admin password; rotate by
+# deleting + recreating this Secret.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: swamp-dev-token
+  namespace: theswamp
+  annotations:
+    kubernetes.io/service-account.name: swamp-dev
+type: kubernetes.io/service-account-token

@@ -8,3 +8,4 @@ resources:
   - deployment-frontend.yaml
   - service-frontend.yaml
   - httproute.yaml
+  - rbac.yaml
