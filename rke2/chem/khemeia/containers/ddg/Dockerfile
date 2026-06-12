@@ -1,4 +1,5 @@
 # ddG-of-folding stability worker (CPU) for the Khemeia genomics layer.
+# Built on the arc-chem runner by .github/workflows/build-chem-images.yml (key: ddg).
 #
 # Given a resolved variant (WT structure PDB + point substitution), predicts the
 # change in folding free energy ΔΔG_fold (kcal/mol; sign convention: POSITIVE =

@@ -1,4 +1,5 @@
 # ESMFold single-sequence structure-prediction worker (GPU).
+# Built on the arc-chem runner by .github/workflows/build-chem-images.yml (key: esmfold).
 #
 # Folds a protein sequence -> PDB + pLDDT on the RTX 3070 (nixos-gpu) with no
 # MSA. Serves DOUBLE DUTY for the Khemeia genomics layer (workers TDD §4):
