@@ -1,5 +1,5 @@
 # ESMFold single-sequence structure-prediction worker (GPU).
-# Built on the arc-chem runner by .github/workflows/build-chem-images.yml (key: esmfold).
+# Registered in .github/workflows/build-chem-images.yml's detect-changes matrix (key: esmfold).
 #
 # Folds a protein sequence -> PDB + pLDDT on the RTX 3070 (nixos-gpu) with no
 # MSA. Serves DOUBLE DUTY for the Khemeia genomics layer (workers TDD §4):
@@ -25,7 +25,10 @@
 # on the Mac.
 
 # ── Stage 1: builder ─────────────────────────────────────────────────────────
-FROM nvidia/cuda:11.8.0-cudnn8-runtime-ubuntu22.04 AS builder
+# -devel (not -runtime): openfold compiles custom CUDA kernels at install and
+# needs nvcc, which only ships in the -devel CUDA image. The runtime stage below
+# stays on -runtime and just copies the built site-packages.
+FROM nvidia/cuda:11.8.0-cudnn8-devel-ubuntu22.04 AS builder
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
@@ -50,9 +53,11 @@ RUN pip3 install --no-cache-dir \
 COPY requirements.txt ./
 RUN pip3 install --no-cache-dir -r requirements.txt
 
-# openfold: ESMFold's structure module. CUDA build hidden behind a CPU-only
-# kernel fallback at import (we never compile the custom attention kernel —
-# ESMFold runs fine without it on a single 3070). Installed from source.
+# openfold: ESMFold's structure module (no stable PyPI release). Its setup.py
+# COMPILES custom CUDA attention kernels at install time, which requires nvcc —
+# hence the -devel builder base above. TORCH_CUDA_ARCH_LIST targets the RTX 3070
+# (sm_86) on nixos-gpu so the kernels match the deployment GPU; the compiled .so
+# are carried into the runtime stage with the rest of site-packages.
 #
 # SUPPLY-CHAIN PIN (VULN-5): pinned to an IMMUTABLE commit SHA, not the mutable
 # @v1.0.1 git tag (tags can be force-moved upstream). The SHA below is exactly
@@ -60,6 +65,9 @@ RUN pip3 install --no-cache-dir -r requirements.txt
 #   aqlaboratory/openfold  tag v1.0.1 -> 42e71db7fa327e0810eb0e371abc9f82aa9b7a6a
 # dllogger has no release tags; pinned to default-branch HEAD on 2026-06-12
 #   NVIDIA/dllogger  master @ 0478734ff7be75adde8d160e04872664d1c62e5f
+ENV CUDA_HOME=/usr/local/cuda
+ENV TORCH_CUDA_ARCH_LIST="8.6"
+ENV FORCE_CUDA=1
 RUN pip3 install --no-cache-dir \
     'dllogger @ git+https://github.com/NVIDIA/dllogger.git@0478734ff7be75adde8d160e04872664d1c62e5f' \
     'openfold @ git+https://github.com/aqlaboratory/openfold.git@42e71db7fa327e0810eb0e371abc9f82aa9b7a6a'
