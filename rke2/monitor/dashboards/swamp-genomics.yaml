@@ -188,7 +188,7 @@ data:
           "options": { "calculate": false, "cellGap": 1, "color": { "scheme": "Spectral", "mode": "scheme" }, "yAxis": { "unit": "short" } },
           "targets": [
             { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" },
-              "expr": "sum by (le) (rate(khemeia_genome_ddg_fold_kcal_mol_bucket{job=\"khemeia-controller\"}[1h]))",
+              "expr": "sum by (le) (rate(khemeia_genome_ddg_fold_kcal_mol_bucket[1h]))",
               "legendFormat": "{{le}}", "format": "heatmap" }
           ]
         },
@@ -201,7 +201,7 @@ data:
           "options": { "calculate": false, "cellGap": 1, "color": { "scheme": "Spectral", "mode": "scheme" }, "yAxis": { "unit": "short" } },
           "targets": [
             { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" },
-              "expr": "sum by (le) (rate(khemeia_genome_ddg_bind_kcal_mol_bucket{job=\"khemeia-controller\"}[1h]))",
+              "expr": "sum by (le) (rate(khemeia_genome_ddg_bind_kcal_mol_bucket[1h]))",
               "legendFormat": "{{le}}", "format": "heatmap" }
           ]
         },
@@ -214,7 +214,7 @@ data:
           "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background" },
           "targets": [
             { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" },
-              "expr": "sum(increase(khemeia_genome_fp_delta_tanimoto_bucket{job=\"khemeia-controller\",le=\"0.7\"}[6h]))" }
+              "expr": "sum(increase(khemeia_genome_fp_delta_tanimoto_bucket{le=\"0.7\"}[6h]))" }
           ]
         },
         {
@@ -226,7 +226,7 @@ data:
           "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background" },
           "targets": [
             { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" },
-              "expr": "sum(rate(khemeia_genome_pocket_proximity_total{job=\"khemeia-controller\",within_cutoff=\"true\"}[6h])) / clamp_min(sum(rate(khemeia_genome_pocket_proximity_total{job=\"khemeia-controller\"}[6h])), 1)" }
+              "expr": "sum(rate(khemeia_genome_pocket_proximity_total{within_cutoff=\"true\"}[6h])) / clamp_min(sum(rate(khemeia_genome_pocket_proximity_total[6h])), 1)" }
           ]
         },
         {
@@ -238,7 +238,7 @@ data:
           "options": { "calculate": false, "cellGap": 1, "color": { "scheme": "RdYlGn", "mode": "scheme" }, "yAxis": { "unit": "short" } },
           "targets": [
             { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" },
-              "expr": "sum by (le) (rate(khemeia_genome_esmfold_plddt_bucket{job=\"khemeia-controller\"}[1h]))",
+              "expr": "sum by (le) (rate(khemeia_genome_esmfold_plddt_bucket[1h]))",
               "legendFormat": "{{le}}", "format": "heatmap" }
           ]
         },

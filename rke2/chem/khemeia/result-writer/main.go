@@ -414,14 +414,27 @@ func processGenomeCalc(ctx context.Context, tx *sql.Tx, row stagingRow) (func(),
 	// Complete the owning per-(variant,calc) row. The controller (GEN-12), not
 	// the writer, advances group-level variant_jobs.status — we only complete
 	// this leaf row.
-	if _, err := tx.ExecContext(ctx,
+	res, err := tx.ExecContext(ctx,
 		`UPDATE variant_calc_jobs
 		   SET status = 'Completed', completed_at = CURRENT_TIMESTAMP
 		 WHERE group_name = $1 AND variant_key = $2 AND calculation = $3`,
 		g.GroupName, g.VariantKey, g.Calculation,
-	); err != nil {
+	)
+	if err != nil {
 		return nil, fmt.Errorf("completing variant_calc_job for (%s,%s,%s): %w",
 			g.GroupName, g.VariantKey, g.Calculation, err)
+	}
+	// Guard against a silent orphan: if the result's identity matched no
+	// variant_calc_jobs row, return an error so the batch loop logs + skips this
+	// staging row (leaving it for retry) instead of deleting it and stranding the
+	// calc job in Pending forever with no signal. (Copilot review)
+	if n, aerr := res.RowsAffected(); aerr != nil {
+		return nil, fmt.Errorf("rows-affected completing (%s,%s,%s): %w",
+			g.GroupName, g.VariantKey, g.Calculation, aerr)
+	} else if n == 0 {
+		return nil, fmt.Errorf(
+			"genome_calc result (%s,%s,%s) matched no variant_calc_jobs row; staging row left for retry",
+			g.GroupName, g.VariantKey, g.Calculation)
 	}
 
 	// Build the post-commit metric recorder. Distributions are observed at this

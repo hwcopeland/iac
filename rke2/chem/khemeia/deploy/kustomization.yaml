@@ -22,6 +22,7 @@ resources:
   - flux-webhook-secret.yaml
   - flux-webhook-receiver.yaml
   - servicemonitor.yaml
+  - servicemonitor-result-writer.yaml
   - grafana-dashboard-khemeia.yaml
   # Garage moved to rke2/garage-system/ on 2026-05-20 — see that kustomization.
   # The S3 credentials are ExternalSecret-managed (sourced from Bitwarden
