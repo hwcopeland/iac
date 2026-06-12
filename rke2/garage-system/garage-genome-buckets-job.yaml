@@ -1,0 +1,118 @@
+---
+# One-shot Job that provisions the two NEW Garage buckets required by the
+# Khemeia genomics tooling layer (GEN-03), mirroring the original
+# `garage-bucket-init` mechanism documented in
+# rke2/chem/khemeia/docs/tdd/wp-9-infrastructure.md §"Bucket Creation"
+# (the same way khemeia-poses / khemeia-reports were first created).
+#
+#   NEW buckets:  khemeia-structures, khemeia-fingerprints
+#   REUSED:       khemeia-poses, khemeia-reports  (already exist — NOT touched here)
+#
+# Why a Job (not the S3 API): bucket creation + access grants are Garage
+# *admin* operations, performed with the `garage` CLI against the cluster
+# RPC, exactly like the original init Job. The Job runs in garage-system
+# (Garage's canonical home since the 2026-05-20 move out of `chem`), so the
+# CLI talks to the local node over the RPC secret + mounted garage.toml.
+#
+# Idempotent: every `garage` call is guarded with `|| true`, so re-applying
+# the Job (or a Flux re-sync) is a no-op once the buckets exist. Safe to
+# leave applied; `ttlSecondsAfterFinished` reaps the completed Pod.
+#
+# Access model: both new buckets are granted read+write (NOT owner — least
+# privilege, VULN-6) to the EXISTING `khemeia-app` key (Key ID
+# GK809a4e2c1f3843748b214db7 — the access-key-id the khemeia-controller already
+# reads from the `garage-secret`). No new key is
+# created; the controller, result-writer, and all genome workers authenticate
+# with the same credentials they use for khemeia-poses / khemeia-reports today.
+#
+# This manifest creates buckets only — it does NOT seed the u4u api_tokens row
+# (that is operator/Bitwarden custody; see docs/runbooks/khemeia-genomics-u4u-token.md).
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: garage-genome-buckets-init
+  namespace: garage-system
+  labels:
+    app.kubernetes.io/name: garage
+    app.kubernetes.io/component: bucket-init
+    khemeia.io/feature: genomics
+spec:
+  ttlSecondsAfterFinished: 3600
+  backoffLimit: 6
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: garage
+        app.kubernetes.io/component: bucket-init
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: init
+          # Pin to the SAME image/version the live Garage StatefulSet runs so
+          # the bundled `garage` CLI matches the node's RPC protocol exactly.
+          image: dxflrs/garage:v1.0.1
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+
+              ADMIN="http://garage.garage-system.svc.cluster.local:3902"
+              # Existing khemeia-app key the controller already authenticates with
+              # (access-key-id in the garage-secret). Grant the new buckets to it.
+              KEY_ID="GK809a4e2c1f3843748b214db7"
+
+              # Wait for the Garage admin API to answer before issuing commands.
+              echo "Waiting for Garage admin API at $ADMIN ..."
+              until wget -q -O- "$ADMIN/health" >/dev/null 2>&1 || curl -sf "$ADMIN/health" >/dev/null 2>&1; do
+                sleep 2
+              done
+              echo "Garage admin API is up."
+
+              # Create the two NEW genomics buckets (idempotent).
+              # khemeia-poses / khemeia-reports already exist and are NOT recreated.
+              for BUCKET in khemeia-structures khemeia-fingerprints; do
+                echo "Ensuring bucket: $BUCKET"
+                garage -c /etc/garage.toml bucket create "$BUCKET" 2>/dev/null || true
+              done
+
+              # Grant read+write (NOT owner) on the new buckets to the existing
+              # key, so the controller / result-writer / genome workers can use
+              # the credentials they already hold (no new key, no secret rotation).
+              # LEAST PRIVILEGE (VULN-6): the workers only read+write objects;
+              # --owner would additionally grant bucket-config / key-management
+              # rights they never exercise, so it is intentionally dropped.
+              # NOTE: the EXISTING buckets (khemeia-poses / khemeia-reports) were
+              # granted --read --write --owner by the original init Job (see
+              # wp-9-infrastructure.md §"Bucket Creation"). That over-grant is a
+              # known inconsistency; the NEW buckets are scoped tighter here and
+              # the existing ones should be re-scoped in a follow-up.
+              for BUCKET in khemeia-structures khemeia-fingerprints; do
+                echo "Granting $KEY_ID read+write on $BUCKET"
+                garage -c /etc/garage.toml bucket allow \
+                  --read --write "$BUCKET" --key "$KEY_ID" 2>/dev/null || true
+              done
+
+              echo "Genomics bucket provisioning complete:"
+              garage -c /etc/garage.toml bucket list 2>/dev/null || true
+          env:
+            - name: GARAGE_RPC_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: garage-secret
+                  key: rpc-secret
+          volumeMounts:
+            - name: config
+              mountPath: /etc/garage.toml
+              subPath: garage.toml
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+      volumes:
+        - name: config
+          configMap:
+            name: garage-config

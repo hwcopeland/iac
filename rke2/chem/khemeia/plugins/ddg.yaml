@@ -1,0 +1,50 @@
+name: ddg-stability
+slug: ddg_stability
+version: "1.0"
+image: zot.hwcopeland.net/chem/ddg:latest
+type: job
+database: khemeia
+visible: false
+
+input:
+  - name: resolution_id
+    type: string
+    required: true
+    description: "ResolvedVariant id (variant_resolutions.resolution_id) to score"
+  - name: group_name
+    type: string
+    required: true
+    description: "Owning genome group name"
+  - name: variant_key
+    type: string
+    required: true
+    description: "Per-variant key within the group"
+  - name: engine
+    type: string
+    default: "thermompnn"
+    # T1: enum widened from foldx|rosetta to thermompnn|ddgun|foldx|rosetta.
+    # thermompnn (MIT, default) + ddgun (GPL) are baked in and shippable.
+    # foldx/rosetta are license-gated, mounted-binary-only — selecting them
+    # without a mounted binary returns E_PARAMS_INVALID.
+    enum: ["thermompnn", "ddgun", "foldx", "rosetta"]
+    description: "ddG engine: thermompnn (default, MIT) | ddgun | foldx | rosetta"
+
+output:
+  - name: ddg_fold
+    type: float
+    parse: 'metric:.*"ddg_fold_kcal_mol":([-\d.]+)'
+  - name: log
+    type: text
+
+artifacts:
+  - name: report
+    pattern: "*.json"
+    content_type: "application/json"
+    description: "Full ddG report (engine, per-term breakdown, stability class)"
+
+resources:
+  computeClass: cpu-high-mem
+  timeout: 6h
+
+command: |
+  cd /opt/ddg && python3 scripts/ddg_run.py 2>&1

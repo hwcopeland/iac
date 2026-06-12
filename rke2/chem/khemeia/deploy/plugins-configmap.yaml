@@ -368,3 +368,241 @@ data:
       DOCK_RC=$? ;
       echo "Dock exit code: $DOCK_RC" ;
       echo "=== Done ==="
+
+  esmfold.yaml: |
+    name: esmfold
+    slug: esmfold
+    version: "1.0"
+    image: zot.hwcopeland.net/chem/esmfold:latest
+    type: job
+    database: khemeia
+    visible: false
+    input:
+      - name: resolution_id
+        type: string
+        required: true
+        description: "ResolvedVariant id (variant_resolutions.resolution_id) to fold"
+      - name: group_name
+        type: string
+        required: true
+        description: "Owning genome group name"
+      - name: variant_key
+        type: string
+        required: true
+        description: "Per-variant key within the group"
+      - name: model
+        type: string
+        default: "wt_and_mut"
+        description: "Folding mode: wt_and_mut (calc) | wt_only (resolve fallback)"
+      - name: role
+        type: string
+        default: "calc"
+        description: "Worker sub-role: calc | resolve_fallback"
+      - name: relax
+        type: string
+        default: "false"
+        description: "Run an optional OpenMM relax pass on the predicted structures"
+      - name: local_window
+        type: int
+        default: 5
+        description: "Residue half-window for the per-site pLDDT delta at the mutation"
+    output:
+      - name: rmsd_ang
+        type: float
+        parse: 'metric:.*"rmsd_ang":([-\d.]+)'
+      - name: mut_plddt
+        type: float
+        parse: 'metric:.*"mut_plddt":([-\d.]+)'
+      - name: log
+        type: text
+    artifacts:
+      - name: structures
+        pattern: "*.pdb"
+        content_type: "chemical/x-pdb"
+        description: "ESMFold WT and mutant predicted structures"
+    resources:
+      computeClass: gpu
+      timeout: 2h
+    command: |
+      cd /opt/esmfold && python3 scripts/fold.py 2>&1
+
+  ddg.yaml: |
+    name: ddg-stability
+    slug: ddg_stability
+    version: "1.0"
+    image: zot.hwcopeland.net/chem/ddg:latest
+    type: job
+    database: khemeia
+    visible: false
+
+    input:
+      - name: resolution_id
+        type: string
+        required: true
+        description: "ResolvedVariant id (variant_resolutions.resolution_id) to score"
+      - name: group_name
+        type: string
+        required: true
+        description: "Owning genome group name"
+      - name: variant_key
+        type: string
+        required: true
+        description: "Per-variant key within the group"
+      - name: engine
+        type: string
+        default: "thermompnn"
+        # T1: enum widened from foldx|rosetta to thermompnn|ddgun|foldx|rosetta.
+        # thermompnn (MIT, default) + ddgun (GPL) are baked in and shippable.
+        # foldx/rosetta are license-gated, mounted-binary-only — selecting them
+        # without a mounted binary returns E_PARAMS_INVALID.
+        enum: ["thermompnn", "ddgun", "foldx", "rosetta"]
+        description: "ddG engine: thermompnn (default, MIT) | ddgun | foldx | rosetta"
+
+    output:
+      - name: ddg_fold
+        type: float
+        parse: 'metric:.*"ddg_fold_kcal_mol":([-\d.]+)'
+      - name: log
+        type: text
+
+    artifacts:
+      - name: report
+        pattern: "*.json"
+        content_type: "application/json"
+        description: "Full ddG report (engine, per-term breakdown, stability class)"
+
+    resources:
+      computeClass: cpu-high-mem
+      timeout: 6h
+
+    command: |
+      cd /opt/ddg && python3 scripts/ddg_run.py 2>&1
+
+  pocket-proximity.yaml: |
+    name: pocket-proximity
+    slug: pocket_proximity
+    version: "1.0"
+    # REUSES the existing P2Rank image — no new image is built (GEN-31). The
+    # pocket_proximity worker ships in this image's next build of zot/chem/p2rank
+    # alongside the unchanged Flask sidecar; the command override below selects the
+    # worker entrypoint instead of gunicorn.
+    image: zot.hwcopeland.net/chem/p2rank:latest
+    type: job
+    database: khemeia
+    visible: false
+
+    input:
+      - name: resolution_id
+        type: string
+        required: true
+        description: "ResolvedVariant id (variant_resolutions.resolution_id) to analyze"
+      - name: group_name
+        type: string
+        required: true
+        description: "Owning genome group name"
+      - name: variant_key
+        type: string
+        required: true
+        description: "Per-variant key within the group"
+      - name: detector
+        type: string
+        default: "p2rank"
+        description: "Pocket detector: p2rank (fpocket is a documented alt, not wired here)"
+      - name: cutoff_ang
+        type: float
+        default: 6.0
+        description: "Proximity cutoff (Angstrom) for pocket_proximity_flag"
+
+    output:
+      - name: distance_ang
+        type: float
+        parse: 'metric:.*"distance_ang":([-\d.]+)'
+      - name: in_pocket
+        type: string
+        parse: 'metric:.*"in_pocket":(true|false)'
+      - name: log
+        type: text
+
+    artifacts:
+      - name: pockets
+        pattern: "*.csv"
+        content_type: "text/csv"
+        description: "p2rank pocket set (pocket_proximity/{rid}/pockets.csv)"
+
+    resources:
+      computeClass: cpu
+      timeout: 1h
+
+    command: |
+      cd /opt/p2rank && python3 scripts/pocket_proximity.py 2>&1
+
+  pgx-docking.yaml: |
+    name: pgx-docking
+    slug: pgx_docking
+    version: "1.0"
+    # REUSED image — pgx_docking is an orchestrator that ships in the existing gnina
+    # container (gnina is the default docking engine). No new compute image
+    # (workers TDD §7.2 / GEN-40). Ships in gnina's next build-* tag.
+    image: zot.hwcopeland.net/chem/gnina:latest
+    type: job
+    database: khemeia
+    visible: false
+
+    input:
+      - name: resolution_id
+        type: string
+        required: true
+        description: "ResolvedVariant id (variant_resolutions.resolution_id) to dock"
+      - name: group_name
+        type: string
+        required: true
+        description: "Owning genome group name"
+      - name: variant_key
+        type: string
+        required: true
+        description: "Per-variant key within the group"
+      - name: drugs
+        type: list
+        required: true
+        description: "Explicit drug list — names | SMILES | library refs (core R4: no implicit panel)"
+      - name: engine
+        type: string
+        default: "gnina"
+        description: "Docking engine: gnina (default, in-image) | vina | diffdock (separate images)"
+      - name: pocket_strategy
+        type: string
+        default: "p2rank"
+        description: "Pocket boxing strategy on WT+mutant: p2rank (default) | fpocket | explicit"
+      - name: exhaustiveness
+        type: int
+        default: 32
+        description: "Docking search exhaustiveness per pose"
+
+    output:
+      - name: ddg_bind
+        type: float
+        parse: 'metric:.*"ddg_bind_kcal_mol":([-\d.]+)'
+        reduce: max
+      - name: tanimoto
+        type: float
+        parse: 'metric:.*"tanimoto":([-\d.]+)'
+        reduce: min
+      - name: log
+        type: text
+
+    artifacts:
+      - name: poses
+        pattern: "*pose*.pdbqt"
+        content_type: "chemical/x-pdbqt"
+        description: "WT and mutant docked drug poses"
+      - name: fingerprints
+        pattern: "*ifp*.json"
+        content_type: "application/json"
+        description: "ProLIF interaction fingerprints (WT, mutant) and the delta"
+
+    resources:
+      computeClass: gpu
+      timeout: 24h
+
+    command: |
+      cd /scripts && python3 pgx_docking.py 2>&1

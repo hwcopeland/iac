@@ -31,8 +31,14 @@ WORKDIR /app
 COPY requirements.txt ./
 RUN pip3 install --no-cache-dir -r requirements.txt
 
-# Batch docking script (primary entrypoint for K8s Jobs)
+# Batch docking script (primary entrypoint for K8s Jobs).
+# Also ships the genomics pgx_docking.py orchestrator (calc=pgx_docking) — it
+# reuses this image's gnina CLI as the default engine; no new image (workers TDD §7).
 COPY scripts/ /scripts/
+
+# Curated PGx drug-name->SMILES table consumed by pgx_docking.py at
+# /scripts/data/pgx_drug_smiles.csv (workers TDD §7.3 / R-W6). Pure data, baked in.
+COPY data/ /scripts/data/
 
 # Flask app retained for health checks
 COPY app.py ./

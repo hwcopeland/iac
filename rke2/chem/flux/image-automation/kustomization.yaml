@@ -14,4 +14,8 @@ resources:
   - image-policy-khemeia-controller.yaml
   - image-repository-khemeia-result-writer.yaml
   - image-policy-khemeia-result-writer.yaml
+  - image-repository-esmfold.yaml
+  - image-policy-esmfold.yaml
+  - image-repository-ddg.yaml
+  - image-policy-ddg.yaml
   - image-update-automation.yaml

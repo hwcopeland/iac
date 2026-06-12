@@ -7,6 +7,7 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	"go.opentelemetry.io/otel/exporters/prometheus"
+	apimetric "go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/resource"
@@ -42,12 +43,16 @@ func initTracer(ctx context.Context) (func(), error) {
 	return func() { _ = tp.Shutdown(ctx) }, nil
 }
 
-func initMetrics() error {
+// initMetrics wires the OTel→Prometheus reader and registers it as the global
+// MeterProvider. It returns a Meter scoped to the controller so callers (e.g.
+// InitGenomeMetrics) can attach application instruments to the same provider
+// that the existing ServiceMonitor scrapes.
+func initMetrics() (apimetric.Meter, error) {
 	exp, err := prometheus.New()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	provider := metric.NewMeterProvider(metric.WithReader(exp))
 	otel.SetMeterProvider(provider)
-	return nil
+	return provider.Meter("khemeia-controller"), nil
 }

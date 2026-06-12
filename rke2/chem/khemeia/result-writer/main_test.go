@@ -156,10 +156,10 @@ func TestDockPayload_UnmarshalValid(t *testing.T) {
 
 func TestDockPayload_MarshalRoundTrip(t *testing.T) {
 	original := dockPayload{
-		WorkflowName:   "vina-standard",
-		PDBID:          "2XYZ",
-		LigandID:       100,
-		CompoundID:     "CID12345",
+		WorkflowName:    "vina-standard",
+		PDBID:           "2XYZ",
+		LigandID:        100,
+		CompoundID:      "CID12345",
 		AffinityKcalMol: -12.5,
 	}
 	data, err := json.Marshal(original)
@@ -228,10 +228,10 @@ func TestPrepPayload_JSONTags(t *testing.T) {
 
 func TestDockPayload_JSONTags(t *testing.T) {
 	d := dockPayload{
-		WorkflowName:   "w",
-		PDBID:          "p",
-		LigandID:       1,
-		CompoundID:     "c",
+		WorkflowName:    "w",
+		PDBID:           "p",
+		LigandID:        1,
+		CompoundID:      "c",
 		AffinityKcalMol: -1.0,
 	}
 	data, err := json.Marshal(d)
@@ -316,5 +316,194 @@ func TestConstants(t *testing.T) {
 	}
 	if httpPort <= 0 || httpPort > 65535 {
 		t.Errorf("httpPort should be a valid port number, got %d", httpPort)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// genomeCalcPayload JSON + mapping tests (job_type='genome_calc', core §5.6)
+// ---------------------------------------------------------------------------
+
+func f64(v float64) *float64 { return &v }
+func bptr(v bool) *bool      { return &v }
+
+func TestGenomeCalcPayload_UnmarshalDdgStability(t *testing.T) {
+	// ddg_stability worker emits ddg_fold_kcal_mol + confidence in headline.
+	raw := `{
+		"group_name": "genome-123",
+		"variant_key": "TPMT:p.R117H",
+		"calculation": "ddg_stability",
+		"resolution_id": "rv-abc123",
+		"structure_source": "alphafold",
+		"headline": { "ddg_fold_kcal_mol": 2.7, "confidence": 0.81 },
+		"payload": { "engine": "foldx", "ddg_fold_kcal_mol": 2.7, "stability_class": "destabilizing" },
+		"artifact_keys": { "report": "ddg_stability/rv-abc123/report.json" }
+	}`
+	var g genomeCalcPayload
+	if err := json.Unmarshal([]byte(raw), &g); err != nil {
+		t.Fatalf("unmarshal failed: %v", err)
+	}
+	if g.Calculation != "ddg_stability" {
+		t.Errorf("Calculation: expected ddg_stability, got %q", g.Calculation)
+	}
+	if g.Headline.DdgFoldKcalMol == nil || *g.Headline.DdgFoldKcalMol != 2.7 {
+		t.Errorf("DdgFoldKcalMol: expected 2.7, got %v", g.Headline.DdgFoldKcalMol)
+	}
+	if g.Headline.Confidence == nil || *g.Headline.Confidence != 0.81 {
+		t.Errorf("Confidence: expected 0.81, got %v", g.Headline.Confidence)
+	}
+	// Fields belonging to other calcs must be nil (→ SQL NULL).
+	if g.Headline.EsmfoldPlddt != nil || g.Headline.PocketProximityFlag != nil ||
+		g.Headline.DdgBindKcalMol != nil || g.Headline.FpDeltaTanimoto != nil {
+		t.Errorf("non-ddg headline fields should be nil, got %+v", g.Headline)
+	}
+	if len(g.Payload) == 0 {
+		t.Error("expected non-empty payload JSONB")
+	}
+}
+
+func TestGenomeCalcPayload_UnmarshalEsmfold(t *testing.T) {
+	raw := `{
+		"group_name": "g", "variant_key": "v", "calculation": "esmfold",
+		"resolution_id": "rv-1", "structure_source": "esmfold",
+		"headline": { "esmfold_plddt": 84.6, "esmfold_rmsd_ang": 1.34 },
+		"payload": { "rmsd_ang": 1.34 }
+	}`
+	var g genomeCalcPayload
+	if err := json.Unmarshal([]byte(raw), &g); err != nil {
+		t.Fatalf("unmarshal failed: %v", err)
+	}
+	if g.Headline.EsmfoldPlddt == nil || *g.Headline.EsmfoldPlddt != 84.6 {
+		t.Errorf("EsmfoldPlddt: expected 84.6, got %v", g.Headline.EsmfoldPlddt)
+	}
+	if g.Headline.EsmfoldRmsdAng == nil || *g.Headline.EsmfoldRmsdAng != 1.34 {
+		t.Errorf("EsmfoldRmsdAng: expected 1.34, got %v", g.Headline.EsmfoldRmsdAng)
+	}
+}
+
+func TestGenomeCalcPayload_UnmarshalPocketProximity(t *testing.T) {
+	raw := `{
+		"group_name": "g", "variant_key": "v", "calculation": "pocket_proximity",
+		"resolution_id": "rv-1", "structure_source": "alphafold",
+		"headline": { "pocket_proximity_flag": true, "pocket_distance_ang": 4.2 },
+		"payload": { "within_cutoff": true }
+	}`
+	var g genomeCalcPayload
+	if err := json.Unmarshal([]byte(raw), &g); err != nil {
+		t.Fatalf("unmarshal failed: %v", err)
+	}
+	if g.Headline.PocketProximityFlag == nil || *g.Headline.PocketProximityFlag != true {
+		t.Errorf("PocketProximityFlag: expected true, got %v", g.Headline.PocketProximityFlag)
+	}
+	if g.Headline.PocketDistanceAng == nil || *g.Headline.PocketDistanceAng != 4.2 {
+		t.Errorf("PocketDistanceAng: expected 4.2, got %v", g.Headline.PocketDistanceAng)
+	}
+}
+
+func TestGenomeCalcPayload_UnmarshalPgxDocking(t *testing.T) {
+	raw := `{
+		"group_name": "g", "variant_key": "v", "calculation": "pgx_docking",
+		"resolution_id": "rv-1", "structure_source": "alphafold",
+		"headline": { "ddg_bind_kcal_mol": 1.7, "fp_delta_tanimoto": 0.62 },
+		"payload": { "per_drug": [] }
+	}`
+	var g genomeCalcPayload
+	if err := json.Unmarshal([]byte(raw), &g); err != nil {
+		t.Fatalf("unmarshal failed: %v", err)
+	}
+	if g.Headline.DdgBindKcalMol == nil || *g.Headline.DdgBindKcalMol != 1.7 {
+		t.Errorf("DdgBindKcalMol: expected 1.7, got %v", g.Headline.DdgBindKcalMol)
+	}
+	if g.Headline.FpDeltaTanimoto == nil || *g.Headline.FpDeltaTanimoto != 0.62 {
+		t.Errorf("FpDeltaTanimoto: expected 0.62, got %v", g.Headline.FpDeltaTanimoto)
+	}
+}
+
+func TestGenomeCalcPayload_AbsentHeadlineFieldsAreNil(t *testing.T) {
+	// An empty headline must leave every typed-column pointer nil so the drain
+	// writes SQL NULL (not 0.0/false) for absent fields.
+	raw := `{
+		"group_name": "g", "variant_key": "v", "calculation": "esmfold",
+		"resolution_id": "rv-1", "headline": {}, "payload": {}
+	}`
+	var g genomeCalcPayload
+	if err := json.Unmarshal([]byte(raw), &g); err != nil {
+		t.Fatalf("unmarshal failed: %v", err)
+	}
+	h := g.Headline
+	if h.DdgFoldKcalMol != nil || h.DdgBindKcalMol != nil || h.FpDeltaTanimoto != nil ||
+		h.EsmfoldPlddt != nil || h.EsmfoldRmsdAng != nil || h.PocketProximityFlag != nil ||
+		h.PocketDistanceAng != nil || h.Confidence != nil {
+		t.Errorf("empty headline should yield all-nil pointers, got %+v", h)
+	}
+}
+
+func TestNullFloat(t *testing.T) {
+	if got := nullFloat(nil); got != nil {
+		t.Errorf("nullFloat(nil): expected nil, got %v", got)
+	}
+	if got := nullFloat(f64(2.7)); got != 2.7 {
+		t.Errorf("nullFloat(2.7): expected 2.7, got %v", got)
+	}
+	// A real zero must NOT collapse to NULL.
+	if got := nullFloat(f64(0)); got != float64(0) {
+		t.Errorf("nullFloat(0): expected 0.0 (not nil), got %v", got)
+	}
+}
+
+func TestNullBool(t *testing.T) {
+	if got := nullBool(nil); got != nil {
+		t.Errorf("nullBool(nil): expected nil, got %v", got)
+	}
+	if got := nullBool(bptr(false)); got != false {
+		t.Errorf("nullBool(false): expected false (not nil), got %v", got)
+	}
+	if got := nullBool(bptr(true)); got != true {
+		t.Errorf("nullBool(true): expected true, got %v", got)
+	}
+}
+
+func TestGenomeResultID_Deterministic(t *testing.T) {
+	a := genomeResultID("genome-1", "TPMT:p.R117H", "ddg_stability")
+	b := genomeResultID("genome-1", "TPMT:p.R117H", "ddg_stability")
+	if a != b {
+		t.Errorf("result_id not deterministic: %q != %q", a, b)
+	}
+	if a[:4] != "res-" {
+		t.Errorf("result_id should have res- prefix, got %q", a)
+	}
+	if len(a) != 20 { // "res-" + 16 hex
+		t.Errorf("result_id length: expected 20, got %d (%q)", len(a), a)
+	}
+	if len(a) > 40 {
+		t.Errorf("result_id exceeds VARCHAR(40): len=%d", len(a))
+	}
+	// Different calculation on the same variant must yield a different id.
+	c := genomeResultID("genome-1", "TPMT:p.R117H", "esmfold")
+	if a == c {
+		t.Error("result_id should differ across calculations for the same variant")
+	}
+}
+
+func TestGenomeCalcPayload_RawPayloadPreserved(t *testing.T) {
+	// The full per-calc payload must reach JSONB byte-for-byte (no re-parse).
+	raw := `{
+		"group_name": "g", "variant_key": "v", "calculation": "ddg_stability",
+		"resolution_id": "rv-1",
+		"headline": { "ddg_fold_kcal_mol": 1.0 },
+		"payload": { "nested": { "per_term": { "vdw": 0.9 } }, "n_runs": 5 }
+	}`
+	var g genomeCalcPayload
+	if err := json.Unmarshal([]byte(raw), &g); err != nil {
+		t.Fatalf("unmarshal failed: %v", err)
+	}
+	var back map[string]interface{}
+	if err := json.Unmarshal(g.Payload, &back); err != nil {
+		t.Fatalf("payload is not valid JSON: %v", err)
+	}
+	if _, ok := back["nested"]; !ok {
+		t.Error("expected nested payload key preserved")
+	}
+	if back["n_runs"].(float64) != 5 {
+		t.Errorf("n_runs: expected 5, got %v", back["n_runs"])
 	}
 }

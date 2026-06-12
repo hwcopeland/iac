@@ -1,0 +1,27 @@
+# ESMFold GPU worker deps. torch + numpy<2 are installed earlier in the
+# Dockerfile (CUDA-wheel-pinned); openfold + dllogger are installed after this
+# file from git (no stable PyPI release). This file holds the rest.
+#
+# Versions pinned for reproducible cluster (Kaniko) builds. `latest` is not a
+# version.
+
+# ESMFold itself: provides esm.pretrained.esmfold_v1 + esm.esmfold.v1 module.
+# The [esmfold] extra wires the structure-module deps openfold expects.
+fair-esm==2.0.0
+
+# PDB I/O + structural superposition (CA Kabsch) for RMSD, and mutation
+# application. biotite provides superimpose()/RMSD; biopython is the fallback
+# PDB parser and matches the diffdock/ddg worker stack.
+biotite==0.40.0
+biopython==1.79
+
+# ESMFold structure-module runtime deps (openfold pulls some, pinned here so the
+# resolver is deterministic).
+ml-collections==0.1.1
+omegaconf==2.3.0
+einops==0.7.0
+scipy==1.10.1
+
+# Garage S3 (structures in/out) + Postgres (job row + resolution + staging).
+boto3==1.34.0
+psycopg2-binary==2.9.9

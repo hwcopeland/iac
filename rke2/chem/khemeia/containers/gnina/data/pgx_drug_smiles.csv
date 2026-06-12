@@ -1,0 +1,33 @@
+# Curated PGx drug name -> canonical SMILES reference table (workers TDD §7.3 / R-W6).
+# Lets a bare drug NAME from a u4u PGx (PharmGKB) context resolve to a dockable
+# ligand offline + deterministically, before any PubChem fallback.
+# Format: name,smiles[,alias,alias,...]  (case-insensitive; '#' lines ignored).
+# SMILES are canonical neutral parent forms; library-prep re-standardizes + protonates.
+# Curated from PharmGKB/DrugBank/PubChem public canonical structures.
+name,smiles
+codeine,CN1CCC23C4C1CC5=C2C(=C(C=C5)OC)OC4C(C=C3)O
+morphine,CN1CCC23C4C1CC5=C2C(=C(C=C5)O)OC4C(C=C3)O
+tramadol,CN(C)CC1CCCCC1(C2=CC(=CC=C2)OC)O
+warfarin,CC(=O)CC(C1=CC=CC=C1)C2=C(C3=CC=CC=C3OC2=O)O
+clopidogrel,COC(=O)C(C1=CC=CC=C1Cl)N2CCC3=C(C2)C=CS3
+mercaptopurine,C1=NC2=C(N1)C(=S)N=CN2,6-mercaptopurine
+azathioprine,CN1C=NC(=C1SC2=NC=NC3=C2NC=N3)[N+](=O)[O-]
+thioguanine,C1=NC2=C(N1)C(=S)N=C(N2)N,6-thioguanine
+fluorouracil,C1=C(C(=O)NC(=O)N1)F,5-fluorouracil
+capecitabine,CCCCCOC(=O)NC1=NC(=O)N(C=C1F)C2C(C(C(O2)C)O)O
+irinotecan,CCC1=C2CN3C(=CC4=C(C3=O)COC(=O)C4(CC)O)C2=NC5=CC=C(C=C5C1)OC(=O)N6CCC(CC6)N7CCCCC7
+tamoxifen,CCC(=C(C1=CC=CC=C1)C2=CC=C(C=C2)OCCN(C)C)C3=CC=CC=C3
+omeprazole,CC1=CN=C(C(=C1OC)C)CS(=O)C2=NC3=CC=CC=C3N2
+simvastatin,CCC(C)(C)C(=O)OC1CC(C=C2C1C(C(C=C2)C)CCC3CC(CC(=O)O3)O)C
+atorvastatin,CC(C)C1=C(C(=C(N1CCC(CC(CC(=O)O)O)O)C2=CC=C(C=C2)F)C3=CC=CC=C3)C(=O)NC4=CC=CC=C4
+phenytoin,C1=CC=C(C=C1)C2(C(=O)NC(=O)N2)C3=CC=CC=C3
+carbamazepine,C1=CC=C2C(=C1)C=CC3=CC=CC=C3N2C(=O)N
+clozapine,CN1CCN(CC1)C2=NC3=CC=CC=C3NC4=C2C=C(C=C4)Cl
+abacavir,C1CC1NC2=C3C(=NC(=N2)N)N(C=N3)C4CC(C=C4)CO
+allopurinol,C1=NNC2=C1C(=O)NC=N2
+nortriptyline,CNCCC=C1C2=CC=CC=C2CCC3=CC=CC=C31
+amitriptyline,CN(C)CCC=C1C2=CC=CC=C2CCC3=CC=CC=C31
+voriconazole,CC(C1=NC=NC=C1F)C(C2=C(C=C(C=C2)F)F)(C3=NC=NN3)O
+tacrolimus,CC1CC(C(C(C=C(C(C(CC(=O)C(C(C(C(=O)C(C(C1)O)C)C)OC)O)CC=C)C)C=C(C)C)OC)OC(=O)C(C(C2CCC(C(O2)CC=CC(=CC3CCCCC3)C)OC)OC)O)O
+methotrexate,CN(CC1=CN=C2C(=N1)C(=NC(=N2)N)N)C3=CC=C(C=C3)C(=O)NC(CCC(=O)O)C(=O)O
+fluvastatin,CC(C)N1C2=CC=CC=C2C(=C1C=CC(CC(CC(=O)O)O)O)C3=CC=C(C=C3)F
