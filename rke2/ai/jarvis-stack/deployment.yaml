@@ -286,6 +286,19 @@ spec:
             # — Sonos is on 10.0.0.0/24 and can only route to this one.
             - name: EDGE_HOST_IP
               value: "10.0.0.190"
+            # Shared secret for the /voice/ingest mesh endpoint (Mac thin
+            # client → edge gate). optional:true so the pod starts without it;
+            # the endpoint 403s (inert) until the secret exists. Activate with:
+            #   kubectl -n ai create secret generic jarvis-edge-ingest \
+            #     --from-literal=token=$(openssl rand -hex 32)
+            # then put the SAME token in the Mac's ~/.openjarvis/config.toml
+            # under [edge] token (+ ingest_url = http://10.0.0.190:8088/voice/ingest).
+            - name: EDGE_INGEST_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: jarvis-edge-ingest
+                  key: token
+                  optional: true
             - name: XDG_RUNTIME_DIR
               value: "/run/user/1000"
             - name: PULSE_SERVER
