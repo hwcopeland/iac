@@ -4,7 +4,7 @@ Architecture (Phase 6 of the JARVIS identity/memory platform):
 
     jarvis-edge OWNER brain  (claude CLI subprocess, JARVIS_MEM_SCOPE in env)
         └─ stdio MCP: jarvis_mem0_mcp.py  (ships in the edge image)
-              └─ HTTP ─▶ THIS service (mem0 lib + fastembed + anthropic)
+              └─ HTTP ─▶ THIS service (mem0 lib + fastembed + xAI Grok)
                             └─ Qdrant  (vector store, Longhorn-backed)
 
 Why a separate service (not mem0-in-edge):
@@ -24,10 +24,12 @@ Partitioning — THE security-relevant invariant:
 Embeddings: fastembed (BAAI/bge-small-en-v1.5, 384-dim) — pure CPU, no GPU,
 no ollama. The 3070 stays free for Chatterbox/Whisper.
 
-Extraction LLM: Anthropic Haiku via the `anthropic` SDK and a DEDICATED API
-key (ANTHROPIC_API_KEY from the mem0-anthropic-credentials Secret). This is NOT
-the edge's subscription OAuth — mem0's LLM provider needs an API key, and the
-subscription token cannot be handed to it. See docs/jarvis/phase6-mem0.md.
+Extraction LLM: xAI Grok via mem0's OpenAI-compatible provider (xAI's API is
+OpenAI-API-compatible at https://api.x.ai/v1). The key is XAI_API_KEY, REUSED
+from the existing `homelab-bot-credentials` Secret in this same `ai` namespace —
+there is exactly ONE xAI key in the cluster, no new key and no new spend. This
+is NOT the edge's subscription OAuth — mem0's LLM provider needs an API key, and
+the subscription token cannot be handed to it. See docs/jarvis/phase6-mem0.md.
 """
 from __future__ import annotations
 
@@ -45,21 +47,29 @@ FASTEMBED_DIMS = int(os.environ.get("FASTEMBED_DIMS", "384"))
 QDRANT_HOST = os.environ.get("QDRANT_HOST", "qdrant.ai.svc.cluster.local")
 QDRANT_PORT = int(os.environ.get("QDRANT_PORT", "6333"))
 QDRANT_COLLECTION = os.environ.get("QDRANT_COLLECTION", "jarvis_mem0")
-EXTRACTION_MODEL = os.environ.get("EXTRACTION_MODEL", "claude-haiku-4-5-20251001")
+EXTRACTION_MODEL = os.environ.get("EXTRACTION_MODEL", "grok-3-mini")
+# xAI is OpenAI-API-compatible; mem0's OpenAI provider talks to it via a
+# base_url override. Default to xAI's endpoint but allow an env override.
+XAI_BASE_URL = os.environ.get("XAI_BASE_URL", "https://api.x.ai/v1")
 
 # ── Build the mem0 Memory once, at import time ───────────────────────────────
 # mem0 config wires THREE pluggable pieces to our self-hosted choices:
-#   llm        → anthropic (Haiku) for fact extraction on add()
+#   llm        → xAI Grok (via mem0's OpenAI provider + base_url override) for
+#                fact extraction on add(). One shared XAI_API_KEY (see header).
 #   embedder   → fastembed (CPU) for vectorizing facts + queries
 #   vector_store → qdrant (our StatefulSet)
 _MEM0_CONFIG = {
     "llm": {
-        "provider": "anthropic",
+        # xAI exposes an OpenAI-compatible Chat Completions API, so we use
+        # mem0's "openai" provider and point openai_base_url at xAI. The key is
+        # passed as api_key (the OpenAI client reads it from there). We also set
+        # OPENAI_API_KEY/OPENAI_BASE_URL in env below so any code path that
+        # reads the env (rather than this config) lands on xAI too.
+        "provider": "openai",
         "config": {
             "model": EXTRACTION_MODEL,
-            # api_key is read from ANTHROPIC_API_KEY in env by the provider;
-            # set it explicitly too so a misconfigured env fails loudly.
-            "api_key": os.environ.get("ANTHROPIC_API_KEY", ""),
+            "api_key": os.environ.get("XAI_API_KEY", ""),
+            "openai_base_url": XAI_BASE_URL,
             "temperature": 0.1,
             "max_tokens": 1024,
         },
@@ -88,11 +98,17 @@ def _get_memory():
     """Lazily construct the mem0 Memory (importing mem0 is heavy)."""
     global _memory
     if _memory is None:
-        if not os.environ.get("ANTHROPIC_API_KEY"):
+        xai_key = os.environ.get("XAI_API_KEY", "")
+        if not xai_key:
             raise RuntimeError(
-                "ANTHROPIC_API_KEY is empty — mem0 extraction needs the "
-                "dedicated Anthropic key (mem0-anthropic-credentials Secret)."
+                "XAI_API_KEY is empty — mem0 extraction needs the shared xAI "
+                "Grok key (XAI_API_KEY from the homelab-bot-credentials Secret)."
             )
+        # mem0's OpenAI provider may construct its client from env rather than
+        # from the passed config in some code paths; mirror the key + base_url
+        # into the env the OpenAI SDK reads so it always targets xAI, not OpenAI.
+        os.environ.setdefault("OPENAI_API_KEY", xai_key)
+        os.environ.setdefault("OPENAI_BASE_URL", XAI_BASE_URL)
         from mem0 import Memory  # imported here so /health can answer pre-init
         _memory = Memory.from_config(_MEM0_CONFIG)
         log.info("mem0 Memory initialized (embed=%s qdrant=%s:%s coll=%s extract=%s)",
@@ -142,7 +158,8 @@ class Handler(BaseHTTPRequestHandler):
                 "qdrant": f"{QDRANT_HOST}:{QDRANT_PORT}",
                 "collection": QDRANT_COLLECTION,
                 "extraction_model": EXTRACTION_MODEL,
-                "has_api_key": bool(os.environ.get("ANTHROPIC_API_KEY")),
+                "extraction_base_url": XAI_BASE_URL,
+                "has_api_key": bool(os.environ.get("XAI_API_KEY")),
             })
             return
         self._send(404, {"error": "not found"})

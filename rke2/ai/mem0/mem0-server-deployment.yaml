@@ -2,8 +2,8 @@
 # mem0 REST service — the JARVIS memory engine. CPU-only.
 #
 # Runs on microedge (Longhorn node), reaches Qdrant over Service DNS. NO GPU,
-# NO ollama — embeddings are fastembed on CPU, extraction is Anthropic Haiku
-# over HTTPS. The RTX 3070 is untouched.
+# NO ollama — embeddings are fastembed on CPU, extraction is xAI Grok
+# (OpenAI-compatible API) over HTTPS. The RTX 3070 is untouched.
 #
 # Image is built on the cluster from build/ and pushed to zot; after a push,
 # restart this Deployment (`kubectl -n ai rollout restart deploy/jarvis-mem0`).
@@ -51,14 +51,20 @@ spec:
             - name: QDRANT_COLLECTION
               value: "jarvis_mem0"
             - name: EXTRACTION_MODEL
-              value: "claude-haiku-4-5-20251001"
-            # Dedicated Anthropic key for extraction ONLY (see
-            # external-secret-mem0.yaml). NOT the edge subscription OAuth.
-            - name: ANTHROPIC_API_KEY
+              value: "grok-3-mini"
+            # xAI's OpenAI-compatible endpoint (mem0's openai provider uses it
+            # as base_url). Override only if xAI changes its API path.
+            - name: XAI_BASE_URL
+              value: "https://api.x.ai/v1"
+            # Extraction key — REUSES the single existing xAI Grok key from the
+            # homelab-bot-credentials Secret (same `ai` namespace; see
+            # external-secret-mem0.yaml). NOT the edge subscription OAuth, and
+            # NOT a new/dedicated key — one xAI key for the whole cluster.
+            - name: XAI_API_KEY
               valueFrom:
                 secretKeyRef:
-                  name: mem0-anthropic-credentials
-                  key: ANTHROPIC_API_KEY
+                  name: homelab-bot-credentials
+                  key: XAI_API_KEY
           resources:
             requests:
               cpu: 250m

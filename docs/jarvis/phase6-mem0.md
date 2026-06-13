@@ -23,7 +23,7 @@ Chatterbox/Whisper, so nothing in this stack touches the GPU node.
          └─ stdio MCP: jarvis_mem0_mcp.py     [thin shim, ships in edge image]
                │  HTTP  (cluster-internal)
                ▼
-  jarvis-mem0  Deployment (microedge, CPU)     [mem0 lib + fastembed + anthropic]
+  jarvis-mem0  Deployment (microedge, CPU)     [mem0 lib + fastembed + xAI Grok]
     └─ TCP
          ▼
   qdrant  StatefulSet (microedge, CPU, Longhorn PVC)   [vector store]
@@ -38,7 +38,7 @@ Chatterbox/Whisper, so nothing in this stack touches the GPU node.
   storage (nixos-gpu has no CSI driver). No `hostNetwork` needed — these are plain ClusterIP
   services reached over Service DNS.
 - **One owner of the Qdrant client + extraction key.** The mem0 server is the only thing that
-  holds the Anthropic key and talks to Qdrant.
+  talks to Qdrant. It reuses the cluster's single xAI key (see §2) for extraction.
 
 ---
 
@@ -46,36 +46,44 @@ Chatterbox/Whisper, so nothing in this stack touches the GPU node.
 
 mem0 runs an LLM **on every `add()`** to extract durable facts from raw turns. mem0's LLM
 provider expects an **API key**. The edge brain authenticates to Claude via **subscription
-OAuth** (`~/.claude/.credentials.json`, the `claude` CLI) — there is **no `ANTHROPIC_API_KEY`**
-on the edge.
+OAuth** (`~/.claude/.credentials.json`, the `claude` CLI) — there is **no API key** on the edge,
+and the subscription token cannot be handed to an mem0 LLM provider (it's not an API key, and
+using it programmatically would violate the subscription's terms). So extraction needs its own
+real API key regardless.
+
+**Resolution: reuse the cluster's existing xAI Grok key — no new key, no new spend.** The
+`homelab-bot` Deployment already runs **grok-3-mini** on an `XAI_API_KEY` from the
+`homelab-bot-credentials` Secret (`rke2/ai/homelab-bot/deployment.yaml`). mem0 lives in the
+**same `ai` namespace**, so it consumes that exact Secret/field via `secretKeyRef` — there is
+exactly **one xAI key** in the cluster.
+
+xAI's API is **OpenAI-API-compatible** (`https://api.x.ai/v1`), so mem0 uses its built-in
+**`openai` provider** with a `openai_base_url` override pointed at xAI and `model: grok-3-mini`.
+The LLM-client dep is therefore the `openai` SDK (replacing `anthropic`).
 
 Options considered:
 
 | Option | Verdict |
 |---|---|
-| **(a) Dedicated Anthropic API key for mem0 extraction (Haiku)** | **CHOSEN.** |
-| (b) Route extraction through the `claude` CLI | Rejected — infeasible. |
-| (c) "Cheaper extraction model" | Subsumed — Haiku *is* the cheap model. |
+| **(a) Reuse the existing xAI Grok key (homelab-bot's), OpenAI-compatible provider** | **CHOSEN.** Zero new key, ~$0 marginal consolidation. |
+| (b) Dedicated Anthropic API key for mem0 extraction (Haiku) | Superseded — would add a new key + new ~$4–16/mo spend. |
+| (c) Route extraction through the `claude` CLI | Rejected — infeasible (CLI is an agent, not a chat-completions endpoint). |
 
-**Why (b) is infeasible:** the `claude` CLI is an interactive *agent*, not an
-OpenAI/Anthropic-compatible chat completion endpoint that mem0's LLM provider can POST to. mem0
-calls `llm.generate_response(messages)`; there is no clean way to make that drive a CLI
-subprocess per extraction, and the subscription OAuth token cannot be handed to mem0's
-`anthropic` provider (it's not an API key, and using it programmatically would violate the
-subscription's terms). So extraction needs its own real API key regardless.
+**Why (a) over (b):** the cluster already pays for an xAI key that homelab-bot uses; pointing
+mem0 at the same key adds only the per-`add()` token cost on an account that's already active —
+no separate Anthropic Console key to create, rotate, and watch. Extraction is a small,
+well-bounded task (read a short turn + a few existing memories, emit structured facts), so
+grok-3-mini is an appropriate tier.
 
-**Why (a) over (c):** "a cheaper model" is the same decision — the cheapest *capable* extraction
-model is **Haiku 4.5**. Extraction is a small, well-bounded task (read a short turn + a few
-existing memories, emit structured facts), so Haiku is the right tier; no need for Sonnet.
+**Cost (rough):** per `add()` ≈ ~1.1k input + ~0.3k output tokens, and it only fires on OWNER
+turns (TRUSTED never reaches the memory tools — see §4). At grok-3-mini's low per-token pricing
+this is on the order of a few dollars/month at 50–200 owner turns/day — and it rides the
+**already-provisioned** xAI key, so there is no *new* account or *new* dedicated spend line.
 
-**Cost (rough):** per `add()` ≈ ~1.1k input + ~0.3k output tokens. At Haiku pricing (~$1/Mtok
-in, ~$5/Mtok out) that's **~$0.0026/turn**:
-- 50 owner turns/day → **~$3.90/mo**
-- 200 owner turns/day → **~$15.60/mo**
-
-Trivial, and it only fires on OWNER turns (TRUSTED never reaches the memory tools — see §4).
-The key is **dedicated and scoped** (`mem0-anthropic-credentials` Secret, Bitwarden-sourced),
-separate from any other Anthropic key, so spend is isolated and it can be rotated/revoked alone.
+> The key is shared with homelab-bot by design (one xAI key). If you ever need mem0's extraction
+> spend isolated or rotated independently, split it back out into its own Bitwarden-backed
+> ExternalSecret and repoint the Deployment's `secretKeyRef` — see the FUTURE note in
+> `rke2/ai/mem0/external-secret-mem0.yaml`.
 
 > Future option if cost ever matters: point the mem0 server's extraction LLM at a local model.
 > Explicitly **not** done now — that would mean ollama/GPU, which the plan forbids. fastembed
@@ -129,15 +137,17 @@ MANUAL kubectl-apply, `ai` namespace, NOT Flux — matches jarvis-edge/chatterbo
 | `qdrant-statefulset.yaml` | Qdrant `qdrant/qdrant:v1.12.4`, 1 replica, microedge, `volumeClaimTemplate` 10Gi Longhorn. ClusterIP only. |
 | `qdrant-service.yaml` | `qdrant.ai.svc:6333` (http) / `:6334` (grpc), ClusterIP. |
 | `qdrant-pvc.yaml` | OPTIONAL standalone PVC (doc of size/class intent). The StatefulSet uses its own template; don't double-apply. |
-| `mem0-server-deployment.yaml` | `jarvis-mem0` Deployment, microedge, CPU-only, `Recreate`. Pulls the Anthropic key from the Secret. Image `zot.hwcopeland.net/ai/jarvis-mem0:latest`. |
+| `mem0-server-deployment.yaml` | `jarvis-mem0` Deployment, microedge, CPU-only, `Recreate`. Pulls `XAI_API_KEY` from the existing `homelab-bot-credentials` Secret. Image `zot.hwcopeland.net/ai/jarvis-mem0:latest`. |
 | `mem0-server-service.yaml` | `jarvis-mem0.ai.svc:8800`, ClusterIP. |
-| `external-secret-mem0.yaml` | ESO → Bitwarden (`bitwarden-fields`) → `mem0-anthropic-credentials` Secret (`ANTHROPIC_API_KEY`). **TODO: paste the Bitwarden item UUID.** |
+| `external-secret-mem0.yaml` | **No object** — documentation stub. mem0 reuses the existing in-namespace `homelab-bot-credentials.XAI_API_KEY`; no dedicated key/Secret/Bitwarden item. (homelab-bot's Secret is hand-created, not ESO.) |
 | `build/Dockerfile` + `build/server.py` + `build/requirements.txt` | The `jarvis-mem0` image. Built on the cluster (Kaniko/nerdctl/CI → zot), NEVER on the Mac. |
 | `jarvis_mem0_mcp.py` | The stdio MCP shim — **belongs in the edge image** (copy to `jarvis-edge/`, see §5). |
 
 **Apply order** (after the image is built+pushed to zot):
 ```
-kubectl apply -f rke2/ai/mem0/external-secret-mem0.yaml
+# No external-secret-mem0.yaml to apply — mem0 reuses homelab-bot-credentials.
+# Just make sure that Secret already carries an XAI_API_KEY key (it does for
+# homelab-bot's grok-3-mini brain).
 kubectl apply -f rke2/ai/mem0/qdrant-statefulset.yaml -f rke2/ai/mem0/qdrant-service.yaml
 kubectl apply -f rke2/ai/mem0/mem0-server-deployment.yaml -f rke2/ai/mem0/mem0-server-service.yaml
 ```
@@ -254,10 +264,16 @@ block) improves recall behavior:
 
 ## 7. Known gotchas / follow-ups
 
-- **Bitwarden UUID is a placeholder** in `external-secret-mem0.yaml` — create the "Anthropic —
-  JARVIS mem0" item (custom field `api_key`) and paste its UUID before applying, or the Secret
-  stays empty and the mem0 server fails its first `add()` loudly (`/health` shows
-  `has_api_key: false`).
+- **No dedicated extraction key** — mem0 reuses `homelab-bot-credentials.XAI_API_KEY` (same `ai`
+  namespace). If that Secret is missing the `XAI_API_KEY` key, the mem0 server fails its first
+  `add()` loudly (`/health` shows `has_api_key: false`). Verify with `kubectl -n ai get secret
+  homelab-bot-credentials -o jsonpath='{.data.XAI_API_KEY}' | base64 -d | head -c 4`.
+- **Shared xAI key blast radius** — rotating/revoking the xAI key affects BOTH homelab-bot and
+  mem0. If you need them decoupled, split mem0 onto its own Bitwarden-backed ExternalSecret (see
+  the FUTURE note in `external-secret-mem0.yaml`).
+- **Stale `mem0-anthropic-credentials`** — if an earlier deploy created the old Anthropic
+  ExternalSecret/Secret, delete it: `kubectl -n ai delete secret mem0-anthropic-credentials
+  externalsecret/mem0-anthropic-credentials --ignore-not-found`.
 - **Embedding dims are fixed at collection-create.** `FASTEMBED_DIMS=384` matches
   `bge-small-en-v1.5`. If you ever swap the embed model to a different dimension, you must drop &
   recreate the Qdrant collection (it's keyed to dim) — there's no in-place reindex.
