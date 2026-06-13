@@ -1,0 +1,9 @@
+# mem0 server — CPU-only memory service for JARVIS.
+# Pinned to known-good versions; bump deliberately, rebuild on the cluster.
+mem0ai==0.1.55
+qdrant-client==1.12.1
+fastembed==0.4.2
+anthropic==0.42.0
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+pydantic==2.10.4

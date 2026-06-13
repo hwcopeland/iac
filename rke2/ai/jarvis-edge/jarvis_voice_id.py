@@ -55,6 +55,14 @@ _EMBED_DIM = 256
 _THRESHOLD_MATCH = 0.70
 _THRESHOLD_BORDER = 0.60
 
+# Granting OWNER (full access) requires a STRICTER match than mere
+# same-speaker identification. An owner false-positive hands a stranger full
+# access to Hampton's data; an owner false-negative just re-challenges
+# Hampton. So the identity resolver (jarvis_identity.resolve_voice) downgrades
+# an owner match scoring below this to TRUSTED rather than granting OWNER.
+# identify() itself is unchanged — this only governs the OWNER *grant*.
+OWNER_THRESHOLD = 0.75
+
 # Singleton encoder — loaded lazily so importing this module is cheap.
 _encoder = None
 
@@ -290,6 +298,13 @@ def get_owner() -> Optional[dict]:
         if e["role"] == "owner":
             return {k: v for k, v in e.items() if k != "embedding"}
     return None
+
+
+def get_owner_slug() -> Optional[str]:
+    """Slug of the enrolled owner, or None. Used by the auth state machine to
+    pass an authorizer to authenticate_pending()."""
+    o = get_owner()
+    return o["slug"] if o else None
 
 
 # ── per-user knowledge base accessor ─────────────────────────────────────────
