@@ -29,6 +29,7 @@ import hmac
 import io
 import json
 import re
+import uuid
 import logging
 import os
 import queue
@@ -961,6 +962,186 @@ def _claude_brain_voice_locked(text: str, timeout: float = 60.0) -> str:
         return ""
 
 
+# ── Warm OWNER brain session (Phase 5) ───────────────────────────────────────
+# One long-lived `claude` stream-json process for the OWNER path ONLY, reused
+# across turns so the six MCP servers stay warm (the ~2-3s/turn cold-start) AND
+# the conversation stays alive (the prereq for mem0 continuity). Reached ONLY
+# via gate_and_respond's OWNER branch → brain_respond(mem_scope="owner");
+# TRUSTED/UNKNOWN never touch it. See docs/jarvis/phase5-warm-brain.md.
+_WARM_SESSION_ID_PATH = os.environ.get("WARM_SESSION_ID_PATH", "/state/warm_session_id")
+_WARM_BRAIN_ENABLED = os.environ.get("WARM_BRAIN", "1") == "1"
+
+
+class _WarmBrain:
+    """Long-lived `claude` stream-json session (OWNER only). Thread-safe via a
+    per-turn lock — the mic loop and the /voice/ingest endpoint can both call
+    in; concurrent owner turns serialize (one conversation, one turn)."""
+
+    def __init__(self):
+        self._proc = None
+        self._q: "queue.Queue" = queue.Queue()
+        self._reader = None
+        self._turn_lock = threading.Lock()
+        self._ever_spawned = False
+        # Whether a session id already existed BEFORE this process started
+        # (pod restart → resume the PVC-persisted transcript) vs a brand-new id.
+        self._sid_preexisted = os.path.exists(_WARM_SESSION_ID_PATH)
+        self._sid = self._load_or_mint_sid()
+
+    def _mint_sid(self) -> str:
+        sid = str(uuid.uuid4())
+        try:
+            with open(_WARM_SESSION_ID_PATH, "w") as f:
+                f.write(sid)
+        except OSError as exc:  # noqa: BLE001
+            print(f"warm brain: could not persist session id: {exc!r}")
+        return sid
+
+    def _load_or_mint_sid(self) -> str:
+        try:
+            with open(_WARM_SESSION_ID_PATH) as f:
+                sid = f.read().strip()
+            if sid:
+                return sid
+        except OSError:
+            pass
+        return self._mint_sid()
+
+    def _alive(self) -> bool:
+        return self._proc is not None and self._proc.poll() is None
+
+    def _spawn(self, force_new: bool = False) -> None:
+        import subprocess as _sp
+        if force_new:
+            self._sid = self._mint_sid()
+        # Resume an existing session on process-death or pod-restart; use a
+        # fresh --session-id only for a genuinely new conversation.
+        resume = (not force_new) and (self._ever_spawned or self._sid_preexisted)
+        # Frozen system prompt (cache-stable) — wall-clock/persona ride the
+        # per-turn user text, exactly like the cold path's cache fix.
+        argv = ["claude",
+                "--input-format", "stream-json",
+                "--output-format", "stream-json",
+                "--verbose",
+                "--append-system-prompt", _PERSONA_SYSTEM,
+                "--mcp-config", _MCP_CONFIG_PATH,
+                "--allowed-tools", _RO_ALLOWED_TOOLS,
+                "--model", "claude-haiku-4-5-20251001"]
+        argv += ["--resume", self._sid] if resume else ["--session-id", self._sid]
+        env = {**os.environ, "JARVIS_MEM_SCOPE": "owner"}
+        self._q = queue.Queue()
+        self._proc = _sp.Popen(
+            argv, stdin=_sp.PIPE, stdout=_sp.PIPE, stderr=_sp.DEVNULL,
+            text=True, bufsize=1, env=env)
+        self._reader = threading.Thread(
+            target=self._read_loop, args=(self._proc,), daemon=True)
+        self._reader.start()
+        self._ever_spawned = True
+
+    def _read_loop(self, proc) -> None:
+        try:
+            for line in iter(proc.stdout.readline, ""):
+                self._q.put(line)
+        except Exception:  # noqa: BLE001
+            pass
+        finally:
+            self._q.put(None)  # sentinel: stream closed
+
+    def ask(self, text: str, timeout: float = 60.0) -> str:
+        """One OWNER turn on the warm session. Returns spoken text, or the SAME
+        error strings _claude_brain returns so brain_respond's metric
+        classification keeps working unchanged."""
+        with self._turn_lock:
+            has_creds = os.path.exists(os.path.expanduser("~/.claude/.credentials.json"))
+            has_api_key = bool(os.environ.get("ANTHROPIC_API_KEY"))
+            if not has_creds and not has_api_key:
+                return "No brain credentials, sir — neither subscription nor API key configured."
+            for attempt in (0, 1):  # one respawn-and-retry; attempt 1 = fresh session
+                if not self._alive():
+                    try:
+                        self._spawn(force_new=(attempt == 1))
+                    except Exception as exc:  # noqa: BLE001
+                        print(f"warm brain: spawn failed: {exc!r}")
+                        return "I lost my connection there, sir."
+                turn_text = _turn_context_prefix(include_persona=True) + text
+                msg = json.dumps({"type": "user", "message": {
+                    "role": "user",
+                    "content": [{"type": "text", "text": turn_text}]}})
+                try:
+                    self._proc.stdin.write(msg + "\n")
+                    self._proc.stdin.flush()
+                except (BrokenPipeError, OSError) as exc:
+                    print(f"warm brain: write failed ({exc!r}) — respawning")
+                    self._proc = None
+                    continue
+                deadline = time.monotonic() + timeout
+                last_text = ""
+                stream_closed = False
+                while True:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        print("warm brain: turn deadline exceeded — marking for respawn")
+                        self._proc = None  # wedged mid-stream; next turn respawns
+                        return "That took too long, sir — try again."
+                    try:
+                        line = self._q.get(timeout=remaining)
+                    except queue.Empty:
+                        self._proc = None
+                        return "That took too long, sir — try again."
+                    if line is None:  # stream closed mid-turn → respawn-retry
+                        self._proc = None
+                        stream_closed = True
+                        break
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        ev = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    et = ev.get("type")
+                    if et == "result":
+                        if ev.get("is_error"):
+                            return "Something went wrong, sir — try again."
+                        result = (ev.get("result") or "").strip()
+                        return result or "I didn't have anything to say there, sir."
+                    if et == "assistant":
+                        try:
+                            for blk in ev["message"]["content"]:
+                                if blk.get("type") == "text" and blk.get("text"):
+                                    last_text = blk["text"].strip()
+                        except (KeyError, TypeError):
+                            pass
+                if stream_closed and last_text:
+                    return last_text  # got text but no result envelope
+                # else: loop for one respawn-retry
+            return "I lost my connection there, sir."
+
+    def shutdown(self) -> None:
+        try:
+            if self._proc is not None:
+                if self._proc.stdin:
+                    self._proc.stdin.close()
+                self._proc.terminate()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+_warm_brain = None
+_warm_brain_lock = threading.Lock()
+
+
+def _get_warm_brain() -> "_WarmBrain":
+    """Lazily construct + spawn the OWNER-only warm session singleton."""
+    global _warm_brain
+    with _warm_brain_lock:
+        if _warm_brain is None:
+            _warm_brain = _WarmBrain()
+        if not _warm_brain._alive():
+            _warm_brain._spawn()
+        return _warm_brain
+
+
 _BRAIN_REFUSAL_PREFIXES = (
     "i can't", "i cannot", "i won't", "i will not", "i'm sorry",
     "i am sorry", "sorry, i can't", "sorry, i cannot", "i'm not able",
@@ -1231,7 +1412,16 @@ def brain_respond(text: str, mem_scope: str = "") -> str:
             if os.path.exists(os.path.expanduser("~/.claude/.credentials.json")):
                 mode = "subscription"
             span.set_attribute("mode", mode)
-            reply = _claude_brain(text, mem_scope=mem_scope)
+            # OWNER turns (mem_scope=="owner") run on the warm persistent
+            # session; open-mode (mem_scope=="") and the WARM_BRAIN=0 kill
+            # switch fall to the cold per-turn subprocess. TRUSTED/UNKNOWN
+            # never reach brain_respond (gate_and_respond routes them away).
+            if (_WARM_BRAIN_ENABLED and mem_scope == "owner"
+                    and os.environ.get("BRAIN_MODE", "claude") == "claude"):
+                span.set_attribute("warm", True)
+                reply = _get_warm_brain().ask(text)
+            else:
+                reply = _claude_brain(text, mem_scope=mem_scope)
             # Best-effort classification of brain error replies so the
             # Prometheus counter has useful reasons to slice by.
             low = (reply or "").lower()
@@ -2071,6 +2261,16 @@ def main() -> None:
         # Verify the API key is valid before we start listening — surface
         # auth problems at startup instead of as silent empty replies.
         _check_brain_auth()
+        # Phase 5: prewarm the OWNER warm session so the MCP servers are warm
+        # before the first turn. Only when an owner is enrolled (no point
+        # warming an owner session in open mode). Fail-open like every other
+        # boot subsystem — falls back to lazy spawn / cold per-turn on error.
+        if _WARM_BRAIN_ENABLED and _vid_has_owner():
+            try:
+                _get_warm_brain()
+                print("warm brain: OWNER session prewarmed")
+            except Exception as exc:  # noqa: BLE001
+                print(f"warm brain: prewarm failed ({exc}) — cold per-turn fallback")
 
     stash = _AudioStash()
     _start_http_server(stash, EDGE_HTTP_PORT)
