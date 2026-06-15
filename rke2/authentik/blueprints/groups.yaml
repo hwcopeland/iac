@@ -22,6 +22,20 @@ entries:
   model: authentik_core.group
   permissions: []
   state: present
+# VG-Admin — content managers for the Valley Growers Garden Center CMS
+# (https://vg.hwcopeland.net/admin). Membership is emitted in the OIDC "groups"
+# claim and gates the /admin area via the providers-vg.yaml policy binding.
+# Add members in the admin UI or via !Find users here (users must have enrolled
+# once). MIRROR of blueprints-configmap.yaml — keep both in sync.
+- attrs:
+    attributes: {}
+    name: VG-Admin
+  conditions: []
+  identifiers:
+    pk: bd39c736-09f0-41ca-85ad-b9c442477036
+  model: authentik_core.group
+  permissions: []
+  state: present
 # Florida Man Bioscience (FMB) — genomics collaborators (Curtis, Tom).
 # Grants Grafana Editor org-role (via kube-prometheus-stack role_attribute_path,
 # name-based) + interactive Khemeia web OIDC access. Admin-on-Swamp-folder is a

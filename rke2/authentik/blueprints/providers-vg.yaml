@@ -1,0 +1,65 @@
+version: 1
+metadata:
+  name: Valley Growers Garden Center CMS Provider and Application
+entries:
+# --- OAuth2 / OIDC provider (confidential client; Authorization Code flow) ---
+# Protects the /admin CMS area of the Astro SSR app at https://vg.hwcopeland.net.
+# App-native OIDC (pattern 1): the app talks to Authentik directly, NOT via the
+# forward-auth outpost. The app reads the "groups" claim from the ID token and
+# checks for VG-Admin membership itself; the policy binding below also restricts
+# the application to the VG-Admin group as defense-in-depth.
+# MIRROR of blueprints-configmap.yaml (providers-vg.yaml key) — keep both in sync
+# (the configmap is what is actually mounted at /blueprints/custom).
+- attrs:
+    access_code_validity: minutes=1
+    access_token_validity: minutes=10
+    authorization_flow: !Find [authentik_flows.flow, [slug, default-provider-authorization-implicit-consent]]
+    client_id: vg
+    client_type: confidential
+    include_claims_in_id_token: true
+    invalidation_flow: !Find [authentik_flows.flow, [slug, default-provider-invalidation-flow]]
+    issuer_mode: per_provider
+    name: Valley Growers CMS
+    property_mappings:
+    - !Find [authentik_providers_oauth2.scopemapping, [scope_name, openid]]
+    - !Find [authentik_providers_oauth2.scopemapping, [scope_name, profile]]
+    - !Find [authentik_providers_oauth2.scopemapping, [scope_name, email]]
+    - !Find [authentik_providers_oauth2.scopemapping, [scope_name, groups]]
+    redirect_uris:
+    - matching_mode: strict
+      url: https://vg.hwcopeland.net/api/auth/callback
+    refresh_token_validity: days=30
+    signing_key: !Find [authentik_crypto.certificatekeypair, [name, authentik Self-signed Certificate]]
+    sub_mode: hashed_user_id
+  conditions: []
+  identifiers:
+    name: Valley Growers CMS
+  model: authentik_providers_oauth2.oauth2provider
+  permissions: []
+  state: present
+# --- Application ---
+- attrs:
+    meta_launch_url: https://vg.hwcopeland.net/admin
+    name: Valley Growers CMS
+    policy_engine_mode: any
+    provider: !Find [authentik_providers_oauth2.oauth2provider, [name, Valley Growers CMS]]
+    slug: vg
+  conditions: []
+  identifiers:
+    slug: vg
+  model: authentik_core.application
+  permissions: []
+  state: present
+# --- Restrict access to the VG-Admin group ---
+- attrs:
+    enabled: true
+    group: !Find [authentik_core.group, [name, VG-Admin]]
+    order: 0
+    target: !Find [authentik_core.application, [slug, vg]]
+    timeout: 30
+  conditions: []
+  identifiers:
+    pk: 1ea52bd9-818a-40a6-95d7-3144b20e2baa
+  model: authentik_policies.policybinding
+  permissions: []
+  state: present
