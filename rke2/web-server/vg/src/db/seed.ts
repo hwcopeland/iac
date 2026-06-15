@@ -54,8 +54,8 @@ export async function seed(db: DB) {
       },
       {
         name: 'Emily',
-        photoUrl: '/seed/team/IMG_5043.jpeg',
-        photoPosition: '50% 8%',
+        photoUrl: '/seed/team/IMG_5043_c.jpeg',
+        photoPosition: '50% 30%',
         role: 'Agribusiness major, MTSU',
         tenure: 'Since April',
         favoritePlant: '',
@@ -84,8 +84,8 @@ export async function seed(db: DB) {
       },
       {
         name: 'Kenyon',
-        photoUrl: '/seed/team/IMG_1217.jpeg',
-        photoPosition: '45% 8%',
+        photoUrl: '/seed/team/IMG_1217_c.jpeg',
+        photoPosition: '50% 20%',
         role: 'MTSU senior — Plant & Soil Science, Entrepreneurship minor',
         tenure: 'Since February 2026',
         favoritePlant: '',
@@ -94,8 +94,8 @@ export async function seed(db: DB) {
       },
       {
         name: 'Kristy Thomas',
-        photoUrl: '/seed/team/IMG_5035.jpeg',
-        photoPosition: '42% 22%',
+        photoUrl: '/seed/team/IMG_5035_c.jpeg',
+        photoPosition: '50% 25%',
         role: "Valley Growers' best water girl eva!",
         tenure: '',
         favoritePlant: '',
@@ -114,8 +114,8 @@ export async function seed(db: DB) {
       },
       {
         name: 'Jerelyn',
-        photoUrl: '/seed/team/IMG_0994.jpeg',
-        photoPosition: '50% 18%',
+        photoUrl: '/seed/team/IMG_0994_c.jpeg',
+        photoPosition: '50% 25%',
         role: '',
         tenure: '3 years',
         favoritePlant: '',
