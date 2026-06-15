@@ -2,14 +2,14 @@
 # is dynamic (SQLite-backed admin), so it runs the Node adapter output directly
 # rather than being served by nginx. Build runs on the ARC cluster runner; base
 # images come from the private zot mirror.
-FROM zot.hwcopeland.net/library/node:22-slim AS builder
+FROM zot.hwcopeland.net/library/node:22-alpine AS builder
 WORKDIR /app
 COPY package.json package-lock.json* ./
 RUN npm ci --no-audit --no-fund
 COPY . .
 RUN npm run build && npm prune --omit=dev
 
-FROM zot.hwcopeland.net/library/node:22-slim
+FROM zot.hwcopeland.net/library/node:22-alpine
 ENV NODE_ENV=production \
     HOST=0.0.0.0 \
     PORT=4321 \
