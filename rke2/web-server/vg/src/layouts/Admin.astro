@@ -1,0 +1,91 @@
+---
+import '@/styles/global.css';
+import { SESSION_COOKIE, getSession } from '@/lib/auth';
+interface Props { title: string; active: string }
+const { title, active } = Astro.props;
+const session = await getSession(Astro.cookies.get(SESSION_COOKIE)?.value);
+const nav = [
+  { href: '/admin', label: 'Dashboard', key: 'dashboard' },
+  { href: '/admin/settings', label: 'Site settings', key: 'settings' },
+  { href: '/admin/team', label: 'Team', key: 'team' },
+  { href: '/admin/gallery', label: 'Gallery', key: 'gallery' },
+  { href: '/admin/testimonials', label: 'Testimonials', key: 'testimonials' },
+  { href: '/admin/messages', label: 'Messages', key: 'messages' },
+];
+const saved = Astro.url.searchParams.get('saved') === '1';
+const errMsg = Astro.url.searchParams.get('err');
+---
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex" />
+    <title>{title} · Valley Growers Admin</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  </head>
+  <body class="admin">
+    <aside class="admin-side">
+      <a class="brand" href="/" style="color:#fff;font-size:1.05rem">🌿 Valley Growers</a>
+      <p style="color:rgba(255,255,255,0.5);font-size:0.8rem;margin:.2rem 0 1.2rem">Content Manager</p>
+      <nav>
+        {nav.map((n) => (
+          <a href={n.href} class={active === n.key ? 'active' : ''}>{n.label}</a>
+        ))}
+      </nav>
+      <div style="margin-top:auto">
+        {session?.email && <p style="color:rgba(255,255,255,0.55);font-size:0.78rem;margin:0 0 .5rem;word-break:break-all">{session.email}</p>}
+        <form method="POST" action="/api/logout">
+          <button class="btn btn--ghost btn--sm" type="submit" style="color:#fff;border-color:rgba(255,255,255,.3)">Log out</button>
+        </form>
+      </div>
+    </aside>
+    <div class="admin-main">
+      <header class="admin-top">
+        <h1 style="font-size:1.5rem;margin:0">{title}</h1>
+        <a href="/" target="_blank" class="btn btn--ghost btn--sm">View site ↗</a>
+      </header>
+      <div class="admin-content">
+        {saved && <div class="notice notice--ok">Saved.</div>}
+        {errMsg && <div class="notice notice--err">{errMsg}</div>}
+        <slot />
+      </div>
+    </div>
+    <style>
+      .admin { display: grid; grid-template-columns: 240px 1fr; min-height: 100vh; }
+      .admin-side {
+        background: var(--green-900); color: #fff; padding: 1.4rem 1.1rem;
+        display: flex; flex-direction: column; position: sticky; top: 0; height: 100vh;
+      }
+      .admin-side nav { display: flex; flex-direction: column; gap: 0.2rem; }
+      .admin-side nav a {
+        color: rgba(255,255,255,0.82); text-decoration: none; padding: 0.55rem 0.7rem;
+        border-radius: 9px; font-size: 0.95rem;
+      }
+      .admin-side nav a:hover { background: rgba(255,255,255,0.08); color: #fff; }
+      .admin-side nav a.active { background: var(--green-700); color: #fff; font-weight: 600; }
+      .admin-main { min-width: 0; }
+      .admin-top {
+        display: flex; align-items: center; justify-content: space-between;
+        padding: 1.1rem 1.6rem; border-bottom: 1px solid var(--border); background: var(--paper);
+      }
+      .admin-content { padding: 1.6rem; max-width: 880px; }
+      .admin-row {
+        display: flex; gap: 1rem; align-items: flex-start; justify-content: space-between;
+        background: var(--paper); border: 1px solid var(--border); border-radius: 12px;
+        padding: 1rem 1.2rem; margin-bottom: 0.8rem;
+      }
+      .admin-row .grow { flex: 1; min-width: 0; }
+      .admin-actions { display: flex; gap: 0.5rem; flex: none; }
+      details.editor { background: var(--paper); border: 1px solid var(--border); border-radius: 12px; padding: 1rem 1.2rem; margin-bottom: 1.4rem; }
+      details.editor > summary { cursor: pointer; font-weight: 600; color: var(--green-800); }
+      .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 0 1rem; }
+      @media (max-width: 720px) {
+        .admin { grid-template-columns: 1fr; }
+        .admin-side { position: static; height: auto; flex-direction: row; flex-wrap: wrap; align-items: center; gap: 0.5rem; }
+        .admin-side nav { flex-direction: row; flex-wrap: wrap; }
+        .two-col { grid-template-columns: 1fr; }
+      }
+    </style>
+  </body>
+</html>

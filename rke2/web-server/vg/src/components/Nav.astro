@@ -1,0 +1,39 @@
+---
+interface Props { businessName: string }
+const { businessName } = Astro.props;
+const path = Astro.url.pathname;
+const links = [
+  { href: '/about', label: 'About' },
+  { href: '/team', label: 'Team' },
+  { href: '/gallery', label: 'Gallery' },
+  { href: '/contact', label: 'Contact' },
+];
+---
+<header class="site-header">
+  <div class="container">
+    <nav class="nav" id="nav">
+      <a class="brand" href="/">
+        <svg class="leaf" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="M5 19c0-7 5-13 14-14 0 9-5 14-12 14H5z" fill="#40916c"/>
+          <path d="M5 19c2-5 6-8 11-9" stroke="#1b4332" stroke-width="1.4" stroke-linecap="round"/>
+        </svg>
+        <span>{businessName}</span>
+      </a>
+      <button class="nav-toggle" aria-label="Toggle menu" aria-expanded="false" id="navToggle">☰</button>
+      <ul class="nav-links">
+        {links.map((l) => (
+          <li><a href={l.href} aria-current={path === l.href ? 'page' : undefined}>{l.label}</a></li>
+        ))}
+        <li><a class="btn btn--sm" href="/contact">Visit Us</a></li>
+      </ul>
+    </nav>
+  </div>
+</header>
+<script>
+  const nav = document.getElementById('nav');
+  const toggle = document.getElementById('navToggle');
+  toggle?.addEventListener('click', () => {
+    const open = nav?.classList.toggle('open');
+    toggle.setAttribute('aria-expanded', String(!!open));
+  });
+</script>

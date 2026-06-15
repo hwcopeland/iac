@@ -1,0 +1,91 @@
+---
+# Build and deploy the Valley Growers CMS (vg.hwcopeland.net).
+#
+# Runner: self-hosted ARC runner on the RKE2 cluster.
+# Registry: zot.hwcopeland.net/web-server/vg.
+#
+# Unlike the static blog, vg is a DB-backed Astro SSR app. The deploy job
+# applies the full kustomization (PVC, Service, Deployment, HTTPRoute,
+# DNSRecord, ExternalSecret) so a first roll creates everything, then restarts
+# the Deployment to pull the freshly built image.
+# Same secret conventions as the other build workflows
+# (ZOT_USERNAME / ZOT_PASSWORD / KUBECONFIG_BASE64).
+
+name: Build and Deploy VG
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'rke2/web-server/vg/**'
+      - '.github/workflows/build-vg.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build vg image
+    runs-on: arc-chem
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
+
+      - name: Log in to Zot registry
+        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
+        with:
+          registry: zot.hwcopeland.net
+          username: ${{ secrets.ZOT_USERNAME }}
+          password: ${{ secrets.ZOT_PASSWORD }}
+
+      - name: Compute image tag
+        id: tags
+        run: |
+          SHORT_SHA="${GITHUB_SHA::7}"
+          echo "sha_tag=sha-${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push
+        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
+        with:
+          context: rke2/web-server/vg
+          platforms: linux/amd64
+          push: true
+          tags: |
+            zot.hwcopeland.net/web-server/vg:${{ steps.tags.outputs.sha_tag }}
+            zot.hwcopeland.net/web-server/vg:latest
+          cache-from: type=registry,ref=zot.hwcopeland.net/web-server/vg:cache
+          cache-to: type=registry,ref=zot.hwcopeland.net/web-server/vg:cache,mode=max
+
+  deploy:
+    name: Deploy to Kubernetes
+    needs: build
+    runs-on: arc-chem
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Apply manifests and wait for rollout
+        env:
+          KUBECONFIG_BASE64: ${{ secrets.KUBECONFIG_BASE64 }}
+        run: |
+          set -euo pipefail
+
+          KUBECTL_VERSION="v1.31.2"
+          curl -fsSL -o /tmp/kubectl \
+            "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl"
+          chmod +x /tmp/kubectl
+
+          mkdir -p "$HOME/.kube"
+          echo "$KUBECONFIG_BASE64" | base64 -d > "$HOME/.kube/config"
+          chmod 600 "$HOME/.kube/config"
+
+          /tmp/kubectl apply -k rke2/web-server/vg
+          /tmp/kubectl -n web-server rollout restart deployment/vg
+          /tmp/kubectl -n web-server rollout status deployment/vg --timeout=300s

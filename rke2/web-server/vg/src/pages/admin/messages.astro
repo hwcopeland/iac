@@ -1,0 +1,33 @@
+---
+import Admin from '@/layouts/Admin.astro';
+import { getMessages } from '@/lib/content';
+const msgs = await getMessages();
+const fmt = (d: Date) => d.toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' });
+---
+<Admin title="Messages" active="messages">
+  {msgs.length === 0 && <p class="lead">No messages yet. Submissions from the contact form will appear here.</p>}
+  {msgs.map((m) => (
+    <div class="admin-row" style={m.isRead ? 'opacity:.7' : 'border-left:3px solid var(--green-500)'}>
+      <div class="grow">
+        <strong>{m.name}</strong>
+        {!m.isRead && <span class="role" style="margin-left:.5rem">NEW</span>}
+        <div class="meta">
+          <a href={`mailto:${m.email}`}>{m.email}</a> · {fmt(m.createdAt)}
+        </div>
+        <p style="white-space:pre-wrap;margin:.4rem 0 0">{m.body}</p>
+      </div>
+      <div class="admin-actions" style="flex-direction:column">
+        <form method="POST" action="/api/admin/messages">
+          <input type="hidden" name="_action" value="toggle-read" />
+          <input type="hidden" name="id" value={m.id} />
+          <button class="btn btn--sm btn--ghost" type="submit">{m.isRead ? 'Mark unread' : 'Mark read'}</button>
+        </form>
+        <form method="POST" action="/api/admin/messages" onsubmit="return confirm('Delete this message?')">
+          <input type="hidden" name="_action" value="delete" />
+          <input type="hidden" name="id" value={m.id} />
+          <button class="btn btn--sm btn--danger" type="submit">Delete</button>
+        </form>
+      </div>
+    </div>
+  ))}
+</Admin>

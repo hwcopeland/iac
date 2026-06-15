@@ -1,0 +1,44 @@
+---
+import Admin from '@/layouts/Admin.astro';
+import { sql, eq } from 'drizzle-orm';
+import { db } from '@/db';
+import { teamMembers, galleryImages, testimonials, messages } from '@/db/schema';
+
+const count = async (t: any, where?: any) => {
+  const q = db.select({ c: sql<number>`count(*)` }).from(t);
+  const [r] = await (where ? q.where(where) : q);
+  return r.c;
+};
+const [team, gallery, quotes, unread, total] = await Promise.all([
+  count(teamMembers),
+  count(galleryImages),
+  count(testimonials),
+  count(messages, eq(messages.isRead, false)),
+  count(messages),
+]);
+const cards = [
+  { label: 'Team members', value: team, href: '/admin/team' },
+  { label: 'Gallery images', value: gallery, href: '/admin/gallery' },
+  { label: 'Testimonials', value: quotes, href: '/admin/testimonials' },
+  { label: 'Messages', value: `${unread} new / ${total}`, href: '/admin/messages' },
+];
+---
+<Admin title="Dashboard" active="dashboard">
+  <p class="lead">Welcome back. Manage everything on the public website from here.</p>
+  <div class="grid grid--4" style="margin:1.2rem 0 2rem">
+    {cards.map((c) => (
+      <a href={c.href} class="card" style="text-decoration:none;color:inherit">
+        <div style="font-size:2rem;font-family:var(--serif);color:var(--green-800)">{c.value}</div>
+        <div class="meta">{c.label}</div>
+      </a>
+    ))}
+  </div>
+  <div class="card">
+    <h3>Quick links</h3>
+    <p>
+      <a class="btn btn--sm" href="/admin/settings">Edit site settings</a>
+      <a class="btn btn--sm btn--ghost" href="/admin/team">Edit team</a>
+      <a class="btn btn--sm btn--ghost" href="/admin/gallery">Manage gallery</a>
+    </p>
+  </div>
+</Admin>

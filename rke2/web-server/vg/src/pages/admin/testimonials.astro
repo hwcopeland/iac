@@ -1,0 +1,40 @@
+---
+import Admin from '@/layouts/Admin.astro';
+import { getTestimonials } from '@/lib/content';
+const items = await getTestimonials();
+---
+<Admin title="Testimonials" active="testimonials">
+  <details class="editor">
+    <summary>+ Add testimonial</summary>
+    <form method="POST" action="/api/admin/testimonials" style="margin-top:1rem">
+      <input type="hidden" name="_action" value="create" />
+      <div class="field"><label>Quote</label><textarea name="quote" required></textarea></div>
+      <div class="two-col">
+        <div class="field"><label>Author</label><input name="author" /></div>
+        <div class="field"><label>Sort order</label><input type="number" name="sortOrder" value="0" /></div>
+      </div>
+      <button class="btn" type="submit">Add</button>
+    </form>
+  </details>
+
+  {items.map((t) => (
+    <div class="admin-row">
+      <form method="POST" action="/api/admin/testimonials" class="grow">
+        <input type="hidden" name="_action" value="update" />
+        <input type="hidden" name="id" value={t.id} />
+        <div class="field"><textarea name="quote" required>{t.quote}</textarea></div>
+        <div style="display:flex;gap:.5rem;align-items:center">
+          <input name="author" value={t.author} placeholder="Author" />
+          <input type="number" name="sortOrder" value={t.sortOrder} style="width:70px" title="Sort order" />
+          <button class="btn btn--sm" type="submit">Save</button>
+        </div>
+      </form>
+      <form method="POST" action="/api/admin/testimonials" class="admin-actions"
+            onsubmit="return confirm('Delete this testimonial?')">
+        <input type="hidden" name="_action" value="delete" />
+        <input type="hidden" name="id" value={t.id} />
+        <button class="btn btn--sm btn--danger" type="submit">Delete</button>
+      </form>
+    </div>
+  ))}
+</Admin>

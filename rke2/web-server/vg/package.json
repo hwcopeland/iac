@@ -1,0 +1,24 @@
+{
+  "name": "vg",
+  "type": "module",
+  "version": "1.0.0",
+  "private": true,
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "dev": "astro dev",
+    "build": "astro build",
+    "preview": "node ./dist/server/entry.mjs",
+    "start": "node ./dist/server/entry.mjs",
+    "astro": "astro"
+  },
+  "dependencies": {
+    "@astrojs/node": "^9.1.3",
+    "@libsql/client": "^0.14.0",
+    "astro": "^5.7.0",
+    "drizzle-orm": "^0.38.4",
+    "jose": "^5.9.6",
+    "nanoid": "^5.0.9"
+  }
+}

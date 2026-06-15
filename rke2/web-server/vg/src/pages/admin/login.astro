@@ -1,0 +1,36 @@
+---
+import '@/styles/global.css';
+import { SESSION_COOKIE, isValidSession } from '@/lib/auth';
+// Already logged in? Skip straight to the dashboard.
+if (await isValidSession(Astro.cookies.get(SESSION_COOKIE)?.value)) {
+  return Astro.redirect('/admin');
+}
+const err = Astro.url.searchParams.get('err');
+const messages: Record<string, string> = {
+  forbidden: 'Your account is not a member of the VG-Admin group. Ask an administrator for access.',
+  bad_state: 'Your sign-in session expired. Please try again.',
+  auth_failed: 'Sign-in failed. Please try again.',
+};
+const message = err ? (messages[err] ?? 'Sign-in error. Please try again.') : null;
+---
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex" />
+    <title>Admin login · Valley Growers</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  </head>
+  <body style="display:grid;place-items:center;min-height:100vh">
+    <main class="card" style="width:min(400px,92vw);text-align:center">
+      <h1 style="font-size:1.5rem">🌿 Valley Growers</h1>
+      <p class="meta">Content management — staff access only.</p>
+      {message && <div class="notice notice--err" style="text-align:left">{message}</div>}
+      <a class="btn" href="/api/auth/login" style="width:100%;justify-content:center;margin-top:.5rem">
+        Sign in with Authentik
+      </a>
+      <p class="meta" style="margin-top:1rem">You'll be redirected to auth.hwcopeland.net to sign in.</p>
+    </main>
+  </body>
+</html>

@@ -1,0 +1,32 @@
+---
+import '@/styles/global.css';
+import Nav from '@/components/Nav.astro';
+import Footer from '@/components/Footer.astro';
+import { getSettings } from '@/lib/content';
+
+interface Props { title?: string; description?: string }
+const { title, description } = Astro.props;
+const s = await getSettings();
+const fullTitle = title ? `${title} · ${s.businessName}` : s.businessName;
+const desc = description ?? s.heroSubheading;
+---
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{fullTitle}</title>
+    <meta name="description" content={desc} />
+    <meta property="og:title" content={fullTitle} />
+    <meta property="og:description" content={desc} />
+    <meta property="og:type" content="website" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  </head>
+  <body>
+    <Nav businessName={s.businessName} />
+    <main>
+      <slot />
+    </main>
+    <Footer settings={s} />
+  </body>
+</html>

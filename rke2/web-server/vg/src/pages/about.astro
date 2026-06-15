@@ -1,0 +1,23 @@
+---
+import Base from '@/layouts/Base.astro';
+import { getSettings } from '@/lib/content';
+const s = await getSettings();
+const paragraphs = s.aboutBody.split(/\n{2,}/).map((p) => p.trim()).filter(Boolean);
+---
+<Base title="About">
+  <section class="hero" style="padding-block: clamp(2.5rem,6vw,4rem)">
+    <div class="container">
+      <p class="eyebrow" style="color: var(--green-100)">About</p>
+      <h1>{s.aboutTitle}</h1>
+    </div>
+  </section>
+  <section class="section">
+    <div class="container prose">
+      {paragraphs.map((p) => <p class="lead" style="color: var(--ink)">{p}</p>)}
+      <div class="hero-actions">
+        <a class="btn" href="/team">Meet the team</a>
+        <a class="btn btn--ghost" href="/contact">Plan a visit</a>
+      </div>
+    </div>
+  </section>
+</Base>

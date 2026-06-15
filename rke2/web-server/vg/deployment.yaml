@@ -1,0 +1,108 @@
+---
+# SQLite database + uploaded images. Single RWO volume — the app is a single
+# replica (one SQLite writer), hence the Recreate strategy below.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: vg-data
+  namespace: web-server
+  labels:
+    app.kubernetes.io/name: vg
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: longhorn
+  resources:
+    requests:
+      storage: 2Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vg
+  namespace: web-server
+  labels:
+    app.kubernetes.io/name: vg
+spec:
+  type: ClusterIP
+  ports:
+    - port: 80
+      targetPort: http
+      protocol: TCP
+  selector:
+    app.kubernetes.io/name: vg
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vg
+  namespace: web-server
+  labels:
+    app.kubernetes.io/name: vg
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: vg
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: vg
+    spec:
+      imagePullSecrets:
+        - name: zot-pull-secret
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      containers:
+        - name: vg
+          image: zot.hwcopeland.net/web-server/vg:latest
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 4321
+              protocol: TCP
+          env:
+            - name: PORT
+              value: "4321"
+            - name: HOST
+              value: "0.0.0.0"
+            - name: DATA_DIR
+              value: /data
+          # OIDC_CLIENT_ID, OIDC_CLIENT_SECRET, OIDC_ISSUER and SESSION_SECRET
+          # all come from the vg-oidc ExternalSecret (Vaultwarden-backed).
+          envFrom:
+            - secretRef:
+                name: vg-oidc
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          resources:
+            requests:
+              memory: 96Mi
+              cpu: 25m
+            limits:
+              memory: 320Mi
+              cpu: 500m
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: vg-data

@@ -1,0 +1,34 @@
+---
+import Base from '@/layouts/Base.astro';
+import { getGallery } from '@/lib/content';
+const images = await getGallery();
+---
+<Base title="Gallery" description="Browse our spring and summer collection — fresh plants grown right here in Tennessee.">
+  <section class="hero" style="padding-block: clamp(2.5rem,6vw,4rem)">
+    <div class="container">
+      <p class="eyebrow" style="color: var(--green-100)">Now available</p>
+      <h1>Spring &amp; Summer Collection</h1>
+      <p class="lead">Browse our collection — fresh plants arriving weekly, grown right here in Tennessee.</p>
+    </div>
+  </section>
+  <section class="section">
+    <div class="container">
+      {images.length === 0 ? (
+        <div class="card" style="text-align:center">
+          <h3>Photos coming soon</h3>
+          <p class="meta">Fresh plant photos are on their way. In the meantime, come see the selection in person!</p>
+          <a class="btn btn--sm" href="/contact">Visit us</a>
+        </div>
+      ) : (
+        <div class="gallery">
+          {images.map((img) => (
+            <figure>
+              <img src={img.src} alt={img.caption || 'Valley Growers plants'} loading="lazy" />
+              {img.caption && <figcaption>{img.caption}</figcaption>}
+            </figure>
+          ))}
+        </div>
+      )}
+    </div>
+  </section>
+</Base>

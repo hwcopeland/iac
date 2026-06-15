@@ -1,0 +1,37 @@
+---
+import Admin from '@/layouts/Admin.astro';
+import { getSettings } from '@/lib/content';
+const s = await getSettings();
+const f = (name: keyof typeof s, label: string, opts: { type?: string; area?: boolean } = {}) => ({ name, label, ...opts });
+const fields = [
+  f('businessName', 'Business name'),
+  f('tagline', 'Tagline'),
+  f('phone', 'Phone'),
+  f('email', 'Email', { type: 'email' }),
+  f('address', 'Address'),
+  f('facebookUrl', 'Facebook URL', { type: 'url' }),
+  f('hoursWeekday', 'Hours — Mon–Fri'),
+  f('hoursSaturday', 'Hours — Saturday'),
+  f('hoursSunday', 'Hours — Sunday'),
+  f('heroHeading', 'Home hero heading'),
+  f('heroSubheading', 'Home hero subheading'),
+  f('homeIntro', 'Home intro paragraph', { area: true }),
+  f('aboutTitle', 'About page title'),
+  f('aboutBody', 'About page body (blank line = new paragraph)', { area: true }),
+];
+---
+<Admin title="Site settings" active="settings">
+  <form method="POST" action="/api/admin/settings">
+    <div class="two-col">
+      {fields.map((field) => (
+        <div class="field" style={field.area ? 'grid-column:1/-1' : ''}>
+          <label for={field.name}>{field.label}</label>
+          {field.area
+            ? <textarea id={field.name} name={field.name} style="min-height:140px">{s[field.name]}</textarea>
+            : <input id={field.name} name={field.name} type={field.type ?? 'text'} value={s[field.name]} />}
+        </div>
+      ))}
+    </div>
+    <button class="btn" type="submit">Save settings</button>
+  </form>
+</Admin>

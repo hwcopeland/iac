@@ -1,0 +1,35 @@
+---
+import Base from '@/layouts/Base.astro';
+import { getTeam } from '@/lib/content';
+const team = await getTeam();
+const initials = (name: string) =>
+  name.split(/\s+/).slice(0, 2).map((w) => w[0]?.toUpperCase()).join('');
+---
+<Base title="Team" description="Meet the knowledgeable, friendly team at Valley Growers.">
+  <section class="hero" style="padding-block: clamp(2.5rem,6vw,4rem)">
+    <div class="container">
+      <p class="eyebrow" style="color: var(--green-100)">Our people</p>
+      <h1>Meet the team</h1>
+      <p class="lead">Knowledgeable, friendly, and always happy to help your garden thrive.</p>
+    </div>
+  </section>
+  <section class="section">
+    <div class="container">
+      <div class="grid grid--3">
+        {team.map((m) => (
+          <article class="card">
+            {m.photoUrl
+              ? <img class="avatar" src={m.photoUrl} alt={m.name} width="64" height="64" />
+              : <div class="avatar" aria-hidden="true">{initials(m.name)}</div>}
+            <h3>{m.name}</h3>
+            {m.role && <div class="role">{m.role}</div>}
+            <p class="meta">
+              {[m.tenure, m.favoritePlant && `Favorite: ${m.favoritePlant}`].filter(Boolean).join(' · ')}
+            </p>
+            {m.bio && <p>{m.bio}</p>}
+          </article>
+        ))}
+      </div>
+    </div>
+  </section>
+</Base>

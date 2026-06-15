@@ -1,0 +1,45 @@
+---
+import Admin from '@/layouts/Admin.astro';
+import { getGallery } from '@/lib/content';
+const images = await getGallery();
+---
+<Admin title="Gallery" active="gallery">
+  <details class="editor" open={images.length === 0}>
+    <summary>+ Add image</summary>
+    <form method="POST" action="/api/admin/gallery" enctype="multipart/form-data" style="margin-top:1rem">
+      <input type="hidden" name="_action" value="create" />
+      <div class="field"><label>Upload image</label><input type="file" name="image" accept="image/*" /></div>
+      <div class="field"><label>…or paste an image URL</label><input name="src" placeholder="https://…" /></div>
+      <div class="two-col">
+        <div class="field"><label>Caption</label><input name="caption" /></div>
+        <div class="field"><label>Sort order</label><input type="number" name="sortOrder" value="0" /></div>
+      </div>
+      <button class="btn" type="submit">Add image</button>
+    </form>
+  </details>
+
+  <div class="grid grid--4">
+    {images.map((img) => (
+      <div class="card" style="padding:0;overflow:hidden">
+        <img src={img.src} alt={img.caption} style="aspect-ratio:4/3;object-fit:cover;width:100%" />
+        <div style="padding:.8rem">
+          <form method="POST" action="/api/admin/gallery">
+            <input type="hidden" name="_action" value="update" />
+            <input type="hidden" name="id" value={img.id} />
+            <div class="field" style="margin-bottom:.5rem"><input name="caption" value={img.caption} placeholder="Caption" /></div>
+            <div style="display:flex;gap:.4rem;align-items:center">
+              <input type="number" name="sortOrder" value={img.sortOrder} style="width:70px" title="Sort order" />
+              <button class="btn btn--sm" type="submit">Save</button>
+            </div>
+          </form>
+          <form method="POST" action="/api/admin/gallery" style="margin-top:.5rem"
+                onsubmit="return confirm('Delete this image?')">
+            <input type="hidden" name="_action" value="delete" />
+            <input type="hidden" name="id" value={img.id} />
+            <button class="btn btn--sm btn--danger" type="submit">Delete</button>
+          </form>
+        </div>
+      </div>
+    ))}
+  </div>
+</Admin>

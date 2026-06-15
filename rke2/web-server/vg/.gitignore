@@ -1,0 +1,20 @@
+# build output
+dist/
+.astro/
+
+# deps
+node_modules/
+
+# local data (SQLite db + uploaded images live on a PVC in prod)
+data/
+*.db
+*.db-*
+
+# env
+.env
+.env.*
+!.env.example
+
+# misc
+npm-debug.log*
+.DS_Store

@@ -1,0 +1,57 @@
+---
+import Base from '@/layouts/Base.astro';
+import { getSettings } from '@/lib/content';
+const s = await getSettings();
+const sent = Astro.url.searchParams.get('sent') === '1';
+const error = Astro.url.searchParams.get('error') === '1';
+const mapsUrl = `https://www.google.com/maps?q=${encodeURIComponent(s.address)}&output=embed`;
+---
+<Base title="Contact">
+  <section class="hero" style="padding-block: clamp(2.5rem,6vw,4rem)">
+    <div class="container">
+      <p class="eyebrow" style="color: var(--green-100)">Contact</p>
+      <h1>Contact Us</h1>
+      <p class="lead">Have questions about our plants, availability, or bulk orders? We'd love to hear from you — we typically respond within 24 hours.</p>
+    </div>
+  </section>
+  <section class="section">
+    <div class="container info-grid" style="align-items:start">
+      <div>
+        <h3>Send us a message</h3>
+        {sent && <div class="notice notice--ok">Thanks! Your message has been sent.</div>}
+        {error && <div class="notice notice--err">Sorry, something went wrong. Please try again or call us.</div>}
+        <form method="POST" action="/api/contact">
+          <div class="field">
+            <label for="name">Name</label>
+            <input id="name" name="name" required autocomplete="name" />
+          </div>
+          <div class="field">
+            <label for="email">Email</label>
+            <input id="email" name="email" type="email" required autocomplete="email" />
+          </div>
+          <div class="field">
+            <label for="body">Message</label>
+            <textarea id="body" name="body" required></textarea>
+          </div>
+          <button class="btn" type="submit">Send message</button>
+        </form>
+      </div>
+      <div>
+        <h3>Reach us directly</h3>
+        <p><strong>Phone:</strong> <a href={`tel:${s.phone.replace(/[^0-9+]/g, '')}`}>{s.phone}</a></p>
+        <p><strong>Email:</strong> <a href={`mailto:${s.email}`}>{s.email}</a></p>
+        <p><strong>Address:</strong><br />{s.address}</p>
+        <h3 style="margin-top:1.5rem">Hours</h3>
+        <div class="hours-row"><span>Mon – Fri</span><span>{s.hoursWeekday}</span></div>
+        <div class="hours-row"><span>Saturday</span><span>{s.hoursSaturday}</span></div>
+        <div class="hours-row"><span>Sunday</span><span>{s.hoursSunday}</span></div>
+        <iframe
+          title="Map"
+          src={mapsUrl}
+          style="width:100%;height:240px;border:0;border-radius:14px;margin-top:1.25rem"
+          loading="lazy"
+          referrerpolicy="no-referrer-when-downgrade"></iframe>
+      </div>
+    </div>
+  </section>
+</Base>

@@ -1,0 +1,31 @@
+---
+import type { Settings } from '@/db/schema';
+interface Props { settings: Settings }
+const { settings: s } = Astro.props;
+const mapsUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(s.address)}`;
+const year = new Date().getFullYear();
+---
+<footer class="site-footer">
+  <div class="container footer-grid">
+    <div>
+      <h4>{s.businessName}</h4>
+      <p>{s.tagline}</p>
+      <p><a href={s.facebookUrl} rel="noopener" target="_blank">Find us on Facebook →</a></p>
+    </div>
+    <div>
+      <h4>Visit</h4>
+      <p><a href={mapsUrl} rel="noopener" target="_blank">{s.address}</a></p>
+      <p><a href={`tel:${s.phone.replace(/[^0-9+]/g, '')}`}>{s.phone}</a><br />
+         <a href={`mailto:${s.email}`}>{s.email}</a></p>
+    </div>
+    <div>
+      <h4>Hours</h4>
+      <div class="hours-row"><span>Mon – Fri</span><span>{s.hoursWeekday}</span></div>
+      <div class="hours-row"><span>Saturday</span><span>{s.hoursSaturday}</span></div>
+      <div class="hours-row"><span>Sunday</span><span>{s.hoursSunday}</span></div>
+    </div>
+  </div>
+  <div class="container footer-bottom">
+    © {year} {s.businessName} · Murfreesboro, TN
+  </div>
+</footer>
