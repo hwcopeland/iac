@@ -31,6 +31,7 @@ export const POST: APIRoute = async ({ request, redirect }) => {
       tenure: String(form.get('tenure') ?? '').trim(),
       favoritePlant: String(form.get('favoritePlant') ?? '').trim(),
       bio: String(form.get('bio') ?? '').trim(),
+      photoPosition: String(form.get('photoPosition') ?? '').trim() || '50% 20%',
       sortOrder: num(form.get('sortOrder')),
     };
     if (!values.name) return redirect('/admin/team?err=Name+is+required');

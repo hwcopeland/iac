@@ -50,6 +50,7 @@ async function initDb() {
         favorite_plant TEXT NOT NULL DEFAULT '',
         bio TEXT NOT NULL DEFAULT '',
         photo_url TEXT NOT NULL DEFAULT '',
+        photo_position TEXT NOT NULL DEFAULT '50% 20%',
         sort_order INTEGER NOT NULL DEFAULT 0
       )`,
       `CREATE TABLE IF NOT EXISTS gallery_images (
@@ -75,6 +76,14 @@ async function initDb() {
     ],
     'write',
   );
+
+  // Migrations for databases created before a column existed. ALTER throws if
+  // the column is already present, so each is best-effort.
+  for (const stmt of [
+    `ALTER TABLE team_members ADD COLUMN photo_position TEXT NOT NULL DEFAULT '50% 20%'`,
+  ]) {
+    try { await client.execute(stmt); } catch { /* column already exists */ }
+  }
 
   await seed(db);
 }

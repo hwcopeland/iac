@@ -28,6 +28,7 @@ export const teamMembers = sqliteTable('team_members', {
   favoritePlant: text('favorite_plant').notNull().default(''),
   bio: text('bio').notNull().default(''),
   photoUrl: text('photo_url').notNull().default(''),
+  photoPosition: text('photo_position').notNull().default('50% 20%'),
   sortOrder: integer('sort_order').notNull().default(0),
 });
 

@@ -19,7 +19,7 @@ const initials = (name: string) =>
         {team.map((m) => (
           <article class="team-card">
             {m.photoUrl
-              ? <img class="team-photo" src={m.photoUrl} alt={m.name} width="300" height="400" loading="lazy" />
+              ? <img class="team-photo" src={m.photoUrl} alt={m.name} width="300" height="400" loading="lazy" style={`object-position:${m.photoPosition || '50% 20%'}`} />
               : <div class="team-photo team-initials" aria-hidden="true">{initials(m.name)}</div>}
             <div class="team-body">
               <h3>{m.name}</h3>

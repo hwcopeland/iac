@@ -11,4 +11,9 @@ export default defineConfig({
   adapter: node({ mode: 'standalone' }),
   server: { host: true, port: 4321 },
   devToolbar: { enabled: false },
+  // TLS is terminated at the gateway, so the Node server sees http:// while the
+  // browser sends an https Origin — Astro's default origin check would reject
+  // every form POST ("Cross-site POST forbidden"). The admin is protected by
+  // Authentik SSO + httpOnly SameSite cookies, so we disable the built-in check.
+  security: { checkOrigin: false },
 });

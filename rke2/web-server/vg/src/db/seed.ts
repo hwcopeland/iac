@@ -45,6 +45,7 @@ export async function seed(db: DB) {
       {
         name: 'Dianna',
         photoUrl: '/seed/team/IMG_1006.jpeg',
+        photoPosition: '50% 18%',
         role: 'B.S. Plant & Soil Science, MTSU',
         tenure: '13 years',
         favoritePlant: '',
@@ -54,6 +55,7 @@ export async function seed(db: DB) {
       {
         name: 'Emily',
         photoUrl: '/seed/team/IMG_5043.jpeg',
+        photoPosition: '50% 8%',
         role: 'Agribusiness major, MTSU',
         tenure: 'Since April',
         favoritePlant: '',
@@ -63,6 +65,7 @@ export async function seed(db: DB) {
       {
         name: 'Brooke Rose',
         photoUrl: '/seed/team/IMG_5322.jpeg',
+        photoPosition: '50% 30%',
         role: '',
         tenure: '3 years',
         favoritePlant: 'Tulips',
@@ -72,6 +75,7 @@ export async function seed(db: DB) {
       {
         name: 'Hampton',
         photoUrl: '/seed/team/IMG_5048.jpeg',
+        photoPosition: '85% 32%',
         role: 'B.S. Chemistry, MTSU',
         tenure: '3 years',
         favoritePlant: 'Torch lily',
@@ -81,6 +85,7 @@ export async function seed(db: DB) {
       {
         name: 'Kenyon',
         photoUrl: '/seed/team/IMG_1217.jpeg',
+        photoPosition: '45% 8%',
         role: 'MTSU senior — Plant & Soil Science, Entrepreneurship minor',
         tenure: 'Since February 2026',
         favoritePlant: '',
@@ -90,6 +95,7 @@ export async function seed(db: DB) {
       {
         name: 'Kristy Thomas',
         photoUrl: '/seed/team/IMG_5035.jpeg',
+        photoPosition: '42% 22%',
         role: "Valley Growers' best water girl eva!",
         tenure: '',
         favoritePlant: '',
@@ -99,6 +105,7 @@ export async function seed(db: DB) {
       {
         name: 'Tara Neugebauer',
         photoUrl: '/seed/team/1000006145.JPG',
+        photoPosition: '50% 15%',
         role: 'B.S. Plant & Soil Science, MTSU (2015)',
         tenure: '13 years',
         favoritePlant: '',
@@ -108,6 +115,7 @@ export async function seed(db: DB) {
       {
         name: 'Jerelyn',
         photoUrl: '/seed/team/IMG_0994.jpeg',
+        photoPosition: '50% 18%',
         role: '',
         tenure: '3 years',
         favoritePlant: '',
@@ -117,6 +125,7 @@ export async function seed(db: DB) {
       {
         name: 'Carol',
         photoUrl: '/seed/team/IMG_1211.jpeg',
+        photoPosition: '50% 14%',
         role: 'B.A.S. Plant & Soil Science, MTSU',
         tenure: 'Since January 2025',
         favoritePlant: '',

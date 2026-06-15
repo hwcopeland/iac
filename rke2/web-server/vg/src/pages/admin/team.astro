@@ -4,6 +4,13 @@ import { getTeam } from '@/lib/content';
 const team = await getTeam();
 ---
 <Admin title="Team" active="team">
+  <datalist id="focuspresets">
+    <option value="50% 50%">Center</option>
+    <option value="50% 0%">Top / face</option>
+    <option value="50% 20%">Upper</option>
+    <option value="20% 35%">Left</option>
+    <option value="85% 35%">Right</option>
+  </datalist>
   <details class="editor">
     <summary>+ Add team member</summary>
     <form method="POST" action="/api/admin/team" enctype="multipart/form-data" style="margin-top:1rem">
@@ -18,6 +25,11 @@ const team = await getTeam();
       <div class="two-col">
         <div class="field"><label>Photo (optional)</label><input type="file" name="photo" accept="image/*" /></div>
         <div class="field"><label>Sort order</label><input type="number" name="sortOrder" value="0" /></div>
+      </div>
+      <div class="field">
+        <label>Photo focus</label>
+        <input name="photoPosition" list="focuspresets" value="50% 20%" />
+        <p class="meta">How the photo is cropped. Format: <code>X% Y%</code>. Lower Y = show higher up (face); X shifts left/right. Try presets ↑</p>
       </div>
       <button class="btn" type="submit">Add member</button>
     </form>
@@ -43,6 +55,11 @@ const team = await getTeam();
               <div class="field"><label>Replace photo</label><input type="file" name="photo" accept="image/*" />
                 {m.photoUrl && <p class="meta">Current: {m.photoUrl}</p>}</div>
               <div class="field"><label>Sort order</label><input type="number" name="sortOrder" value={m.sortOrder} /></div>
+            </div>
+            <div class="field">
+              <label>Photo focus</label>
+              <input name="photoPosition" list="focuspresets" value={m.photoPosition} />
+              <p class="meta">Crop position <code>X% Y%</code> — lower Y shows higher up; X shifts left/right.</p>
             </div>
             <button class="btn btn--sm" type="submit">Save changes</button>
           </form>
