@@ -5,7 +5,7 @@ const s = await getSettings();
 const testimonials = await getTestimonials();
 ---
 <Base title="Home">
-  <section class="hero">
+  <section class="hero" style="background-image: linear-gradient(160deg, rgba(27,67,50,0.82), rgba(64,145,108,0.78)), url('/seed/home/IMG_5895.jpeg'); background-size: cover; background-position: center;">
     <div class="container">
       <p class="eyebrow" style="color: var(--green-100)">{s.tagline}</p>
       <h1>{s.heroHeading}</h1>

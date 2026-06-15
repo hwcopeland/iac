@@ -13,6 +13,8 @@ const paragraphs = s.aboutBody.split(/\n{2,}/).map((p) => p.trim()).filter(Boole
   </section>
   <section class="section">
     <div class="container prose">
+      <img src="/seed/home/IMG_4010.png" alt="Valley Growers Garden Center"
+           style="width:100%;max-height:420px;object-fit:cover;border-radius:var(--radius);box-shadow:var(--shadow);margin-bottom:1.5rem" />
       {paragraphs.map((p) => <p class="lead" style="color: var(--ink)">{p}</p>)}
       <div class="hero-actions">
         <a class="btn" href="/team">Meet the team</a>

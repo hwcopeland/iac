@@ -1,7 +1,7 @@
 import { sql } from 'drizzle-orm';
 import type { LibSQLDatabase } from 'drizzle-orm/libsql';
 import * as schema from './schema';
-import { settings, teamMembers, testimonials } from './schema';
+import { settings, teamMembers, testimonials, galleryImages } from './schema';
 
 type DB = LibSQLDatabase<typeof schema>;
 
@@ -146,5 +146,33 @@ export async function seed(db: DB) {
         sortOrder: 4,
       },
     ]);
+  }
+
+  const [{ count: galleryCount }] = await db
+    .select({ count: sql<number>`count(*)` })
+    .from(galleryImages);
+
+  if (galleryCount === 0) {
+    // Real photos pulled from the original site, served as static assets from
+    // public/seed/. Plant/garden photos first, then the original gallery set.
+    const files = [
+      'home/IMG_2796.jpg', 'home/IMG_5895.jpeg', 'home/IMG_5896.jpeg',
+      'home/IMG_5900.jpeg', 'home/IMG_5902.jpeg', 'home/IMG_5904.jpg',
+      'home/IMG_2637.jpg', 'home/IMG_2638.jpg', 'home/IMG_2651.jpg',
+      'gallery/IMG_2649.jpeg', 'gallery/IMG_2631.jpeg',
+      'gallery/Screenshot_2026-04-11_at_12.38.36_AM.png',
+      'gallery/Screenshot_2026-04-11_at_12.38.56_AM.png',
+      'gallery/Screenshot_2026-04-11_at_12.39.20_AM.png',
+      'gallery/Screenshot_2026-04-11_at_12.39.42_AM.png',
+      'gallery/Screenshot_2026-04-11_at_12.43.02_AM.png',
+      'gallery/Screenshot_2026-04-11_at_12.43.10_AM.png',
+      'gallery/Screenshot_2026-04-11_at_12.43.32_AM.png',
+      'gallery/Screenshot_2026-04-11_at_12.48.40_AM.png',
+      'gallery/Screenshot_2026-04-11_at_12.50.09_AM.png',
+      'gallery/Screenshot_2026-04-11_at_12.51.40_AM.png',
+    ];
+    await db.insert(galleryImages).values(
+      files.map((f, i) => ({ src: `/seed/${f}`, caption: '', sortOrder: i + 1 })),
+    );
   }
 }
