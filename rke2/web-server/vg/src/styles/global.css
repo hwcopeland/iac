@@ -172,6 +172,33 @@ img { max-width: 100%; display: block; }
   margin-bottom: 0.9rem; object-fit: cover; overflow: hidden;
 }
 
+/* Team — two-column cards: a rectangular photo beside the bio. */
+.team-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(440px, 1fr)); gap: 1.25rem; }
+.team-card {
+  display: grid; grid-template-columns: 180px 1fr; gap: 1.4rem;
+  align-items: start;
+  background: var(--paper); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 1.3rem; box-shadow: var(--shadow);
+}
+.team-photo {
+  width: 180px; aspect-ratio: 3 / 4; object-fit: cover; object-position: top center;
+  border-radius: 12px; display: block;
+}
+.team-initials {
+  display: flex; align-items: center; justify-content: center;
+  background: var(--green-100); color: var(--green-800);
+  font-family: var(--serif); font-size: 3rem; font-weight: 600;
+}
+.team-body h3 { margin-bottom: 0.1rem; }
+.team-body .role { color: var(--green-700); font-weight: 600; font-size: 0.9rem; }
+.team-body .meta { color: var(--muted); font-size: 0.85rem; margin: 0.2rem 0 0.7rem; }
+.team-body p { margin: 0.45rem 0 0; font-size: 0.95rem; }
+@media (max-width: 560px) {
+  .team-grid { grid-template-columns: 1fr; }
+  .team-card { grid-template-columns: 120px 1fr; gap: 1rem; padding: 1rem; }
+  .team-photo { width: 120px; }
+}
+
 .testimonial { font-family: var(--serif); font-size: 1.15rem; }
 .testimonial cite { display: block; margin-top: 0.6rem; font-family: var(--sans); font-style: normal; color: var(--muted); font-size: 0.9rem; }
 

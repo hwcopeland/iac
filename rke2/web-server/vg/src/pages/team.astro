@@ -15,18 +15,22 @@ const initials = (name: string) =>
   </section>
   <section class="section">
     <div class="container">
-      <div class="grid grid--3">
+      <div class="team-grid">
         {team.map((m) => (
-          <article class="card">
+          <article class="team-card">
             {m.photoUrl
-              ? <img class="avatar" src={m.photoUrl} alt={m.name} width="64" height="64" />
-              : <div class="avatar" aria-hidden="true">{initials(m.name)}</div>}
-            <h3>{m.name}</h3>
-            {m.role && <div class="role">{m.role}</div>}
-            <p class="meta">
-              {[m.tenure, m.favoritePlant && `Favorite: ${m.favoritePlant}`].filter(Boolean).join(' · ')}
-            </p>
-            {m.bio && <p>{m.bio}</p>}
+              ? <img class="team-photo" src={m.photoUrl} alt={m.name} width="300" height="400" loading="lazy" />
+              : <div class="team-photo team-initials" aria-hidden="true">{initials(m.name)}</div>}
+            <div class="team-body">
+              <h3>{m.name}</h3>
+              {m.role && <div class="role">{m.role}</div>}
+              {(m.tenure || m.favoritePlant) && (
+                <p class="meta">
+                  {[m.tenure, m.favoritePlant && `Favorite: ${m.favoritePlant}`].filter(Boolean).join(' · ')}
+                </p>
+              )}
+              {m.bio && <p>{m.bio}</p>}
+            </div>
           </article>
         ))}
       </div>
