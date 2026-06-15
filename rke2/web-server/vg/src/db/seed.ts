@@ -60,7 +60,7 @@ export async function seed(db: DB) {
         tenure: 'Since April',
         favoritePlant: '',
         bio: `Emily is an Agribusiness major at MTSU and has been at Valley Growers since April. She has enjoyed learning more about each plant and watching everything bloom and grow, and she loves sharing her new knowledge with customers — and learning from them as well.`,
-        sortOrder: 2,
+        sortOrder: 8,
       },
       {
         name: 'Brooke Rose',
@@ -90,7 +90,7 @@ export async function seed(db: DB) {
         tenure: 'Since February 2026',
         favoritePlant: '',
         bio: `Kenyon is a senior at MTSU majoring in Plant and Soil Science with a minor in entrepreneurship, and he graduated high school with an associate's degree in applied sciences. He runs his own landscaping business and has worked at Valley Growers since February 2026. Over the last few months he's grown a lot in his overall knowledge of plants, and he hopes to keep improving as he heads into his senior year. He loves working with his coworkers and helping customers accomplish their desired results for their gardens.`,
-        sortOrder: 5,
+        sortOrder: 7,
       },
       {
         name: 'Kristy Thomas',
@@ -100,7 +100,7 @@ export async function seed(db: DB) {
         tenure: '',
         favoritePlant: '',
         bio: `Kristy has been married for 25 years and is a mom of two grown girls. A CrossFitter for 15 years, she's co-owned a CrossFit gym in Christiana since 2020. Now a retired full-time mom, she's Valley Growers' part-time water girl — she loves working here because the environment is so friendly and beautiful, enjoys chatting with the customers, and says she has the best coworkers to work with.`,
-        sortOrder: 6,
+        sortOrder: 9,
       },
       {
         name: 'Tara Neugebauer',
@@ -110,7 +110,7 @@ export async function seed(db: DB) {
         tenure: '13 years',
         favoritePlant: '',
         bio: `Tara has been with Valley Growers for 13 years and holds a Bachelor's in Plant and Soil Science from MTSU (2015). She loves her job, and being able to help customers always makes her happy. She loves all flowers, so choosing a favorite is hard. She's a devoted mom to four wonderful children.`,
-        sortOrder: 7,
+        sortOrder: 2,
       },
       {
         name: 'Jerelyn',
@@ -120,7 +120,7 @@ export async function seed(db: DB) {
         tenure: '3 years',
         favoritePlant: '',
         bio: `Jerelyn has been part of the team for 3 years. Nature and outdoor work have always been a big part of her life, so working at Valley Growers feels like a natural fit. She's always enjoyed environments that are welcoming, creative, and hands-on, and she loves that every day here is a little different — whether she's helping care for plants or helping customers find the perfect flowers, greenery, or seasonal inspiration. Outside of work, she enjoys spending time with horses and the slower, peaceful side of being outdoors, and playing in her garden.`,
-        sortOrder: 8,
+        sortOrder: 5,
       },
       {
         name: 'Carol',
@@ -130,7 +130,7 @@ export async function seed(db: DB) {
         tenure: 'Since January 2025',
         favoritePlant: '',
         bio: `Carol was medically retired after 16 years in the Army and started working at Valley Growers in January 2025 while attending MTSU, where she recently earned a Bachelor's of Applied Science in Plant & Soil Science. She's been working with and learning about plants for nearly 10 years — at one point she had over 100 houseplants! She loves working at Valley Growers and sharing her knowledge and experience with the community.`,
-        sortOrder: 9,
+        sortOrder: 6,
       },
     ]);
   }
