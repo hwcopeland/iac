@@ -120,6 +120,35 @@ img { max-width: 100%; display: block; }
 .hero .btn--ghost:hover { background: rgba(255,255,255,0.12); }
 .hero-actions { display: flex; gap: 0.8rem; flex-wrap: wrap; margin-top: 1.5rem; }
 
+/* Hero background slideshow (homepage) — crossfades through plant photos. */
+.hero .container { position: relative; z-index: 2; }
+.hero-slides, .hero-overlay { position: absolute; inset: 0; }
+.hero-slides { z-index: 0; }
+.hero-overlay {
+  z-index: 1;
+  background: linear-gradient(160deg, rgba(27, 67, 50, 0.74), rgba(64, 145, 108, 0.6));
+}
+.hero-slide {
+  position: absolute; inset: 0;
+  background-size: cover; background-position: center;
+  opacity: 0;
+  animation: heroFade 27s infinite;
+}
+.hero-slide:nth-child(1) { animation-delay: 0s; }
+.hero-slide:nth-child(2) { animation-delay: 9s; }
+.hero-slide:nth-child(3) { animation-delay: 18s; }
+@keyframes heroFade {
+  0% { opacity: 0; }
+  6% { opacity: 1; }
+  33% { opacity: 1; }
+  39% { opacity: 0; }
+  100% { opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .hero-slide { animation: none; opacity: 1; }
+  .hero-slide:nth-child(n+2) { display: none; }
+}
+
 /* Cards & grids */
 .grid { display: grid; gap: 1.25rem; }
 .grid--3 { grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
@@ -146,9 +175,11 @@ img { max-width: 100%; display: block; }
 .testimonial { font-family: var(--serif); font-size: 1.15rem; }
 .testimonial cite { display: block; margin-top: 0.6rem; font-family: var(--sans); font-style: normal; color: var(--muted); font-size: 0.9rem; }
 
-/* Gallery */
-.gallery { columns: 3 240px; column-gap: 1rem; }
-.gallery figure { margin: 0 0 1rem; break-inside: avoid; border-radius: var(--radius); overflow: hidden; box-shadow: var(--shadow); background: var(--paper); }
+/* Gallery — uniform grid with reserved aspect ratio so images don't reflow
+   the layout as they lazy-load (no cumulative layout shift). */
+.gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 1rem; }
+.gallery figure { margin: 0; border-radius: var(--radius); overflow: hidden; box-shadow: var(--shadow); background: var(--green-100); }
+.gallery figure img { width: 100%; aspect-ratio: 4 / 5; object-fit: cover; display: block; }
 .gallery figcaption { padding: 0.6rem 0.8rem; font-size: 0.88rem; color: var(--muted); }
 
 /* Info / hours */
