@@ -788,7 +788,7 @@ def _claude_brain_discord(text: str, timeout: float = 60.0) -> str:
              "--append-system-prompt", persona_prompt,
              "--mcp-config", _MCP_CONFIG_PATH,
              "--allowed-tools", _RO_ALLOWED_TOOLS,
-             "--model", "claude-haiku-4-5-20251001",
+             "--model", "sonnet",
              "--max-turns", "6",
              "--output-format", "json"],
             capture_output=True, text=True, timeout=timeout,
@@ -842,7 +842,7 @@ def _claude_brain_discord_locked(text: str, timeout: float = 60.0) -> str:
             ["claude", "-p", text,
              "--append-system-prompt", persona_prompt,
              # No --mcp-config, no --allowed-tools = no tool access.
-             "--model", "claude-haiku-4-5-20251001",
+             "--model", "sonnet",
              "--max-turns", "1",
              "--output-format", "json"],
             capture_output=True, text=True, timeout=timeout,
@@ -906,7 +906,7 @@ def _claude_brain(text: str, timeout: float = 60.0, mem_scope: str = "") -> str:
              "--append-system-prompt", persona_prompt,
              "--mcp-config", _MCP_CONFIG_PATH,
              "--allowed-tools", _RO_ALLOWED_TOOLS,
-             "--model", "claude-haiku-4-5-20251001",
+             "--model", "sonnet",
              "--max-turns", "6",
              "--output-format", "json"],
             capture_output=True, text=True, timeout=timeout, env=_env,
@@ -968,7 +968,7 @@ def _claude_brain_voice_locked(text: str, timeout: float = 60.0) -> str:
             ["claude", "-p", user_text,
              "--append-system-prompt", persona_prompt,
              # No --mcp-config, no --allowed-tools = no tool access (Layer A).
-             "--model", "claude-haiku-4-5-20251001",
+             "--model", "sonnet",
              "--max-turns", "1",
              "--output-format", "json"],
             capture_output=True, text=True, timeout=timeout,
@@ -1059,7 +1059,7 @@ class _WarmBrain:
                 "--append-system-prompt", _PERSONA_SYSTEM,
                 "--mcp-config", _MCP_CONFIG_PATH,
                 "--allowed-tools", _RO_ALLOWED_TOOLS,
-                "--model", "claude-haiku-4-5-20251001"]
+                "--model", "sonnet"]
         argv += ["--resume", self._sid] if resume else ["--session-id", self._sid]
         env = {**os.environ, "JARVIS_MEM_SCOPE": "owner"}
         self._q = queue.Queue()
@@ -1238,7 +1238,7 @@ def _claude_brain_raw(text: str, system_prompt: str | None = None,
         print("brain raw: no credentials configured")
         return ""
     argv = ["claude", "-p", text,
-            "--model", "claude-haiku-4-5-20251001",
+            "--model", "sonnet",
             "--max-turns", "1",
             "--output-format", "json"]
     if system_prompt:
@@ -1352,7 +1352,7 @@ def _claude_brain_vision(text: str, image_paths: list, timeout: float = 90.0) ->
              "--input-format", "stream-json",
              "--output-format", "stream-json",
              "--verbose",
-             "--model", "claude-haiku-4-5-20251001",
+             "--model", "sonnet",
              "--max-turns", "1"],
             input=stdin_bytes,
             capture_output=True, timeout=timeout,
