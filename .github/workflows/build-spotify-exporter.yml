@@ -99,6 +99,13 @@ jobs:
           /tmp/kubectl apply -f zot-pull-secret.yaml
           /tmp/kubectl apply -f deployment.yaml
           /tmp/kubectl apply -f dashboard.yaml
+          # Postgres-backed analytics dashboards (Spotify folder). These read
+          # the Postgres datasource (uid "spotify-postgres") registered by
+          # @data-engineer; panels stay empty until the exporter ships rows.
+          /tmp/kubectl apply -f dashboard-library-vs-listening.yaml
+          /tmp/kubectl apply -f dashboard-trends-behavior.yaml
+          /tmp/kubectl apply -f dashboard-wrapped-anytime.yaml
+          /tmp/kubectl apply -f dashboard-vibe-proxy.yaml
 
           # Pin to the immutable sha tag and wait for rollout.
           /tmp/kubectl -n monitor set image deployment/spotify-exporter \

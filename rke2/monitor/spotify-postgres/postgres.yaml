@@ -1,0 +1,124 @@
+# Dedicated Postgres 16 for the Spotify analytics pipeline (play history,
+# library SCD, audio features, rollups). Single replica, Longhorn RWO, Recreate
+# — same single-writer storage discipline as spotify-exporter.
+#
+# Backup posture (two layers — Longhorn snapshots of a LIVE pg are only
+# crash-consistent, so we add a logical dump):
+#   1. PVC is tagged into BOTH the cluster-wide 'default' snapshot group AND the
+#      curated off-cluster 'b2-backup' group (recurring-job-group labels below).
+#   2. A weekly pg_dump -> Garage CronJob (cronjob-backup.yaml) takes a
+#      transactionally-consistent logical dump.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: spotify-postgres-data
+  namespace: monitor
+  labels:
+    app: spotify-postgres
+    # Off-cluster B2 backup of the raw volume (curated group). This opts the
+    # volume into the b2-backup RecurringJob (longhorn-system/recurring-jobs.yaml,
+    # daily 04:00).
+    # NB: in this Longhorn version the CSI driver does NOT propagate this PVC
+    # label onto the Volume CR (only the 'default' group is auto-applied). After
+    # the PVC binds, the label must be set on the volume directly (one-time):
+    #   PV=$(kubectl -n monitor get pvc spotify-postgres-data -o jsonpath='{.spec.volumeName}')
+    #   kubectl -n longhorn-system label volumes.longhorn.io "$PV" \
+    #       recurring-job-group.longhorn.io/b2-backup=enabled --overwrite
+    # (already done for the current volume at deploy time).
+    recurring-job-group.longhorn.io/b2-backup: enabled
+spec:
+  accessModes: ["ReadWriteOnce"]
+  storageClassName: longhorn
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: spotify-postgres
+  namespace: monitor
+  labels:
+    app: spotify-postgres
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate          # single RWO volume — never two pods at once
+  selector:
+    matchLabels:
+      app: spotify-postgres
+  template:
+    metadata:
+      labels:
+        app: spotify-postgres
+    spec:
+      # Don't inject SVC env vars: the Service "spotify-postgres" would set
+      # SPOTIFY_POSTGRES_PORT=tcp://… which is harmless here but we keep parity
+      # with spotify-exporter's hygiene.
+      enableServiceLinks: false
+      securityContext:
+        # postgres:16 runs as uid 999 (the 'postgres' user in the image).
+        # fsGroup makes the Longhorn PVC writable by that gid.
+        fsGroup: 999
+      containers:
+        - name: postgres
+          image: postgres:16
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: postgres
+              containerPort: 5432
+          env:
+            - name: POSTGRES_DB
+              value: spotify
+            - name: POSTGRES_USER
+              value: postgres
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: spotify-postgres
+                  key: POSTGRES_PASSWORD
+            # Keep PGDATA in a subdir so the lost+found at the volume root never
+            # collides with initdb's empty-dir check.
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          resources:
+            requests:
+              cpu: 50m
+              memory: 256Mi
+            limits:
+              cpu: 1000m
+              memory: 1Gi
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "postgres", "-d", "spotify"]
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-U", "postgres", "-d", "spotify"]
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 5
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: spotify-postgres-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: spotify-postgres
+  namespace: monitor
+  labels:
+    app: spotify-postgres
+spec:
+  selector:
+    app: spotify-postgres
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres

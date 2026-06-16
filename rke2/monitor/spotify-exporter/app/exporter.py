@@ -4,7 +4,12 @@
 Polls the Spotify Web API on a background loop and exposes metrics on
 :9112/metrics. OAuth tokens live in a shared Kubernetes Secret (see
 tokenstore.py) so this exporter and JARVIS never fight over Spotify's
-rotating PKCE refresh token. Play counts persist to the /state PVC.
+rotating PKCE refresh token.
+
+The DURABLE listening record now lives in Postgres (see db.py): play_events,
+tracks/artists/albums dimensions, the saved-library diff, and the genre rollup.
+Postgres is the dedup authority. The /state PVC is only a Prometheus-only
+fallback dedup store when the DB sink is disabled.
 
 Metric families
 ---------------
@@ -46,6 +51,8 @@ from prometheus_client import (
 )
 
 import tokenstore
+import genre_rollup as genre_rollup_mod
+from db import DB_INSTANCE as DB
 
 # ── Config ────────────────────────────────────────────────────────────────
 STATE_DIR = os.environ.get("SPOTIFY_STATE_DIR", "/state")
@@ -56,6 +63,8 @@ PORT = int(os.environ.get("METRICS_PORT", "9112"))
 NOW_PLAYING_INTERVAL = int(os.environ.get("NOW_PLAYING_INTERVAL", "15"))
 RECENT_INTERVAL = int(os.environ.get("RECENT_INTERVAL", "120"))
 TOP_INTERVAL = int(os.environ.get("TOP_INTERVAL", "1800"))  # 30 min
+# Library snapshot diff runs on a slow cadence (default 12h).
+LIBRARY_INTERVAL = int(os.environ.get("LIBRARY_INTERVAL", str(12 * 3600)))
 
 _HTTP_TIMEOUT = 12
 _UA = "spotify-exporter/1.0 (+homelab)"
@@ -77,6 +86,11 @@ M_TOP_TRACK = Gauge("spotify_top_track_rank", "Top track rank (1=most played)", 
 M_GENRE = Gauge("spotify_genre_score", "Rank-weighted genre share (%)", ["range", "genre"], registry=REG)
 
 M_PLAYS = PromCounter("spotify_plays", "Plays observed via recently-played", ["artist"], registry=REG)
+
+# DB-backed health/inventory (durable record now lives in Postgres).
+M_DB_UP = Gauge("spotify_db_up", "1 if the Postgres analytics sink is reachable", registry=REG)
+M_DB_PLAYS_INSERTED = PromCounter("spotify_db_plays_inserted", "New play_events rows inserted by this exporter", registry=REG)
+M_LIBRARY_SAVED = Gauge("spotify_library_saved_tracks", "Currently-saved tracks (library_tracks, removed_at IS NULL)", registry=REG)
 
 
 # ── Spotify Web API (token comes from the shared cluster Secret) ─────────────
@@ -121,6 +135,63 @@ def _api(path: str, params: Optional[dict] = None) -> Optional[dict]:
         return None
 
 
+# ── Dimension helpers ────────────────────────────────────────────────────────
+def _artist_genres(artist_id: str) -> list[str]:
+    """Fetch genres[] for an artist, cached per id (genres rarely change).
+
+    Some artists return genres: [] — that's fine, we store the empty array and
+    handle 'untagged' at rollup time.
+    """
+    if not artist_id:
+        return []
+    cached = DB.artist_genre_cache.get(artist_id)
+    if cached is not None:
+        return cached
+    d = _api(f"/artists/{artist_id}")
+    genres = [g[:60] for g in ((d or {}).get("genres") or [])]
+    DB.artist_genre_cache[artist_id] = genres
+    return genres
+
+
+def _upsert_track_dimensions(track: dict) -> Optional[str]:
+    """Upsert artist/album/track dimensions for a recently-played track item.
+
+    Returns the track_id (or None). No-op when the DB sink is disabled.
+    """
+    if not DB.enabled():
+        return (track or {}).get("id")
+    track_id = (track or {}).get("id")
+    if not track_id:
+        return None
+
+    artists = track.get("artists") or []
+    primary_artist = artists[0] if artists else {}
+    artist_id = primary_artist.get("id")
+    if artist_id:
+        genres = _artist_genres(artist_id)
+        DB.upsert_artist(
+            artist_id,
+            primary_artist.get("name", ""),
+            primary_artist.get("popularity"),  # usually absent on the track payload
+            genres,
+        )
+
+    album = track.get("album") or {}
+    album_id = album.get("id")
+    if album_id:
+        DB.upsert_album(album_id, album.get("name", ""), album.get("release_date"))
+
+    DB.upsert_track(
+        track_id,
+        track.get("name", ""),
+        artist_id,
+        album_id,
+        track.get("duration_ms"),
+        track.get("popularity"),
+    )
+    return track_id
+
+
 # ── Pollers ──────────────────────────────────────────────────────────────────
 def poll_now_playing() -> None:
     d = _api("/me/player/currently-playing")
@@ -143,30 +214,120 @@ def poll_now_playing() -> None:
 
 
 def poll_recently_played(state: dict) -> None:
+    """Record each recently-played item as a row in play_events (DB-authoritative).
+
+    Postgres is now the durable record and the dedup authority: each play is an
+    INSERT ... ON CONFLICT (played_at, track_id) DO NOTHING, and the RETURNING
+    tells us whether the row was new. We keep the live Prometheus plays counter
+    (cheap, drives the now-playing/rate panels) but it is NO LONGER the system
+    of record. The /state seen-set is only used as a fallback when the DB sink
+    is disabled, so a Prometheus-only deploy still dedups across restarts.
+    """
     d = _api("/me/player/recently-played", {"limit": 50})
     if not d or not d.get("items"):
         return
+
+    db_on = DB.enabled()
     seen: set[str] = set(state.get("seen", []))
     new_seen = list(seen)
     counts: dict = state.setdefault("counts", {})
     added = 0
+
     for it in d["items"]:
-        pid = it.get("played_at")
-        if not pid or pid in seen:
+        played_at = it.get("played_at")
+        track = it.get("track") or {}
+        if not played_at or not track.get("id"):
             continue
-        seen.add(pid)
-        new_seen.append(pid)
-        added += 1
-        artists = it.get("track", {}).get("artists", [])
+
+        artists = track.get("artists", [])
         primary = (artists[0]["name"] if artists else "unknown")[:120]
-        M_PLAYS.labels(artist=primary).inc()
-        M_PLAYS.labels(artist="__all__").inc()
-        counts[primary] = counts.get(primary, 0) + 1
-        counts["__all__"] = counts.get("__all__", 0) + 1
-    if added:
-        # Keep the dedupe window bounded; played_at is ISO8601 so lexical sort = chronological.
+
+        if db_on:
+            track_id = _upsert_track_dimensions(track)
+            # DB dedup: only count/inc when a genuinely new row landed.
+            is_new = DB.insert_play(played_at, track_id) if track_id else False
+            if is_new:
+                added += 1
+                M_DB_PLAYS_INSERTED.inc()
+                M_PLAYS.labels(artist=primary).inc()
+                M_PLAYS.labels(artist="__all__").inc()
+        else:
+            # Prometheus-only fallback: dedup against the /state seen-set.
+            if played_at in seen:
+                continue
+            seen.add(played_at)
+            new_seen.append(played_at)
+            added += 1
+            M_PLAYS.labels(artist=primary).inc()
+            M_PLAYS.labels(artist="__all__").inc()
+            counts[primary] = counts.get(primary, 0) + 1
+            counts["__all__"] = counts.get("__all__", 0) + 1
+
+    if added and not db_on:
+        # Bounded dedupe window; played_at is ISO8601 so lexical sort = chronological.
         state["seen"] = sorted(new_seen)[-500:]
         _persist_plays(state)
+
+
+def poll_library(state: dict) -> None:
+    """Snapshot-diff the saved-tracks library against library_tracks.
+
+    Pulls the full saved library (GET /me/tracks, 50/page, added_at per track),
+    then: newly-saved -> insert with added_at; rows no longer present -> set
+    removed_at = now(). Requires the user-library-read scope (already granted on
+    the shared token — no re-auth). DB-only; no-op when the sink is disabled.
+    """
+    if not DB.enabled():
+        return
+
+    current: dict[str, str] = {}  # track_id -> added_at
+    offset = 0
+    page_track_payloads: list[dict] = []
+    while True:
+        d = _api("/me/tracks", {"limit": 50, "offset": offset})
+        items = (d or {}).get("items") or []
+        if not items:
+            break
+        for it in items:
+            track = it.get("track") or {}
+            tid = track.get("id")
+            if not tid:
+                continue
+            current[tid] = it.get("added_at")
+            page_track_payloads.append(track)
+        # Spotify returns `next`: null when paging is done.
+        if not (d or {}).get("next"):
+            break
+        offset += 50
+        if offset > 20000:  # safety cap (~20k tracks)
+            break
+
+    if not current:
+        return
+
+    previously_saved = DB.current_saved_track_ids()
+    now_saved = set(current.keys())
+
+    newly_saved = now_saved - previously_saved
+    no_longer_saved = previously_saved - now_saved
+
+    # Upsert dimensions for new saves so library panels can join tracks/artists.
+    payload_by_id = {t.get("id"): t for t in page_track_payloads}
+    for tid in newly_saved:
+        track = payload_by_id.get(tid)
+        if track:
+            _upsert_track_dimensions(track)
+        DB.library_add(tid, current[tid])
+
+    if no_longer_saved:
+        DB.library_remove(no_longer_saved)
+
+    M_LIBRARY_SAVED.set(len(now_saved))
+    print(
+        f"library diff: {len(now_saved)} saved "
+        f"(+{len(newly_saved)} new, -{len(no_longer_saved)} removed)",
+        flush=True,
+    )
 
 
 def _persist_plays(state: dict) -> None:
@@ -224,15 +385,25 @@ def poll_top(state: dict) -> None:
 # ── Main loop ─────────────────────────────────────────────────────────────────
 def main() -> None:
     plays_state = _restore_plays()
-    # Track per-artist counts for restart re-seeding.
+    # Track per-artist counts for restart re-seeding (Prometheus-only fallback).
     if "counts" not in plays_state:
         plays_state["counts"] = {}
+
+    # Seed the genre rollup table once on startup (idempotent UPSERT). The DB
+    # layer no-ops gracefully if the sink is disabled.
+    if DB.enabled():
+        version, mappings = genre_rollup_mod.load()
+        DB.seed_genre_rollup(mappings)
+        print(f"genre_rollup: loaded v{version} ({len(mappings)} mappings)", flush=True)
+    else:
+        print("db: SPOTIFY_DB_DSN/PGHOST unset — running Prometheus-only", flush=True)
 
     start_http_server(PORT, registry=REG)
     print(f"spotify-exporter listening on :{PORT}/metrics", flush=True)
 
     last_recent = 0.0
     last_top = 0.0
+    last_library = 0.0
     while True:
         cycle_ok = True
         try:
@@ -244,11 +415,15 @@ def main() -> None:
             if now - last_top >= TOP_INTERVAL:
                 poll_top(plays_state)
                 last_top = now
+            if now - last_library >= LIBRARY_INTERVAL:
+                poll_library(plays_state)
+                last_library = now
         except Exception as exc:  # noqa: BLE001 — never let the loop die
             M_ERRORS.inc()
             cycle_ok = False
             print(f"poll error: {type(exc).__name__}: {exc}", flush=True)
         M_UP.set(1 if cycle_ok else 0)
+        M_DB_UP.set(1 if (DB.enabled() and DB._connect() is not None) else 0)
         time.sleep(NOW_PLAYING_INTERVAL)
 
 

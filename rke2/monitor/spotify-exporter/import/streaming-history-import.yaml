@@ -1,0 +1,122 @@
+# One-time backfill of Spotify's GDPR "Extended Streaming History" export into
+# the play_events fact table. Reuses the exact spotify-exporter image (which
+# already bundles import_streaming_history.py + db.py + psycopg) — no separate
+# image build. Idempotent: ON CONFLICT (played_at, track_id) DO NOTHING, safe to
+# re-run and safe to run while the live exporter is also writing.
+#
+# ════════════════════════════════════════════════════════════════════════════
+#  HOW TO RUN (when the export arrives, ~30 days after requesting it)
+# ════════════════════════════════════════════════════════════════════════════
+#  Spotify mails a ZIP ("my_spotify_data.zip") containing
+#  Streaming_History_Audio_*.json (or legacy endsong_*.json). Then:
+#
+#  1. Create the import PVC (defined below) on its own so it exists before we
+#     copy data into it. We mount it into a throwaway "loader" pod to cp into:
+#
+#       kubectl apply -f rke2/monitor/spotify-exporter/import/streaming-history-import.yaml
+#       # ^ this also creates the Job, which will WAIT (init pod) until data
+#       #   exists; or apply just the PVC first with:
+#       #   kubectl apply -f ... --selector ... (or split the PVC out — see note)
+#
+#  2. Copy the unzipped JSON files into the PVC via a scratch pod:
+#
+#       kubectl -n monitor run sh-loader --image=busybox --restart=Never \
+#         --overrides='{"spec":{"containers":[{"name":"sh-loader","image":"busybox","command":["sleep","3600"],"volumeMounts":[{"name":"import","mountPath":"/import"}]}],"volumes":[{"name":"import","persistentVolumeClaim":{"claimName":"spotify-import"}}]}}'
+#       kubectl -n monitor cp ./Streaming_History_Audio_2014_0.json sh-loader:/import/
+#       # ...repeat for every Streaming_History_Audio_*.json...
+#       kubectl -n monitor exec sh-loader -- ls -la /import     # verify
+#       kubectl -n monitor delete pod sh-loader
+#
+#  3. Run the backfill Job (re-trigger if it already ran: it's a fresh Job name
+#     each time, or delete the old one first):
+#
+#       kubectl -n monitor delete job spotify-streaming-history-import --ignore-not-found
+#       kubectl apply -f rke2/monitor/spotify-exporter/import/streaming-history-import.yaml
+#       kubectl -n monitor logs -f job/spotify-streaming-history-import
+#
+#     The Job prints: records read / plays inserted / podcast-skipped /
+#     duplicates-ignored. Re-running is a no-op (every play already present).
+#
+#  4. (optional) Reclaim the PVC once you're satisfied:
+#       kubectl -n monitor delete -f rke2/monitor/spotify-exporter/import/streaming-history-import.yaml
+#       kubectl -n monitor delete pvc spotify-import
+# ════════════════════════════════════════════════════════════════════════════
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: spotify-import
+  namespace: monitor
+  labels:
+    app: spotify-exporter
+    component: streaming-history-import
+spec:
+  accessModes: ["ReadWriteOnce"]
+  storageClassName: longhorn
+  resources:
+    requests:
+      # Extended streaming history for a heavy listener is tens of MB of JSON;
+      # 2Gi is comfortable headroom.
+      storage: 2Gi
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: spotify-streaming-history-import
+  namespace: monitor
+  labels:
+    app: spotify-exporter
+    component: streaming-history-import
+spec:
+  backoffLimit: 2
+  # Keep the finished Job (and its logs) for a day, then auto-clean.
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app: spotify-exporter
+        component: streaming-history-import
+    spec:
+      restartPolicy: Never
+      enableServiceLinks: false
+      imagePullSecrets:
+        - name: zot-pull-secret
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        fsGroup: 10001       # make the longhorn import PVC readable by the uid
+      containers:
+        - name: import
+          image: zot.hwcopeland.net/monitor/spotify-exporter:latest
+          imagePullPolicy: Always
+          # Override the exporter ENTRYPOINT — run the backfill instead of the
+          # metrics server. Reads every *.json under /import.
+          command: ["python", "/app/import_streaming_history.py", "/import"]
+          env:
+            # Same DB wiring as the exporter Deployment: connect as the
+            # read/write spotify_app role; password from the spotify-postgres
+            # Secret. NOT optional here — a backfill with no DB sink is useless,
+            # so fail fast if the Secret/DB is missing.
+            - name: PGHOST
+              value: spotify-postgres.monitor.svc.cluster.local
+            - name: PGPORT
+              value: "5432"
+            - name: PGDATABASE
+              value: spotify
+            - name: PGUSER
+              value: spotify_app
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: spotify-postgres
+                  key: APP_PASSWORD
+          resources:
+            requests: { cpu: 50m, memory: 128Mi }
+            limits:   { cpu: 500m, memory: 512Mi }
+          volumeMounts:
+            - name: import
+              mountPath: /import
+              readOnly: true
+      volumes:
+        - name: import
+          persistentVolumeClaim:
+            claimName: spotify-import

@@ -1,0 +1,89 @@
+# Grafana dashboard: Spotify — Wrapped Anytime (fun stats).
+# Listening streaks, mainstream-ness, genre-diversity index, Country vs DnB.
+# Postgres datasource uid "spotify-postgres".
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-spotify-wrapped-anytime
+  namespace: monitor
+  labels:
+    grafana_dashboard: "1"
+  annotations:
+    grafana_folder: "Spotify"
+data:
+  spotify-wrapped-anytime.json: |-
+    {
+      "uid": "spotify-wrapped-anytime",
+      "title": "Spotify — Wrapped Anytime",
+      "schemaVersion": 38,
+      "version": 1,
+      "refresh": "1h",
+      "time": { "from": "now-1y", "to": "now" },
+      "tags": ["spotify", "music", "wrapped"],
+      "panels": [
+        { "id": 1, "type": "row", "title": "Streaks & mainstream-ness", "gridPos": { "x": 0, "y": 0, "w": 24, "h": 1 } },
+        {
+          "id": 2, "type": "stat", "title": "Longest listening streak (consecutive days with plays)",
+          "gridPos": { "x": 0, "y": 1, "w": 8, "h": 6 },
+          "datasource": { "type": "postgres", "uid": "spotify-postgres" },
+          "targets": [ { "refId": "A", "format": "table", "rawSql":
+            "WITH days AS (SELECT DISTINCT played_at::date AS d FROM play_events), grp AS (SELECT d, d - (row_number() OVER (ORDER BY d))::int AS g FROM days) SELECT max(streak) AS longest_streak FROM (SELECT count(*) AS streak FROM grp GROUP BY g) s" } ],
+          "fieldConfig": { "defaults": { "unit": "d", "color": { "mode": "fixed", "fixedColor": "purple" } } },
+          "options": { "colorMode": "background", "reduceOptions": { "calcs": ["lastNotNull"] } }
+        },
+        {
+          "id": 3, "type": "stat", "title": "Current streak (days)",
+          "gridPos": { "x": 8, "y": 1, "w": 8, "h": 6 },
+          "datasource": { "type": "postgres", "uid": "spotify-postgres" },
+          "targets": [ { "refId": "A", "format": "table", "rawSql":
+            "WITH days AS (SELECT DISTINCT played_at::date AS d FROM play_events), grp AS (SELECT d, d - (row_number() OVER (ORDER BY d))::int AS g FROM days) SELECT count(*) AS current_streak FROM grp WHERE g = (SELECT g FROM grp ORDER BY d DESC LIMIT 1) AND (SELECT max(d) FROM days) >= current_date - 1" } ],
+          "fieldConfig": { "defaults": { "unit": "d" } },
+          "options": { "colorMode": "value", "reduceOptions": { "calcs": ["lastNotNull"] } }
+        },
+        {
+          "id": 4, "type": "stat", "title": "Mainstream-ness (avg track popularity, all time)",
+          "gridPos": { "x": 16, "y": 1, "w": 8, "h": 6 },
+          "datasource": { "type": "postgres", "uid": "spotify-postgres" },
+          "targets": [ { "refId": "A", "format": "table", "rawSql":
+            "SELECT round(avg(t.popularity)::numeric, 1) AS avg_popularity FROM play_events pe JOIN tracks t ON t.track_id = pe.track_id WHERE t.popularity IS NOT NULL" } ],
+          "fieldConfig": { "defaults": { "min": 0, "max": 100, "color": { "mode": "continuous-GrYlRd" } } },
+          "options": { "colorMode": "background", "reduceOptions": { "calcs": ["lastNotNull"] } }
+        },
+        {
+          "id": 5, "type": "timeseries", "title": "Mainstream-ness over time (avg popularity / week)",
+          "gridPos": { "x": 0, "y": 7, "w": 24, "h": 8 },
+          "datasource": { "type": "postgres", "uid": "spotify-postgres" },
+          "targets": [ { "refId": "A", "format": "time_series", "rawSql":
+            "SELECT date_trunc('week', pe.played_at) AS time, avg(t.popularity) AS avg_popularity FROM play_events pe JOIN tracks t ON t.track_id = pe.track_id WHERE t.popularity IS NOT NULL GROUP BY 1 ORDER BY 1" } ],
+          "fieldConfig": { "defaults": { "min": 0, "max": 100, "custom": { "drawStyle": "line", "fillOpacity": 15 } } }
+        },
+
+        { "id": 9, "type": "row", "title": "Genre diversity", "gridPos": { "x": 0, "y": 15, "w": 24, "h": 1 } },
+        {
+          "id": 10, "type": "timeseries", "title": "Genre-diversity index — distinct parent genres per week",
+          "gridPos": { "x": 0, "y": 16, "w": 12, "h": 8 },
+          "datasource": { "type": "postgres", "uid": "spotify-postgres" },
+          "targets": [ { "refId": "A", "format": "time_series", "rawSql":
+            "SELECT date_trunc('week', pe.played_at) AS time, count(DISTINCT COALESCE(gr.parent_genre,'Other')) AS distinct_parent_genres FROM play_events pe JOIN tracks t ON t.track_id = pe.track_id LEFT JOIN artists a ON a.artist_id = t.artist_id LEFT JOIN LATERAL unnest(COALESCE(a.genres, ARRAY[]::text[])) AS g(raw) ON true LEFT JOIN genre_rollup gr ON gr.raw_genre = lower(g.raw) GROUP BY 1 ORDER BY 1" } ],
+          "fieldConfig": { "defaults": { "custom": { "drawStyle": "bars", "fillOpacity": 60 } } }
+        },
+        {
+          "id": 11, "type": "timeseries", "title": "Genre-diversity index — Shannon entropy per week",
+          "gridPos": { "x": 12, "y": 16, "w": 12, "h": 8 },
+          "datasource": { "type": "postgres", "uid": "spotify-postgres" },
+          "targets": [ { "refId": "A", "format": "time_series", "rawSql":
+            "WITH wk AS (SELECT date_trunc('week', pe.played_at) AS w, COALESCE(gr.parent_genre,'Other') AS pg, count(*) AS n FROM play_events pe JOIN tracks t ON t.track_id = pe.track_id LEFT JOIN artists a ON a.artist_id = t.artist_id LEFT JOIN LATERAL unnest(COALESCE(a.genres, ARRAY[]::text[])) AS g(raw) ON true LEFT JOIN genre_rollup gr ON gr.raw_genre = lower(g.raw) GROUP BY 1,2), tot AS (SELECT w, sum(n) AS total FROM wk GROUP BY w) SELECT wk.w AS time, -sum((wk.n::float/tot.total) * ln(wk.n::float/tot.total)) AS entropy FROM wk JOIN tot ON tot.w = wk.w GROUP BY wk.w ORDER BY wk.w" } ],
+          "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "fillOpacity": 15 } } }
+        },
+
+        { "id": 19, "type": "row", "title": "Country vs DnB head-to-head", "gridPos": { "x": 0, "y": 24, "w": 24, "h": 1 } },
+        {
+          "id": 20, "type": "timeseries", "title": "Country vs DnB — plays per week",
+          "gridPos": { "x": 0, "y": 25, "w": 24, "h": 9 },
+          "datasource": { "type": "postgres", "uid": "spotify-postgres" },
+          "targets": [ { "refId": "A", "format": "time_series", "rawSql":
+            "SELECT date_trunc('week', pe.played_at) AS time, gr.parent_genre AS metric, count(DISTINCT (pe.played_at, pe.track_id)) AS plays FROM play_events pe JOIN tracks t ON t.track_id = pe.track_id LEFT JOIN artists a ON a.artist_id = t.artist_id LEFT JOIN LATERAL unnest(COALESCE(a.genres, ARRAY[]::text[])) AS g(raw) ON true JOIN genre_rollup gr ON gr.raw_genre = lower(g.raw) WHERE gr.parent_genre IN ('Country','DnB') GROUP BY 1, 2 ORDER BY 1" } ],
+          "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "fillOpacity": 25 } }, "overrides": [ { "matcher": { "id": "byName", "options": "DnB" }, "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "blue" } } ] }, { "matcher": { "id": "byName", "options": "Country" }, "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "orange" } } ] } ] }
+        }
+      ]
+    }

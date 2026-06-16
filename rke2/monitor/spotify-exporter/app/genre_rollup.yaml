@@ -1,0 +1,124 @@
+# Versioned genre rollup: raw Spotify artist tag (lowercased) -> parent bucket.
+#
+# Spotify's /v1/artists genres[] are hyper-granular and inconsistent
+# ("liquid funk", "uk dnb", "drum and bass" all mean DnB to a human). This map
+# collapses them into readable parent buckets for the Grafana "genre mix" and
+# "country-vs-DnB" panels. Loaded idempotently into the `genre_rollup` table on
+# exporter startup (UPSERT on raw_genre).
+#
+# Matching is done on the lowercased raw tag. Anything not listed here is
+# rolled up to its own raw value at query time via COALESCE (the table only
+# stores explicit overrides) and surfaced under the "Other / untagged" bucket
+# in the dashboards. Bump `version` whenever the mapping changes so a redeploy
+# re-seeds.
+version: 3
+
+mappings:
+  # ── DnB family ────────────────────────────────────────────────────────────
+  "drum and bass": DnB
+  "drum n bass": DnB
+  "dnb": DnB
+  "liquid dnb": DnB
+  "liquid funk": DnB
+  "liquid drum and bass": DnB
+  "jungle": DnB
+  "ragga jungle": DnB
+  "ragga": DnB
+  "bassline": DnB
+  "neurofunk": DnB
+  "jump up": DnB
+  "uk dnb": DnB
+  "atmospheric drum and bass": DnB
+  "halftime dnb": DnB
+  "minimal dnb": DnB
+  "rollers": DnB
+
+  # ── Country family ────────────────────────────────────────────────────────
+  "country": Country
+  "contemporary country": Country
+  "modern country rock": Country
+  "outlaw country": Country
+  "country road": Country
+  "alt-country": Country
+  "americana": Country
+  "red dirt": Country
+  "texas country": Country
+  "country rock": Country
+  "classic country pop": Country
+  "country pop": Country
+  "nashville sound": Country
+  "bluegrass": Country
+
+  # ── Electronic / dance (non-DnB) ──────────────────────────────────────────
+  "house": Electronic
+  "deep house": Electronic
+  "tech house": Electronic
+  "progressive house": Electronic
+  "electro house": Electronic
+  "techno": Electronic
+  "melodic techno": Electronic
+  "trance": Electronic
+  "dubstep": Electronic
+  "future bass": Electronic
+  "edm": Electronic
+  "electronica": Electronic
+  "idm": Electronic
+  "ambient": Electronic
+  "downtempo": Electronic
+  "garage": Electronic
+  "uk garage": Electronic
+  "breakbeat": Electronic
+
+  # ── Hip-hop / rap ─────────────────────────────────────────────────────────
+  "hip hop": Hip-Hop
+  "rap": Hip-Hop
+  "trap": Hip-Hop
+  "conscious hip hop": Hip-Hop
+  "southern hip hop": Hip-Hop
+  "gangster rap": Hip-Hop
+  "melodic rap": Hip-Hop
+  "drill": Hip-Hop
+
+  # ── Rock / metal ──────────────────────────────────────────────────────────
+  "rock": Rock
+  "classic rock": Rock
+  "hard rock": Rock
+  "alternative rock": Rock
+  "indie rock": Rock
+  "punk": Rock
+  "post-punk": Rock
+  "metal": Rock
+  "heavy metal": Rock
+  "metalcore": Rock
+  "grunge": Rock
+
+  # ── Pop ───────────────────────────────────────────────────────────────────
+  "pop": Pop
+  "dance pop": Pop
+  "electropop": Pop
+  "indie pop": Pop
+  "art pop": Pop
+  "synthpop": Pop
+  "pop rock": Pop
+
+  # ── R&B / soul / funk ─────────────────────────────────────────────────────
+  "r&b": R&B
+  "rnb": R&B
+  "soul": R&B
+  "neo soul": R&B
+  "funk": R&B
+  "motown": R&B
+
+  # ── Jazz / blues ──────────────────────────────────────────────────────────
+  "jazz": Jazz
+  "smooth jazz": Jazz
+  "jazz fusion": Jazz
+  "blues": Jazz
+  "bebop": Jazz
+
+  # ── Folk / acoustic / singer-songwriter ───────────────────────────────────
+  "folk": Folk
+  "indie folk": Folk
+  "singer-songwriter": Folk
+  "acoustic": Folk
+  "folk rock": Folk

@@ -107,6 +107,30 @@ spec:
                   key: refresh_token
             - name: SPOTIFY_STATE_DIR
               value: /state
+            # Postgres analytics sink. @data-engineer's deployed schema ships a
+            # single `spotify-postgres` Secret that holds ONLY passwords
+            # (POSTGRES_PASSWORD / APP_PASSWORD / GRAFANA_RO_PASSWORD) — there is
+            # no host/port/dbname/user/password Secret. The exporter writes as
+            # the least-privilege `spotify_app` role, so the non-secret
+            # connection coordinates are inlined here and only PGPASSWORD comes
+            # from the Secret (key APP_PASSWORD). db.py::_dsn assembles the DSN
+            # from these PG* vars. PGPASSWORD is `optional: true` so the deploy
+            # still rolls out (Prometheus-only mode) if the Secret is absent;
+            # flip to `optional: false` to fail fast once it's confirmed.
+            - name: PGHOST
+              value: spotify-postgres.monitor.svc.cluster.local
+            - name: PGPORT
+              value: "5432"
+            - name: PGDATABASE
+              value: spotify
+            - name: PGUSER
+              value: spotify_app
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: spotify-postgres
+                  key: APP_PASSWORD
+                  optional: true
           resources:
             requests:
               cpu: 10m
