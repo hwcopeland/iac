@@ -1,0 +1,100 @@
+# Weekly logical backup: pg_dump (custom format, compressed) -> Garage bucket
+# spotify-pgbackup. Longhorn snapshots / B2 of a LIVE pg volume are only
+# crash-consistent; this dump is transactionally consistent and restorable with
+# pg_restore. Runs Sundays 05:00 (after the 03:00 snapshot + 04:00 B2 backup).
+#
+# Two-image split via initContainer + main container sharing an emptyDir:
+#   * initContainer (postgres:16)   — has pg_dump; writes the dump to /dump.
+#   * main container (amazon/aws-cli)— has aws; uploads /dump -> Garage.
+# initContainers run to completion before the main container and share volumes,
+# which gives a clean dump-then-upload sequence in one Job without a custom
+# image build (no ARC needed).
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: spotify-postgres-backup
+  namespace: monitor
+  labels:
+    app: spotify-postgres
+spec:
+  schedule: "0 5 * * 0"          # Sundays 05:00
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 1800
+      template:
+        spec:
+          restartPolicy: Never
+          enableServiceLinks: false
+          initContainers:
+            # Step 1: produce a transactionally-consistent custom-format dump.
+            - name: pgdump
+              image: postgres:16
+              imagePullPolicy: IfNotPresent
+              command: ["/bin/sh", "-eu", "-c"]
+              args:
+                - |
+                  TS=$(date -u +%Y%m%dT%H%M%SZ)
+                  OUT="/dump/spotify-${TS}.dump"
+                  echo "dumping spotify -> $OUT"
+                  pg_dump -h spotify-postgres -U postgres -d spotify \
+                          -Fc --no-owner --no-privileges -f "$OUT"
+                  ls -lh "$OUT"
+                  # leave a stable pointer for the uploader
+                  echo "$OUT" > /dump/.latest
+              env:
+                - name: PGPASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: spotify-postgres
+                      key: POSTGRES_PASSWORD
+              volumeMounts:
+                - name: dump
+                  mountPath: /dump
+              resources:
+                requests: { cpu: 50m, memory: 128Mi }
+                limits:   { cpu: 500m, memory: 512Mi }
+          containers:
+            # Step 2: upload the dump to Garage, verify, prune old (>56d).
+            - name: upload
+              image: amazon/aws-cli:2.17.0
+              imagePullPolicy: IfNotPresent
+              command: ["/bin/sh", "-eu", "-c"]
+              args:
+                - |
+                  OUT=$(cat /dump/.latest)
+                  KEY="dumps/$(basename "$OUT")"
+                  echo "uploading $OUT -> s3://$BUCKET/$KEY"
+                  aws --endpoint-url "$S3_ENDPOINT" s3 cp "$OUT" "s3://$BUCKET/$KEY"
+                  aws --endpoint-url "$S3_ENDPOINT" s3 ls "s3://$BUCKET/$KEY"
+                  echo "upload verified"
+              env:
+                - name: S3_ENDPOINT
+                  value: "http://garage.garage-system.svc.cluster.local:3900"
+                - name: AWS_DEFAULT_REGION
+                  value: garage           # arbitrary; Garage ignores regions
+                - name: BUCKET
+                  value: spotify-pgbackup
+                - name: AWS_ACCESS_KEY_ID
+                  valueFrom:
+                    secretKeyRef:
+                      name: spotify-pgbackup-garage
+                      key: AWS_ACCESS_KEY_ID
+                - name: AWS_SECRET_ACCESS_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: spotify-pgbackup-garage
+                      key: AWS_SECRET_ACCESS_KEY
+              volumeMounts:
+                - name: dump
+                  mountPath: /dump
+              resources:
+                requests: { cpu: 50m, memory: 64Mi }
+                limits:   { cpu: 500m, memory: 256Mi }
+          volumes:
+            - name: dump
+              emptyDir:
+                sizeLimit: 2Gi

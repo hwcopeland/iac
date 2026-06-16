@@ -1,0 +1,111 @@
+# Grafana dashboard: Spotify — Library vs Listening.
+# Postgres-backed analytics (play_events / library_tracks / tracks / artists).
+# Loaded by the kube-prometheus stack Grafana sidecar (label grafana_dashboard="1"),
+# placed in the "Spotify" folder. Postgres datasource uid "spotify-postgres" is
+# registered by @data-engineer alongside the spotify-postgres deployment.
+#
+# Explicit top-level "uid" avoids the orphan-duplicate sidecar bug (each
+# ConfigMap MUST carry a unique uid).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-spotify-library-vs-listening
+  namespace: monitor
+  labels:
+    grafana_dashboard: "1"
+  annotations:
+    grafana_folder: "Spotify"
+data:
+  spotify-library-vs-listening.json: |-
+    {
+      "uid": "spotify-library-vs-listening",
+      "title": "Spotify — Library vs Listening",
+      "schemaVersion": 38,
+      "version": 1,
+      "refresh": "1h",
+      "time": { "from": "now-1y", "to": "now" },
+      "tags": ["spotify", "music", "library"],
+      "templating": {
+        "list": [
+          {
+            "name": "dormant_months",
+            "label": "Dormant if not played in (months)",
+            "type": "custom",
+            "query": "1,2,3,6,12",
+            "current": { "text": "6", "value": "6" },
+            "options": [
+              { "text": "1", "value": "1" },
+              { "text": "2", "value": "2" },
+              { "text": "3", "value": "3" },
+              { "text": "6", "value": "6", "selected": true },
+              { "text": "12", "value": "12" }
+            ]
+          }
+        ]
+      },
+      "panels": [
+        { "id": 1, "type": "row", "title": "Coverage", "gridPos": { "x": 0, "y": 0, "w": 24, "h": 1 } },
+        {
+          "id": 2, "type": "stat", "title": "Library coverage % (share of plays that are saved)",
+          "gridPos": { "x": 0, "y": 1, "w": 8, "h": 6 },
+          "datasource": { "type": "postgres", "uid": "spotify-postgres" },
+          "targets": [ { "refId": "A", "format": "table", "rawSql":
+            "SELECT 100.0 * count(*) FILTER (WHERE lt.track_id IS NOT NULL) / NULLIF(count(*),0) AS coverage_pct FROM play_events pe LEFT JOIN library_tracks lt ON lt.track_id = pe.track_id AND lt.removed_at IS NULL" } ],
+          "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100, "color": { "mode": "continuous-GrYlRd" } } },
+          "options": { "colorMode": "background", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "/coverage_pct/" } }
+        },
+        {
+          "id": 3, "type": "stat", "title": "Saved tracks (current)",
+          "gridPos": { "x": 8, "y": 1, "w": 4, "h": 6 },
+          "datasource": { "type": "postgres", "uid": "spotify-postgres" },
+          "targets": [ { "refId": "A", "format": "table", "rawSql":
+            "SELECT count(*) AS saved FROM library_tracks WHERE removed_at IS NULL" } ],
+          "fieldConfig": { "defaults": { "color": { "mode": "fixed", "fixedColor": "green" } } },
+          "options": { "colorMode": "value", "reduceOptions": { "calcs": ["lastNotNull"] } }
+        },
+        {
+          "id": 4, "type": "stat", "title": "Distinct tracks played",
+          "gridPos": { "x": 12, "y": 1, "w": 4, "h": 6 },
+          "datasource": { "type": "postgres", "uid": "spotify-postgres" },
+          "targets": [ { "refId": "A", "format": "table", "rawSql":
+            "SELECT count(DISTINCT track_id) AS played FROM play_events" } ],
+          "options": { "colorMode": "value", "reduceOptions": { "calcs": ["lastNotNull"] } }
+        },
+        {
+          "id": 5, "type": "timeseries", "title": "Library size over time (cumulative net saves)",
+          "gridPos": { "x": 16, "y": 1, "w": 8, "h": 6 },
+          "datasource": { "type": "postgres", "uid": "spotify-postgres" },
+          "targets": [ { "refId": "A", "format": "time_series", "rawSql":
+            "SELECT d::timestamptz AS time, sum(count(*)) OVER (ORDER BY d) AS net_saved FROM (SELECT date_trunc('week', added_at) AS d, 1 AS s FROM library_tracks UNION ALL SELECT date_trunc('week', removed_at), -1 FROM library_tracks WHERE removed_at IS NOT NULL) x GROUP BY d ORDER BY d" } ],
+          "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "fillOpacity": 20 } } }
+        },
+
+        { "id": 10, "type": "row", "title": "Save candidates — played a lot, not saved", "gridPos": { "x": 0, "y": 7, "w": 24, "h": 1 } },
+        {
+          "id": 11, "type": "table", "title": "Save candidates (high play_count, no current library row)",
+          "gridPos": { "x": 0, "y": 8, "w": 24, "h": 10 },
+          "datasource": { "type": "postgres", "uid": "spotify-postgres" },
+          "targets": [ { "refId": "A", "format": "table", "rawSql":
+            "SELECT t.name AS track, a.name AS artist, count(*) AS play_count, max(pe.played_at) AS last_played FROM play_events pe JOIN tracks t ON t.track_id = pe.track_id LEFT JOIN artists a ON a.artist_id = t.artist_id LEFT JOIN library_tracks lt ON lt.track_id = pe.track_id AND lt.removed_at IS NULL WHERE lt.track_id IS NULL GROUP BY t.name, a.name HAVING count(*) >= 3 ORDER BY play_count DESC LIMIT 50" } ],
+          "options": { "showHeader": true }
+        },
+
+        { "id": 20, "type": "row", "title": "Dormant library & forgotten favorites", "gridPos": { "x": 0, "y": 18, "w": 24, "h": 1 } },
+        {
+          "id": 21, "type": "table", "title": "Dormant library (saved, never/long-ago played)",
+          "gridPos": { "x": 0, "y": 19, "w": 12, "h": 10 },
+          "datasource": { "type": "postgres", "uid": "spotify-postgres" },
+          "targets": [ { "refId": "A", "format": "table", "rawSql":
+            "SELECT t.name AS track, a.name AS artist, lt.added_at, max(pe.played_at) AS last_played FROM library_tracks lt LEFT JOIN tracks t ON t.track_id = lt.track_id LEFT JOIN artists a ON a.artist_id = t.artist_id LEFT JOIN play_events pe ON pe.track_id = lt.track_id WHERE lt.removed_at IS NULL GROUP BY t.name, a.name, lt.added_at HAVING max(pe.played_at) IS NULL OR max(pe.played_at) < now() - make_interval(months => ${dormant_months}::int) ORDER BY last_played ASC NULLS FIRST LIMIT 50" } ],
+          "options": { "showHeader": true }
+        },
+        {
+          "id": 22, "type": "table", "title": "Forgotten favorites (once-heavy, gone quiet)",
+          "gridPos": { "x": 12, "y": 19, "w": 12, "h": 10 },
+          "datasource": { "type": "postgres", "uid": "spotify-postgres" },
+          "targets": [ { "refId": "A", "format": "table", "rawSql":
+            "SELECT t.name AS track, a.name AS artist, count(*) AS lifetime_plays, max(pe.played_at) AS last_played, count(*) FILTER (WHERE pe.played_at > now() - interval '90 days') AS plays_90d FROM play_events pe JOIN tracks t ON t.track_id = pe.track_id LEFT JOIN artists a ON a.artist_id = t.artist_id GROUP BY t.name, a.name HAVING count(*) >= 5 AND count(*) FILTER (WHERE pe.played_at > now() - interval '90 days') = 0 ORDER BY lifetime_plays DESC LIMIT 50" } ],
+          "options": { "showHeader": true }
+        }
+      ]
+    }
