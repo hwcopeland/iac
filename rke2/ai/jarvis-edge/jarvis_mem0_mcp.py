@@ -113,26 +113,22 @@ def _post(path: str, payload: dict) -> dict:
 
 
 def _call(name: str, args: dict) -> dict:
-    if not _MEM_SCOPE:
-        # No scope = fail closed. Without it we'd risk writing to/reading from
-        # an unscoped namespace, so refuse rather than guess.
-        return _text_result(
-            "Memory is unavailable for this turn (no memory scope).",
-            is_error=True,
-        )
     try:
         if name == "memory_search":
             query = (args.get("query") or "").strip()
             if not query:
                 return _text_result("memory_search needs a query", is_error=True)
             limit = int(args.get("limit", 5))
-            # Search the speaker's own scope AND the shared world/homelab scope
-            # ("jarvis") where the worldsync mappers + initiative seeder write
-            # cluster/database/metric/project facts. Without this the
-            # owner-scoped brain never sees homelab knowledge ("what's the deal
-            # with the mem0 rollout" returns nothing). Merge both.
-            scopes = [_MEM_SCOPE]
-            if _WORLD_SCOPE and _WORLD_SCOPE != _MEM_SCOPE:
+            # READS are open on the shared world/homelab scope ("jarvis") —
+            # cluster/database/metric/project facts are JARVIS's understanding of
+            # the homelab, not anyone's private data, so an unidentified/open-mode
+            # turn can still recall them ("what's the deal with the mem0 rollout").
+            # The speaker's OWN scope is added only when identified, so personal
+            # memory stays identity-gated. (WRITES still require a scope below.)
+            scopes = []
+            if _MEM_SCOPE:
+                scopes.append(_MEM_SCOPE)
+            if _WORLD_SCOPE and _WORLD_SCOPE not in scopes:
                 scopes.append(_WORLD_SCOPE)
             merged = []
             for sc in scopes:
@@ -146,6 +142,13 @@ def _call(name: str, args: dict) -> dict:
                 except urllib.error.URLError:
                     pass
             return _text_result(json.dumps(merged))
+        # WRITES (and any non-search op) require an identified scope — no
+        # anonymous/open-mode writes into memory.
+        if not _MEM_SCOPE:
+            return _text_result(
+                "Memory write unavailable for this turn (no memory scope).",
+                is_error=True,
+            )
         if name == "memory_add":
             text = (args.get("text") or "").strip()
             if not text:
