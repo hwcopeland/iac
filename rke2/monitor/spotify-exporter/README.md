@@ -38,7 +38,17 @@ authoritative play record and dedup authority.
   snapshot-diffed against `library_tracks` — new saves inserted with `added_at`,
   vanished tracks get `removed_at = now()`.
 - **Genre rollup**: `genre_rollup.yaml` (raw Spotify tag → parent bucket) is
-  loaded idempotently into `genre_rollup` on startup.
+  loaded idempotently into `genre_rollup` on startup. The rollup is used ONLY
+  for optional parent grouping / drill-down — the fine sub-genres are the
+  primary signal and are never replaced by their parent.
+- **ISRC + genre enrichment**: `tracks.isrc` is captured from Spotify
+  `external_ids.isrc` (the MusicBrainz join key). `app/enrich.py` runs as the
+  hourly `spotify-genre-enrich` CronJob (see `spotify-postgres/cronjob-enrich.yaml`):
+  ISRC → MusicBrainz recording → fine genres/tags, plus an artist+year fallback
+  and artist-level tags. **MusicBrainz needs no API key** (only a descriptive
+  User-Agent + 1 req/s), so it runs with zero user setup and fills sub-genres for
+  the old/catalog tracks Spotify leaves `untagged`. The exporter publishes the
+  backlog/coverage gauges (`spotify_enrich_*`) from the same tables.
 - **Audio features** (`energy/danceability/tempo/valence`) are left **NULL** —
   `/audio-features` returns 403 under Spotify's Nov-2024 deprecation.
 - **Degrades gracefully**: with no `PGHOST`/`SPOTIFY_DB_DSN` the exporter runs
