@@ -1,0 +1,288 @@
+# Idempotent schema migration for the Spotify analytics DB. The DDL lives in a
+# ConfigMap and is applied by a one-shot Job (psql in the postgres:16 image).
+#
+# Idempotency strategy:
+#   * Every object uses CREATE ... IF NOT EXISTS.
+#   * Roles are created via a DO-block guard (CREATE ROLE has no IF NOT EXISTS).
+#   * The whole file is wrapped so re-running is a no-op: it records itself in
+#     schema_migrations and short-circuits if version 1 is already present.
+#   * Safe to run on every deploy / rollout-restart.
+#
+# Re-run after editing: bump the migration version, append a new guarded block.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: spotify-postgres-migrations
+  namespace: monitor
+  labels:
+    app: spotify-postgres
+data:
+  001_init.sql: |
+    -- ============================================================== --
+    --  Spotify analytics — schema migration 001 (initial)            --
+    -- ============================================================== --
+    BEGIN;
+
+    -- ---- migration ledger ---------------------------------------- --
+    CREATE TABLE IF NOT EXISTS schema_migrations (
+        version      integer      PRIMARY KEY,
+        description  text         NOT NULL,
+        applied_at   timestamptz  NOT NULL DEFAULT now()
+    );
+
+    -- Short-circuit: if 001 is already applied, commit and stop here.
+    DO $mig$
+    BEGIN
+      IF EXISTS (SELECT 1 FROM schema_migrations WHERE version = 1) THEN
+        RAISE NOTICE 'migration 001 already applied; skipping';
+      ELSE
+        RAISE NOTICE 'applying migration 001';
+      END IF;
+    END
+    $mig$;
+
+    COMMIT;
+
+    -- ---- least-privilege roles ----------------------------------- --
+    -- spotify_app: read/write, used by the exporter writer.
+    -- grafana_ro : read-only, used by the Grafana Postgres datasource.
+    -- NOTE: psql client-side vars (:'app_pw') are substituted into the SQL TEXT
+    -- before it reaches the server, so they CANNOT be used inside a server-side
+    -- DO/plpgsql block. We therefore build the CREATE/ALTER ROLE statements at
+    -- the psql layer with \gexec: the SELECT generates the statement string
+    -- (with the password literal already substituted) only when needed, and
+    -- \gexec runs it. CREATE ROLE has no IF NOT EXISTS, so we branch on
+    -- pg_roles existence; ALTER keeps the password in sync on re-runs.
+    SELECT format('CREATE ROLE spotify_app LOGIN PASSWORD %L', :'app_pw')
+      WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'spotify_app')
+    \gexec
+    SELECT format('ALTER ROLE spotify_app WITH LOGIN PASSWORD %L', :'app_pw')
+    \gexec
+
+    SELECT format('CREATE ROLE grafana_ro LOGIN PASSWORD %L', :'ro_pw')
+      WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'grafana_ro')
+    \gexec
+    SELECT format('ALTER ROLE grafana_ro WITH LOGIN PASSWORD %L', :'ro_pw')
+    \gexec
+
+    BEGIN;
+
+    -- ============================================================== --
+    --  DIMENSION: artists                                            --
+    -- ============================================================== --
+    CREATE TABLE IF NOT EXISTS artists (
+        artist_id    text         PRIMARY KEY,          -- Spotify artist ID
+        name         text         NOT NULL,
+        genres       text[]       NOT NULL DEFAULT '{}', -- raw Spotify genres
+        popularity   smallint,                           -- 0-100, nullable
+        followers    integer,                            -- nullable
+        fetched_at   timestamptz  NOT NULL DEFAULT now(),
+        updated_at   timestamptz  NOT NULL DEFAULT now()
+    );
+
+    -- ============================================================== --
+    --  DIMENSION: albums                                             --
+    -- ============================================================== --
+    CREATE TABLE IF NOT EXISTS albums (
+        album_id      text         PRIMARY KEY,          -- Spotify album ID
+        name          text         NOT NULL,
+        album_type    text,                              -- album|single|compilation
+        release_date  date,                              -- normalized to a date
+        release_date_precision text,                     -- year|month|day
+        total_tracks  smallint,
+        label         text,
+        fetched_at    timestamptz  NOT NULL DEFAULT now(),
+        updated_at    timestamptz  NOT NULL DEFAULT now()
+    );
+
+    -- ============================================================== --
+    --  DIMENSION: tracks (incl. nullable audio-feature columns)      --
+    -- ============================================================== --
+    CREATE TABLE IF NOT EXISTS tracks (
+        track_id      text         PRIMARY KEY,          -- Spotify track ID
+        name          text         NOT NULL,
+        artist_id     text         REFERENCES artists(artist_id),  -- primary artist
+        album_id      text         REFERENCES albums(album_id),
+        duration_ms   integer,
+        explicit      boolean,
+        popularity    smallint,                          -- 0-100, nullable
+        isrc          text,                              -- recording identifier
+        -- ---- audio features (nullable: fetched lazily / may be unavailable) --
+        danceability      real,
+        energy            real,
+        track_key         smallint,                      -- pitch class 0-11 ('key' is reserved)
+        loudness          real,
+        mode              smallint,                      -- 0 minor / 1 major
+        speechiness       real,
+        acousticness      real,
+        instrumentalness  real,
+        liveness          real,
+        valence           real,
+        tempo             real,
+        time_signature    smallint,
+        audio_features_fetched_at timestamptz,           -- NULL = features not yet fetched
+        fetched_at    timestamptz  NOT NULL DEFAULT now(),
+        updated_at    timestamptz  NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS tracks_artist_id_idx ON tracks (artist_id);
+    CREATE INDEX IF NOT EXISTS tracks_album_id_idx  ON tracks (album_id);
+    -- Find tracks still missing audio features (partial, cheap).
+    CREATE INDEX IF NOT EXISTS tracks_features_missing_idx
+        ON tracks (track_id) WHERE audio_features_fetched_at IS NULL;
+
+    -- ============================================================== --
+    --  FACT: play_events (recently-played scrobbles)                 --
+    --  PK (played_at, track_id): a track can recur; the timestamp is --
+    --  the natural event key. BRIN on played_at (append-only, time-  --
+    --  ordered) + btree on track_id for per-track lookups.           --
+    -- ============================================================== --
+    CREATE TABLE IF NOT EXISTS play_events (
+        played_at    timestamptz  NOT NULL,              -- Spotify played_at
+        track_id     text         NOT NULL REFERENCES tracks(track_id),
+        ms_played    integer,                            -- nullable (recently-played gives full track)
+        context_type text,                               -- playlist|album|artist|...
+        context_uri  text,
+        PRIMARY KEY (played_at, track_id)
+    );
+    -- BRIN: tiny, ideal for the monotonic played_at on an append-only fact.
+    CREATE INDEX IF NOT EXISTS play_events_played_at_brin
+        ON play_events USING brin (played_at);
+    -- btree for "all plays of track X" and join-back.
+    CREATE INDEX IF NOT EXISTS play_events_track_id_idx
+        ON play_events (track_id);
+
+    -- ============================================================== --
+    --  library_tracks — SCD snapshot of "saved" (liked) tracks.      --
+    --  removed_at IS NULL  => currently saved (open row).            --
+    --  removed_at IS NOT NULL => was removed at that time (closed).  --
+    --  Partial-unique open-row index: at most ONE open row per track.--
+    -- ============================================================== --
+    CREATE TABLE IF NOT EXISTS library_tracks (
+        id          bigint       GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+        track_id    text         NOT NULL REFERENCES tracks(track_id),
+        added_at    timestamptz  NOT NULL,               -- Spotify "added_at"
+        observed_at timestamptz  NOT NULL DEFAULT now(), -- when our snapshot saw it
+        removed_at  timestamptz                          -- NULL = still saved
+    );
+    -- Enforce a single open (saved) row per track.
+    CREATE UNIQUE INDEX IF NOT EXISTS library_tracks_open_uidx
+        ON library_tracks (track_id) WHERE removed_at IS NULL;
+    CREATE INDEX IF NOT EXISTS library_tracks_track_id_idx
+        ON library_tracks (track_id);
+
+    -- ============================================================== --
+    --  genre_rollup — maps a raw Spotify genre to a parent bucket.   --
+    -- ============================================================== --
+    CREATE TABLE IF NOT EXISTS genre_rollup (
+        raw_genre    text  PRIMARY KEY,                  -- e.g. 'melodic death metal'
+        parent_genre text  NOT NULL                      -- e.g. 'metal'
+    );
+    CREATE INDEX IF NOT EXISTS genre_rollup_parent_idx
+        ON genre_rollup (parent_genre);
+
+    -- ============================================================== --
+    --  top_snapshots — periodic "top tracks/artists" captures.       --
+    -- ============================================================== --
+    CREATE TABLE IF NOT EXISTS top_snapshots (
+        id          bigint       GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+        snapshot_at timestamptz  NOT NULL DEFAULT now(),
+        entity_type text         NOT NULL,               -- 'track' | 'artist'
+        time_range  text         NOT NULL,               -- short_term|medium_term|long_term
+        rank        smallint     NOT NULL,               -- 1-based position
+        entity_id   text         NOT NULL,               -- track_id or artist_id
+        UNIQUE (snapshot_at, entity_type, time_range, rank)
+    );
+    CREATE INDEX IF NOT EXISTS top_snapshots_lookup_idx
+        ON top_snapshots (entity_type, time_range, snapshot_at);
+
+    -- ============================================================== --
+    --  GRANTS                                                        --
+    -- ============================================================== --
+    -- App role: full DML on all tables + sequence usage (identity cols).
+    GRANT USAGE ON SCHEMA public TO spotify_app;
+    GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO spotify_app;
+    GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO spotify_app;
+    ALTER DEFAULT PRIVILEGES IN SCHEMA public
+        GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO spotify_app;
+    ALTER DEFAULT PRIVILEGES IN SCHEMA public
+        GRANT USAGE, SELECT ON SEQUENCES TO spotify_app;
+
+    -- Read-only role for Grafana: SELECT only.
+    GRANT USAGE ON SCHEMA public TO grafana_ro;
+    GRANT SELECT ON ALL TABLES IN SCHEMA public TO grafana_ro;
+    ALTER DEFAULT PRIVILEGES IN SCHEMA public
+        GRANT SELECT ON TABLES TO grafana_ro;
+
+    -- ---- record the migration (idempotent) ----------------------- --
+    INSERT INTO schema_migrations (version, description)
+    VALUES (1, 'initial spotify analytics schema')
+    ON CONFLICT (version) DO NOTHING;
+
+    COMMIT;
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: spotify-postgres-migrate
+  namespace: monitor
+  labels:
+    app: spotify-postgres
+spec:
+  backoffLimit: 3
+  # ttl so re-applying with a new migration replaces cleanly; bump the Job name
+  # (e.g. -migrate-002) when you add migrations so apply doesn't hit the
+  # immutable-Job error.
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app: spotify-postgres-migrate
+    spec:
+      restartPolicy: Never
+      enableServiceLinks: false
+      containers:
+        - name: migrate
+          image: postgres:16
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-eu", "-c"]
+          args:
+            - |
+              echo "waiting for postgres to accept connections..."
+              until pg_isready -h spotify-postgres -U postgres -d spotify; do
+                sleep 2
+              done
+              echo "applying migrations..."
+              psql -v ON_ERROR_STOP=1 \
+                   -h spotify-postgres -U postgres -d spotify \
+                   -v app_pw="$APP_PASSWORD" \
+                   -v ro_pw="$GRAFANA_RO_PASSWORD" \
+                   -f /migrations/001_init.sql
+              echo "migration complete; current schema_migrations:"
+              psql -h spotify-postgres -U postgres -d spotify \
+                   -c "SELECT version, description, applied_at FROM schema_migrations ORDER BY version;"
+          env:
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: spotify-postgres
+                  key: POSTGRES_PASSWORD
+            - name: APP_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: spotify-postgres
+                  key: APP_PASSWORD
+            - name: GRAFANA_RO_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: spotify-postgres
+                  key: GRAFANA_RO_PASSWORD
+          volumeMounts:
+            - name: migrations
+              mountPath: /migrations
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits:   { cpu: 500m, memory: 256Mi }
+      volumes:
+        - name: migrations
+          configMap:
+            name: spotify-postgres-migrations

@@ -11,7 +11,10 @@ WORKDIR /app
 COPY app/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY app/exporter.py app/tokenstore.py ./
+COPY app/exporter.py app/tokenstore.py app/db.py app/genre_rollup.py app/genre_rollup.yaml ./
+# One-time GDPR "Extended Streaming History" backfill, run as a Job (see
+# import/streaming-history-import.yaml) reusing this same image.
+COPY app/import_streaming_history.py ./
 
 RUN useradd -u 10001 -r -s /usr/sbin/nologin exporter \
     && mkdir -p /state && chown exporter:exporter /state
