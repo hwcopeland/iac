@@ -39,6 +39,10 @@ MEM0_URL = os.environ.get(
 # If absent we FAIL CLOSED to a sentinel that maps to nothing useful rather
 # than silently writing to a shared namespace.
 _MEM_SCOPE = (os.environ.get("JARVIS_MEM_SCOPE") or "").strip()
+# Shared world/homelab scope: cluster/database/metric/project facts the
+# worldsync mappers + seeder write here (user_id "jarvis"), readable by every
+# speaker's brain so homelab knowledge isn't trapped in one person's scope.
+_WORLD_SCOPE = (os.environ.get("JARVIS_WORLD_SCOPE") or "jarvis").strip()
 
 _HTTP_TIMEOUT = float(os.environ.get("MEM0_HTTP_TIMEOUT", "20"))
 
@@ -122,10 +126,26 @@ def _call(name: str, args: dict) -> dict:
             if not query:
                 return _text_result("memory_search needs a query", is_error=True)
             limit = int(args.get("limit", 5))
-            out = _post("/search", {
-                "query": query, "user_id": _MEM_SCOPE, "limit": limit,
-            })
-            return _text_result(json.dumps(out.get("result", out)))
+            # Search the speaker's own scope AND the shared world/homelab scope
+            # ("jarvis") where the worldsync mappers + initiative seeder write
+            # cluster/database/metric/project facts. Without this the
+            # owner-scoped brain never sees homelab knowledge ("what's the deal
+            # with the mem0 rollout" returns nothing). Merge both.
+            scopes = [_MEM_SCOPE]
+            if _WORLD_SCOPE and _WORLD_SCOPE != _MEM_SCOPE:
+                scopes.append(_WORLD_SCOPE)
+            merged = []
+            for sc in scopes:
+                try:
+                    out = _post("/search", {
+                        "query": query, "user_id": sc, "limit": limit,
+                    })
+                    res = out.get("result", []) if isinstance(out, dict) else []
+                    if isinstance(res, list):
+                        merged.extend(res)
+                except urllib.error.URLError:
+                    pass
+            return _text_result(json.dumps(merged))
         if name == "memory_add":
             text = (args.get("text") or "").strip()
             if not text:
