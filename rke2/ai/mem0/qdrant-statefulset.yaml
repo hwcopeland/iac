@@ -54,6 +54,11 @@ spec:
             # only, reachable solely from the mem0 server via Service DNS).
             - name: QDRANT__TELEMETRY_DISABLED
               value: "true"
+            # Snapshots default to /qdrant/snapshots on the image root fs,
+            # which is root-owned and unwritable under runAsUser 1000. Redirect
+            # them onto the fsGroup-writable PVC so qdrant can boot.
+            - name: QDRANT__STORAGE__SNAPSHOTS_PATH
+              value: /qdrant/storage/snapshots
           resources:
             requests:
               cpu: 100m

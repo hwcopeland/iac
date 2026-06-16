@@ -71,13 +71,28 @@ _MEM0_CONFIG = {
             "api_key": os.environ.get("XAI_API_KEY", ""),
             "openai_base_url": XAI_BASE_URL,
             "temperature": 0.1,
-            "max_tokens": 1024,
+            # Extraction must emit a COMPLETE JSON object. A long fact (an
+            # initiative paragraph) yields many atomic facts; at 1024 tokens the
+            # JSON was truncated mid-string and mem0 logged "Error in
+            # new_retrieved_facts: Unterminated string" and stored nothing.
+            # 4096 gives the extraction/decision JSON room to finish.
+            "max_tokens": 4096,
+            # mem0's BaseLlmConfig defaults top_p=0 and ALWAYS forwards it to the
+            # Chat Completions call. OpenAI tolerates top_p=0, but xAI rejects it
+            # ("top_p must be positive but top_p = 0", HTTP 400). Set a valid
+            # positive value so xAI accepts the extraction request.
+            "top_p": 1.0,
         },
     },
     "embedder": {
+        # "fastembed" is NOT a built-in mem0 0.1.55 provider; server.py
+        # registers a custom CPU adapter under this name at startup (see
+        # _register_fastembed_provider). embedding_dims must match the model
+        # and the qdrant collection's vector size (BAAI/bge-small = 384).
         "provider": "fastembed",
         "config": {
             "model": FASTEMBED_MODEL,
+            "embedding_dims": FASTEMBED_DIMS,
         },
     },
     "vector_store": {
@@ -92,6 +107,188 @@ _MEM0_CONFIG = {
 }
 
 _memory = None
+
+
+# Module-level so it is importable by a dotted path. mem0's EmbedderFactory.create
+# does `load_class(class_type)` which `importlib.import_module(module).getattr(cls)`
+# — it REQUIRES a "module.ClassName" string, not a class object. A class nested in
+# a function has no importable path, so it must live at module scope and be
+# registered as f"{__name__}._FastEmbedEmbedder".
+class _FastEmbedEmbedder:
+    """mem0 embedder backed by fastembed (onnxruntime, pure CPU).
+
+    Subclasses mem0's EmbeddingBase at construction time (imported lazily so the
+    class body doesn't pull mem0 at module import — /health must answer before
+    the heavy mem0/onnxruntime import). EmbedderFactory.create passes a
+    BaseEmbedderConfig instance as `config`.
+    """
+
+    def __init__(self, config=None):
+        from fastembed import TextEmbedding
+        self.config = config
+        model = getattr(config, "model", None) or FASTEMBED_MODEL
+        self._dims = getattr(config, "embedding_dims", None) or FASTEMBED_DIMS
+        self._model = TextEmbedding(model)
+        log.info("fastembed embedder ready (model=%s dims=%s)", model, self._dims)
+
+    def embed(self, text, memory_action=None):  # noqa: ARG002
+        # mem0 0.1.55 calls embed(text) with a single string; accept an optional
+        # memory_action kwarg for forward-compat with newer mem0.
+        vector = next(iter(self._model.embed([text])))
+        return vector.tolist()
+
+
+def _register_fastembed_provider():
+    """Wire a CPU-only fastembed embedder into mem0's EmbedderFactory.
+
+    Why this exists: mem0ai 0.1.55 ships NO built-in "fastembed" embedder
+    provider (its EmbedderFactory only knows openai/ollama/huggingface/
+    azure_openai/gemini/vertexai/together). Asking for provider="fastembed"
+    therefore fails with HTTP 400 "Unsupported embedding provider: fastembed".
+    The only other CPU option, "huggingface", needs `sentence-transformers`
+    which is NOT in the image.
+
+    The `fastembed` package (+ the BAAI/bge-small-en-v1.5 model) IS already
+    installed and pre-downloaded in this image, so instead of an image rebuild
+    we register a tiny adapter class under the provider name "fastembed". This
+    keeps the CPU-only / no-GPU / no-new-key intent and needs only a server.py
+    change (no new dependency). If a future mem0 bump adds a native fastembed
+    provider, drop this shim and use it directly.
+    """
+    from mem0.utils.factory import EmbedderFactory
+
+    # Register the DOTTED PATH (not the class object). load_class() does
+    # `module_path, class_name = class_type.rsplit(".", 1)`, so a class object
+    # would crash with "type object ... has no attribute 'rsplit'". __name__ is
+    # "__main__" when run as `python server.py` (importlib can import __main__),
+    # or "server" when imported — both resolve _FastEmbedEmbedder above.
+    EmbedderFactory.provider_to_class["fastembed"] = f"{__name__}._FastEmbedEmbedder"
+    log.info("registered custom 'fastembed' embedder provider into mem0 (%s)",
+             EmbedderFactory.provider_to_class["fastembed"])
+
+    # CRITICAL: registering in the factory is NOT enough. mem0 0.1.55 validates
+    # the embedder provider name against a HARDCODED allowlist in a pydantic v2
+    # field_validator (mem0/embeddings/configs.py::EmbedderConfig.validate_config)
+    # BEFORE the factory is ever consulted. With "fastembed" absent from that
+    # list, Memory.from_config raises:
+    #   "1 validation error for MemoryConfig ... Unsupported embedding provider:
+    #    fastembed"
+    # and /add + /search return HTTP 400. So we ALSO relax that validator to
+    # accept "fastembed" (every other provider still validates exactly as
+    # upstream does — a bogus provider is still rejected).
+    #
+    # Pydantic v2 compiles the validator into the model's core schema at class
+    # definition, so you cannot just reassign the attribute or model_rebuild():
+    # the nested MemoryConfig still carries the old compiled validator. The
+    # reliable approach is to (a) build a sibling model that declares the same
+    # field with a permissive validator so pydantic produces a correctly-bound
+    # decorator descriptor, (b) splice that descriptor's `.func` into the real
+    # EmbedderConfig's decorator registry, then (c) force-rebuild BOTH
+    # EmbedderConfig and MemoryConfig so the new validator is recompiled into
+    # the schema mem0 actually uses.
+    from typing import Optional as _Optional
+
+    from pydantic import BaseModel as _BaseModel
+    from pydantic import Field as _Field
+    from pydantic import field_validator as _field_validator
+
+    from mem0.configs import base as _mem0_base
+    from mem0.embeddings import configs as _emb_configs
+
+    _ALLOWED = [
+        "openai", "ollama", "huggingface", "azure_openai",
+        "gemini", "vertexai", "together", "fastembed",
+    ]
+
+    class _PatchedEmbedderConfig(_BaseModel):
+        provider: str = _Field(default="openai")
+        config: _Optional[dict] = _Field(default={})
+
+        @_field_validator("config")
+        def validate_config(cls, v, values):  # noqa: N805
+            provider = values.data.get("provider")
+            if provider in _ALLOWED:
+                return v
+            raise ValueError(f"Unsupported embedding provider: {provider}")
+
+    _good = _PatchedEmbedderConfig.__pydantic_decorators__.field_validators[
+        "validate_config"
+    ]
+    _emb_configs.EmbedderConfig.__pydantic_decorators__.field_validators[
+        "validate_config"
+    ].func = _good.func
+    _emb_configs.EmbedderConfig.model_rebuild(force=True)
+    _mem0_base.MemoryConfig.model_rebuild(force=True)
+    log.info("patched EmbedderConfig validator to allow 'fastembed' provider")
+
+
+# Fact-extraction prompt tuned for the JARVIS homelab/world scope. mem0 0.1.55's
+# default FACT_RETRIEVAL_PROMPT is a "Personal Information Organizer" that only
+# extracts facts/preferences ABOUT A USER (first-person), so it DISCARDS the
+# third-person infrastructure/project facts we seed and sync (the initiative
+# seeds and the worldsync_* mappers all came back with {"facts": []}). This
+# prompt instead extracts durable facts about the homelab, its deployments,
+# databases, and projects — while still returning [] for greetings/chatter.
+_HOMELAB_FACT_PROMPT = """You are JARVIS's memory extractor for a homelab and its \
+software/science projects. Extract durable, self-contained FACTS from the input \
+and return them as JSON. Facts can be about the homelab cluster, its \
+deployments/services, databases, metrics, and the owner's projects/initiatives \
+(their name, goal, current status, and key components), as well as the owner's \
+own preferences, people, and decisions. Keep each fact a single standalone \
+statement; preserve concrete names, namespaces, services, and status.
+
+Return ONLY JSON of the form {{"facts": ["...", "..."]}}. If there is nothing \
+durable to remember (a greeting, small talk, an empty/trivial message), return \
+{{"facts": []}}.
+
+Here are some examples:
+
+Input: Hi.
+Output: {{"facts": []}}
+
+Input: The mem0 rollout is the JARVIS unified-memory project. It uses a Qdrant \
+vector store and CPU-only fastembed embeddings, and is currently broken on a \
+stale image.
+Output: {{"facts": ["The mem0 rollout is the JARVIS unified-memory project", \
+"mem0 uses a Qdrant vector store and CPU-only fastembed embeddings", "The mem0 \
+rollout is currently broken on a stale image"]}}
+
+Input: khemeia is a Kubernetes computational-chemistry platform in the chem \
+namespace; the docking prototype works but most work packages are not started.
+Output: {{"facts": ["khemeia is a Kubernetes computational-chemistry platform \
+in the chem namespace", "khemeia's docking prototype works", "Most khemeia work \
+packages are not started"]}}
+
+Input: My name is Hampton and I prefer the brain to run on Sonnet.
+Output: {{"facts": ["Name is Hampton", "Prefers the brain to run on Sonnet"]}}
+
+Today's date is {today}. Detect the input language and record facts in the same \
+language. Return only the JSON object, nothing else."""
+
+
+def _install_homelab_fact_prompt():
+    """Swap mem0's personal-only extraction prompt for the homelab-aware one.
+
+    mem0.memory.utils.get_fact_retrieval_messages returns
+    (FACT_RETRIEVAL_PROMPT, "Input:\\n<msg>"), and mem0.memory.main imports that
+    function by value at import time. We replace the function in BOTH modules so
+    every add() uses our prompt regardless of which reference mem0 calls.
+    """
+    from datetime import datetime
+
+    from mem0.memory import main as _mem_main
+    from mem0.memory import utils as _mem_utils
+
+    today = datetime.now().strftime("%Y-%m-%d")
+    system_prompt = _HOMELAB_FACT_PROMPT.format(today=today)
+
+    def _homelab_fact_messages(message):
+        return system_prompt, f"Input:\n{message}"
+
+    _mem_utils.get_fact_retrieval_messages = _homelab_fact_messages
+    _mem_main.get_fact_retrieval_messages = _homelab_fact_messages
+    log.info("installed homelab/world fact-extraction prompt (replaces mem0's "
+             "personal-only default)")
 
 
 def _get_memory():
@@ -109,12 +306,47 @@ def _get_memory():
         # into the env the OpenAI SDK reads so it always targets xAI, not OpenAI.
         os.environ.setdefault("OPENAI_API_KEY", xai_key)
         os.environ.setdefault("OPENAI_BASE_URL", XAI_BASE_URL)
+        # mem0 0.1.55 has no native fastembed provider — add ours before build.
+        _register_fastembed_provider()
+        # Replace mem0's personal-only extraction prompt with the homelab one so
+        # third-person infra/project facts actually get extracted + stored.
+        _install_homelab_fact_prompt()
         from mem0 import Memory  # imported here so /health can answer pre-init
         _memory = Memory.from_config(_MEM0_CONFIG)
+        _raise_extraction_token_budget(_memory)
         log.info("mem0 Memory initialized (embed=%s qdrant=%s:%s coll=%s extract=%s)",
                  FASTEMBED_MODEL, QDRANT_HOST, QDRANT_PORT, QDRANT_COLLECTION,
                  EXTRACTION_MODEL)
     return _memory
+
+
+# Extraction/decision token budget. grok-3-mini is a REASONING model: its
+# reasoning tokens are billed against max_tokens, leaving little for the actual
+# JSON output. mem0's add() calls llm.generate_response() WITHOUT a max_tokens
+# arg, so it falls back to the OpenAILLM default of 100 — far too small once
+# reasoning (~400 tokens) is subtracted. The visible symptom is a truncated JSON
+# response and "Error in new_retrieved_facts: Unterminated string", after which
+# mem0 swallows the error and stores NOTHING. We bump that effective default.
+_EXTRACTION_MAX_TOKENS = int(os.environ.get("EXTRACTION_MAX_TOKENS", "8192"))
+
+
+def _raise_extraction_token_budget(memory) -> None:
+    """Wrap the LLM's generate_response so the extraction + memory-decision
+    calls (which omit max_tokens, defaulting to 100) get a budget large enough
+    for grok-3-mini's reasoning + the full JSON output."""
+    llm = memory.llm
+    orig = llm.generate_response
+
+    def _patched(messages, response_format=None, tools=None,
+                 tool_choice="auto", max_tokens=None):
+        if not max_tokens or max_tokens <= 100:
+            max_tokens = _EXTRACTION_MAX_TOKENS
+        return orig(messages=messages, response_format=response_format,
+                    tools=tools, tool_choice=tool_choice, max_tokens=max_tokens)
+
+    llm.generate_response = _patched
+    log.info("raised extraction/decision max_tokens default to %d "
+             "(grok-3-mini reasoning budget)", _EXTRACTION_MAX_TOKENS)
 
 
 def _require_scope(body: dict) -> str:

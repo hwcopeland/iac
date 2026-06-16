@@ -9,6 +9,8 @@ COPY jarvis_personal.py jarvis_personal_mcp.py \
      jarvis_spotify.py jarvis_spotify_mcp.py \
      jarvis_delegate_mcp.py \
      jarvis_kube_mcp.py \
+     jarvis_overview_mcp.py \
+     jarvis_mem0_mcp.py \
      jarvis_sonos_mcp.py \
      jarvis_persona_mcp.py \
      jarvis_tv.py jarvis_tv_mcp.py \

@@ -1,0 +1,76 @@
+---
+# In-cluster Kaniko build for jarvis-mem0 (no GH Actions workflow for mem0).
+#
+# Builds from the iac git context at hwcopeland/iac on the
+# feat/jarvis-identity-gate ref, sub-context rke2/ai/mem0/build, and pushes
+# zot.hwcopeland.net/ai/jarvis-mem0:latest (+ a sha tag for traceability).
+#
+# Mirrors the osiris build-job idiom: reuses an existing dockerconfigjson Secret
+# remapped to /kaniko/.docker/config.json. We use the ai-namespace
+# `zot-pull-secret` (push-capable) so this runs in ns `ai`.
+#
+# The Dockerfile pip-installs mem0/fastembed/onnxruntime AND pre-downloads the
+# BAAI/bge-small-en-v1.5 embedding model at build time, so this build is heavier
+# and slower than osiris — give it memory headroom and a long deadline.
+#
+# ONE-SHOT. Re-run by deleting + re-applying. NOT part of any continuous deploy.
+# This manifest is intentionally UNCOMMITTED (deploy-only artifact).
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: jarvis-mem0-build
+  namespace: ai
+  labels:
+    app: jarvis-mem0
+    app.kubernetes.io/component: build
+spec:
+  backoffLimit: 1
+  activeDeadlineSeconds: 2400
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app: jarvis-mem0
+        app.kubernetes.io/component: build
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      # Keep the build off the GPU node; any CPU node is fine.
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values:
+                      - nixos-gpu
+      containers:
+        - name: kaniko
+          image: gcr.io/kaniko-project/executor:latest
+          args:
+            - "--context=git://github.com/hwcopeland/iac.git#refs/heads/feat/jarvis-identity-gate"
+            - "--context-sub-path=rke2/ai/mem0/build"
+            - "--dockerfile=Dockerfile"
+            - "--destination=zot.hwcopeland.net/ai/jarvis-mem0:latest"
+            - "--destination=zot.hwcopeland.net/ai/jarvis-mem0:sha-7c31b55"
+            - "--cache=false"
+            - "--snapshot-mode=redo"
+            - "--verbosity=info"
+          resources:
+            requests:
+              cpu: "1"
+              memory: 2Gi
+            limits:
+              cpu: "4"
+              memory: 6Gi
+          volumeMounts:
+            - name: docker-config
+              mountPath: /kaniko/.docker
+      volumes:
+        - name: docker-config
+          secret:
+            secretName: zot-pull-secret
+            items:
+              - key: .dockerconfigjson
+                path: config.json

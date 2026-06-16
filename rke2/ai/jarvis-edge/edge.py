@@ -450,6 +450,15 @@ Tools:
 - For "is the cluster healthy" / "how many devices" / "what's broken",
   use the mcp__jarvis_kube__* tools (kube_get_pods, kube_top_nodes,
   kube_events, etc). You have READ access only — no secrets, no writes.
+- UNIFIED MEMORY (mem0) + OVERVIEW — your understanding of the homelab.
+  For open-ended status questions ("what's going on", "how's the
+  cluster", "what's the deal with X", "where do things stand"): call
+  mcp__jarvis_overview__cluster_overview for the live digest, and/or
+  mcp__jarvis_mem0__memory_search to recall what you already know about
+  X, BEFORE answering — never guess. When the owner tells you a durable
+  fact worth keeping (a preference, a decision, a person, an ongoing
+  project, a correction), persist it with mcp__jarvis_mem0__memory_add.
+  Do NOT store transient chatter (weather, the time, small talk).
 - For longer / multi-step tasks use mcp__jarvis_delegate__delegate to
   spawn a sub-agent claude session.
 - WebSearch / WebFetch for live external facts.
@@ -500,6 +509,22 @@ def _write_mcp_config() -> None:
             "jarvis_persona": {
                 "command": "python3",
                 "args": ["/app/jarvis_persona_mcp.py"],
+            },
+            # Unified memory (mem0) — thin stdio shim that HTTP-calls the mem0
+            # REST service. Partition key (user_id) is taken from
+            # JARVIS_MEM_SCOPE in the subprocess env (threaded by the brain
+            # paths); the brain CANNOT override it. MEM0_URL defaults to the
+            # in-cluster Service, so no env override is needed here.
+            "jarvis_mem0": {
+                "command": "python3",
+                "args": ["/app/jarvis_mem0_mcp.py"],
+            },
+            # Live cluster overview — single read-only digest tool for
+            # open-ended "what's going on / status" questions. Uses the
+            # in-pod jarvis-readonly ServiceAccount like jarvis_kube.
+            "jarvis_overview": {
+                "command": "python3",
+                "args": ["/app/jarvis_overview_mcp.py"],
             },
         }
     }
@@ -684,6 +709,12 @@ _RO_ALLOWED_TOOLS = " ".join([
     "mcp__jarvis_sonos__sonos_now_playing",
     "mcp__jarvis_sonos__sonos_list_speakers",
     "mcp__jarvis_sonos__sonos_play_spotify",
+    # Unified memory (mem0) — read past facts before answering, persist
+    # durable facts. Scope is fixed by JARVIS_MEM_SCOPE env (no user_id arg).
+    "mcp__jarvis_mem0__memory_search",
+    "mcp__jarvis_mem0__memory_add",
+    # Live cluster overview — one digest tool for "what's going on" questions.
+    "mcp__jarvis_overview__cluster_overview",
     # Persona self-tuning (humor / formality / terseness / sass / TTS / vol)
     "mcp__jarvis_persona__persona_get",
     "mcp__jarvis_persona__persona_set",
@@ -863,9 +894,11 @@ def _claude_brain(text: str, timeout: float = 60.0, mem_scope: str = "") -> str:
     # stable and Anthropic prompt caching actually hits.
     # See docs/jarvis/cache-optimization.md.
     user_text = _turn_context_prefix(include_persona=True) + text
-    # mem_scope is threaded to the subprocess env as INERT plumbing for the
-    # future mem0 MCP server (it will partition memory by this key). No tool
-    # reads JARVIS_MEM_SCOPE yet, so this is a no-op today.
+    # mem_scope is threaded to the subprocess env so the mem0 MCP shim
+    # (jarvis_mem0_mcp.py) partitions unified memory by this key. The shim
+    # reads JARVIS_MEM_SCOPE and fails closed if it is absent — so when
+    # mem_scope is empty (open mode) no env override is passed and memory is
+    # simply unavailable for the turn, which is the intended owner-safe default.
     _env = {**os.environ, "JARVIS_MEM_SCOPE": mem_scope} if mem_scope else None
     try:
         proc = _sp.run(
