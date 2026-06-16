@@ -134,10 +134,15 @@ spec:
           resources:
             requests:
               cpu: 10m
-              memory: 32Mi
+              memory: 64Mi
             limits:
               cpu: 250m
-              memory: 128Mi
+              # Bumped from 128Mi: the saved-library snapshot poll (poll_library,
+              # ~4.5k tracks) was OOMKilled at 128Mi, which prevented the library
+              # diff from ever completing (library_tracks stayed empty). The poll
+              # is now memory-streamed, but a 192Mi ceiling leaves headroom for
+              # the psycopg connection + page payloads during the snapshot.
+              memory: 192Mi
           livenessProbe:
             httpGet:
               path: /metrics

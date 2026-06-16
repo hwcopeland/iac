@@ -66,6 +66,49 @@ def _dsn() -> Optional[str]:
     return " ".join(parts)
 
 
+def _normalize_release_date(release_date: Optional[str],
+                            precision: Optional[str] = None) -> Optional[str]:
+    """Coerce Spotify's release_date into a value the Postgres `date` column accepts.
+
+    Spotify returns reduced-precision strings depending on
+    `release_date_precision`:
+      precision="year"  -> "1975"      (year only)
+      precision="month" -> "1975-03"   (year-month)
+      precision="day"   -> "1975-03-21"
+
+    The `date` column rejects "1975" / "1975-03" (InvalidDatetimeFormat), which
+    previously aborted the album insert and cascaded into dropped tracks AND
+    plays via the album/track FKs. We normalize to a full ISO date by padding
+    the missing components to January / the 1st:
+      "1975"    -> "1975-01-01"
+      "1975-03" -> "1975-03-01"
+      "1975-03-21" -> unchanged
+
+    `precision` is the authoritative signal when present; when the album payload
+    omits it (some slim payloads do), we infer from the string shape (count of
+    '-'-separated parts) so the normalization still holds.
+    """
+    if not release_date:
+        return None
+    rd = release_date.strip()
+    if not rd:
+        return None
+    # Prefer the explicit precision when Spotify provides it.
+    if precision == "year":
+        return f"{rd[:4]}-01-01"
+    if precision == "month":
+        return f"{rd[:7]}-01" if len(rd) >= 7 else f"{rd[:4]}-01-01"
+    if precision == "day":
+        return rd
+    # No (or unexpected) precision — infer from the string shape.
+    parts = rd.split("-")
+    if len(parts) == 1:            # "1975"
+        return f"{parts[0]}-01-01"
+    if len(parts) == 2:           # "1975-03"
+        return f"{parts[0]}-{parts[1]}-01"
+    return rd                     # already YYYY-MM-DD (or finer — pass through)
+
+
 class DB:
     """Thin lazy-reconnecting wrapper. All methods are best-effort: a transient
     DB error is logged and swallowed so the Prometheus poll loop keeps running.
@@ -129,10 +172,14 @@ class DB:
 
     # ── dimension upserts ────────────────────────────────────────────────────
     def upsert_artist(self, artist_id: str, name: str,
-                      popularity: Optional[int], genres: list[str]) -> None:
+                      popularity: Optional[int], genres: list[str]) -> bool:
+        """Upsert an artist dimension. Returns True on success (False on any
+        write failure, without raising), so the caller can null the track's
+        artist_id rather than let an artist hiccup cascade into a dropped play.
+        """
         if not artist_id:
-            return
-        self._exec(
+            return False
+        return self._exec(
             """
             INSERT INTO artists (artist_id, name, popularity, genres)
             VALUES (%s, %s, %s, %s)
@@ -145,10 +192,20 @@ class DB:
         )
 
     def upsert_album(self, album_id: str, name: str,
-                     release_date: Optional[str]) -> None:
+                     release_date: Optional[str],
+                     release_date_precision: Optional[str] = None) -> bool:
+        """Upsert an album dimension. Returns True on success.
+
+        `release_date` is normalized to a full ISO date via
+        _normalize_release_date so reduced-precision values ("1975", "1975-03")
+        no longer raise InvalidDatetimeFormat and abort the insert. Returns
+        False (without raising) when the album cannot be written, so the caller
+        can still persist the track (with album_id=NULL) and the play.
+        """
         if not album_id:
-            return
-        self._exec(
+            return False
+        normalized = _normalize_release_date(release_date, release_date_precision)
+        return self._exec(
             """
             INSERT INTO albums (album_id, name, release_date)
             VALUES (%s, %s, %s)
@@ -156,18 +213,26 @@ class DB:
               SET name = EXCLUDED.name,
                   release_date = COALESCE(EXCLUDED.release_date, albums.release_date)
             """,
-            (album_id, name[:300], release_date),
+            (album_id, name[:300], normalized),
         )
 
     def upsert_track(self, track_id: str, name: str, artist_id: Optional[str],
                      album_id: Optional[str], duration_ms: Optional[int],
-                     popularity: Optional[int]) -> None:
+                     popularity: Optional[int]) -> bool:
+        """Upsert a track dimension. Returns True on success.
+
+        Returns False (without raising) when the row can't be written, so the
+        caller can decide whether to still record the play. Pass album_id=None
+        when the album dimension could not be upserted — the tracks.album_id FK
+        is nullable, so a track with an unknown album still persists and keeps
+        the play insertable.
+        """
         if not track_id:
-            return
+            return False
         # NOTE: energy/danceability/tempo/valence/audio_features_fetched_at are
         # intentionally NOT written — /audio-features is 403 (deprecated). They
         # stay NULL and are filled by a future backfill if a source appears.
-        self._exec(
+        return self._exec(
             """
             INSERT INTO tracks (track_id, name, artist_id, album_id, duration_ms, popularity)
             VALUES (%s, %s, %s, %s, %s, %s)
