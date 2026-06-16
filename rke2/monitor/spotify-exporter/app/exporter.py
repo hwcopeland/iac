@@ -156,7 +156,17 @@ def _artist_genres(artist_id: str) -> list[str]:
 def _upsert_track_dimensions(track: dict) -> Optional[str]:
     """Upsert artist/album/track dimensions for a recently-played track item.
 
-    Returns the track_id (or None). No-op when the DB sink is disabled.
+    RESILIENCE CONTRACT: the irreplaceable datum is the *play* (the listening
+    event), so no single failing dimension may ever block it. Each dimension is
+    upserted independently; if the artist or album write fails (e.g. a bad
+    release_date, a transient DB error), we null that FK on the track so the
+    track row still lands. The track row is the minimal prerequisite for the
+    play's FK — as long as it persists, the play persists. The dimension failure
+    is logged but never propagated.
+
+    Returns the track_id when the track row is present (so the caller can insert
+    the play), or None when even the bare track couldn't be written.
+    No-op (returns the id) when the DB sink is disabled.
     """
     if not DB.enabled():
         return (track or {}).get("id")
@@ -169,26 +179,44 @@ def _upsert_track_dimensions(track: dict) -> Optional[str]:
     artist_id = primary_artist.get("id")
     if artist_id:
         genres = _artist_genres(artist_id)
-        DB.upsert_artist(
+        if not DB.upsert_artist(
             artist_id,
             primary_artist.get("name", ""),
             primary_artist.get("popularity"),  # usually absent on the track payload
             genres,
-        )
+        ):
+            # Artist dimension failed — drop the FK, keep the track + play.
+            print(f"dim: artist upsert failed for {artist_id}; "
+                  f"writing track {track_id} with artist_id=NULL", flush=True)
+            artist_id = None
 
     album = track.get("album") or {}
     album_id = album.get("id")
     if album_id:
-        DB.upsert_album(album_id, album.get("name", ""), album.get("release_date"))
+        if not DB.upsert_album(
+            album_id,
+            album.get("name", ""),
+            album.get("release_date"),
+            album.get("release_date_precision"),
+        ):
+            # Album dimension failed — drop the FK, keep the track + play.
+            print(f"dim: album upsert failed for {album_id}; "
+                  f"writing track {track_id} with album_id=NULL", flush=True)
+            album_id = None
 
-    DB.upsert_track(
+    if not DB.upsert_track(
         track_id,
         track.get("name", ""),
         artist_id,
         album_id,
         track.get("duration_ms"),
         track.get("popularity"),
-    )
+    ):
+        # Even the bare track couldn't be written — the play FK would fail, so
+        # signal the caller not to attempt it (avoids a noisy FK-violation log).
+        print(f"dim: track upsert failed for {track_id}; play skipped this "
+              f"cycle, retried next poll", flush=True)
+        return None
     return track_id
 
 
@@ -272,17 +300,32 @@ def poll_recently_played(state: dict) -> None:
 def poll_library(state: dict) -> None:
     """Snapshot-diff the saved-tracks library against library_tracks.
 
-    Pulls the full saved library (GET /me/tracks, 50/page, added_at per track),
-    then: newly-saved -> insert with added_at; rows no longer present -> set
-    removed_at = now(). Requires the user-library-read scope (already granted on
-    the shared token — no re-auth). DB-only; no-op when the sink is disabled.
+    Pages GET /me/tracks (50/page, added_at per track) and, for each page,
+    upserts dimensions + a library_tracks row for any track that wasn't already
+    open. Tracks no longer present get removed_at=now() at the end. Requires the
+    user-library-read scope (already granted on the shared token — no re-auth).
+    DB-only; no-op when the sink is disabled.
+
+    MEMORY DISCIPLINE (this caused OOMKills at the 128Mi limit): the saved
+    library is large (~4.5k tracks). The previous version hoarded EVERY track's
+    full JSON payload (`page_track_payloads`) plus a payload_by_id index, then
+    diffed — peak memory scaled with library size and the pod was OOMKilled
+    mid-poll, so the library diff never completed and library_tracks stayed
+    empty. We now stream: hold only the lightweight id->added_at map for the
+    removal diff, fetch the open-saved set ONCE up front, and upsert
+    dimensions/library rows per page so at most one page (50) of payloads is
+    resident at a time.
     """
     if not DB.enabled():
         return
 
-    current: dict[str, str] = {}  # track_id -> added_at
+    # Snapshot the currently-open saved ids ONCE; everything new this run is
+    # diffed against it without re-querying per page.
+    previously_saved = DB.current_saved_track_ids()
+
+    current_added: dict[str, str] = {}  # track_id -> added_at (lightweight)
+    new_count = 0
     offset = 0
-    page_track_payloads: list[dict] = []
     while True:
         d = _api("/me/tracks", {"limit": 50, "offset": offset})
         items = (d or {}).get("items") or []
@@ -293,8 +336,14 @@ def poll_library(state: dict) -> None:
             tid = track.get("id")
             if not tid:
                 continue
-            current[tid] = it.get("added_at")
-            page_track_payloads.append(track)
+            added_at = it.get("added_at")
+            current_added[tid] = added_at
+            # Only do the (heavier) dimension + library upsert for tracks that
+            # weren't already open — keeps writes and memory bounded to deltas.
+            if tid not in previously_saved:
+                _upsert_track_dimensions(track)
+                DB.library_add(tid, added_at)
+                new_count += 1
         # Spotify returns `next`: null when paging is done.
         if not (d or {}).get("next"):
             break
@@ -302,30 +351,18 @@ def poll_library(state: dict) -> None:
         if offset > 20000:  # safety cap (~20k tracks)
             break
 
-    if not current:
+    if not current_added:
         return
 
-    previously_saved = DB.current_saved_track_ids()
-    now_saved = set(current.keys())
-
-    newly_saved = now_saved - previously_saved
+    now_saved = set(current_added.keys())
     no_longer_saved = previously_saved - now_saved
-
-    # Upsert dimensions for new saves so library panels can join tracks/artists.
-    payload_by_id = {t.get("id"): t for t in page_track_payloads}
-    for tid in newly_saved:
-        track = payload_by_id.get(tid)
-        if track:
-            _upsert_track_dimensions(track)
-        DB.library_add(tid, current[tid])
-
     if no_longer_saved:
         DB.library_remove(no_longer_saved)
 
     M_LIBRARY_SAVED.set(len(now_saved))
     print(
         f"library diff: {len(now_saved)} saved "
-        f"(+{len(newly_saved)} new, -{len(no_longer_saved)} removed)",
+        f"(+{new_count} new, -{len(no_longer_saved)} removed)",
         flush=True,
     )
 
@@ -403,6 +440,12 @@ def main() -> None:
 
     last_recent = 0.0
     last_top = 0.0
+    # last_library = 0.0 means `now - last_library` (a full unix epoch) >>
+    # LIBRARY_INTERVAL on the first cycle, so the library snapshot runs ONCE
+    # shortly after boot and then every LIBRARY_INTERVAL (default 12h) — it does
+    # NOT wait a full interval before its first run. This is what populates
+    # library_tracks promptly; previously the poll fired but the pod OOMKilled
+    # mid-snapshot (see poll_library's memory note), so it never completed.
     last_library = 0.0
     while True:
         cycle_ok = True
