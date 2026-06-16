@@ -19,6 +19,8 @@ on:
       - main
     paths:
       - 'rke2/monitor/spotify-exporter/**'
+      - 'rke2/monitor/spotify-postgres/migration.yaml'
+      - 'rke2/monitor/spotify-postgres/cronjob-enrich.yaml'
       - '.github/workflows/build-spotify-exporter.yml'
   workflow_dispatch:
 
@@ -112,3 +114,21 @@ jobs:
           /tmp/kubectl -n monitor set image deployment/spotify-exporter \
             spotify-exporter="zot.hwcopeland.net/monitor/spotify-exporter:${SHA_TAG}"
           /tmp/kubectl -n monitor rollout status deployment/spotify-exporter --timeout=180s
+
+          # ── Genre enrichment (MusicBrainz) — schema migration + CronJob ──
+          # Apply the idempotent schema migration (002 is guarded; short-circuits
+          # if version 2 is already recorded). The Job's pod template is
+          # immutable, so it's named -migrate-002; delete any prior instance so
+          # a re-apply after editing the migration SQL doesn't hit the immutable
+          # error, then wait for it to complete before the CronJob runs.
+          cd ../spotify-postgres
+          /tmp/kubectl -n monitor delete job spotify-postgres-migrate-002 --ignore-not-found
+          /tmp/kubectl apply -f migration.yaml
+          /tmp/kubectl -n monitor wait --for=condition=complete \
+            job/spotify-postgres-migrate-002 --timeout=180s
+          # MusicBrainz enrichment CronJob (no API key — runs immediately).
+          /tmp/kubectl apply -f cronjob-enrich.yaml
+          # Kick one run now so the first enrichment doesn't wait up to an hour.
+          /tmp/kubectl -n monitor delete job spotify-genre-enrich-bootstrap --ignore-not-found
+          /tmp/kubectl -n monitor create job spotify-genre-enrich-bootstrap \
+            --from=cronjob/spotify-genre-enrich

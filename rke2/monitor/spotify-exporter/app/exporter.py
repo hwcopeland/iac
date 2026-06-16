@@ -65,6 +65,8 @@ RECENT_INTERVAL = int(os.environ.get("RECENT_INTERVAL", "120"))
 TOP_INTERVAL = int(os.environ.get("TOP_INTERVAL", "1800"))  # 30 min
 # Library snapshot diff runs on a slow cadence (default 12h).
 LIBRARY_INTERVAL = int(os.environ.get("LIBRARY_INTERVAL", str(12 * 3600)))
+# Enrichment backlog/coverage gauges refresh on a cheap, frequent cadence.
+ENRICH_STATS_INTERVAL = int(os.environ.get("ENRICH_STATS_INTERVAL", "300"))  # 5 min
 
 _HTTP_TIMEOUT = 12
 _UA = "spotify-exporter/1.0 (+homelab)"
@@ -91,6 +93,16 @@ M_PLAYS = PromCounter("spotify_plays", "Plays observed via recently-played", ["a
 M_DB_UP = Gauge("spotify_db_up", "1 if the Postgres analytics sink is reachable", registry=REG)
 M_DB_PLAYS_INSERTED = PromCounter("spotify_db_plays_inserted", "New play_events rows inserted by this exporter", registry=REG)
 M_LIBRARY_SAVED = Gauge("spotify_library_saved_tracks", "Currently-saved tracks (library_tracks, removed_at IS NULL)", registry=REG)
+
+# Genre-enrichment health (the MusicBrainz CronJob does the work; these gauges
+# are derived from the same music_ids / track_genres tables so the
+# backlog/coverage are continuously scrapeable without scraping the short-lived
+# CronJob pod).
+M_ENRICH_MATCHED = Gauge("spotify_enrich_matched_tracks", "Tracks with a resolved MusicBrainz match (match_status='matched')", registry=REG)
+M_ENRICH_NOMATCH = Gauge("spotify_enrich_nomatch_tracks", "Tracks that resolved to no MusicBrainz match (match_status='nomatch')", registry=REG)
+M_ENRICH_BACKLOG = Gauge("spotify_enrich_backlog_tracks", "Tracks still awaiting enrichment (no terminal music_ids row)", registry=REG)
+M_ENRICH_TAGGED = Gauge("spotify_enrich_tracks_with_mb_tags", "Distinct tracks with at least one MusicBrainz sub-genre tag", registry=REG)
+M_ENRICH_OLD_FILLED = Gauge("spotify_enrich_untagged_old_filled", "Previously Spotify-untagged tracks now carrying a MusicBrainz sub-genre", registry=REG)
 
 
 # ── Spotify Web API (token comes from the shared cluster Secret) ─────────────
@@ -204,6 +216,13 @@ def _upsert_track_dimensions(track: dict) -> Optional[str]:
                   f"writing track {track_id} with album_id=NULL", flush=True)
             album_id = None
 
+    # ISRC (recording identifier) lives under external_ids on the FULL track
+    # object returned by both /me/tracks and /recently-played. It is the join
+    # key for the downstream genre-enrichment pipeline (ISRC → MusicBrainz).
+    isrc = ((track.get("external_ids") or {}).get("isrc") or None)
+    if isrc:
+        isrc = isrc.strip().upper()[:20] or None
+
     if not DB.upsert_track(
         track_id,
         track.get("name", ""),
@@ -211,6 +230,7 @@ def _upsert_track_dimensions(track: dict) -> Optional[str]:
         album_id,
         track.get("duration_ms"),
         track.get("popularity"),
+        isrc,
     ):
         # Even the bare track couldn't be written — the play FK would fail, so
         # signal the caller not to attempt it (avoids a noisy FK-violation log).
@@ -367,6 +387,30 @@ def poll_library(state: dict) -> None:
     )
 
 
+def poll_enrichment_stats() -> None:
+    """Publish genre-enrichment backlog/coverage gauges from the DB.
+
+    Cheap aggregate query; the enrichment CronJob writes the underlying
+    music_ids / track_genres rows. Degrades silently (gauges unset) if the
+    enrichment tables don't exist yet (pre-migration-002 DB).
+    """
+    if not DB.enabled():
+        return
+    stats = DB.enrichment_stats()
+    if not stats:
+        return
+    if stats.get("matched") is not None:
+        M_ENRICH_MATCHED.set(stats["matched"])
+    if stats.get("nomatch") is not None:
+        M_ENRICH_NOMATCH.set(stats["nomatch"])
+    if stats.get("backlog") is not None:
+        M_ENRICH_BACKLOG.set(stats["backlog"])
+    if stats.get("tracks_with_mb_tags") is not None:
+        M_ENRICH_TAGGED.set(stats["tracks_with_mb_tags"])
+    if stats.get("untagged_old_filled") is not None:
+        M_ENRICH_OLD_FILLED.set(stats["untagged_old_filled"])
+
+
 def _persist_plays(state: dict) -> None:
     os.makedirs(STATE_DIR, exist_ok=True)
     tmp = PLAYS_PATH + ".tmp"
@@ -447,6 +491,7 @@ def main() -> None:
     # library_tracks promptly; previously the poll fired but the pod OOMKilled
     # mid-snapshot (see poll_library's memory note), so it never completed.
     last_library = 0.0
+    last_enrich_stats = 0.0
     while True:
         cycle_ok = True
         try:
@@ -461,6 +506,9 @@ def main() -> None:
             if now - last_library >= LIBRARY_INTERVAL:
                 poll_library(plays_state)
                 last_library = now
+            if now - last_enrich_stats >= ENRICH_STATS_INTERVAL:
+                poll_enrichment_stats()
+                last_enrich_stats = now
         except Exception as exc:  # noqa: BLE001 — never let the loop die
             M_ERRORS.inc()
             cycle_ok = False

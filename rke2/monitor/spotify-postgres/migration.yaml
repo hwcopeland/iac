@@ -219,11 +219,183 @@ data:
     ON CONFLICT (version) DO NOTHING;
 
     COMMIT;
+  002_genre_enrichment.sql: |
+    -- ============================================================== --
+    --  Spotify analytics — schema migration 002 (genre enrichment)   --
+    --                                                                 --
+    --  Adds MusicBrainz external-ID resolution (NO third-party API    --
+    --  signups — MusicBrainz needs only a descriptive User-Agent) and --
+    --  per-track / per-artist fine sub-genre tagging, plus a UNION    --
+    --  VIEW (track_genre_effective) that surfaces ALL fine sub-genre  --
+    --  tags per track (Spotify + MusicBrainz), de-duped and NOT       --
+    --  collapsed to coarse parents. The existing genre_rollup table   --
+    --  is used ONLY for optional parent grouping / drill-down nav.    --
+    --  Idempotent: every object is CREATE ... IF NOT EXISTS / guarded;--
+    --  the whole block short-circuits once version 2 is recorded.     --
+    -- ============================================================== --
+    DO $mig2$
+    BEGIN
+      IF EXISTS (SELECT 1 FROM schema_migrations WHERE version = 2) THEN
+        RAISE NOTICE 'migration 002 already applied; skipping';
+        RETURN;
+      END IF;
+      RAISE NOTICE 'applying migration 002';
+
+      -- ---- genre_rollup gains a provenance column ---------------- --
+      -- Existing rows were all seeded from the curated Spotify-tag map,
+      -- so they backfill to 'spotify'. The column is extensible, but only
+      -- 'spotify' and 'musicbrainz' are used now. The rollup is for
+      -- OPTIONAL parent grouping; the fine sub-genres are never replaced
+      -- by their parent in the primary view.
+      ALTER TABLE genre_rollup
+        ADD COLUMN IF NOT EXISTS source text NOT NULL DEFAULT 'spotify';
+
+      -- ---- music_ids — resolved MusicBrainz identifiers ---------- --
+      -- One row per track: the durable cache of ISRC → MusicBrainz IDs.
+      -- Resolved IDs are permanent (an ISRC never remaps), so the
+      -- enrichment job writes once and skips already-resolved tracks.
+      -- match_method records WHICH path resolved it (isrc, artist_year)
+      -- so the coverage panels can distinguish ISRC-grade matches.
+      CREATE TABLE IF NOT EXISTS music_ids (
+          track_id            text PRIMARY KEY REFERENCES tracks(track_id),
+          isrc                text,
+          mb_recording_id     text,
+          mb_artist_id        text,
+          mb_releasegroup_id  text,
+          match_method        text,                       -- isrc|artist_year
+          match_score         real,                       -- 0..1 confidence
+          match_status        text NOT NULL DEFAULT 'unmatched', -- unmatched|matched|nomatch|error
+          resolved_at         timestamptz
+      );
+      CREATE INDEX IF NOT EXISTS music_ids_status_idx
+          ON music_ids (match_status);
+      CREATE INDEX IF NOT EXISTS music_ids_isrc_idx
+          ON music_ids (isrc) WHERE isrc IS NOT NULL;
+      CREATE INDEX IF NOT EXISTS music_ids_mb_recording_idx
+          ON music_ids (mb_recording_id) WHERE mb_recording_id IS NOT NULL;
+
+      -- ---- track_genres — per-track fine sub-genre tags ---------- --
+      -- A track can carry many fine sub-genre tags from MusicBrainz
+      -- (curated genres + folksonomy tags). PK (track_id, source,
+      -- raw_tag) makes re-fetch idempotent via ON CONFLICT DO NOTHING.
+      CREATE TABLE IF NOT EXISTS track_genres (
+          track_id   text NOT NULL REFERENCES tracks(track_id),
+          source     text NOT NULL,                       -- spotify|musicbrainz
+          raw_tag    text NOT NULL,                       -- fine sub-genre, as returned
+          tag_kind   text NOT NULL DEFAULT 'genre',       -- genre|tag
+          weight     real,                                -- source vote count / score
+          fetched_at timestamptz NOT NULL DEFAULT now(),
+          PRIMARY KEY (track_id, source, raw_tag)
+      );
+      CREATE INDEX IF NOT EXISTS track_genres_track_idx
+          ON track_genres (track_id);
+      CREATE INDEX IF NOT EXISTS track_genres_source_idx
+          ON track_genres (source);
+
+      -- ---- artist_genres_enriched — same shape, keyed by artist -- --
+      CREATE TABLE IF NOT EXISTS artist_genres_enriched (
+          artist_id  text NOT NULL REFERENCES artists(artist_id),
+          source     text NOT NULL,                       -- musicbrainz
+          raw_tag    text NOT NULL,
+          tag_kind   text NOT NULL DEFAULT 'genre',
+          weight     real,
+          fetched_at timestamptz NOT NULL DEFAULT now(),
+          PRIMARY KEY (artist_id, source, raw_tag)
+      );
+      CREATE INDEX IF NOT EXISTS artist_genres_enriched_artist_idx
+          ON artist_genres_enriched (artist_id);
+
+      RAISE NOTICE 'migration 002 tables created';
+    END
+    $mig2$;
+
+    -- ---- track_genre_effective — the fine sub-genre UNION VIEW --- --
+    -- Surfaces the UNION of FINE sub-genre tags per track from every
+    -- source (Spotify artist genres[] + MusicBrainz track/artist
+    -- genres+tags), de-duped on (track_id, sub_genre). It does NOT
+    -- collapse to coarse parents — "rock"/"pop" are meaningless across
+    -- decades, so the hyper-specific tags (e.g. "yacht rock",
+    -- "neurofunk", "permanent wave") are exactly what we keep. The
+    -- OPTIONAL parent_genre column (from genre_rollup) is exposed only
+    -- for drill-down navigation/grouping; it is never substituted for
+    -- the sub_genre. `source` distinguishes Spotify- vs MusicBrainz-
+    -- supplied tags so coverage panels can measure how much previously
+    -- `untagged` (Spotify-empty) catalog music MusicBrainz filled in.
+    CREATE OR REPLACE VIEW track_genre_effective AS
+    WITH fine_tags AS (
+        -- Spotify: the primary artist's hyper-specific genres[] tags.
+        SELECT t.track_id,
+               lower(g.raw)              AS sub_genre,
+               'spotify'::text           AS source,
+               1.0::real                 AS weight
+        FROM tracks t
+        JOIN artists a ON a.artist_id = t.artist_id
+        CROSS JOIN LATERAL unnest(COALESCE(a.genres, ARRAY[]::text[])) AS g(raw)
+        WHERE g.raw <> ''
+
+        UNION ALL
+        -- MusicBrainz: per-track fine genres + folksonomy tags. These FILL
+        -- the gap where Spotify returns no genre (old/catalog artists).
+        SELECT tg.track_id,
+               lower(tg.raw_tag)         AS sub_genre,
+               'musicbrainz'::text       AS source,
+               COALESCE(tg.weight, 1.0)  AS weight
+        FROM track_genres tg
+        WHERE tg.source = 'musicbrainz'
+
+        UNION ALL
+        -- MusicBrainz: artist-level fine tags, mapped onto EVERY track by that
+        -- artist — not just the individually-resolved ones. This maximizes
+        -- coverage: once one track by an old/untagged artist resolves an artist
+        -- MBID, the whole catalog by that artist inherits the sub-genres.
+        SELECT t.track_id,
+               lower(age.raw_tag)        AS sub_genre,
+               'musicbrainz'::text       AS source,
+               COALESCE(age.weight, 1.0) AS weight
+        FROM tracks t
+        JOIN artist_genres_enriched age
+          ON age.artist_id = t.artist_id AND age.source = 'musicbrainz'
+        WHERE age.raw_tag <> ''
+    )
+    -- De-dupe on (track_id, sub_genre); keep the highest weight and a
+    -- stable source preference (spotify first as the "native" tag) for
+    -- the surviving row. The OPTIONAL parent is attached for drill-down.
+    SELECT DISTINCT ON (ft.track_id, ft.sub_genre)
+           ft.track_id,
+           ft.sub_genre,
+           initcap(ft.sub_genre)               AS sub_genre_display,
+           ft.source,
+           ft.weight,
+           gr.parent_genre                      AS parent_genre   -- optional grouping only
+    FROM fine_tags ft
+    LEFT JOIN genre_rollup gr ON gr.raw_genre = ft.sub_genre
+    WHERE ft.sub_genre <> ''
+    ORDER BY ft.track_id, ft.sub_genre,
+             (ft.source = 'spotify') DESC, ft.weight DESC NULLS LAST;
+
+    -- ---- grants for the new tables/view ------------------------- --
+    -- (idempotent; covered by ALTER DEFAULT PRIVILEGES from 001 for
+    -- objects created AFTER it ran, but the migration Job runs as the
+    -- superuser 'postgres', so default-priv inheritance does not apply —
+    -- grant explicitly.)
+    GRANT SELECT, INSERT, UPDATE, DELETE
+        ON music_ids, track_genres, artist_genres_enriched TO spotify_app;
+    GRANT SELECT
+        ON music_ids, track_genres, artist_genres_enriched, track_genre_effective
+        TO grafana_ro;
+
+    -- ---- record the migration (idempotent) --------------------- --
+    INSERT INTO schema_migrations (version, description)
+    VALUES (2, 'genre enrichment (musicbrainz): music_ids, track_genres, artist_genres_enriched, track_genre_effective fine sub-genre view')
+    ON CONFLICT (version) DO NOTHING;
 ---
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: spotify-postgres-migrate
+  # Renamed to -migrate-002 when migration 002 was added: a Job's pod template
+  # is immutable, so re-applying a same-named Job after editing args fails. Bump
+  # this suffix (-migrate-00N) each time a new migration key is added.
+  name: spotify-postgres-migrate-002
   namespace: monitor
   labels:
     app: spotify-postgres
@@ -257,6 +429,11 @@ spec:
                    -v app_pw="$APP_PASSWORD" \
                    -v ro_pw="$GRAFANA_RO_PASSWORD" \
                    -f /migrations/001_init.sql
+              # 002 is guarded (short-circuits if version 2 already recorded) and
+              # uses no psql client vars, so it is safe on every re-run.
+              psql -v ON_ERROR_STOP=1 \
+                   -h spotify-postgres -U postgres -d spotify \
+                   -f /migrations/002_genre_enrichment.sql
               echo "migration complete; current schema_migrations:"
               psql -h spotify-postgres -U postgres -d spotify \
                    -c "SELECT version, description, applied_at FROM schema_migrations ORDER BY version;"

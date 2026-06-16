@@ -15,6 +15,9 @@ COPY app/exporter.py app/tokenstore.py app/db.py app/genre_rollup.py app/genre_r
 # One-time GDPR "Extended Streaming History" backfill, run as a Job (see
 # import/streaming-history-import.yaml) reusing this same image.
 COPY app/import_streaming_history.py ./
+# MusicBrainz genre enrichment, run as a CronJob (see spotify-postgres/
+# cronjob-enrich.yaml) reusing this same image: `python /app/enrich.py`.
+COPY app/enrich.py ./
 
 RUN useradd -u 10001 -r -s /usr/sbin/nologin exporter \
     && mkdir -p /state && chown exporter:exporter /state

@@ -1,0 +1,91 @@
+# MusicBrainz genre enrichment CronJob.
+#
+# Reuses the EXACT spotify-exporter image (which bundles enrich.py + db.py +
+# psycopg) — no separate image build. For each track still missing resolved
+# external IDs (active-library-first), it resolves against MusicBrainz
+# (ISRC → recording, or artist+year fallback) and writes:
+#   * music_ids               — resolved MBIDs (permanent cache)
+#   * track_genres            — recording-level FINE sub-genre tags
+#   * artist_genres_enriched  — artist-level FINE sub-genre tags
+# The track_genre_effective VIEW (migration 002) then surfaces the de-duped
+# UNION of Spotify + MusicBrainz fine sub-genres per track.
+#
+# ZERO user setup: MusicBrainz needs NO API key / signup — only a descriptive
+# User-Agent with a contact (ENRICH_CONTACT) and a 1 req/s rate limit (enforced
+# in enrich.py). So this runs immediately on deploy. All writes are idempotent
+# (ON CONFLICT), so a killed run loses nothing and the next schedule resumes.
+#
+# Schedule: hourly. Each run has a bounded budget (ENRICH_MAX_TRACKS=300 /
+# ENRICH_MAX_SECONDS=3000) and drains the active-library-first backlog over
+# successive runs at MusicBrainz's polite 1 req/s.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: spotify-genre-enrich
+  namespace: monitor
+  labels:
+    app: spotify-exporter
+    component: genre-enrich
+spec:
+  schedule: "17 * * * *"            # hourly at :17 (off the top-of-hour rush)
+  concurrencyPolicy: Forbid         # never two enrich runs at once (rate limit)
+  startingDeadlineSeconds: 600
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      # Wall-clock cap a hair above ENRICH_MAX_SECONDS so the Job's own deadline
+      # never races the in-process budget.
+      activeDeadlineSeconds: 3300
+      ttlSecondsAfterFinished: 86400
+      template:
+        metadata:
+          labels:
+            app: spotify-exporter
+            component: genre-enrich
+        spec:
+          restartPolicy: Never
+          enableServiceLinks: false
+          imagePullSecrets:
+            - name: zot-pull-secret
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            fsGroup: 10001
+          containers:
+            - name: enrich
+              image: zot.hwcopeland.net/monitor/spotify-exporter:latest
+              imagePullPolicy: Always
+              # Override the exporter ENTRYPOINT — run the enrichment backfill
+              # instead of the metrics server.
+              command: ["python", "/app/enrich.py"]
+              env:
+                # Same DB wiring as the exporter Deployment: connect as the
+                # read/write spotify_app role; password from the spotify-postgres
+                # Secret. NOT optional — an enrichment run with no DB sink is
+                # useless, so fail fast if the Secret/DB is missing.
+                - name: PGHOST
+                  value: spotify-postgres.monitor.svc.cluster.local
+                - name: PGPORT
+                  value: "5432"
+                - name: PGDATABASE
+                  value: spotify
+                - name: PGUSER
+                  value: spotify_app
+                - name: PGPASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: spotify-postgres
+                      key: APP_PASSWORD
+                # MusicBrainz policy requires a contact in the User-Agent.
+                - name: ENRICH_CONTACT
+                  value: "hampton888@gmail.com"
+                # Per-run budget (the backlog drains over successive hourly runs).
+                - name: ENRICH_MAX_TRACKS
+                  value: "300"
+                - name: ENRICH_MAX_SECONDS
+                  value: "3000"
+              resources:
+                requests: { cpu: 25m, memory: 96Mi }
+                limits:   { cpu: 250m, memory: 256Mi }

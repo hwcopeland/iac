@@ -26,7 +26,7 @@ data:
       "uid": "spotify-library",
       "title": "Spotify — Library",
       "schemaVersion": 38,
-      "version": 1,
+      "version": 2,
       "refresh": "1h",
       "time": { "from": "now-1y", "to": "now" },
       "tags": ["spotify", "music", "library"],
@@ -85,44 +85,80 @@ data:
           "fieldConfig": { "defaults": { "custom": { "drawStyle": "bars", "fillOpacity": 70 } } }
         },
 
-        { "id": 9, "type": "row", "title": "Library by genre", "gridPos": { "x": 0, "y": 15, "w": 24, "h": 1 } },
+        { "id": 9, "type": "row", "title": "Library by sub-genre (Spotify + MusicBrainz)", "gridPos": { "x": 0, "y": 15, "w": 24, "h": 1 } },
         {
           "id": 10, "type": "text", "title": "Note on genre classification",
-          "gridPos": { "x": 0, "y": 16, "w": 24, "h": 2 },
-          "options": { "mode": "markdown", "content": "Library genres are rolled up to parent buckets via the `genre_rollup` table from each track's primary-artist `genres[]`. **Older catalog music is frequently untagged by Spotify** and lands in **Other** — improving older-music genre classification is tracked separately (AcousticBrainz/MusicBrainz enrichment), so the large *Other* bucket is expected for now." }
+          "gridPos": { "x": 0, "y": 16, "w": 24, "h": 3 },
+          "options": { "mode": "markdown", "content": "Genres here are the **fine sub-genres** themselves (e.g. *yacht rock*, *neurofunk*, *permanent wave*) — NOT coarse \"rock\"/\"pop\" buckets, which are meaningless across decades. Tags come from the `track_genre_effective` view: the de-duped **union** of Spotify artist genres **and** MusicBrainz genres/folksonomy tags. Older catalog music that Spotify leaves `untagged` is filled by the hourly MusicBrainz enrichment CronJob — the Coverage panels below track how much previously-untagged old music now has sub-genres. The optional parent grouping (from `genre_rollup`) is used only for drill-down, never to replace a sub-genre." }
         },
         {
-          "id": 11, "type": "piechart", "title": "Saved library by parent genre",
-          "gridPos": { "x": 0, "y": 18, "w": 10, "h": 10 },
+          "id": 13, "type": "stat", "title": "Sub-genre coverage % of saved library (≥1 fine sub-genre)",
+          "gridPos": { "x": 0, "y": 19, "w": 8, "h": 5 },
           "datasource": { "type": "postgres", "uid": "spotify-postgres" },
           "targets": [ { "refId": "A", "format": "table", "rawSql":
-            "SELECT COALESCE(gr.parent_genre, 'Other') AS genre, count(DISTINCT lt.track_id) AS saved FROM library_tracks lt LEFT JOIN tracks t ON t.track_id = lt.track_id LEFT JOIN artists a ON a.artist_id = t.artist_id LEFT JOIN LATERAL unnest(COALESCE(a.genres, ARRAY[]::text[])) AS g(raw) ON true LEFT JOIN genre_rollup gr ON gr.raw_genre = lower(g.raw) WHERE lt.removed_at IS NULL GROUP BY 1 ORDER BY saved DESC" } ],
-          "options": { "pieType": "donut", "legend": { "displayMode": "table", "placement": "right", "values": ["value"] }, "reduceOptions": { "calcs": ["lastNotNull"] } }
+            "SELECT 100.0 * count(*) FILTER (WHERE EXISTS (SELECT 1 FROM track_genre_effective e WHERE e.track_id = lt.track_id)) / NULLIF(count(*),0) AS coverage_pct FROM library_tracks lt WHERE lt.removed_at IS NULL" } ],
+          "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100, "color": { "mode": "continuous-GrYlRd" } } },
+          "options": { "colorMode": "background", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "/coverage_pct/" } }
         },
         {
-          "id": 12, "type": "barchart", "title": "Saved library by parent genre (counts)",
-          "gridPos": { "x": 10, "y": 18, "w": 14, "h": 10 },
+          "id": 14, "type": "stat", "title": "Old music rescued (Spotify-untagged tracks now MB-tagged)",
+          "gridPos": { "x": 8, "y": 19, "w": 8, "h": 5 },
           "datasource": { "type": "postgres", "uid": "spotify-postgres" },
           "targets": [ { "refId": "A", "format": "table", "rawSql":
-            "SELECT COALESCE(gr.parent_genre, 'Other') AS genre, count(DISTINCT lt.track_id) AS saved FROM library_tracks lt LEFT JOIN tracks t ON t.track_id = lt.track_id LEFT JOIN artists a ON a.artist_id = t.artist_id LEFT JOIN LATERAL unnest(COALESCE(a.genres, ARRAY[]::text[])) AS g(raw) ON true LEFT JOIN genre_rollup gr ON gr.raw_genre = lower(g.raw) WHERE lt.removed_at IS NULL GROUP BY 1 ORDER BY saved DESC LIMIT 25" } ],
+            "SELECT count(DISTINCT lt.track_id) AS rescued FROM library_tracks lt JOIN tracks t ON t.track_id = lt.track_id JOIN artists a ON a.artist_id = t.artist_id WHERE lt.removed_at IS NULL AND COALESCE(array_length(a.genres,1),0) = 0 AND EXISTS (SELECT 1 FROM track_genre_effective e WHERE e.track_id = lt.track_id AND e.source = 'musicbrainz')" } ],
+          "fieldConfig": { "defaults": { "color": { "mode": "fixed", "fixedColor": "purple" } } },
+          "options": { "colorMode": "value", "reduceOptions": { "calcs": ["lastNotNull"] } }
+        },
+        {
+          "id": 15, "type": "stat", "title": "Sub-genre diversity (distinct sub-genres in saved library)",
+          "gridPos": { "x": 16, "y": 19, "w": 8, "h": 5 },
+          "datasource": { "type": "postgres", "uid": "spotify-postgres" },
+          "targets": [ { "refId": "A", "format": "table", "rawSql":
+            "SELECT count(DISTINCT e.sub_genre) AS sub_genres FROM library_tracks lt JOIN track_genre_effective e ON e.track_id = lt.track_id WHERE lt.removed_at IS NULL" } ],
+          "fieldConfig": { "defaults": { "color": { "mode": "fixed", "fixedColor": "blue" } } },
+          "options": { "colorMode": "value", "reduceOptions": { "calcs": ["lastNotNull"] } }
+        },
+        {
+          "id": 11, "type": "barchart", "title": "Top fine sub-genres in saved library (specific, not rolled up)",
+          "gridPos": { "x": 0, "y": 24, "w": 14, "h": 12 },
+          "datasource": { "type": "postgres", "uid": "spotify-postgres" },
+          "targets": [ { "refId": "A", "format": "table", "rawSql":
+            "SELECT e.sub_genre_display AS sub_genre, count(DISTINCT lt.track_id) AS saved FROM library_tracks lt JOIN track_genre_effective e ON e.track_id = lt.track_id WHERE lt.removed_at IS NULL GROUP BY 1 ORDER BY saved DESC LIMIT 30" } ],
           "fieldConfig": { "defaults": { "color": { "mode": "continuous-BlPu" } } },
-          "options": { "xField": "genre", "orientation": "horizontal" }
+          "options": { "xField": "sub_genre", "orientation": "horizontal" }
+        },
+        {
+          "id": 12, "type": "table", "title": "Sub-genre source split (how much MusicBrainz adds over Spotify)",
+          "gridPos": { "x": 14, "y": 24, "w": 10, "h": 12 },
+          "datasource": { "type": "postgres", "uid": "spotify-postgres" },
+          "targets": [ { "refId": "A", "format": "table", "rawSql":
+            "SELECT e.source, count(DISTINCT e.sub_genre) AS distinct_sub_genres, count(DISTINCT e.track_id) AS tracks FROM library_tracks lt JOIN track_genre_effective e ON e.track_id = lt.track_id WHERE lt.removed_at IS NULL GROUP BY e.source ORDER BY tracks DESC" } ],
+          "options": { "showHeader": true }
+        },
+        {
+          "id": 16, "type": "barchart", "title": "Optional drill-down — saved tracks by parent genre (grouping only)",
+          "gridPos": { "x": 0, "y": 36, "w": 24, "h": 9 },
+          "datasource": { "type": "postgres", "uid": "spotify-postgres" },
+          "targets": [ { "refId": "A", "format": "table", "rawSql":
+            "SELECT COALESCE(e.parent_genre, 'ungrouped') AS parent_genre, count(DISTINCT lt.track_id) AS saved FROM library_tracks lt JOIN track_genre_effective e ON e.track_id = lt.track_id WHERE lt.removed_at IS NULL GROUP BY 1 ORDER BY saved DESC LIMIT 25" } ],
+          "fieldConfig": { "defaults": { "color": { "mode": "continuous-GrYlRd" } } },
+          "options": { "xField": "parent_genre", "orientation": "horizontal" }
         },
 
-        { "id": 19, "type": "row", "title": "Save candidates — played a lot, not saved", "gridPos": { "x": 0, "y": 28, "w": 24, "h": 1 } },
+        { "id": 19, "type": "row", "title": "Save candidates — played a lot, not saved", "gridPos": { "x": 0, "y": 45, "w": 24, "h": 1 } },
         {
           "id": 20, "type": "table", "title": "Save candidates (high play_count, no current library row)",
-          "gridPos": { "x": 0, "y": 29, "w": 24, "h": 10 },
+          "gridPos": { "x": 0, "y": 46, "w": 24, "h": 10 },
           "datasource": { "type": "postgres", "uid": "spotify-postgres" },
           "targets": [ { "refId": "A", "format": "table", "rawSql":
             "SELECT t.name AS track, a.name AS artist, count(*) AS play_count, max(pe.played_at) AS last_played FROM play_events pe JOIN tracks t ON t.track_id = pe.track_id LEFT JOIN artists a ON a.artist_id = t.artist_id LEFT JOIN library_tracks lt ON lt.track_id = pe.track_id AND lt.removed_at IS NULL WHERE lt.track_id IS NULL GROUP BY t.name, a.name HAVING count(*) >= 3 ORDER BY play_count DESC LIMIT 50" } ],
           "options": { "showHeader": true }
         },
 
-        { "id": 29, "type": "row", "title": "Dormant library & forgotten favorites", "gridPos": { "x": 0, "y": 39, "w": 24, "h": 1 } },
+        { "id": 29, "type": "row", "title": "Dormant library & forgotten favorites", "gridPos": { "x": 0, "y": 56, "w": 24, "h": 1 } },
         {
           "id": 30, "type": "table", "title": "Dormant library (saved, never/long-ago played)",
-          "gridPos": { "x": 0, "y": 40, "w": 12, "h": 10 },
+          "gridPos": { "x": 0, "y": 57, "w": 12, "h": 10 },
           "datasource": { "type": "postgres", "uid": "spotify-postgres" },
           "targets": [ { "refId": "A", "format": "table", "rawSql":
             "SELECT t.name AS track, a.name AS artist, lt.added_at, max(pe.played_at) AS last_played FROM library_tracks lt LEFT JOIN tracks t ON t.track_id = lt.track_id LEFT JOIN artists a ON a.artist_id = t.artist_id LEFT JOIN play_events pe ON pe.track_id = lt.track_id WHERE lt.removed_at IS NULL GROUP BY t.name, a.name, lt.added_at HAVING max(pe.played_at) IS NULL OR max(pe.played_at) < now() - make_interval(months => ${dormant_months}::int) ORDER BY last_played ASC NULLS FIRST LIMIT 50" } ],
@@ -130,7 +166,7 @@ data:
         },
         {
           "id": 31, "type": "table", "title": "Forgotten favorites (once-heavy, gone quiet)",
-          "gridPos": { "x": 12, "y": 40, "w": 12, "h": 10 },
+          "gridPos": { "x": 12, "y": 57, "w": 12, "h": 10 },
           "datasource": { "type": "postgres", "uid": "spotify-postgres" },
           "targets": [ { "refId": "A", "format": "table", "rawSql":
             "SELECT t.name AS track, a.name AS artist, count(*) AS lifetime_plays, max(pe.played_at) AS last_played, count(*) FILTER (WHERE pe.played_at > now() - interval '90 days') AS plays_90d FROM play_events pe JOIN tracks t ON t.track_id = pe.track_id LEFT JOIN artists a ON a.artist_id = t.artist_id GROUP BY t.name, a.name HAVING count(*) >= 5 AND count(*) FILTER (WHERE pe.played_at > now() - interval '90 days') = 0 ORDER BY lifetime_plays DESC LIMIT 50" } ],

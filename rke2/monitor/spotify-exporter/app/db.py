@@ -218,7 +218,8 @@ class DB:
 
     def upsert_track(self, track_id: str, name: str, artist_id: Optional[str],
                      album_id: Optional[str], duration_ms: Optional[int],
-                     popularity: Optional[int]) -> bool:
+                     popularity: Optional[int],
+                     isrc: Optional[str] = None) -> bool:
         """Upsert a track dimension. Returns True on success.
 
         Returns False (without raising) when the row can't be written, so the
@@ -226,6 +227,12 @@ class DB:
         when the album dimension could not be upserted — the tracks.album_id FK
         is nullable, so a track with an unknown album still persists and keeps
         the play insertable.
+
+        `isrc` (International Standard Recording Code) is captured from the
+        Spotify track payload's `external_ids.isrc`. It is the JOIN KEY for the
+        downstream genre-enrichment pipeline (ISRC → MusicBrainz recording →
+        genre/style tags), so it MUST be populated when present. COALESCE keeps a
+        previously-written isrc if a later slim payload omits external_ids.
         """
         if not track_id:
             return False
@@ -234,16 +241,17 @@ class DB:
         # stay NULL and are filled by a future backfill if a source appears.
         return self._exec(
             """
-            INSERT INTO tracks (track_id, name, artist_id, album_id, duration_ms, popularity)
-            VALUES (%s, %s, %s, %s, %s, %s)
+            INSERT INTO tracks (track_id, name, artist_id, album_id, duration_ms, popularity, isrc)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (track_id) DO UPDATE
               SET name = EXCLUDED.name,
                   artist_id = COALESCE(EXCLUDED.artist_id, tracks.artist_id),
                   album_id = COALESCE(EXCLUDED.album_id, tracks.album_id),
                   duration_ms = COALESCE(EXCLUDED.duration_ms, tracks.duration_ms),
-                  popularity = COALESCE(EXCLUDED.popularity, tracks.popularity)
+                  popularity = COALESCE(EXCLUDED.popularity, tracks.popularity),
+                  isrc = COALESCE(EXCLUDED.isrc, tracks.isrc)
             """,
-            (track_id, name[:500], artist_id, album_id, duration_ms, popularity),
+            (track_id, name[:500], artist_id, album_id, duration_ms, popularity, isrc),
         )
 
     # ── play events ──────────────────────────────────────────────────────────
@@ -314,27 +322,248 @@ class DB:
         )
 
     # ── genre rollup seed ────────────────────────────────────────────────────
-    def seed_genre_rollup(self, mappings: dict[str, str]) -> None:
-        """Idempotent UPSERT of raw_genre -> parent_genre."""
+    def seed_genre_rollup(self, mappings: dict[str, str],
+                          source: str = "spotify") -> None:
+        """Idempotent UPSERT of raw_genre -> parent_genre, tagged with a source.
+
+        The rollup is used ONLY for optional parent grouping / drill-down — the
+        fine sub-genres are never replaced by their parent in the primary view.
+        `source` records provenance ('spotify' for the curated Spotify-tag map).
+        The `genre_rollup.source` column is added by migration 002; this writer
+        degrades to a sourceless insert if the column is absent (pre-002 DB) so
+        it never crashes a Prometheus-only / unmigrated deploy.
+        """
         if not mappings:
             return
         conn = self._connect()
         if conn is None:
             return
+        rows = [(raw.lower(), parent, source) for raw, parent in mappings.items()]
         try:
             with conn.cursor() as cur:
                 cur.executemany(
                     """
-                    INSERT INTO genre_rollup (raw_genre, parent_genre)
-                    VALUES (%s, %s)
+                    INSERT INTO genre_rollup (raw_genre, parent_genre, source)
+                    VALUES (%s, %s, %s)
                     ON CONFLICT (raw_genre) DO UPDATE
-                      SET parent_genre = EXCLUDED.parent_genre
+                      SET parent_genre = EXCLUDED.parent_genre,
+                          source = EXCLUDED.source
                     """,
-                    [(raw.lower(), parent) for raw, parent in mappings.items()],
+                    rows,
                 )
-            print(f"db: seeded {len(mappings)} genre_rollup rows", flush=True)
+            print(f"db: seeded {len(mappings)} genre_rollup rows "
+                  f"(source={source})", flush=True)
+        except Exception:  # noqa: BLE001 — likely pre-002 (no source column)
+            # Reconnect (the failed txn poisoned the connection) and retry without
+            # the source column so a not-yet-migrated DB still seeds.
+            try:
+                conn.close()
+            finally:
+                self._conn = None
+            conn = self._connect()
+            if conn is None:
+                return
+            try:
+                with conn.cursor() as cur:
+                    cur.executemany(
+                        """
+                        INSERT INTO genre_rollup (raw_genre, parent_genre)
+                        VALUES (%s, %s)
+                        ON CONFLICT (raw_genre) DO UPDATE
+                          SET parent_genre = EXCLUDED.parent_genre
+                        """,
+                        [(r[0], r[1]) for r in rows],
+                    )
+                print(f"db: seeded {len(mappings)} genre_rollup rows "
+                      f"(no source col)", flush=True)
+            except Exception as exc:  # noqa: BLE001
+                print(f"db: genre seed failed: {type(exc).__name__}: {exc}",
+                      flush=True)
+
+    # ── enrichment: candidate selection ──────────────────────────────────────
+    def enrichment_candidates(self, limit: int) -> list[dict]:
+        """Tracks needing ID resolution, ACTIVE-LIBRARY-FIRST.
+
+        Orders by: (a) is the track in play_events or the open library? then
+        (b) most-recently active. A track is a candidate when it has NO
+        music_ids row, or its row is still 'unmatched' (so a previous partial
+        run is retried). Returns the columns the resolver needs: track_id, isrc,
+        track name, artist name, primary release year.
+        """
+        return self._query(
+            """
+            SELECT t.track_id,
+                   t.isrc,
+                   t.artist_id,
+                   t.name                       AS track_name,
+                   a.name                       AS artist_name,
+                   EXTRACT(year FROM al.release_date)::int AS year,
+                   (lt.track_id IS NOT NULL
+                    OR pe.track_id IS NOT NULL) AS active
+            FROM tracks t
+            LEFT JOIN artists a               ON a.artist_id = t.artist_id
+            LEFT JOIN albums  al              ON al.album_id  = t.album_id
+            LEFT JOIN music_ids mi            ON mi.track_id  = t.track_id
+            LEFT JOIN library_tracks lt
+                   ON lt.track_id = t.track_id AND lt.removed_at IS NULL
+            LEFT JOIN LATERAL (
+                   SELECT track_id FROM play_events pe2
+                    WHERE pe2.track_id = t.track_id LIMIT 1
+            ) pe ON true
+            WHERE mi.track_id IS NULL
+               OR mi.match_status = 'unmatched'
+            ORDER BY active DESC, mi.track_id NULLS FIRST
+            LIMIT %s
+            """,
+            (limit,),
+        )
+
+    def upsert_music_ids(self, track_id: str, *, isrc: Optional[str] = None,
+                         mb_recording_id: Optional[str] = None,
+                         mb_artist_id: Optional[str] = None,
+                         mb_releasegroup_id: Optional[str] = None,
+                         match_method: Optional[str] = None,
+                         match_score: Optional[float] = None,
+                         match_status: str = "matched") -> bool:
+        """Persist resolved MusicBrainz IDs (COALESCE keeps prior non-null IDs)."""
+        if not track_id:
+            return False
+        return self._exec(
+            """
+            INSERT INTO music_ids
+              (track_id, isrc, mb_recording_id, mb_artist_id, mb_releasegroup_id,
+               match_method, match_score, match_status, resolved_at)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s, now())
+            ON CONFLICT (track_id) DO UPDATE SET
+              isrc               = COALESCE(EXCLUDED.isrc, music_ids.isrc),
+              mb_recording_id    = COALESCE(EXCLUDED.mb_recording_id, music_ids.mb_recording_id),
+              mb_artist_id       = COALESCE(EXCLUDED.mb_artist_id, music_ids.mb_artist_id),
+              mb_releasegroup_id = COALESCE(EXCLUDED.mb_releasegroup_id, music_ids.mb_releasegroup_id),
+              match_method       = COALESCE(EXCLUDED.match_method, music_ids.match_method),
+              match_score        = COALESCE(EXCLUDED.match_score, music_ids.match_score),
+              match_status       = EXCLUDED.match_status,
+              resolved_at        = now()
+            """,
+            (track_id, isrc, mb_recording_id, mb_artist_id, mb_releasegroup_id,
+             match_method, match_score, match_status),
+        )
+
+    def mark_music_ids_status(self, track_id: str, status: str) -> bool:
+        """Record a terminal non-match (nomatch/error) so it isn't retried as
+        'unmatched' every run (still re-tried on a later schedule if desired)."""
+        if not track_id:
+            return False
+        return self._exec(
+            """
+            INSERT INTO music_ids (track_id, match_status, resolved_at)
+            VALUES (%s, %s, now())
+            ON CONFLICT (track_id) DO UPDATE
+              SET match_status = EXCLUDED.match_status, resolved_at = now()
+            """,
+            (track_id, status),
+        )
+
+    def add_track_tags(self, track_id: str, source: str,
+                       tags: Iterable[tuple[str, str, Optional[float]]]) -> int:
+        """Insert (raw_tag, tag_kind, weight) tags for a track. Idempotent
+        (ON CONFLICT DO NOTHING). Returns the count attempted."""
+        rows = [
+            (track_id, source, raw[:120], (kind or "genre"), weight)
+            for raw, kind, weight in tags if raw
+        ]
+        if not rows:
+            return 0
+        conn = self._connect()
+        if conn is None:
+            return 0
+        try:
+            with conn.cursor() as cur:
+                cur.executemany(
+                    """
+                    INSERT INTO track_genres (track_id, source, raw_tag, tag_kind, weight)
+                    VALUES (%s,%s,%s,%s,%s)
+                    ON CONFLICT (track_id, source, raw_tag) DO NOTHING
+                    """,
+                    rows,
+                )
+            return len(rows)
         except Exception as exc:  # noqa: BLE001
-            print(f"db: genre seed failed: {type(exc).__name__}: {exc}", flush=True)
+            print(f"db: add_track_tags failed: {type(exc).__name__}: {exc}",
+                  flush=True)
+            try:
+                conn.close()
+            finally:
+                self._conn = None
+            return 0
+
+    def add_artist_tags(self, artist_id: str, source: str,
+                        tags: Iterable[tuple[str, str, Optional[float]]]) -> int:
+        """Insert (raw_tag, tag_kind, weight) tags for an ARTIST. Idempotent
+        (ON CONFLICT DO NOTHING). Returns the count attempted. Artist-level MB
+        tags fill every track by that artist whose recording had no MB tags."""
+        if not artist_id:
+            return 0
+        rows = [
+            (artist_id, source, raw[:120], (kind or "genre"), weight)
+            for raw, kind, weight in tags if raw
+        ]
+        if not rows:
+            return 0
+        conn = self._connect()
+        if conn is None:
+            return 0
+        try:
+            with conn.cursor() as cur:
+                cur.executemany(
+                    """
+                    INSERT INTO artist_genres_enriched
+                      (artist_id, source, raw_tag, tag_kind, weight)
+                    VALUES (%s,%s,%s,%s,%s)
+                    ON CONFLICT (artist_id, source, raw_tag) DO NOTHING
+                    """,
+                    rows,
+                )
+            return len(rows)
+        except Exception as exc:  # noqa: BLE001
+            print(f"db: add_artist_tags failed: {type(exc).__name__}: {exc}",
+                  flush=True)
+            try:
+                conn.close()
+            finally:
+                self._conn = None
+            return 0
+
+    def enrichment_stats(self) -> dict:
+        """Backlog + coverage counts for the enrichment Prometheus metrics.
+
+        `untagged_old_filled` measures the headline win: tracks whose primary
+        artist has NO Spotify genres (the `untagged` old/catalog case) that now
+        carry at least one MusicBrainz fine sub-genre tag.
+        """
+        rows = self._query(
+            """
+            SELECT
+              (SELECT count(*) FROM tracks)                                   AS tracks_total,
+              (SELECT count(*) FROM music_ids WHERE match_status='matched')   AS matched,
+              (SELECT count(*) FROM music_ids WHERE match_status='nomatch')   AS nomatch,
+              (SELECT count(*) FROM tracks t
+                 WHERE NOT EXISTS (SELECT 1 FROM music_ids mi
+                                    WHERE mi.track_id=t.track_id
+                                      AND mi.match_status<>'unmatched'))      AS backlog,
+              (SELECT count(DISTINCT track_id) FROM track_genre_effective
+                 WHERE source='musicbrainz')                                  AS tracks_with_mb_tags,
+              -- Headline win: tracks whose primary artist has NO Spotify genres
+              -- (the `untagged` old/catalog case) that now carry a MusicBrainz
+              -- sub-genre via the effective view (recording- OR artist-level).
+              (SELECT count(*) FROM tracks t
+                 JOIN artists a ON a.artist_id = t.artist_id
+                WHERE COALESCE(array_length(a.genres,1),0) = 0
+                  AND EXISTS (SELECT 1 FROM track_genre_effective e
+                               WHERE e.track_id = t.track_id
+                                 AND e.source = 'musicbrainz'))               AS untagged_old_filled
+            """
+        )
+        return rows[0] if rows else {}
 
 
 # Module-level singleton, mirroring the exporter's other globals.
