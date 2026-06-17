@@ -112,6 +112,14 @@ jobs:
           # Behavioural analytics (skip/intent/bingeing/genre rivalry) — reads
           # the rich GDPR-export columns added in schema migration 003.
           /tmp/kubectl apply -f dashboard-behavior.yaml
+          # Sessions & Rhythm (WHEN you listen): listening clock, 30-min-gap
+          # session detection, biggest days, on-repeat timeline, late-night split.
+          /tmp/kubectl apply -f dashboard-sessions.yaml
+          # Taste Evolution: genre mix over time, discovery timeline, 2024-vs-2026,
+          # eclecticism (distinct parent genres + Shannon entropy per month).
+          /tmp/kubectl apply -f dashboard-taste.yaml
+          # Wrapped (any period): picker-driven headline + top tracks/artists/genres.
+          /tmp/kubectl apply -f dashboard-wrapped.yaml
 
           # Pin to the immutable sha tag and wait for rollout.
           /tmp/kubectl -n monitor set image deployment/spotify-exporter \
