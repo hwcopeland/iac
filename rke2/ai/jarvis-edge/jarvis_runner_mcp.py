@@ -224,19 +224,66 @@ def _job_manifest(run_id: str, task: str, mode: str) -> dict:
                         "runAsGroup": 100,
                     },
                     "initContainers": [{
-                        # Same seed-only pattern as the edge's claude-creds-init,
-                        # but into a fresh emptyDir (claude-home) — NOT the
-                        # jarvis-state PVC — so it can't race the edge's refresh.
+                        # Seed claude OAuth creds into a FRESH emptyDir
+                        # (claude-home) per Job, then run claude with HOME=/tmp
+                        # so it resolves ~/.claude/.credentials.json there. The
+                        # emptyDir (never the edge's live PVC mount) means the
+                        # runner can self-refresh its copy without racing the
+                        # edge's in-place OAuth-refresh writes.
+                        #
+                        # SOURCE PRIORITY — read the LIVE edge creds first, the
+                        # Secret only as a last resort:
+                        #   1. /live/.credentials.json — the edge's CURRENT
+                        #      creds on the jarvis-state PVC (mounted read-only
+                        #      here). This holds the LIVE, rotated refreshToken
+                        #      the edge's claude self-refreshes with.
+                        #   2. /src/claude_credentials.json — the Secret seed.
+                        #      FALLBACK ONLY: OAuth refreshTokens ROTATE on use,
+                        #      so the Secret's refreshToken was superseded the
+                        #      first time the edge refreshed and is now DEAD —
+                        #      seeding from it gives an expired accessToken AND a
+                        #      dead refreshToken, so claude can't refresh and
+                        #      401s ("Invalid authentication credentials"). The
+                        #      live PVC copy is the only source with a working
+                        #      refreshToken.
+                        #
+                        # CRITICAL: chown/chmod the /dst DIRECTORY (not just the
+                        # file) to uid 1000. The seeded accessToken is usually
+                        # already expired, so the runner's claude must refresh it
+                        # on first call — an ATOMIC write (temp file + rename)
+                        # INTO ~/.claude, which needs write permission on the
+                        # directory. An emptyDir mount is created root-owned, so
+                        # without this chown uid 1000 cannot write the refreshed
+                        # creds and the run fails. The edge pod's init does the
+                        # same `chown 1000:100 /dst` + `chmod 0700 /dst`.
                         "name": "claude-creds-init",
                         "image": "busybox:1.36",
                         "command": ["sh", "-c", (
-                            "install -m 0600 /src/claude_credentials.json "
+                            "chown 1000:100 /dst && chmod 0700 /dst && "
+                            "if [ -s /live/.credentials.json ]; then "
+                            "  install -m 0600 /live/.credentials.json "
                             "/dst/.credentials.json && "
-                            "chown 1000:100 /dst/.credentials.json && "
-                            "echo 'claude creds: seeded for run'"
+                            "  echo 'claude creds: seeded from LIVE edge PVC "
+                            "(rotated refreshToken)'; "
+                            "else "
+                            "  install -m 0600 /src/claude_credentials.json "
+                            "/dst/.credentials.json && "
+                            "  echo 'claude creds: WARNING seeded from stale "
+                            "Secret fallback (refreshToken likely dead -> may "
+                            "401)'; "
+                            "fi && "
+                            "chown 1000:100 /dst/.credentials.json"
                         )],
                         "securityContext": {"runAsUser": 0, "runAsGroup": 0},
                         "volumeMounts": [
+                            # Live edge creds on the jarvis-state PVC — READ
+                            # ONLY. We only ever copy OUT of it into the
+                            # emptyDir, so we never touch the edge's live file
+                            # and can't race its refresh. RWO PVC co-mounts on
+                            # the same node (nixos-gpu) where the edge already
+                            # has it; the Job is pinned there via nodeSelector.
+                            {"name": "jarvis-state-live", "mountPath": "/live",
+                             "subPath": ".claude", "readOnly": True},
                             {"name": "claude-creds-src", "mountPath": "/src",
                              "readOnly": True},
                             {"name": "claude-home", "mountPath": "/dst"},
@@ -269,6 +316,13 @@ def _job_manifest(run_id: str, task: str, mode: str) -> dict:
                     }],
                     "volumes": [
                         {"name": "claude-home", "emptyDir": {}},
+                        # Live edge creds (jarvis-state PVC). Mounted read-only
+                        # in the init only — source for the LIVE rotated
+                        # refreshToken. RWO PVC; safe because the Job is pinned
+                        # to nixos-gpu (nodeSelector gpu=rtx3070) where the edge
+                        # already mounts it, and RWO is per-node not per-pod.
+                        {"name": "jarvis-state-live", "persistentVolumeClaim": {
+                            "claimName": "jarvis-state", "readOnly": True}},
                         {"name": "claude-creds-src", "secret": {
                             "secretName": "jarvis-secrets",
                             "items": [{"key": "claude_credentials.json",

@@ -1,16 +1,38 @@
-# Dashboard ConfigMap for the JARVIS voice + IG pipeline.
+# Dashboard ConfigMap for the JARVIS console.
 #
 # Picked up by the kube-prometheus-stack Grafana sidecar via the
 # `grafana_dashboard: "1"` label (searchNamespace: ALL — see
 # rke2/monitor/kube-prometheus-stack-values.yaml). Lives in the
 # `Voice` Grafana folder via the `grafana_folder` annotation.
 #
-# Datasources:
-#   - prometheus uid "prometheus" — scraped via PodMonitor
-#     rke2/ai/jarvis-stack/podmonitor-jarvis-edge.yaml (port 9090, /metrics)
-#   - tempo uid "tempo" — Tempo OTLP receiver at
-#     tempo.monitor.svc.cluster.local:4317, datasource provisioned
-#     by rke2/monitor/tempo/tempo-grafana-datasource.yaml
+# Four sections (rows):
+#   1. UNIFIED MEMORY      — mem0/qdrant exporter (job=mem0-exporter, ns ai)
+#   2. AGENT RUNS          — kube-state-metrics kube_job_* for jarvis-run-* Jobs
+#   3. VOICE + BRAIN       — edge jarvis_* metrics (PodMonitor jarvis-edge :9090)
+#   4. CLUSTER/PROJECT HEALTH — node/pod/DCGM metrics
+#
+# Metric-name provenance (only confirmed-existing series are used):
+#   - mem0:    jarvis_mem0_points{scope,project}, jarvis_mem0_points_by_scope,
+#              jarvis_mem0_collection_points, jarvis_mem0_points_total,
+#              jarvis_mem0_server_up, jarvis_mem0_scrape_success
+#     (NOTE: there is NO jarvis_mem0_points_by_project series — per-project
+#      counts come from aggregating jarvis_mem0_points by the `project` label.)
+#   - runs:    kube_job_status_active / _succeeded / _failed / _start_time,
+#              kube_job_info, kube_job_status_completion_time
+#     (kube-state-metrics does NOT expose custom Job labels by default, so
+#      runner Jobs are matched by job_name=~"jarvis-run.*", not label_jarvis_run.)
+#   - voice:   jarvis_turns_total{addressed,ambient_drop,echo_drop},
+#              jarvis_stt/brain/tts_segment/sonos_first_audio/turn_total_duration_seconds
+#              (histograms), jarvis_echo_drops_total,
+#              jarvis_unknown_speaker_drops_total, jarvis_brain_errors_total{reason}.
+#     (These are 0-series until the edge image is rebuilt — the
+#      double-registration fix re-enables them. Panels are correct by
+#      construction and populate post-rebuild.)
+#   - cluster: kube_node_info, kube_node_status_condition, kube_pod_status_phase,
+#              kube_pod_status_ready, DCGM_FI_DEV_GPU_UTIL, DCGM_FI_DEV_FB_USED,
+#              DCGM_FI_DEV_GPU_TEMP, node_load1.
+#
+# Datasource: prometheus uid "prometheus".
 #
 # Sidecar auto-discovers updates to the data: block on each ConfigMap
 # update — no Grafana restart needed.
@@ -26,45 +48,196 @@ metadata:
 data:
   jarvis-voice-pipeline.json: |-
     {
-      "uid": "jarvis-voice-pipeline",
-      "title": "JARVIS — Voice + IG Pipeline",
-      "tags": ["voice", "jarvis", "ig", "traces"],
+      "uid": "jarvis-console",
+      "title": "JARVIS — Console",
+      "tags": ["jarvis", "memory", "agent-runs", "voice", "cluster"],
       "timezone": "browser",
       "refresh": "30s",
       "schemaVersion": 39,
       "version": 1,
       "editable": true,
-      "time": {"from": "now-1h", "to": "now"},
+      "time": {"from": "now-6h", "to": "now"},
       "templating": {"list": []},
       "panels": [
         {
           "type": "row",
           "id": 100,
-          "title": "Voice latency at a glance",
+          "title": "1 · Unified Memory (mem0 / qdrant)",
           "gridPos": {"x": 0, "y": 0, "w": 24, "h": 1},
           "collapsed": false
         },
         {
           "id": 1,
           "type": "stat",
-          "title": "Turns (last 1h)",
-          "description": "Total voice turns processed in the last hour (sum across all outcome labels).",
-          "gridPos": {"x": 0, "y": 1, "w": 6, "h": 5},
+          "title": "Total facts (qdrant collection)",
+          "description": "Authoritative point count for the jarvis_mem0 qdrant collection (jarvis_mem0_collection_points).",
+          "gridPos": {"x": 0, "y": 1, "w": 5, "h": 5},
           "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "targets": [{
-            "expr": "sum(increase(jarvis_turns_total[1h]))",
-            "instant": true,
-            "refId": "A"
-          }],
+          "targets": [{"expr": "max(jarvis_mem0_collection_points)", "instant": true, "refId": "A"}],
           "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "background"},
           "fieldConfig": {"defaults": {"unit": "short", "color": {"mode": "fixed", "fixedColor": "blue"}}}
         },
         {
           "id": 2,
+          "type": "stat",
+          "title": "mem0 server / scrape health",
+          "description": "jarvis_mem0_server_up (mem0 REST /health) and jarvis_mem0_scrape_success (exporter scroll completed).",
+          "gridPos": {"x": 5, "y": 1, "w": 5, "h": 5},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [
+            {"expr": "max(jarvis_mem0_server_up)", "legendFormat": "mem0 up", "instant": true, "refId": "A"},
+            {"expr": "max(jarvis_mem0_scrape_success)", "legendFormat": "scrape ok", "instant": true, "refId": "B"}
+          ],
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "background", "orientation": "horizontal", "textMode": "value_and_name"},
+          "fieldConfig": {"defaults": {"unit": "short", "mappings": [{"type": "value", "options": {"0": {"text": "DOWN", "color": "red"}, "1": {"text": "UP", "color": "green"}}}], "color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "red"}, {"color": "green", "value": 1}]}}}
+        },
+        {
+          "id": 3,
+          "type": "piechart",
+          "title": "Facts by scope",
+          "description": "jarvis_mem0_points_by_scope — scope = mem0 user_id (jarvis = world memory, owner = Hampton, runs = agent-run scope once present).",
+          "gridPos": {"x": 10, "y": 1, "w": 7, "h": 9},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"expr": "sum by (scope) (jarvis_mem0_points_by_scope)", "legendFormat": "{{scope}}", "refId": "A"}],
+          "options": {"legend": {"showLegend": true, "displayMode": "list", "placement": "right", "values": ["value"]}, "pieType": "donut", "reduceOptions": {"calcs": ["lastNotNull"]}}
+        },
+        {
+          "id": 4,
+          "type": "bargauge",
+          "title": "Facts by project",
+          "description": "Per-project fact counts aggregated from jarvis_mem0_points by the `project` label (workload / db / none until a real project field grows).",
+          "gridPos": {"x": 17, "y": 1, "w": 7, "h": 9},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"expr": "sum by (project) (jarvis_mem0_points)", "legendFormat": "{{project}}", "refId": "A"}],
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "orientation": "horizontal", "displayMode": "gradient"},
+          "fieldConfig": {"defaults": {"unit": "short", "color": {"mode": "continuous-GrYlRd"}}}
+        },
+        {
+          "id": 5,
+          "type": "timeseries",
+          "title": "Memory growth — total facts over time",
+          "description": "jarvis_mem0_collection_points over the dashboard window. The slope is the rate at which JARVIS is learning.",
+          "gridPos": {"x": 0, "y": 6, "w": 10, "h": 4},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"expr": "max(jarvis_mem0_collection_points)", "legendFormat": "total facts", "refId": "A"}],
+          "fieldConfig": {"defaults": {"unit": "short", "custom": {"fillOpacity": 20, "lineWidth": 2, "drawStyle": "line"}, "color": {"mode": "fixed", "fixedColor": "blue"}}}
+        },
+        {
+          "type": "row",
+          "id": 101,
+          "title": "2 · Agent Runs (jarvis-runner Jobs)",
+          "gridPos": {"x": 0, "y": 10, "w": 24, "h": 1},
+          "collapsed": false
+        },
+        {
+          "id": 10,
+          "type": "stat",
+          "title": "Running",
+          "description": "jarvis-run-* Jobs with an active pod (kube_job_status_active).",
+          "gridPos": {"x": 0, "y": 11, "w": 4, "h": 5},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"expr": "sum(kube_job_status_active{namespace=\"ai\", job_name=~\"jarvis-run.*\"})", "instant": true, "refId": "A"}],
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "background"},
+          "fieldConfig": {"defaults": {"unit": "short", "color": {"mode": "fixed", "fixedColor": "blue"}}}
+        },
+        {
+          "id": 11,
+          "type": "stat",
+          "title": "Succeeded (total)",
+          "description": "Cumulative succeeded count across all jarvis-run-* Jobs still tracked by kube-state-metrics.",
+          "gridPos": {"x": 4, "y": 11, "w": 4, "h": 5},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"expr": "sum(kube_job_status_succeeded{namespace=\"ai\", job_name=~\"jarvis-run.*\"})", "instant": true, "refId": "A"}],
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "background"},
+          "fieldConfig": {"defaults": {"unit": "short", "color": {"mode": "fixed", "fixedColor": "green"}}}
+        },
+        {
+          "id": 12,
+          "type": "stat",
+          "title": "Failed (total)",
+          "description": "Cumulative failed pod count across all jarvis-run-* Jobs (kube_job_status_failed).",
+          "gridPos": {"x": 8, "y": 11, "w": 4, "h": 5},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"expr": "sum(kube_job_status_failed{namespace=\"ai\", job_name=~\"jarvis-run.*\"})", "instant": true, "refId": "A"}],
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "background"},
+          "fieldConfig": {"defaults": {"unit": "short", "thresholds": {"mode": "absolute", "steps": [{"color": "green"}, {"color": "red", "value": 1}]}, "color": {"mode": "thresholds"}}}
+        },
+        {
+          "id": 13,
+          "type": "timeseries",
+          "title": "Run starts vs completions",
+          "description": "Rate of jarvis-run Job start times vs completion times — divergence means runs are queueing or hanging.",
+          "gridPos": {"x": 12, "y": 11, "w": 12, "h": 5},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [
+            {"expr": "sum(changes(kube_job_status_start_time{namespace=\"ai\", job_name=~\"jarvis-run.*\"}[$__rate_interval]))", "legendFormat": "started", "refId": "A"},
+            {"expr": "sum(changes(kube_job_status_completion_time{namespace=\"ai\", job_name=~\"jarvis-run.*\"}[$__rate_interval]))", "legendFormat": "completed", "refId": "B"}
+          ],
+          "fieldConfig": {"defaults": {"unit": "short", "custom": {"fillOpacity": 15, "lineWidth": 2}}}
+        },
+        {
+          "id": 14,
+          "type": "table",
+          "title": "Recent jarvis-run Jobs",
+          "description": "One row per jarvis-run-* Job: status (active/succeeded/failed) and age. Sourced by joining kube_job_status_* on job_name. Age = now - start time.",
+          "gridPos": {"x": 0, "y": 16, "w": 24, "h": 10},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [
+            {"expr": "max by (job_name) (kube_job_status_active{namespace=\"ai\", job_name=~\"jarvis-run.*\"})", "format": "table", "instant": true, "refId": "active"},
+            {"expr": "max by (job_name) (kube_job_status_succeeded{namespace=\"ai\", job_name=~\"jarvis-run.*\"})", "format": "table", "instant": true, "refId": "succeeded"},
+            {"expr": "max by (job_name) (kube_job_status_failed{namespace=\"ai\", job_name=~\"jarvis-run.*\"})", "format": "table", "instant": true, "refId": "failed"},
+            {"expr": "max by (job_name) (time() - kube_job_status_start_time{namespace=\"ai\", job_name=~\"jarvis-run.*\"})", "format": "table", "instant": true, "refId": "age"}
+          ],
+          "transformations": [
+            {"id": "merge", "options": {}},
+            {"id": "organize", "options": {
+              "excludeByName": {"Time": true},
+              "renameByName": {
+                "job_name": "Run (Job)",
+                "Value #active": "Active",
+                "Value #succeeded": "Succeeded",
+                "Value #failed": "Failed",
+                "Value #age": "Age"
+              },
+              "indexByName": {"job_name": 0, "Value #active": 1, "Value #succeeded": 2, "Value #failed": 3, "Value #age": 4}
+            }},
+            {"id": "sortBy", "options": {"fields": "", "sort": [{"field": "Age", "desc": false}]}}
+          ],
+          "fieldConfig": {
+            "defaults": {"custom": {"align": "auto"}},
+            "overrides": [
+              {"matcher": {"id": "byName", "options": "Age"}, "properties": [{"id": "unit", "value": "s"}]},
+              {"matcher": {"id": "byName", "options": "Active"}, "properties": [{"id": "custom.cellOptions", "value": {"type": "color-text"}}, {"id": "thresholds", "value": {"mode": "absolute", "steps": [{"color": "text"}, {"color": "blue", "value": 1}]}}]},
+              {"matcher": {"id": "byName", "options": "Succeeded"}, "properties": [{"id": "custom.cellOptions", "value": {"type": "color-text"}}, {"id": "thresholds", "value": {"mode": "absolute", "steps": [{"color": "text"}, {"color": "green", "value": 1}]}}]},
+              {"matcher": {"id": "byName", "options": "Failed"}, "properties": [{"id": "custom.cellOptions", "value": {"type": "color-text"}}, {"id": "thresholds", "value": {"mode": "absolute", "steps": [{"color": "text"}, {"color": "red", "value": 1}]}}]}
+            ]
+          },
+          "options": {"showHeader": true, "footer": {"show": false}}
+        },
+        {
+          "type": "row",
+          "id": 102,
+          "title": "3 · Voice + Brain (edge jarvis_* metrics)",
+          "gridPos": {"x": 0, "y": 26, "w": 24, "h": 1},
+          "collapsed": false
+        },
+        {
+          "id": 20,
+          "type": "stat",
+          "title": "Turns / hr",
+          "description": "Voice turns processed, extrapolated to per-hour from the rate window (sum across outcome labels of jarvis_turns_total). Populates after the edge metrics rebuild.",
+          "gridPos": {"x": 0, "y": 27, "w": 5, "h": 5},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"expr": "sum(rate(jarvis_turns_total[$__rate_interval])) * 3600", "instant": true, "refId": "A"}],
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "background"},
+          "fieldConfig": {"defaults": {"unit": "short", "decimals": 1, "color": {"mode": "fixed", "fixedColor": "purple"}}}
+        },
+        {
+          "id": 21,
           "type": "timeseries",
           "title": "Per-turn duration — p50 / p95 / p99",
-          "description": "Full voice-turn wall clock from jarvis_turn_total_duration_seconds histogram.",
-          "gridPos": {"x": 6, "y": 1, "w": 12, "h": 9},
+          "description": "Full voice-turn wall clock from the jarvis_turn_total_duration_seconds histogram.",
+          "gridPos": {"x": 5, "y": 27, "w": 11, "h": 9},
           "datasource": {"type": "prometheus", "uid": "prometheus"},
           "targets": [
             {"expr": "histogram_quantile(0.50, sum by (le) (rate(jarvis_turn_total_duration_seconds_bucket[$__rate_interval])))", "legendFormat": "p50", "refId": "A"},
@@ -74,345 +247,152 @@ data:
           "fieldConfig": {"defaults": {"unit": "s", "custom": {"fillOpacity": 10, "lineWidth": 2}, "thresholds": {"mode": "absolute", "steps": [{"color": "green"}, {"color": "orange", "value": 3}, {"color": "red", "value": 5}]}}}
         },
         {
-          "id": 3,
+          "id": 22,
           "type": "stat",
-          "title": "Addressed vs ambient drops (1h)",
-          "description": "Split of jarvis_turns_total by outcome over the last hour. Addressed = handled, ambient_drop = filtered as background, echo_drop = TTS feedback.",
-          "gridPos": {"x": 18, "y": 1, "w": 6, "h": 5},
+          "title": "Addressed / ambient / echo (1h)",
+          "description": "Split of jarvis_turns_total by outcome over the last hour.",
+          "gridPos": {"x": 16, "y": 27, "w": 8, "h": 5},
           "datasource": {"type": "prometheus", "uid": "prometheus"},
           "targets": [
             {"expr": "sum(increase(jarvis_turns_total{addressed=\"true\"}[1h]))", "legendFormat": "addressed", "refId": "A"},
-            {"expr": "sum(increase(jarvis_turns_total{ambient_drop=\"true\"}[1h]))", "legendFormat": "ambient_drop", "refId": "B"},
-            {"expr": "sum(increase(jarvis_turns_total{echo_drop=\"true\"}[1h]))", "legendFormat": "echo_drop", "refId": "C"}
+            {"expr": "sum(increase(jarvis_turns_total{ambient_drop=\"true\"}[1h]))", "legendFormat": "ambient drop", "refId": "B"},
+            {"expr": "sum(increase(jarvis_turns_total{echo_drop=\"true\"}[1h]))", "legendFormat": "echo drop", "refId": "C"}
           ],
-          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "value"},
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "value", "orientation": "horizontal", "textMode": "value_and_name"},
           "fieldConfig": {"defaults": {"unit": "short"}}
         },
         {
-          "id": 4,
+          "id": 23,
           "type": "timeseries",
-          "title": "Stage averages — STT / brain / TTS / first-audio",
-          "description": "Mean duration per stage computed from histogram sum/count over rate windows. Stacked to show where per-turn budget goes.",
-          "gridPos": {"x": 0, "y": 6, "w": 18, "h": 8},
+          "title": "Stage latency (mean) — STT / brain / TTS / first-audio",
+          "description": "Mean duration per stage from histogram sum/count rate windows. Stacked to show where the per-turn budget goes.",
+          "gridPos": {"x": 0, "y": 32, "w": 11, "h": 8},
           "datasource": {"type": "prometheus", "uid": "prometheus"},
           "targets": [
             {"expr": "sum(rate(jarvis_stt_duration_seconds_sum[$__rate_interval])) / clamp_min(sum(rate(jarvis_stt_duration_seconds_count[$__rate_interval])), 1)", "legendFormat": "STT", "refId": "A"},
-            {"expr": "sum(rate(jarvis_brain_duration_seconds_sum[$__rate_interval])) / clamp_min(sum(rate(jarvis_brain_duration_seconds_count[$__rate_interval])), 1)", "legendFormat": "Brain", "refId": "B"},
-            {"expr": "sum(rate(jarvis_tts_segment_duration_seconds_sum[$__rate_interval])) / clamp_min(sum(rate(jarvis_tts_segment_duration_seconds_count[$__rate_interval])), 1)", "legendFormat": "TTS per segment", "refId": "C"},
+            {"expr": "sum(rate(jarvis_brain_duration_seconds_sum[$__rate_interval])) / clamp_min(sum(rate(jarvis_brain_duration_seconds_count[$__rate_interval])), 1)", "legendFormat": "Brain (Sonnet)", "refId": "B"},
+            {"expr": "sum(rate(jarvis_tts_segment_duration_seconds_sum[$__rate_interval])) / clamp_min(sum(rate(jarvis_tts_segment_duration_seconds_count[$__rate_interval])), 1)", "legendFormat": "TTS / segment", "refId": "C"},
             {"expr": "sum(rate(jarvis_sonos_first_audio_seconds_sum[$__rate_interval])) / clamp_min(sum(rate(jarvis_sonos_first_audio_seconds_count[$__rate_interval])), 1)", "legendFormat": "Sonos first-audio", "refId": "D"}
           ],
           "fieldConfig": {"defaults": {"unit": "s", "custom": {"fillOpacity": 30, "lineWidth": 1, "stacking": {"mode": "normal"}}}}
         },
         {
-          "id": 5,
+          "id": 24,
+          "type": "barchart",
+          "title": "Brain errors by reason (1h)",
+          "description": "jarvis_brain_errors_total by reason: no_credentials, timeout, nonzero_rc, empty_result, is_error, exception. This is the panel that exposes the runner/edge claude-auth class of failures.",
+          "gridPos": {"x": 11, "y": 32, "w": 7, "h": 8},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"expr": "sum by (reason) (increase(jarvis_brain_errors_total[1h]))", "legendFormat": "{{reason}}", "refId": "A"}],
+          "options": {"legend": {"showLegend": true, "displayMode": "list", "placement": "right"}, "orientation": "horizontal"},
+          "fieldConfig": {"defaults": {"unit": "short", "color": {"mode": "palette-classic"}}}
+        },
+        {
+          "id": 25,
           "type": "stat",
-          "title": "Echo + unknown-speaker drops (1h)",
-          "description": "Defensive drops — echo guard catches TTS feedback, unknown-speaker drops are voices that failed enrollment match.",
-          "gridPos": {"x": 18, "y": 6, "w": 6, "h": 8},
+          "title": "Speaker & echo drops (1h)",
+          "description": "jarvis_unknown_speaker_drops_total (voices that failed speaker-ID enrollment match — identity gate) and jarvis_echo_drops_total (TTS feedback caught by the echo guard).",
+          "gridPos": {"x": 18, "y": 32, "w": 6, "h": 8},
           "datasource": {"type": "prometheus", "uid": "prometheus"},
           "targets": [
-            {"expr": "sum(increase(jarvis_echo_drops_total[1h]))", "legendFormat": "echo drops", "refId": "A"},
-            {"expr": "sum(increase(jarvis_unknown_speaker_drops_total[1h]))", "legendFormat": "unknown speaker", "refId": "B"}
+            {"expr": "sum(increase(jarvis_unknown_speaker_drops_total[1h]))", "legendFormat": "unknown speaker", "refId": "A"},
+            {"expr": "sum(increase(jarvis_echo_drops_total[1h]))", "legendFormat": "echo", "refId": "B"}
           ],
-          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "value", "orientation": "vertical"},
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "value", "orientation": "vertical", "textMode": "value_and_name"},
           "fieldConfig": {"defaults": {"unit": "short", "color": {"mode": "fixed", "fixedColor": "orange"}}}
         },
         {
-          "type": "row",
-          "id": 101,
-          "title": "IG comment path",
-          "gridPos": {"x": 0, "y": 14, "w": 24, "h": 1},
-          "collapsed": false
-        },
-        {
-          "id": 10,
-          "type": "stat",
-          "title": "Comment replies (last 24h)",
-          "description": "Comment-tag replies sent by the IG comment consumer.",
-          "gridPos": {"x": 0, "y": 15, "w": 6, "h": 5},
-          "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "targets": [{
-            "expr": "sum(increase(jarvis_ig_comments_replied_total[24h]))",
-            "instant": true,
-            "refId": "A"
-          }],
-          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "background"},
-          "fieldConfig": {"defaults": {"unit": "short", "color": {"mode": "fixed", "fixedColor": "purple"}}}
-        },
-        {
-          "id": 11,
-          "type": "piechart",
-          "title": "DM consumer drop reasons (24h)",
-          "description": "Reasons DMs were dropped instead of replied to — unauthenticated, self, non-text, error.",
-          "gridPos": {"x": 6, "y": 15, "w": 6, "h": 9},
-          "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "targets": [{
-            "expr": "sum by (reason) (increase(jarvis_ig_consumer_drops_total[24h]))",
-            "legendFormat": "{{reason}}",
-            "refId": "A"
-          }],
-          "options": {"legend": {"showLegend": true, "displayMode": "list", "placement": "right"}, "pieType": "donut", "reduceOptions": {"calcs": ["lastNotNull"]}}
-        },
-        {
-          "id": 12,
-          "type": "timeseries",
-          "title": "DM enqueue vs replies — gap = drop rate",
-          "description": "Polling messages (DMs enqueued) vs consumer replies. Divergence indicates drops (see drop reasons panel).",
-          "gridPos": {"x": 12, "y": 15, "w": 12, "h": 9},
-          "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "targets": [
-            {"expr": "sum(rate(jarvis_ig_polling_messages_total[$__rate_interval]))", "legendFormat": "enqueued (polling)", "refId": "A"},
-            {"expr": "sum(rate(jarvis_ig_consumer_replies_total[$__rate_interval]))", "legendFormat": "replied (consumer)", "refId": "B"}
-          ],
-          "fieldConfig": {"defaults": {"unit": "ops", "custom": {"fillOpacity": 10, "lineWidth": 2}}}
-        },
-        {
-          "id": 13,
-          "type": "stat",
-          "title": "Authenticated vs unauthenticated comment replies (24h)",
-          "description": "Split of jarvis_ig_comments_replied_total by authentication state.",
-          "gridPos": {"x": 0, "y": 20, "w": 6, "h": 4},
-          "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "targets": [
-            {"expr": "sum(increase(jarvis_ig_comments_replied_total{authenticated=\"true\"}[24h]))", "legendFormat": "authenticated", "refId": "A"},
-            {"expr": "sum(increase(jarvis_ig_comments_replied_total{authenticated=\"false\"}[24h]))", "legendFormat": "unauthenticated", "refId": "B"}
-          ],
-          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "value", "orientation": "horizontal"},
-          "fieldConfig": {"defaults": {"unit": "short"}}
-        },
-        {
-          "type": "row",
-          "id": 102,
-          "title": "IG DM path",
-          "gridPos": {"x": 0, "y": 24, "w": 24, "h": 1},
-          "collapsed": false
-        },
-        {
-          "id": 20,
-          "type": "stat",
-          "title": "DMs received (last 1h)",
-          "description": "DMs enqueued from polling cycles in the last hour.",
-          "gridPos": {"x": 0, "y": 25, "w": 6, "h": 5},
-          "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "targets": [{
-            "expr": "sum(increase(jarvis_ig_polling_messages_total[1h]))",
-            "instant": true,
-            "refId": "A"
-          }],
-          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "background"},
-          "fieldConfig": {"defaults": {"unit": "short", "color": {"mode": "fixed", "fixedColor": "purple"}}}
-        },
-        {
-          "id": 21,
-          "type": "timeseries",
-          "title": "DM poll cycles by outcome",
-          "description": "Rate of polling cycles broken down by outcome label (success / empty / error).",
-          "gridPos": {"x": 6, "y": 25, "w": 12, "h": 8},
-          "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "targets": [{
-            "expr": "sum by (outcome) (rate(jarvis_ig_polling_cycles_total[$__rate_interval]))",
-            "legendFormat": "{{outcome}}",
-            "refId": "A"
-          }],
-          "fieldConfig": {"defaults": {"unit": "ops", "custom": {"fillOpacity": 20, "lineWidth": 1, "stacking": {"mode": "normal"}}}}
-        },
-        {
-          "id": 22,
-          "type": "bargauge",
-          "title": "DM polling errors by reason (1h)",
-          "description": "Count of polling errors grouped by reason label.",
-          "gridPos": {"x": 18, "y": 25, "w": 6, "h": 8},
-          "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "targets": [{
-            "expr": "sum by (reason) (increase(jarvis_ig_polling_errors_total[1h]))",
-            "legendFormat": "{{reason}}",
-            "refId": "A"
-          }],
-          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "orientation": "horizontal", "displayMode": "gradient"},
-          "fieldConfig": {"defaults": {"unit": "short", "color": {"mode": "fixed", "fixedColor": "red"}}}
+          "id": 26,
+          "type": "text",
+          "title": "Tool-call breakdown — not edge-sourced",
+          "description": "There is no edge-side tool-call counter. Tool/agent work is observable via the Agent Runs section (kube_job_*).",
+          "gridPos": {"x": 0, "y": 40, "w": 24, "h": 3},
+          "options": {
+            "mode": "markdown",
+            "content": "**Tool-call breakdown:** the edge exposes no per-tool counter (`jarvis_brain_errors_total{reason}` is the only brain-side breakdown). Agent tool execution runs as cluster Jobs — see the **Agent Runs** section above for run-level tool activity. Wire a `jarvis_tool_calls_total{tool}` counter in `edge.py` to populate a real per-tool panel here."
+          }
         },
         {
           "type": "row",
           "id": 103,
-          "title": "Brain health",
-          "gridPos": {"x": 0, "y": 33, "w": 24, "h": 1},
+          "title": "4 · Cluster / Project Health",
+          "gridPos": {"x": 0, "y": 43, "w": 24, "h": 1},
           "collapsed": false
         },
         {
           "id": 30,
           "type": "stat",
-          "title": "Brain errors (last 1h)",
-          "description": "Total claude CLI errors across all reasons in the last hour.",
-          "gridPos": {"x": 0, "y": 34, "w": 6, "h": 5},
+          "title": "Nodes Ready",
+          "description": "Nodes with Ready=true vs total (kube_node_status_condition / kube_node_info).",
+          "gridPos": {"x": 0, "y": 44, "w": 4, "h": 5},
           "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "targets": [{
-            "expr": "sum(increase(jarvis_brain_errors_total[1h]))",
-            "instant": true,
-            "refId": "A"
-          }],
-          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "background"},
-          "fieldConfig": {"defaults": {"unit": "short", "thresholds": {"mode": "absolute", "steps": [{"color": "green"}, {"color": "orange", "value": 1}, {"color": "red", "value": 10}]}, "color": {"mode": "thresholds"}}}
-        },
-        {
-          "id": 31,
-          "type": "barchart",
-          "title": "Brain errors by reason (1h)",
-          "description": "jarvis_brain_errors_total grouped by reason label — typical reasons: timeout, parse, exit_code, exception.",
-          "gridPos": {"x": 6, "y": 34, "w": 12, "h": 8},
-          "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "targets": [{
-            "expr": "sum by (reason) (increase(jarvis_brain_errors_total[1h]))",
-            "legendFormat": "{{reason}}",
-            "refId": "A"
-          }],
-          "options": {"legend": {"showLegend": true, "displayMode": "list", "placement": "right"}, "orientation": "horizontal", "xTickLabelRotation": 0},
-          "fieldConfig": {"defaults": {"unit": "short", "color": {"mode": "palette-classic"}}}
-        },
-        {
-          "id": 32,
-          "type": "text",
-          "title": "TODO — Local brain fallback rate",
-          "description": "Placeholder until jarvis_local_brain_fallbacks_total counter is wired.",
-          "gridPos": {"x": 18, "y": 34, "w": 6, "h": 8},
-          "options": {
-            "mode": "markdown",
-            "content": "## TODO\n\nWire `jarvis_local_brain_fallbacks_total` counter in `edge.py` to track how often the brain falls back from cloud claude to a local model.\n\nOnce wired, replace this panel with:\n```\nsum(rate(jarvis_local_brain_fallbacks_total[$__rate_interval]))\n  /\nclamp_min(sum(rate(jarvis_brain_duration_seconds_count[$__rate_interval])), 1)\n```\n\nDisplayed as a percent ratio."
-          }
-        },
-        {
-          "type": "row",
-          "id": 104,
-          "title": "Media + song-id",
-          "gridPos": {"x": 0, "y": 42, "w": 24, "h": 1},
-          "collapsed": false
-        },
-        {
-          "id": 40,
-          "type": "stat",
-          "title": "Reels downloaded (24h)",
-          "description": "DM-shared reels saved successfully in the last 24h (result=\"ok\").",
-          "gridPos": {"x": 0, "y": 43, "w": 6, "h": 5},
-          "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "targets": [{
-            "expr": "sum(increase(jarvis_ig_media_downloads_total{result=\"ok\"}[24h]))",
-            "instant": true,
-            "refId": "A"
-          }],
-          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "background"},
-          "fieldConfig": {"defaults": {"unit": "short", "color": {"mode": "fixed", "fixedColor": "blue"}}}
-        },
-        {
-          "id": 41,
-          "type": "stat",
-          "title": "Songs identified (24h)",
-          "description": "Shazam fingerprint hits in the last 24h.",
-          "gridPos": {"x": 6, "y": 43, "w": 6, "h": 5},
-          "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "targets": [{
-            "expr": "sum(increase(jarvis_ig_song_id_total{result=\"hit\"}[24h]))",
-            "instant": true,
-            "refId": "A"
-          }],
-          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "background"},
+          "targets": [
+            {"expr": "sum(kube_node_status_condition{condition=\"Ready\", status=\"true\"})", "legendFormat": "ready", "instant": true, "refId": "A"},
+            {"expr": "count(kube_node_info)", "legendFormat": "total", "instant": true, "refId": "B"}
+          ],
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "value", "orientation": "horizontal", "textMode": "value_and_name"},
           "fieldConfig": {"defaults": {"unit": "short", "color": {"mode": "fixed", "fixedColor": "green"}}}
         },
         {
-          "id": 42,
-          "type": "piechart",
-          "title": "Song-id outcomes (24h)",
-          "description": "Distribution of jarvis_ig_song_id_total result labels — hit / miss / error.",
-          "gridPos": {"x": 12, "y": 43, "w": 6, "h": 9},
-          "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "targets": [{
-            "expr": "sum by (result) (increase(jarvis_ig_song_id_total[24h]))",
-            "legendFormat": "{{result}}",
-            "refId": "A"
-          }],
-          "options": {"legend": {"showLegend": true, "displayMode": "list", "placement": "right"}, "pieType": "donut", "reduceOptions": {"calcs": ["lastNotNull"]}}
-        },
-        {
-          "id": 43,
-          "type": "timeseries",
-          "title": "Media downloads by type + result",
-          "description": "Rate of jarvis_ig_media_downloads_total split by media_type and result.",
-          "gridPos": {"x": 18, "y": 43, "w": 6, "h": 9},
-          "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "targets": [{
-            "expr": "sum by (media_type, result) (rate(jarvis_ig_media_downloads_total[$__rate_interval]))",
-            "legendFormat": "{{media_type}} / {{result}}",
-            "refId": "A"
-          }],
-          "fieldConfig": {"defaults": {"unit": "ops", "custom": {"fillOpacity": 20, "lineWidth": 1}}}
-        },
-        {
-          "id": 44,
+          "id": 31,
           "type": "stat",
-          "title": "Webhook signature failures (24h)",
-          "description": "Webhook events that failed Meta signature verification. Currently inert (webhook not active) but wired for when it goes live.",
-          "gridPos": {"x": 0, "y": 48, "w": 6, "h": 4},
+          "title": "Pods not ready",
+          "description": "Running pods whose Ready condition is false (kube_pod_status_ready{condition=\"true\"}==0 over running pods).",
+          "gridPos": {"x": 4, "y": 44, "w": 4, "h": 5},
           "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "targets": [{
-            "expr": "sum(increase(jarvis_ig_webhook_signature_failures_total[24h]))",
-            "instant": true,
-            "refId": "A"
-          }],
+          "targets": [{"expr": "count(kube_pod_status_ready{condition=\"true\"} == 0) or vector(0)", "instant": true, "refId": "A"}],
           "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "background"},
-          "fieldConfig": {"defaults": {"unit": "short", "thresholds": {"mode": "absolute", "steps": [{"color": "green"}, {"color": "red", "value": 1}]}, "color": {"mode": "thresholds"}}}
+          "fieldConfig": {"defaults": {"unit": "short", "thresholds": {"mode": "absolute", "steps": [{"color": "green"}, {"color": "orange", "value": 1}, {"color": "red", "value": 5}]}, "color": {"mode": "thresholds"}}}
         },
         {
-          "id": 45,
-          "type": "timeseries",
-          "title": "Webhook events by type + status",
-          "description": "jarvis_ig_webhook_events_total split by event type and processing status. Inert until webhook is live.",
-          "gridPos": {"x": 6, "y": 48, "w": 6, "h": 4},
+          "id": 32,
+          "type": "stat",
+          "title": "GPU util (nixos-gpu)",
+          "description": "DCGM_FI_DEV_GPU_UTIL for the RTX 3070 — JARVIS's STT/TTS and the agent-run Jobs share this GPU.",
+          "gridPos": {"x": 8, "y": 44, "w": 4, "h": 5},
           "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "targets": [{
-            "expr": "sum by (type, status) (rate(jarvis_ig_webhook_events_total[$__rate_interval]))",
-            "legendFormat": "{{type}} / {{status}}",
-            "refId": "A"
-          }],
-          "fieldConfig": {"defaults": {"unit": "ops", "custom": {"fillOpacity": 10, "lineWidth": 1}}}
+          "targets": [{"expr": "max(DCGM_FI_DEV_GPU_UTIL)", "instant": true, "refId": "A"}],
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "background"},
+          "fieldConfig": {"defaults": {"unit": "percent", "min": 0, "max": 100, "thresholds": {"mode": "absolute", "steps": [{"color": "green"}, {"color": "orange", "value": 70}, {"color": "red", "value": 95}]}, "color": {"mode": "thresholds"}}}
         },
         {
-          "type": "row",
-          "id": 105,
-          "title": "Tempo trace search",
-          "gridPos": {"x": 0, "y": 52, "w": 24, "h": 1},
-          "collapsed": false
+          "id": 33,
+          "type": "timeseries",
+          "title": "GPU memory used + temperature",
+          "description": "DCGM_FI_DEV_FB_USED (MiB) and DCGM_FI_DEV_GPU_TEMP (°C) for the shared GPU.",
+          "gridPos": {"x": 12, "y": 44, "w": 12, "h": 9},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [
+            {"expr": "max(DCGM_FI_DEV_FB_USED)", "legendFormat": "FB used (MiB)", "refId": "A"},
+            {"expr": "max(DCGM_FI_DEV_GPU_TEMP)", "legendFormat": "temp (°C)", "refId": "B"}
+          ],
+          "fieldConfig": {
+            "defaults": {"custom": {"fillOpacity": 10, "lineWidth": 2}},
+            "overrides": [
+              {"matcher": {"id": "byName", "options": "FB used (MiB)"}, "properties": [{"id": "unit", "value": "decmbytes"}]},
+              {"matcher": {"id": "byName", "options": "temp (°C)"}, "properties": [{"id": "unit", "value": "celsius"}, {"id": "custom.axisPlacement", "value": "right"}]}
+            ]
+          }
         },
         {
-          "id": 50,
-          "type": "table",
-          "title": "Recent jarvis.turn traces",
-          "description": "TraceQL search for the most recent voice-turn root spans. Click a row to open the trace in Tempo.",
-          "gridPos": {"x": 0, "y": 53, "w": 12, "h": 10},
-          "datasource": {"type": "tempo", "uid": "tempo"},
-          "targets": [{
-            "refId": "A",
-            "queryType": "traceqlSearch",
-            "filters": [
-              {"id": "span-name", "tag": "name", "operator": "=", "scope": "span", "value": ["jarvis.turn"], "valueType": "string"}
-            ],
-            "limit": 20,
-            "tableType": "traces"
-          }]
+          "id": 34,
+          "type": "timeseries",
+          "title": "Node load (1m)",
+          "description": "node_load1 per node — quick read on cluster pressure.",
+          "gridPos": {"x": 0, "y": 49, "w": 12, "h": 8},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"expr": "node_load1", "legendFormat": "{{instance}}", "refId": "A"}],
+          "fieldConfig": {"defaults": {"unit": "short", "custom": {"fillOpacity": 5, "lineWidth": 1}}}
         },
         {
-          "id": 51,
-          "type": "table",
-          "title": "Recent jarvis.ig.comment.reply traces",
-          "description": "TraceQL search for the most recent IG comment-reply spans.",
-          "gridPos": {"x": 12, "y": 53, "w": 12, "h": 10},
-          "datasource": {"type": "tempo", "uid": "tempo"},
-          "targets": [{
-            "refId": "A",
-            "queryType": "traceqlSearch",
-            "filters": [
-              {"id": "span-name", "tag": "name", "operator": "=", "scope": "span", "value": ["jarvis.ig.comment.reply"], "valueType": "string"}
-            ],
-            "limit": 20,
-            "tableType": "traces"
-          }]
+          "id": 35,
+          "type": "timeseries",
+          "title": "Key JARVIS workloads — ready pods (ns ai)",
+          "description": "Ready pod count per workload in the ai namespace (jarvis-stack edge, mem0, qdrant, mem0-exporter). 0 = workload down.",
+          "gridPos": {"x": 12, "y": 53, "w": 12, "h": 4},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"expr": "count by (pod) (kube_pod_status_ready{namespace=\"ai\", condition=\"true\"} == 1 and on (pod, namespace) (kube_pod_labels{namespace=\"ai\"}))", "legendFormat": "{{pod}}", "refId": "A"}],
+          "fieldConfig": {"defaults": {"unit": "short", "custom": {"fillOpacity": 10, "lineWidth": 1, "drawStyle": "bars"}}}
         }
       ]
     }

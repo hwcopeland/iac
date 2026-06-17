@@ -121,70 +121,114 @@ except Exception as _otel_exc:  # noqa: BLE001
 
 # Prometheus metrics. Histograms in seconds (Prom convention). Buckets tuned
 # for voice-assistant timings (sub-100ms STT chunks up to multi-second turns).
+#
+# IDEMPOTENT REGISTRATION — edge.py runs as __main__ (CMD ["python","-u","edge.py"]),
+# so it lives in sys.modules as "__main__", NOT "edge". At runtime several
+# sub-modules (jarvis_ig_consumer, jarvis_discord, jarvis_song_id,
+# jarvis_reel_context, …) do `import edge as _edge`. Because "edge" is absent
+# from sys.modules, Python imports edge.py a SECOND time under the name "edge",
+# re-executing this whole module — including this metrics block. Re-creating a
+# collector whose name already lives in the default REGISTRY raises
+# "ValueError: Duplicated timeseries in CollectorRegistry: jarvis_stt_..." which
+# the broad `except` below swallowed by replacing EVERY metric with a NoopMetric
+# → ALL jarvis_* metrics silently disabled. Fix: look up the existing collector
+# by name and reuse it instead of constructing a duplicate, so a second import
+# is a no-op and metrics keep exporting once.
 try:
     from prometheus_client import (
         Counter as _PromCounter,
         Histogram as _PromHistogram,
         start_http_server as _prom_start_http_server,
     )
+    from prometheus_client import REGISTRY as _PROM_REGISTRY
+
+    def _metric(_ctor, _name, *args, **kwargs):
+        """Create a collector, or reuse the one already in the default registry.
+
+        prometheus_client maps each timeseries name to its registered collector
+        in REGISTRY._names_to_collectors. On a second import of edge.py we find
+        the existing collector there and return it rather than raising on a
+        duplicate. Idempotent across any number of re-imports.
+        """
+        existing = getattr(_PROM_REGISTRY, "_names_to_collectors", {}).get(_name)
+        if existing is not None:
+            return existing
+        return _ctor(_name, *args, **kwargs)
+
     _DUR_BUCKETS = (0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 3.0, 5.0, 8.0, 13.0, 21.0)
-    METRIC_STT_DURATION = _PromHistogram(
+    METRIC_STT_DURATION = _metric(
+        _PromHistogram,
         "jarvis_stt_duration_seconds",
         "Whisper STT round-trip duration",
         buckets=_DUR_BUCKETS,
     )
-    METRIC_BRAIN_DURATION = _PromHistogram(
+    METRIC_BRAIN_DURATION = _metric(
+        _PromHistogram,
         "jarvis_brain_duration_seconds",
         "Brain (claude/echo/shortcut) response duration",
         buckets=_DUR_BUCKETS,
     )
-    METRIC_TTS_SEGMENT_DURATION = _PromHistogram(
+    METRIC_TTS_SEGMENT_DURATION = _metric(
+        _PromHistogram,
         "jarvis_tts_segment_duration_seconds",
         "Chatterbox TTS synthesis per segment",
         buckets=_DUR_BUCKETS,
     )
-    METRIC_SONOS_FIRST_AUDIO = _PromHistogram(
+    METRIC_SONOS_FIRST_AUDIO = _metric(
+        _PromHistogram,
         "jarvis_sonos_first_audio_seconds",
         "Time from stream start to Sonos first audio playing",
         buckets=_DUR_BUCKETS,
     )
-    METRIC_TURN_TOTAL_DURATION = _PromHistogram(
+    METRIC_TURN_TOTAL_DURATION = _metric(
+        _PromHistogram,
         "jarvis_turn_total_duration_seconds",
         "Full per-turn wall-clock: speech_start → stream_done",
         buckets=_DUR_BUCKETS,
     )
-    METRIC_TURNS_TOTAL = _PromCounter(
+    METRIC_TURNS_TOTAL = _metric(
+        _PromCounter,
         "jarvis_turns_total",
         "Per-turn outcomes",
         ["addressed", "ambient_drop", "echo_drop"],
     )
-    METRIC_ECHO_DROPS = _PromCounter(
+    METRIC_ECHO_DROPS = _metric(
+        _PromCounter,
         "jarvis_echo_drops_total",
         "Utterances dropped as JARVIS-self-echo",
     )
-    METRIC_UNKNOWN_SPEAKER_DROPS = _PromCounter(
+    METRIC_UNKNOWN_SPEAKER_DROPS = _metric(
+        _PromCounter,
         "jarvis_unknown_speaker_drops_total",
         "Utterances dropped because speaker did not match an enrolled voice",
     )
-    METRIC_BRAIN_ERRORS = _PromCounter(
+    METRIC_BRAIN_ERRORS = _metric(
+        _PromCounter,
         "jarvis_brain_errors_total",
         "Brain failures by reason",
         ["reason"],
     )
-    METRIC_IG_EVENTS = _PromCounter(
+    METRIC_IG_EVENTS = _metric(
+        _PromCounter,
         "jarvis_ig_webhook_events_total",
         "IG webhook events",
         ["type", "status"],
     )
-    METRIC_IG_SIG_FAILURES = _PromCounter(
+    METRIC_IG_SIG_FAILURES = _metric(
+        _PromCounter,
         "jarvis_ig_webhook_signature_failures_total",
         "IG webhook HMAC signature failures",
     )
-    try:
-        _prom_start_http_server(_PROM_PORT)
-        print(f"prometheus: /metrics on 0.0.0.0:{_PROM_PORT}")
-    except OSError as _prom_exc:
-        print(f"prometheus: port {_PROM_PORT} busy ({_prom_exc}) — metrics endpoint disabled")
+    # Only the FIRST execution (the __main__ process) should bind the HTTP
+    # server. A re-import under the name "edge" must never try to bind :9090
+    # again — that would either collide or, worse, be swallowed and look like a
+    # failure. Guard on __name__ so exactly one server starts per process.
+    if __name__ == "__main__":
+        try:
+            _prom_start_http_server(_PROM_PORT)
+            print(f"prometheus: /metrics on 0.0.0.0:{_PROM_PORT}")
+        except OSError as _prom_exc:
+            print(f"prometheus: port {_PROM_PORT} busy ({_prom_exc}) — metrics endpoint disabled")
 except Exception as _prom_exc:  # noqa: BLE001
     print(f"prometheus: client unavailable ({_prom_exc!r}) — metrics disabled")
 
