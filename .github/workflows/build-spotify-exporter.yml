@@ -121,15 +121,15 @@ jobs:
           # ── Genre enrichment (MusicBrainz) — schema migration + CronJob ──
           # Apply the idempotent schema migrations (each block is guarded and
           # short-circuits once its version is recorded). The Job's pod template
-          # is immutable, so it's named -migrate-003 (current head); delete any
+          # is immutable, so it's named -migrate-004 (current head); delete any
           # prior instance so a re-apply after editing the migration SQL doesn't
           # hit the immutable error, then wait for it before the CronJob runs.
           cd ../spotify-postgres
-          /tmp/kubectl -n monitor delete job spotify-postgres-migrate-002 --ignore-not-found
           /tmp/kubectl -n monitor delete job spotify-postgres-migrate-003 --ignore-not-found
+          /tmp/kubectl -n monitor delete job spotify-postgres-migrate-004 --ignore-not-found
           /tmp/kubectl apply -f migration.yaml
           /tmp/kubectl -n monitor wait --for=condition=complete \
-            job/spotify-postgres-migrate-003 --timeout=180s
+            job/spotify-postgres-migrate-004 --timeout=180s
           # MusicBrainz enrichment CronJob (no API key — runs immediately).
           /tmp/kubectl apply -f cronjob-enrich.yaml
           # Kick one run now so the first enrichment doesn't wait up to an hour.

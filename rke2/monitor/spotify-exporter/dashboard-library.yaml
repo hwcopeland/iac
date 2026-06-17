@@ -26,9 +26,9 @@ data:
       "uid": "spotify-library",
       "title": "Spotify — Library",
       "schemaVersion": 38,
-      "version": 2,
+      "version": 3,
       "refresh": "1h",
-      "time": { "from": "now-1y", "to": "now" },
+      "time": { "from": "2024-09-01T00:00:00.000Z", "to": "now" },
       "tags": ["spotify", "music", "library"],
       "templating": {
         "list": [
@@ -89,7 +89,7 @@ data:
         {
           "id": 10, "type": "text", "title": "Note on genre classification",
           "gridPos": { "x": 0, "y": 16, "w": 24, "h": 3 },
-          "options": { "mode": "markdown", "content": "Genres here are the **fine sub-genres** themselves (e.g. *yacht rock*, *neurofunk*, *permanent wave*) — NOT coarse \"rock\"/\"pop\" buckets, which are meaningless across decades. Tags come from the `track_genre_effective` view: the de-duped **union** of Spotify artist genres **and** MusicBrainz genres/folksonomy tags. Older catalog music that Spotify leaves `untagged` is filled by the hourly MusicBrainz enrichment CronJob — the Coverage panels below track how much previously-untagged old music now has sub-genres. The optional parent grouping (from `genre_rollup`) is used only for drill-down, never to replace a sub-genre." }
+          "options": { "mode": "markdown", "content": "Genres here are the **fine sub-genres** themselves (e.g. *yacht rock*, *neurofunk*, *permanent wave*) — NOT coarse \"rock\"/\"pop\" buckets, which are meaningless across decades. Tags come from the `track_genre_effective` view: the de-duped **union** of Spotify artist genres **and** MusicBrainz genres/folksonomy tags. Older catalog music that Spotify leaves `untagged` is filled by the hourly MusicBrainz enrichment CronJob — the Coverage panels below track how much previously-untagged old music now has sub-genres. The optional parent grouping (from the keyword `genre_parent()` classifier, with `genre_rollup` overrides) is used only for drill-down, never to replace a sub-genre." }
         },
         {
           "id": 13, "type": "stat", "title": "Sub-genre coverage % of saved library (≥1 fine sub-genre)",
