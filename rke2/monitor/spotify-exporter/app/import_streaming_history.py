@@ -37,10 +37,18 @@ What the GDPR export DOES and does NOT give us
   * ms_played: present -> stored on play_events.ms_played. This is the column the
     live /recently-played feed CANNOT provide, so the backfill is what unlocks
     skip-rate / completion-rate analysis.
-  * skipped / reason_end: the export has these per play, but play_events has no
-    column for them. We DERIVE a conservative `ms_played` (already in the export)
-    and leave skip classification to the dashboards, which can threshold on
-    ms_played vs tracks.duration_ms (e.g. played < 30s or < 50% of duration = skip).
+  * Rich behavioural fields (skipped, reason_start, reason_end, shuffle,
+    platform, conn_country, offline, incognito_mode): these live ONLY in the
+    GDPR export — /recently-played cannot supply them. Schema migration 003 adds
+    matching columns to play_events, and this importer writes them via
+    DB.backfill_play (ON CONFLICT (played_at, track_id) DO UPDATE SET ...), so a
+    re-run BACKFILLS the columns onto rows already inserted by a prior run or by
+    the live writer, not just fresh inserts. Future live /recently-played rows
+    leave these NULL — that is expected. They power the "Spotify — Listening
+    Behavior" dashboard (skip rate, completion rate, intent, shuffle %, device
+    split) and the geo travel trail. Spotify's own `skipped` boolean is stored
+    verbatim (authoritative); dashboards do not need to re-derive it from
+    ms_played vs duration.
   * artist / album: the export gives only NAMES, not Spotify IDs. tracks.artist_id
     and tracks.album_id are FKs to artists(artist_id)/albums(album_id) keyed by
     Spotify ID, which we don't have here. We therefore leave them NULL and let the
@@ -135,6 +143,30 @@ def import_path(path: str) -> tuple[int, int, int]:
             if not isinstance(ms_played, int):
                 ms_played = None
 
+            # Rich behavioural fields — present ONLY in the GDPR export, NOT in
+            # /recently-played. These unlock skip-rate, completion-rate, intent
+            # (reason_start/end), shuffle %, device split and the geo travel
+            # trail. Stay liberal about types; leave NULL when absent so the
+            # backfill never writes a spurious False over a real value.
+            # NOTE: `skipped` is already the non-track loop counter above, so the
+            # export's skipped field is read into `skipped_field`.
+            def _b(key: str) -> Optional[bool]:
+                v = rec.get(key)
+                return v if isinstance(v, bool) else None
+
+            def _s(key: str) -> Optional[str]:
+                v = rec.get(key)
+                return v if isinstance(v, str) and v else None
+
+            skipped_field = _b("skipped")
+            reason_start = _s("reason_start")
+            reason_end = _s("reason_end")
+            shuffle = _b("shuffle")
+            platform = _s("platform")
+            conn_country = _s("conn_country")
+            offline = _b("offline")
+            incognito_mode = _b("incognito_mode")
+
             # Dimension: store the track NAME so name-joined panels work even
             # before the API enrichment links artist_id/album_id. artist_id and
             # album_id are NULL here (the export has names only, not IDs).
@@ -149,11 +181,25 @@ def import_path(path: str) -> tuple[int, int, int]:
                 )
                 upserted_tracks.add(track_id)
 
-            # Fact: one play. ON CONFLICT (played_at, track_id) DO NOTHING makes
-            # this idempotent and safe next to the live /recently-played writer.
-            # ms_played from the export is the value /recently-played can't give,
-            # so this is what makes skip/completion analysis possible.
-            if DB.insert_play(ts, track_id, ms_played):
+            # Fact: one play. backfill_play uses ON CONFLICT (played_at,
+            # track_id) DO UPDATE SET, so re-running this importer BACKFILLS the
+            # rich columns onto rows already inserted by a prior run or the live
+            # /recently-played writer — not just fresh inserts. COALESCE on the
+            # UPDATE means a NULL export field never erases an existing value.
+            # `inserted` counts only NEW rows; backfilled rows count as updates.
+            if DB.backfill_play(
+                ts,
+                track_id,
+                ms_played,
+                skipped=skipped_field,
+                reason_start=reason_start,
+                reason_end=reason_end,
+                shuffle=shuffle,
+                platform=platform,
+                conn_country=conn_country,
+                offline=offline,
+                incognito_mode=incognito_mode,
+            ):
                 inserted += 1
                 file_inserted += 1
 

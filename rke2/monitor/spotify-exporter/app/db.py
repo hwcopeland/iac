@@ -274,6 +274,71 @@ class DB:
         )
         return len(rows) > 0
 
+    def backfill_play(
+        self,
+        played_at: str,
+        track_id: str,
+        ms_played: Optional[int] = None,
+        *,
+        skipped: Optional[bool] = None,
+        reason_start: Optional[str] = None,
+        reason_end: Optional[str] = None,
+        shuffle: Optional[bool] = None,
+        platform: Optional[str] = None,
+        conn_country: Optional[str] = None,
+        offline: Optional[bool] = None,
+        incognito_mode: Optional[bool] = None,
+    ) -> bool:
+        """Insert/backfill one play WITH the rich GDPR-export fields.
+
+        Unlike the live `insert_play` (DO NOTHING — used by /recently-played,
+        which carries none of these columns), this is the one-time GDPR-export
+        importer's writer. It uses ON CONFLICT (played_at, track_id) DO UPDATE so
+        re-running the import BACKFILLS the rich columns onto rows that were
+        already inserted (by a prior import run or by the live exporter), not
+        just brand-new inserts.
+
+        The rich fields (skipped/reason_start/reason_end/shuffle/platform/
+        conn_country/offline/incognito_mode) exist ONLY in Spotify's "Extended
+        Streaming History" export — the live /recently-played feed cannot supply
+        them, so future live rows leave them NULL. COALESCE on UPDATE keeps any
+        value already present (export is authoritative here, but COALESCE means a
+        NULL in the export never erases a value), and ms_played is likewise only
+        overwritten when the export provides one.
+
+        Returns True if a NEW row was inserted (vs. an UPDATE/backfill of an
+        existing row), so the caller can report fresh inserts separately.
+        """
+        if not played_at or not track_id:
+            return False
+        rows = self._query(
+            """
+            INSERT INTO play_events (
+                played_at, track_id, ms_played,
+                skipped, reason_start, reason_end, shuffle,
+                platform, conn_country, offline, incognito_mode
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (played_at, track_id) DO UPDATE SET
+                ms_played      = COALESCE(EXCLUDED.ms_played,      play_events.ms_played),
+                skipped        = COALESCE(EXCLUDED.skipped,        play_events.skipped),
+                reason_start   = COALESCE(EXCLUDED.reason_start,   play_events.reason_start),
+                reason_end     = COALESCE(EXCLUDED.reason_end,     play_events.reason_end),
+                shuffle        = COALESCE(EXCLUDED.shuffle,        play_events.shuffle),
+                platform       = COALESCE(EXCLUDED.platform,       play_events.platform),
+                conn_country   = COALESCE(EXCLUDED.conn_country,   play_events.conn_country),
+                offline        = COALESCE(EXCLUDED.offline,        play_events.offline),
+                incognito_mode = COALESCE(EXCLUDED.incognito_mode, play_events.incognito_mode)
+            RETURNING (xmax = 0) AS inserted
+            """,
+            (
+                played_at, track_id, ms_played,
+                skipped, reason_start, reason_end, shuffle,
+                platform, conn_country, offline, incognito_mode,
+            ),
+        )
+        return bool(rows and rows[0].get("inserted"))
+
     # ── library snapshot diff ────────────────────────────────────────────────
     def current_saved_track_ids(self) -> set[str]:
         """track_ids currently saved (removed_at IS NULL)."""

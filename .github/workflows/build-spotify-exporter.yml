@@ -109,6 +109,9 @@ jobs:
           # was dropped — /audio-features is 403 (revisit when AudioMuse lands).
           /tmp/kubectl apply -f dashboard-listening.yaml
           /tmp/kubectl apply -f dashboard-library.yaml
+          # Behavioural analytics (skip/intent/bingeing/genre rivalry) — reads
+          # the rich GDPR-export columns added in schema migration 003.
+          /tmp/kubectl apply -f dashboard-behavior.yaml
 
           # Pin to the immutable sha tag and wait for rollout.
           /tmp/kubectl -n monitor set image deployment/spotify-exporter \
@@ -116,16 +119,17 @@ jobs:
           /tmp/kubectl -n monitor rollout status deployment/spotify-exporter --timeout=180s
 
           # ── Genre enrichment (MusicBrainz) — schema migration + CronJob ──
-          # Apply the idempotent schema migration (002 is guarded; short-circuits
-          # if version 2 is already recorded). The Job's pod template is
-          # immutable, so it's named -migrate-002; delete any prior instance so
-          # a re-apply after editing the migration SQL doesn't hit the immutable
-          # error, then wait for it to complete before the CronJob runs.
+          # Apply the idempotent schema migrations (each block is guarded and
+          # short-circuits once its version is recorded). The Job's pod template
+          # is immutable, so it's named -migrate-003 (current head); delete any
+          # prior instance so a re-apply after editing the migration SQL doesn't
+          # hit the immutable error, then wait for it before the CronJob runs.
           cd ../spotify-postgres
           /tmp/kubectl -n monitor delete job spotify-postgres-migrate-002 --ignore-not-found
+          /tmp/kubectl -n monitor delete job spotify-postgres-migrate-003 --ignore-not-found
           /tmp/kubectl apply -f migration.yaml
           /tmp/kubectl -n monitor wait --for=condition=complete \
-            job/spotify-postgres-migrate-002 --timeout=180s
+            job/spotify-postgres-migrate-003 --timeout=180s
           # MusicBrainz enrichment CronJob (no API key — runs immediately).
           /tmp/kubectl apply -f cronjob-enrich.yaml
           # Kick one run now so the first enrichment doesn't wait up to an hour.
