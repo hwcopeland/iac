@@ -461,6 +461,20 @@ Tools:
   Do NOT store transient chatter (weather, the time, small talk).
 - For longer / multi-step tasks use mcp__jarvis_delegate__delegate to
   spawn a sub-agent claude session.
+- CLUSTER RUNS (long-running, fire-and-forget). When sir asks for a
+  LONG-RUNNING task he wants done even if his laptop closes ("go figure
+  out why X is broken and let me know", "investigate Y and report back",
+  "spend a while digging into Z"), use mcp__jarvis_runner__launch_run.
+  This creates a tracked cluster-side job that survives the laptop closing
+  and ANNOUNCES its result on the speakers when done.
+  PROPOSE FIRST, THEN ACT: do NOT call launch_run on sir's first request.
+  First say one short line — "I'll launch a cluster run to <X> in
+  <read|apply> mode, sir. Confirm?" — and only call launch_run AFTER sir
+  explicitly confirms on a following turn. Default to mode="read"
+  (read-only investigation). Only pass mode="apply" when sir explicitly
+  said make / apply / fix / deploy / commit. Use
+  mcp__jarvis_runner__list_runs / run_status to answer "what's running" /
+  "did that finish" / "what did that run find".
 - WebSearch / WebFetch for live external facts.
 - For "volume up/down" / "louder/quieter" / "set the volume to X" /
   "mute" / "pause the music" / "what's playing": use the
@@ -525,6 +539,19 @@ def _write_mcp_config() -> None:
             "jarvis_overview": {
                 "command": "python3",
                 "args": ["/app/jarvis_overview_mcp.py"],
+            },
+            # Cluster-side agent runner (charter roadmap #2). launch_run
+            # creates a TRACKED, INDEPENDENT k8s Job that survives the laptop
+            # closing; list_runs/run_status read its status from the k8s API.
+            # This server is in EVERY brain's MCP config, but launch_run is
+            # only ADDED TO THE ALLOWLIST for the OWNER paths (see
+            # _OWNER_ALLOWED_TOOLS) — TRUSTED/UNKNOWN/open-mode brains cannot
+            # reach it. launch_run uses the jarvis-runner SA token (mounted
+            # via JARVIS_RUNNER_TOKEN_PATH) to create the Job; the always-on
+            # edge SA (jarvis-readonly) gains NO Job-create privilege.
+            "jarvis_runner": {
+                "command": "python3",
+                "args": ["/app/jarvis_runner_mcp.py"],
             },
         }
     }
@@ -741,6 +768,23 @@ _RO_ALLOWED_TOOLS = " ".join([
 ])
 
 
+# OWNER-ONLY allowlist = the read-only toolbox PLUS the cluster-side agent
+# runner (charter roadmap #2). launch_run creates a tracked, independent
+# k8s Job that survives the laptop closing; list_runs/run_status track it.
+# This is wired ONLY into the OWNER brain paths (the warm session and the
+# cold owner subprocess when mem_scope=="owner") — TRUSTED, UNKNOWN,
+# open-mode, and Discord brains use _RO_ALLOWED_TOOLS and therefore PHYSICALLY
+# cannot launch a run. launch_run is additionally propose-then-confirm gated
+# (the model proposes first; the owner confirms on a following turn), per
+# charter principle 3 — but the allowlist split is the real security boundary.
+_OWNER_ALLOWED_TOOLS = " ".join([
+    _RO_ALLOWED_TOOLS,
+    "mcp__jarvis_runner__launch_run",
+    "mcp__jarvis_runner__list_runs",
+    "mcp__jarvis_runner__run_status",
+])
+
+
 _DISCORD_PERSONA_SYSTEM = """You are JARVIS, the Iron Man AI butler. The owner is sir (he/him), known elsewhere as Hampton — but to other people in chat you NEVER refer to him as "Hampton" by name in third person. To others he is "sir", "the boss", "my user", or just "he"/"him". Voice that as if you'd actually be embarrassed to broadcast his name. This conversation is happening in a Discord text channel — output is read with eyes, not ears.
 
 You CAN also be triggered by a handful of other allowed users (their request will be labelled "@username's request:" instead of "sir's request:"). Treat those as peer requesters — polite-equal, not deferential. Address them by their @ when responding. "Sir" stays reserved for the owner only.
@@ -900,12 +944,16 @@ def _claude_brain(text: str, timeout: float = 60.0, mem_scope: str = "") -> str:
     # mem_scope is empty (open mode) no env override is passed and memory is
     # simply unavailable for the turn, which is the intended owner-safe default.
     _env = {**os.environ, "JARVIS_MEM_SCOPE": mem_scope} if mem_scope else None
+    # OWNER cold turns (mem_scope=="owner", the warm-brain-disabled fallback)
+    # get the runner tools; open-mode/other scopes stay read-only. The warm
+    # session is the usual owner path — this keeps the cold fallback at parity.
+    _allowed = _OWNER_ALLOWED_TOOLS if mem_scope == "owner" else _RO_ALLOWED_TOOLS
     try:
         proc = _sp.run(
             ["claude", "-p", user_text,
              "--append-system-prompt", persona_prompt,
              "--mcp-config", _MCP_CONFIG_PATH,
-             "--allowed-tools", _RO_ALLOWED_TOOLS,
+             "--allowed-tools", _allowed,
              "--model", "sonnet",
              "--max-turns", "6",
              "--output-format", "json"],
@@ -1058,7 +1106,10 @@ class _WarmBrain:
                 "--verbose",
                 "--append-system-prompt", _PERSONA_SYSTEM,
                 "--mcp-config", _MCP_CONFIG_PATH,
-                "--allowed-tools", _RO_ALLOWED_TOOLS,
+                # OWNER warm session: gets the runner tools (launch_run etc).
+                # This path is OWNER-only (mem_scope=="owner") by construction
+                # in brain_respond, so only the owner can ever reach launch_run.
+                "--allowed-tools", _OWNER_ALLOWED_TOOLS,
                 "--model", "sonnet"]
         argv += ["--resume", self._sid] if resume else ["--session-id", self._sid]
         env = {**os.environ, "JARVIS_MEM_SCOPE": "owner"}
@@ -1162,6 +1213,15 @@ class _WarmBrain:
 
 _warm_brain = None
 _warm_brain_lock = threading.Lock()
+
+# Shared speaking lock: serializes Sonos output between the mic loop and the
+# run-announce daemon (charter roadmap #2) so a completion announcement never
+# interleaves mid-sentence with a live owner turn. The mic loop acquires it
+# around its _stream_on_sonos calls; jarvis_run_announce acquires it before
+# speaking a finished-run result. A re-entrant lock would let a single thread
+# double-acquire harmlessly, but a plain Lock is correct here since each
+# speaker holds it for exactly one stream.
+_speak_lock = threading.Lock()
 
 
 def _get_warm_brain() -> "_WarmBrain":
@@ -2394,6 +2454,24 @@ def main() -> None:
         except Exception as exc:
             print(f"discord: failed to start — {exc}")
 
+    # Cluster-run completion announcer (charter roadmap #2). Polls k8s for
+    # finished runner Jobs and speaks the result on Sonos via _stream_on_sonos,
+    # serialized against the mic loop by _speak_lock. FAIL-OPEN — import or
+    # start failure must NOT take down the voice loop, exactly like the IG /
+    # Discord subsystems above. No-op until launch_run has produced a Job.
+    if os.environ.get("RUN_ANNOUNCE_ENABLED", "1") == "1":
+        try:
+            import jarvis_run_announce
+            jarvis_run_announce.start_announce_thread(
+                sonos=sonos, host_ip=host_ip,
+                http_port=EDGE_ADVERTISED_PORT,
+                stream_fn=_stream_on_sonos, stash=stash,
+                speak_lock=_speak_lock,
+            )
+            print("run announce: thread started")
+        except Exception as exc:
+            print(f"run announce: failed to start — {exc}")
+
     try:
         import torch  # noqa: F401
         from silero_vad import load_silero_vad, VADIterator
@@ -2568,8 +2646,9 @@ def main() -> None:
                                 _sents = _split_sentences(id_reply)
                                 if _sents:
                                     try:
-                                        _stream_on_sonos(sonos, _sents, host_ip,
-                                                         EDGE_ADVERTISED_PORT, turn_n, stash)
+                                        with _speak_lock:
+                                            _stream_on_sonos(sonos, _sents, host_ip,
+                                                             EDGE_ADVERTISED_PORT, turn_n, stash)
                                         engaged_until = time.time() + ADDRESSEE_WINDOW
                                     except Exception as exc:
                                         print(f"  sonos stream error: {exc}")
@@ -2634,8 +2713,12 @@ def main() -> None:
                     turn_span.set_attribute("segment_count", len(sentences))
                     print(f"  streaming {len(sentences)} segment(s)")
                     try:
-                        _stream_on_sonos(sonos, sentences, host_ip,
-                                         EDGE_ADVERTISED_PORT, turn_n, stash)
+                        # Hold the shared speaking lock so a run-announce
+                        # completion can't interleave mid-sentence with this
+                        # live owner turn (charter roadmap #2).
+                        with _speak_lock:
+                            _stream_on_sonos(sonos, sentences, host_ip,
+                                             EDGE_ADVERTISED_PORT, turn_n, stash)
                         engaged_until = time.time() + ADDRESSEE_WINDOW
                     except Exception as exc:
                         print(f"  sonos stream error: {exc}")

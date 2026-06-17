@@ -1,0 +1,176 @@
+# ─────────────────────────────────────────────────────────────────────────
+# JARVIS cluster-side agent RUN — parametrized k8s Job template.
+#
+# Charter roadmap #2 (agent control-plane). One voice-initiated long-running
+# task = one Job = one tracked run. The Job's .status (Active/Succeeded/Failed)
+# IS the authoritative run registry (see runner/jarvis_runner_entrypoint.py);
+# mem0 user_id="runs" holds only the narratable result blurb.
+#
+# launch_run (jarvis_runner_mcp.py) creates this via the in-cluster k8s API,
+# substituting the __PLACEHOLDER__ tokens below. This file is the canonical
+# source and the thing you `kubectl apply --dry-run` to validate the shape.
+#
+# Substitution tokens (launch_run fills these in):
+#   __RUN_ID__       run id, e.g. r17181234abcd  (must be a valid label value)
+#   __TASK__         task text for claude -p (JSON-escaped into env value)
+#   __TASK_TRUNC__   <=63-char task summary for the annotation
+#   __MODE__         read | apply
+#   __BUDGET_USD__   claude --max-budget-usd cap (default 3)
+#   __CREATED_AT__   RFC3339 timestamp
+#
+# Manual-apply namespace (ai) — NOT Flux. launch_run POSTs this to
+# /apis/batch/v1/namespaces/ai/jobs using the jarvis-runner SA token.
+# ─────────────────────────────────────────────────────────────────────────
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: jarvis-run-__RUN_ID__
+  namespace: ai
+  labels:
+    app: jarvis-runner          # list_runs / announce loop select on this
+    jarvis-run: __RUN_ID__      # run_status selects the single Job on this
+  annotations:
+    jarvis.run/task: "__TASK_TRUNC__"
+    jarvis.run/mode: "__MODE__"
+    jarvis.run/requested-by: owner
+    jarvis.run/created-at: "__CREATED_AT__"
+spec:
+  # No silent retries — a possibly-mutating (apply-mode) task must not be
+  # re-run on failure. Read-mode runs are cheap enough to relaunch by voice.
+  backoffLimit: 0
+  # Hard wall-clock cap: a run that overshoots is killed and shows Failed
+  # (DeadlineExceeded) so the announce loop reports it rather than hanging.
+  activeDeadlineSeconds: 3600
+  # Keep the finished Job around 24h so the announce loop + run_status can
+  # read terminal status/result before k8s reaps it.
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app: jarvis-runner
+        jarvis-run: __RUN_ID__
+    spec:
+      restartPolicy: Never
+      # Must land on nixos-gpu (same node as the creds/image and the
+      # in-cluster Services). We request NO GPU (claude is network-bound),
+      # so this never starves whisper-stt / chatterbox-tts even though it
+      # co-locates. nodeAffinity (not just nodeSelector) so the intent is
+      # explicit and survives label-key churn.
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: gpu
+                    operator: In
+                    values: ["rtx3070"]
+      tolerations:
+        - key: gpu
+          operator: Equal
+          value: "true"
+          effect: NoSchedule
+      imagePullSecrets:
+        - name: zot-pull-secret
+      # Read-only SA: the run reaches mem0/whisper/etc over the network and
+      # reads k8s via the same `view` binding the edge has. Job-CREATE power
+      # lives ONLY in launch_run's caller, never in the run itself. Apply-mode
+      # writes happen via `git push` to the jarvis branch (delegate's model),
+      # NOT via this SA — so a compromised run can't mutate the cluster.
+      serviceAccountName: jarvis-runner
+      initContainers:
+        # Seed claude subscription OAuth creds into a FRESH emptyDir (NOT the
+        # edge's jarvis-state PVC subPath) so a run never races the edge's
+        # in-pod OAuth-refresh writes. The seeded token is valid for the run's
+        # lifetime (<=1h via activeDeadlineSeconds). Mirrors the deployment's
+        # claude-creds-init pattern.
+        - name: claude-creds-init
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              install -m 0600 /src/claude_credentials.json /dst/.credentials.json
+              chown 1000:100 /dst/.credentials.json || true
+              echo "claude creds: seeded into run emptyDir"
+          securityContext:
+            runAsUser: 0
+            runAsGroup: 0
+          volumeMounts:
+            - name: claude-creds-src
+              mountPath: /src
+              readOnly: true
+            - name: claude-home
+              mountPath: /dst
+      containers:
+        - name: runner
+          image: zot.hwcopeland.net/ai/jarvis-edge:latest
+          imagePullPolicy: Always
+          command: ["python", "-u", "/app/runner/jarvis_runner_entrypoint.py"]
+          securityContext:
+            runAsUser: 1000
+            runAsGroup: 100
+          env:
+            - name: RUNNER_RUN_ID
+              value: "__RUN_ID__"
+            - name: RUNNER_TASK
+              value: "__TASK__"
+            - name: RUNNER_MODE
+              value: "__MODE__"
+            - name: RUNNER_BUDGET_USD
+              value: "__BUDGET_USD__"
+            - name: RUNNER_WORKDIR
+              value: "/tmp/iac"
+            # mem0 "runs" scope is set by the Job, NOT overridable by claude
+            # (preserves the mem0 partition invariant — world="jarvis",
+            # owner="owner", runs="runs").
+            - name: JARVIS_MEM_SCOPE
+              value: "runs"
+            - name: MEM0_URL
+              value: "http://jarvis-mem0.ai.svc.cluster.local:8800"
+            - name: RUNNER_MCP_CONFIG
+              value: "/app/runner/runner_mcp_config.json"
+            - name: RESULT_ANNOTATION_FILE
+              value: "/tmp/jarvis-run-result.txt"
+            # HOME=/tmp so the seeded ~/.claude/.credentials.json and the
+            # config.toml mount resolve, identical to the edge container.
+            - name: HOME
+              value: "/tmp"
+            # No ANTHROPIC_API_KEY — subscription (Claude Max) mode; the
+            # entrypoint also pops it defensively.
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "512Mi"
+            limits:
+              cpu: "2"
+              memory: "2Gi"
+          volumeMounts:
+            # config.toml + spotify tokens, read-only, same as the edge.
+            - name: jarvis-config
+              mountPath: /tmp/.openjarvis
+              readOnly: true
+            # Seeded claude creds (fresh per-run emptyDir, never the PVC).
+            - name: claude-home
+              mountPath: /tmp/.claude
+      volumes:
+        - name: jarvis-config
+          secret:
+            secretName: jarvis-secrets
+            items:
+              - key: config.toml
+                path: config.toml
+                mode: 0444
+              - key: spotify_tokens.json
+                path: spotify_tokens.json
+                mode: 0444
+        - name: claude-creds-src
+          secret:
+            secretName: jarvis-secrets
+            items:
+              - key: claude_credentials.json
+                path: claude_credentials.json
+                mode: 0444
+        # Fresh per-run creds dir — isolates the run from the edge's live
+        # OAuth-refresh writes (the creds-race mitigation).
+        - name: claude-home
+          emptyDir: {}

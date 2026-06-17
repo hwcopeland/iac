@@ -22,7 +22,14 @@ COPY jarvis_personal.py jarvis_personal_mcp.py \
      jarvis_ig_cooldown.py \
      jarvis_local_brain.py \
      jarvis_discord.py \
+     jarvis_runner_mcp.py \
+     jarvis_run_announce.py \
      /app/
+# Cluster-side agent runner (charter roadmap #2): the Job entrypoint +
+# its narrowed MCP config. launch_run creates a Job whose container runs
+# `python -u runner/jarvis_runner_entrypoint.py` from WORKDIR /app.
+COPY runner/jarvis_runner_entrypoint.py runner/runner_mcp_config.json \
+     /app/runner/
 
 ENV EDGE_HTTP_PORT=8088 \
     VOICE_REF=/app/jarvis_voice.wav

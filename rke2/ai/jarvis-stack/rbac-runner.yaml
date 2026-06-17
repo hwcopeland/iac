@@ -1,0 +1,84 @@
+---
+# RBAC for the cluster-side JARVIS agent-runner (charter roadmap #2).
+#
+# Design decision (the "RBAC widening" risk in the spec): the always-on
+# voice pod's default ServiceAccount `jarvis-readonly` must NOT gain
+# Job-create — that would be a privilege-escalation surface on the
+# always-listening mic pod. Instead, a SEPARATE narrowly-scoped SA owns
+# the Job-create capability:
+#
+#   * jarvis-runner SA — can create/get/list/watch/delete Jobs (and read
+#     the Pods/logs they spawn) ONLY in namespace `ai`. The launch_run MCP
+#     tool uses THIS SA's token to POST the Job; the runner Job pods also
+#     run AS this SA. Nothing here grants apply/scale/delete on workloads,
+#     secrets, or any cluster-wide read — mutating runs do their writes via
+#     `git push` on the jarvis branch (matching delegate's model), gated by
+#     the runner's claude tool-scope, not by this SA.
+#
+# Namespaced (Role, not ClusterRole): the runner only ever touches ns `ai`.
+#
+# Apply: kubectl apply -f rbac-runner.yaml   (ai ns is manual, not Flux)
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: jarvis-runner
+  namespace: ai
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: jarvis-runner
+  namespace: ai
+rules:
+  # Create + track the runner Jobs. No verbs on Deployments/StatefulSets/
+  # Services/Secrets — this SA cannot mutate running workloads.
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["create", "get", "list", "watch", "delete"]
+  # Read the Pods (and their logs) that the Jobs spawn — for diagnosing a
+  # failed run. Read-only; no create/delete/exec on pods.
+  - apiGroups: [""]
+    resources: ["pods", "pods/log"]
+    verbs: ["get", "list", "watch"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: jarvis-runner
+  namespace: ai
+subjects:
+  - kind: ServiceAccount
+    name: jarvis-runner
+    namespace: ai
+roleRef:
+  kind: Role
+  name: jarvis-runner
+  apiGroup: rbac.authorization.k8s.io
+
+---
+# Additive binding: the always-on edge pod runs as `jarvis-readonly`, and
+# launch_run (the jarvis_runner MCP tool) creates the runner Job using the
+# edge pod's projected SA token. Rather than projecting a second SA token
+# into the pod (TokenRequest can't impersonate another SA), we grant the
+# edge's existing SA the SAME narrow jarvis-runner Role — create/get/list/
+# watch/delete jobs + read pods in ns `ai`, and NOTHING else. This is the
+# conservative additive-role option (vs. switching the pod's
+# serviceAccountName): the edge keeps `jarvis-readonly` and gains ONLY the
+# Job-create capability, which is gated upstream in gate_and_respond so
+# only OWNER-confirmed turns can reach launch_run. No mutate on
+# Deployments/Services/Secrets is granted.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: jarvis-runner-edge
+  namespace: ai
+subjects:
+  - kind: ServiceAccount
+    name: jarvis-readonly
+    namespace: ai
+roleRef:
+  kind: Role
+  name: jarvis-runner
+  apiGroup: rbac.authorization.k8s.io
