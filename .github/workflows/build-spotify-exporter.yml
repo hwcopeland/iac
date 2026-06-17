@@ -100,26 +100,16 @@ jobs:
           /tmp/kubectl apply -f external-secret.yaml
           /tmp/kubectl apply -f zot-pull-secret.yaml
           /tmp/kubectl apply -f deployment.yaml
-          /tmp/kubectl apply -f dashboard.yaml
-          # Postgres-backed analytics dashboards (Spotify folder). These read
-          # the Postgres datasource (uid "spotify-postgres") registered by
-          # @data-engineer. Consolidated from the prior 4 dashboards into 2:
-          # "Spotify — Listening" (play-event analytics) and
-          # "Spotify — Library" (saved-library analytics). The vibe-proxy view
-          # was dropped — /audio-features is 403 (revisit when AudioMuse lands).
+          # EXACTLY two Postgres-backed analytics dashboards (Spotify folder).
+          # Both read the Postgres datasource (uid "spotify-postgres") registered
+          # by @data-engineer; live Now-Playing panels use the in-cluster
+          # Prometheus datasource (uid "prometheus"). Everything about listening
+          # (overview, top/loyalty, when, behavior, where, taste — in collapsible
+          # rows) lives on "Spotify — Listening"; saved-collection analytics live
+          # on "Spotify — Library". The prior spotify-overview/behavior/sessions/
+          # taste/wrapped boards were folded in and deleted (no dup panels).
           /tmp/kubectl apply -f dashboard-listening.yaml
           /tmp/kubectl apply -f dashboard-library.yaml
-          # Behavioural analytics (skip/intent/bingeing/genre rivalry) — reads
-          # the rich GDPR-export columns added in schema migration 003.
-          /tmp/kubectl apply -f dashboard-behavior.yaml
-          # Sessions & Rhythm (WHEN you listen): listening clock, 30-min-gap
-          # session detection, biggest days, on-repeat timeline, late-night split.
-          /tmp/kubectl apply -f dashboard-sessions.yaml
-          # Taste Evolution: genre mix over time, discovery timeline, 2024-vs-2026,
-          # eclecticism (distinct parent genres + Shannon entropy per month).
-          /tmp/kubectl apply -f dashboard-taste.yaml
-          # Wrapped (any period): picker-driven headline + top tracks/artists/genres.
-          /tmp/kubectl apply -f dashboard-wrapped.yaml
 
           # Pin to the immutable sha tag and wait for rollout.
           /tmp/kubectl -n monitor set image deployment/spotify-exporter \
