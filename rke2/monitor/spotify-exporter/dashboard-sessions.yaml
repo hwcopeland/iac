@@ -26,7 +26,7 @@ data:
       "uid": "spotify-sessions",
       "title": "Spotify — Sessions & Rhythm",
       "schemaVersion": 38,
-      "version": 1,
+      "version": 2,
       "refresh": "1h",
       "time": { "from": "2024-09-01T00:00:00.000Z", "to": "now" },
       "tags": ["spotify", "music", "sessions", "rhythm"],
@@ -34,7 +34,7 @@ data:
         {
           "id": 1, "type": "text", "title": "About",
           "gridPos": { "x": 0, "y": 0, "w": 24, "h": 3 },
-          "options": { "mode": "markdown", "content": "**When** you listen, not what. A *session* is a run of plays with no gap longer than **30 minutes** (detected with a `LAG(played_at)` window over the 54k-row history). The on-repeat timeline counts **distinct-second** plays — same-second skims share a `(played_at, track_id)` primary key and were collapsed at GDPR import (~0.2% of plays), so a true 100+ replay day reads as its distinct-second count. Hours are derived from `ms_played` (Extended Streaming History only)." }
+          "options": { "mode": "markdown", "content": "**When** you listen, not what. A *session* is a run of plays with no gap longer than **30 minutes** (detected with a `LAG(played_at)` window over the 54k-row history). Hours are derived from `ms_played` (Extended Streaming History only). Biggest-days and on-repeat leaderboards live on the [Behavior](/d/spotify-listening-behavior) board." }
         },
 
         { "id": 9, "type": "row", "title": "Listening clock", "gridPos": { "x": 0, "y": 3, "w": 24, "h": 1 } },
@@ -108,28 +108,7 @@ data:
           "options": { "legend": { "showLegend": false }, "tooltip": { "mode": "single" } }
         },
 
-        { "id": 29, "type": "row", "title": "Biggest days & repeats", "gridPos": { "x": 0, "y": 28, "w": 24, "h": 1 } },
-        {
-          "id": 30, "type": "table", "title": "Biggest listening days (by hours)",
-          "gridPos": { "x": 0, "y": 29, "w": 12, "h": 10 },
-          "datasource": { "type": "postgres", "uid": "spotify-postgres" },
-          "targets": [ { "refId": "A", "format": "table", "rawSql":
-            "SELECT played_at::date AS day, round((sum(ms_played)/3600000.0)::numeric, 1) AS hours, count(*) AS plays FROM play_events WHERE ms_played IS NOT NULL AND $__timeFilter(played_at) GROUP BY 1 ORDER BY hours DESC LIMIT 20" } ],
-          "fieldConfig": { "defaults": { "custom": { "align": "auto" } }, "overrides": [ { "matcher": { "id": "byName", "options": "hours" }, "properties": [ { "id": "unit", "value": "h" }, { "id": "custom.cellOptions", "value": { "type": "gauge", "mode": "gradient" } }, { "id": "max", "value": 17 } ] } ] },
-          "options": { "showHeader": true, "sortBy": [ { "displayName": "hours", "desc": true } ] }
-        },
-        {
-          "id": 31, "type": "table", "title": "On-repeat timeline — (track, day, count) events",
-          "gridPos": { "x": 12, "y": 29, "w": 12, "h": 10 },
-          "datasource": { "type": "postgres", "uid": "spotify-postgres" },
-          "description": "Days a single track was played many times. Counts are distinct-second plays (same-second skims collapse on the (played_at, track_id) PK — ~0.2% of plays), so a real 100x-replay day reads slightly lower.",
-          "targets": [ { "refId": "A", "format": "table", "rawSql":
-            "SELECT pe.played_at::date AS day, COALESCE(t.name, pe.track_id) AS track, count(*) AS plays FROM play_events pe LEFT JOIN tracks t ON t.track_id = pe.track_id WHERE $__timeFilter(pe.played_at) GROUP BY 1, 2 HAVING count(*) >= 6 ORDER BY plays DESC, day DESC LIMIT 25" } ],
-          "fieldConfig": { "defaults": { "custom": { "align": "auto" } }, "overrides": [ { "matcher": { "id": "byName", "options": "plays" }, "properties": [ { "id": "custom.cellOptions", "value": { "type": "gauge", "mode": "gradient" } }, { "id": "max", "value": 20 } ] } ] },
-          "options": { "showHeader": true, "sortBy": [ { "displayName": "plays", "desc": true } ] }
-        },
-
-        { "id": 39, "type": "row", "title": "Late-night vs daytime", "gridPos": { "x": 0, "y": 39, "w": 24, "h": 1 } },
+        { "id": 39, "type": "row", "title": "Late-night vs daytime", "gridPos": { "x": 0, "y": 28, "w": 24, "h": 1 } },
         {
           "id": 40, "type": "piechart", "title": "Late-night (22:00–05:59) vs daytime split — plays",
           "gridPos": { "x": 0, "y": 40, "w": 8, "h": 8 },

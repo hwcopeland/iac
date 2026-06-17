@@ -26,7 +26,7 @@ data:
       "uid": "spotify-wrapped",
       "title": "Spotify — Wrapped (any period)",
       "schemaVersion": 38,
-      "version": 1,
+      "version": 2,
       "refresh": "",
       "time": { "from": "now-1y", "to": "now" },
       "tags": ["spotify", "music", "wrapped"],
@@ -60,9 +60,9 @@ data:
           "id": 12, "type": "stat", "title": "Distinct artists",
           "gridPos": { "x": 8, "y": 4, "w": 4, "h": 5 },
           "datasource": { "type": "postgres", "uid": "spotify-postgres" },
-          "description": "Distinct artists with a linked Spotify ID played in the window.",
+          "description": "Distinct artists played in the window (COALESCE linked name, GDPR artist_name).",
           "targets": [ { "refId": "A", "format": "table", "rawSql":
-            "SELECT count(DISTINCT t.artist_id) AS artists FROM play_events pe JOIN tracks t ON t.track_id = pe.track_id WHERE t.artist_id IS NOT NULL AND $__timeFilter(pe.played_at)" } ],
+            "SELECT count(DISTINCT COALESCE(a.name, t.artist_name)) AS artists FROM play_events pe JOIN tracks t ON t.track_id = pe.track_id LEFT JOIN artists a ON a.artist_id = t.artist_id WHERE COALESCE(a.name, t.artist_name) IS NOT NULL AND $__timeFilter(pe.played_at)" } ],
           "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "fixed", "fixedColor": "purple" } } },
           "options": { "colorMode": "background", "reduceOptions": { "calcs": ["lastNotNull"] } }
         },
@@ -88,9 +88,9 @@ data:
           "id": 15, "type": "stat", "title": "New artists discovered",
           "gridPos": { "x": 20, "y": 4, "w": 4, "h": 5 },
           "datasource": { "type": "postgres", "uid": "spotify-postgres" },
-          "description": "Artists whose FIRST-ever play falls inside the window (linked artist_id only).",
+          "description": "Artists whose FIRST-ever play falls inside the window (COALESCE linked name, GDPR artist_name).",
           "targets": [ { "refId": "A", "format": "table", "rawSql":
-            "WITH firsts AS (SELECT t.artist_id, min(pe.played_at) AS first_play FROM play_events pe JOIN tracks t ON t.track_id = pe.track_id WHERE t.artist_id IS NOT NULL GROUP BY t.artist_id) SELECT count(*) AS new_artists FROM firsts WHERE $__timeFilter(first_play)" } ],
+            "WITH firsts AS (SELECT COALESCE(a.name, t.artist_name) AS artist_key, min(pe.played_at) AS first_play FROM play_events pe JOIN tracks t ON t.track_id = pe.track_id LEFT JOIN artists a ON a.artist_id = t.artist_id WHERE COALESCE(a.name, t.artist_name) IS NOT NULL GROUP BY COALESCE(a.name, t.artist_name)) SELECT count(*) AS new_artists FROM firsts WHERE $__timeFilter(first_play)" } ],
           "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "fixed", "fixedColor": "green" } } },
           "options": { "colorMode": "background", "reduceOptions": { "calcs": ["lastNotNull"] } }
         },
