@@ -1,0 +1,122 @@
+# Grafana dashboard: Spotify — Taste Evolution (Wave 3).
+# How taste shifts over time: parent-genre mix month-over-month, a discovery
+# timeline (new artists per month), a 2024-vs-2026 side-by-side, and an
+# eclecticism trend (distinct parent genres + Shannon entropy per month).
+#
+# Datasource: Postgres uid "spotify-postgres". ALL genre aggregation uses
+# genre_parent() with PER-PLAY dedup (DISTINCT played_at, track_id, parent
+# before counting) — a play tagged with several sub-genres of the same parent
+# counts once for that parent. NO unnest fan-out (the PR #65 double-count bug).
+# A play may count toward >1 distinct parent (e.g. Electronic AND DnB); that is
+# intended for a *mix* view and noted on the panel.
+#
+# Discovery / artist panels need a linked artist_id — GDPR name-only rows
+# (artist_id NULL) are excluded and flagged. Time defaults to 2024-09-01 -> now.
+#
+# Loaded by the kube-prometheus Grafana sidecar (label grafana_dashboard="1"),
+# placed in the "Spotify" folder. Explicit top-level uid (spotify-taste-evolution).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-spotify-taste
+  namespace: monitor
+  labels:
+    grafana_dashboard: "1"
+  annotations:
+    grafana_folder: "Spotify"
+data:
+  spotify-taste.json: |-
+    {
+      "uid": "spotify-taste-evolution",
+      "title": "Spotify — Taste Evolution",
+      "schemaVersion": 38,
+      "version": 1,
+      "refresh": "1h",
+      "time": { "from": "2024-09-01T00:00:00.000Z", "to": "now" },
+      "tags": ["spotify", "music", "taste", "discovery"],
+      "panels": [
+        {
+          "id": 1, "type": "text", "title": "About",
+          "gridPos": { "x": 0, "y": 0, "w": 24, "h": 3 },
+          "options": { "mode": "markdown", "content": "How your taste shifts. Genres are the keyword `genre_parent()` rollup with **per-play dedup** (a play tagged with several sub-genres of one parent counts once for that parent — no `unnest` fan-out). A single play can still count toward more than one *distinct* parent (e.g. Electronic **and** DnB), which is what makes the genre-mix a true share-of-attention. **Discovery** and the artist comparison need a linked `artist_id`; ~20% of plays are GDPR name-only rows (no Spotify ID) and are excluded there — coverage fills in as enrichment drains." }
+        },
+
+        { "id": 9, "type": "row", "title": "Genre mix over time", "gridPos": { "x": 0, "y": 3, "w": 24, "h": 1 } },
+        {
+          "id": 10, "type": "timeseries", "title": "Parent-genre share by month (% of deduped plays)",
+          "gridPos": { "x": 0, "y": 4, "w": 24, "h": 11 },
+          "datasource": { "type": "postgres", "uid": "spotify-postgres" },
+          "description": "Stacked monthly share of each parent genre (per-play deduped). Shares can sum > 100% because a play can carry several parents; read it as relative attention, not a strict partition.",
+          "targets": [ { "refId": "A", "format": "time_series", "rawSql":
+            "WITH play_parent AS (SELECT DISTINCT pe.played_at, pe.track_id, genre_parent(lower(g.raw)) AS parent FROM play_events pe JOIN tracks t ON t.track_id = pe.track_id LEFT JOIN artists a ON a.artist_id = t.artist_id LEFT JOIN LATERAL unnest(COALESCE(a.genres, ARRAY[]::text[])) AS g(raw) ON true WHERE $__timeFilter(pe.played_at)), m AS (SELECT date_trunc('month', played_at) AS mon, parent, count(*) AS n FROM play_parent WHERE parent IS NOT NULL GROUP BY 1, 2), tot AS (SELECT date_trunc('month', played_at) AS mon, count(DISTINCT (played_at, track_id)) AS t FROM play_parent WHERE parent IS NOT NULL GROUP BY 1) SELECT m.mon AS time, m.parent AS metric, round((100.0 * m.n / NULLIF(tot.t,0))::numeric, 1) AS pct FROM m JOIN tot ON tot.mon = m.mon ORDER BY 1" } ],
+          "fieldConfig": { "defaults": { "unit": "percent", "custom": { "drawStyle": "bars", "fillOpacity": 80, "lineWidth": 0, "stacking": { "mode": "normal" } } } },
+          "options": { "legend": { "displayMode": "table", "placement": "right", "values": ["lastNotNull"] }, "tooltip": { "mode": "multi", "sort": "desc" } }
+        },
+
+        { "id": 19, "type": "row", "title": "Discovery timeline", "gridPos": { "x": 0, "y": 15, "w": 24, "h": 1 } },
+        {
+          "id": 20, "type": "timeseries", "title": "New artists discovered per month",
+          "gridPos": { "x": 0, "y": 16, "w": 16, "h": 9 },
+          "datasource": { "type": "postgres", "uid": "spotify-postgres" },
+          "description": "An artist counts in the month of their FIRST-ever play. Only artists with a linked artist_id (GDPR name-only rows excluded).",
+          "targets": [ { "refId": "A", "format": "time_series", "rawSql":
+            "WITH firsts AS (SELECT t.artist_id, min(pe.played_at) AS first_play FROM play_events pe JOIN tracks t ON t.track_id = pe.track_id WHERE t.artist_id IS NOT NULL GROUP BY t.artist_id) SELECT date_trunc('month', first_play) AS time, count(*) AS new_artists FROM firsts WHERE $__timeFilter(first_play) GROUP BY 1 ORDER BY 1" } ],
+          "fieldConfig": { "defaults": { "unit": "short", "custom": { "drawStyle": "bars", "fillOpacity": 70, "lineWidth": 1 }, "color": { "mode": "fixed", "fixedColor": "green" } } },
+          "options": { "legend": { "showLegend": false }, "tooltip": { "mode": "single" } }
+        },
+        {
+          "id": 21, "type": "stat", "title": "Total artists discovered (window)",
+          "gridPos": { "x": 16, "y": 16, "w": 8, "h": 9 },
+          "datasource": { "type": "postgres", "uid": "spotify-postgres" },
+          "description": "Distinct artists whose first-ever play falls inside the selected range.",
+          "targets": [ { "refId": "A", "format": "table", "rawSql":
+            "WITH firsts AS (SELECT t.artist_id, min(pe.played_at) AS first_play FROM play_events pe JOIN tracks t ON t.track_id = pe.track_id WHERE t.artist_id IS NOT NULL GROUP BY t.artist_id) SELECT count(*) AS new_artists FROM firsts WHERE $__timeFilter(first_play)" } ],
+          "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "fixed", "fixedColor": "green" } } },
+          "options": { "colorMode": "background", "reduceOptions": { "calcs": ["lastNotNull"] } }
+        },
+
+        { "id": 29, "type": "row", "title": "2024 vs 2026", "gridPos": { "x": 0, "y": 25, "w": 24, "h": 1 } },
+        {
+          "id": 30, "type": "table", "title": "Top artists — 2024 vs 2026 (by hours)",
+          "gridPos": { "x": 0, "y": 26, "w": 12, "h": 11 },
+          "datasource": { "type": "postgres", "uid": "spotify-postgres" },
+          "description": "Side-by-side top-15 artists by listening hours for calendar 2024 vs 2026 (full-history board ignores the picker for this fixed comparison). Linked artist_id only.",
+          "targets": [ { "refId": "A", "format": "table", "rawSql":
+            "WITH y24 AS (SELECT a.name, round((sum(pe.ms_played)/3600000.0)::numeric,1) AS h FROM play_events pe JOIN tracks t ON t.track_id=pe.track_id JOIN artists a ON a.artist_id=t.artist_id WHERE pe.ms_played IS NOT NULL AND pe.played_at >= '2024-01-01' AND pe.played_at < '2025-01-01' GROUP BY a.name ORDER BY h DESC LIMIT 15), y26 AS (SELECT a.name, round((sum(pe.ms_played)/3600000.0)::numeric,1) AS h FROM play_events pe JOIN tracks t ON t.track_id=pe.track_id JOIN artists a ON a.artist_id=t.artist_id WHERE pe.ms_played IS NOT NULL AND pe.played_at >= '2026-01-01' AND pe.played_at < '2027-01-01' GROUP BY a.name ORDER BY h DESC LIMIT 15), r24 AS (SELECT name, h, row_number() OVER (ORDER BY h DESC) AS rn FROM y24), r26 AS (SELECT name, h, row_number() OVER (ORDER BY h DESC) AS rn FROM y26) SELECT COALESCE(r24.rn, r26.rn) AS rank, r24.name AS \"2024 artist\", r24.h AS \"2024 h\", r26.name AS \"2026 artist\", r26.h AS \"2026 h\" FROM r24 FULL OUTER JOIN r26 ON r24.rn = r26.rn ORDER BY rank" } ],
+          "fieldConfig": { "defaults": { "custom": { "align": "auto" } }, "overrides": [ { "matcher": { "id": "byRegexp", "options": ".* h$" }, "properties": [ { "id": "unit", "value": "h" } ] } ] },
+          "options": { "showHeader": true }
+        },
+        {
+          "id": 31, "type": "table", "title": "Top parent genres — 2024 vs 2026 (deduped plays)",
+          "gridPos": { "x": 12, "y": 26, "w": 12, "h": 11 },
+          "datasource": { "type": "postgres", "uid": "spotify-postgres" },
+          "description": "Per-play deduped parent-genre play counts, 2024 vs 2026 side by side. Shows the taste rotation directly.",
+          "targets": [ { "refId": "A", "format": "table", "rawSql":
+            "WITH pp AS (SELECT DISTINCT pe.played_at, pe.track_id, genre_parent(lower(g.raw)) AS parent FROM play_events pe JOIN tracks t ON t.track_id = pe.track_id LEFT JOIN artists a ON a.artist_id = t.artist_id LEFT JOIN LATERAL unnest(COALESCE(a.genres, ARRAY[]::text[])) AS g(raw) ON true), y24 AS (SELECT parent, count(*) AS n FROM pp WHERE parent IS NOT NULL AND played_at >= '2024-01-01' AND played_at < '2025-01-01' GROUP BY 1), y26 AS (SELECT parent, count(*) AS n FROM pp WHERE parent IS NOT NULL AND played_at >= '2026-01-01' AND played_at < '2027-01-01' GROUP BY 1) SELECT COALESCE(y24.parent, y26.parent) AS genre, COALESCE(y24.n,0) AS \"2024 plays\", COALESCE(y26.n,0) AS \"2026 plays\" FROM y24 FULL OUTER JOIN y26 ON y24.parent = y26.parent ORDER BY \"2026 plays\" DESC, \"2024 plays\" DESC" } ],
+          "fieldConfig": { "defaults": { "custom": { "align": "auto" } }, "overrides": [ { "matcher": { "id": "byRegexp", "options": ".* plays$" }, "properties": [ { "id": "custom.cellOptions", "value": { "type": "gauge", "mode": "gradient" } } ] } ] },
+          "options": { "showHeader": true }
+        },
+
+        { "id": 39, "type": "row", "title": "Eclecticism over time", "gridPos": { "x": 0, "y": 37, "w": 24, "h": 1 } },
+        {
+          "id": 40, "type": "timeseries", "title": "Distinct parent genres per month",
+          "gridPos": { "x": 0, "y": 38, "w": 12, "h": 9 },
+          "datasource": { "type": "postgres", "uid": "spotify-postgres" },
+          "description": "How many different parent genres you touched each month — breadth of listening.",
+          "targets": [ { "refId": "A", "format": "time_series", "rawSql":
+            "WITH pp AS (SELECT DISTINCT pe.played_at, pe.track_id, genre_parent(lower(g.raw)) AS parent FROM play_events pe JOIN tracks t ON t.track_id = pe.track_id LEFT JOIN artists a ON a.artist_id = t.artist_id LEFT JOIN LATERAL unnest(COALESCE(a.genres, ARRAY[]::text[])) AS g(raw) ON true WHERE $__timeFilter(pe.played_at)) SELECT date_trunc('month', played_at) AS time, count(DISTINCT parent) AS genres FROM pp WHERE parent IS NOT NULL GROUP BY 1 ORDER BY 1" } ],
+          "fieldConfig": { "defaults": { "unit": "short", "custom": { "drawStyle": "line", "fillOpacity": 20, "lineWidth": 2, "pointSize": 6, "showPoints": "always" }, "color": { "mode": "fixed", "fixedColor": "purple" } } },
+          "options": { "legend": { "showLegend": false }, "tooltip": { "mode": "single" } }
+        },
+        {
+          "id": 41, "type": "timeseries", "title": "Genre entropy per month (Shannon, bits)",
+          "gridPos": { "x": 12, "y": 38, "w": 12, "h": 9 },
+          "datasource": { "type": "postgres", "uid": "spotify-postgres" },
+          "description": "Shannon entropy (log base 2) of the parent-genre distribution each month. Higher = more evenly spread across genres; lower = dominated by one.",
+          "targets": [ { "refId": "A", "format": "time_series", "rawSql":
+            "WITH pp AS (SELECT DISTINCT pe.played_at, pe.track_id, genre_parent(lower(g.raw)) AS parent FROM play_events pe JOIN tracks t ON t.track_id = pe.track_id LEFT JOIN artists a ON a.artist_id = t.artist_id LEFT JOIN LATERAL unnest(COALESCE(a.genres, ARRAY[]::text[])) AS g(raw) ON true WHERE $__timeFilter(pe.played_at)), c AS (SELECT date_trunc('month', played_at) AS mon, parent, count(*) AS n FROM pp WHERE parent IS NOT NULL GROUP BY 1, 2), tot AS (SELECT mon, sum(n) AS t FROM c GROUP BY 1) SELECT c.mon AS time, round((-sum((c.n::numeric/tot.t) * ln(c.n::numeric/tot.t)) / ln(2))::numeric, 2) AS entropy_bits FROM c JOIN tot ON tot.mon = c.mon GROUP BY c.mon ORDER BY 1" } ],
+          "fieldConfig": { "defaults": { "unit": "short", "decimals": 2, "custom": { "drawStyle": "line", "fillOpacity": 20, "lineWidth": 2, "pointSize": 6, "showPoints": "always" }, "color": { "mode": "fixed", "fixedColor": "blue" } } },
+          "options": { "legend": { "showLegend": false }, "tooltip": { "mode": "single" } }
+        }
+      ]
+    }

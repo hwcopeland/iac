@@ -25,7 +25,7 @@ data:
       "uid": "spotify-listening-behavior",
       "title": "Spotify — Listening Behavior",
       "schemaVersion": 38,
-      "version": 3,
+      "version": 4,
       "refresh": "1h",
       "time": { "from": "2024-09-01T00:00:00.000Z", "to": "now" },
       "tags": ["spotify", "music", "behavior"],
@@ -200,6 +200,78 @@ data:
             "WITH play_parent AS (SELECT DISTINCT pe.played_at, pe.track_id, pe.ms_played, COALESCE(genre_parent(lower(g.raw)), 'Other') AS parent FROM play_events pe JOIN tracks t ON t.track_id = pe.track_id LEFT JOIN artists a ON a.artist_id = t.artist_id LEFT JOIN LATERAL unnest(COALESCE(a.genres, ARRAY[]::text[])) AS g(raw) ON true WHERE pe.ms_played IS NOT NULL AND $__timeFilter(pe.played_at)) SELECT date_trunc('quarter', played_at) AS time, parent AS metric, round((SUM(ms_played)/3600000.0)::numeric, 1) AS hours FROM play_parent WHERE parent IN ('DnB','Country') GROUP BY 1, 2 ORDER BY 1" } ],
           "fieldConfig": { "defaults": { "unit": "h", "custom": { "drawStyle": "line", "fillOpacity": 15, "lineWidth": 2, "pointSize": 6, "showPoints": "always" } } },
           "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } }
+        },
+
+        { "id": 49, "type": "row", "title": "Skip patterns (deep dive)", "gridPos": { "x": 0, "y": 75, "w": 24, "h": 1 } },
+        {
+          "id": 50, "type": "timeseries", "title": "Completion rate over time (weekly trackdone %)",
+          "gridPos": { "x": 0, "y": 76, "w": 24, "h": 8 },
+          "datasource": { "type": "postgres", "uid": "spotify-postgres" },
+          "description": "Weekly share of plays that ended naturally (reason_end = 'trackdone'). The inverse of impulse-skipping.",
+          "targets": [ { "refId": "A", "format": "time_series", "rawSql":
+            "SELECT date_trunc('week', played_at) AS time, round((100.0 * avg((reason_end = 'trackdone')::int))::numeric, 1) AS completion_pct FROM play_events WHERE reason_end IS NOT NULL AND $__timeFilter(played_at) GROUP BY 1 ORDER BY 1" } ],
+          "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100, "custom": { "drawStyle": "line", "fillOpacity": 20, "lineWidth": 2, "spanNulls": true }, "color": { "mode": "fixed", "fixedColor": "green" } } },
+          "options": { "legend": { "showLegend": false }, "tooltip": { "mode": "single" } }
+        },
+        {
+          "id": 51, "type": "barchart", "title": "Skip rate by hour-of-day",
+          "gridPos": { "x": 0, "y": 84, "w": 12, "h": 9 },
+          "datasource": { "type": "postgres", "uid": "spotify-postgres" },
+          "description": "Average skip rate for plays started in each hour. Reveals when you cycle tracks fastest.",
+          "targets": [ { "refId": "A", "format": "table", "rawSql":
+            "SELECT lpad(extract(hour FROM played_at)::text, 2, '0') || ':00' AS hour, round((100.0 * avg(skipped::int))::numeric, 1) AS skip_pct FROM play_events WHERE skipped IS NOT NULL AND $__timeFilter(played_at) GROUP BY 1 ORDER BY 1" } ],
+          "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100, "color": { "mode": "continuous-GrYlRd" } } },
+          "options": { "orientation": "horizontal", "xField": "hour", "showValue": "auto", "legend": { "showLegend": false } }
+        },
+        {
+          "id": 52, "type": "barchart", "title": "Skip rate by parent genre (deduped)",
+          "gridPos": { "x": 12, "y": 84, "w": 12, "h": 9 },
+          "datasource": { "type": "postgres", "uid": "spotify-postgres" },
+          "description": "Per-play deduped (DISTINCT played_at, track_id) so a play tagged with several sub-genres of the same parent counts once — no unnest fan-out. Genres with >= 50 plays only; 'Other' excluded.",
+          "targets": [ { "refId": "A", "format": "table", "rawSql":
+            "WITH play_parent AS (SELECT DISTINCT pe.played_at, pe.track_id, pe.skipped, COALESCE(genre_parent(lower(g.raw)), 'Other') AS parent FROM play_events pe JOIN tracks t ON t.track_id = pe.track_id LEFT JOIN artists a ON a.artist_id = t.artist_id LEFT JOIN LATERAL unnest(COALESCE(a.genres, ARRAY[]::text[])) AS g(raw) ON true WHERE pe.skipped IS NOT NULL AND $__timeFilter(pe.played_at)) SELECT parent AS genre, round((100.0 * avg(skipped::int))::numeric, 1) AS skip_pct FROM play_parent WHERE parent <> 'Other' GROUP BY parent HAVING count(*) >= 50 ORDER BY skip_pct DESC" } ],
+          "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100, "color": { "mode": "continuous-GrYlRd" } } },
+          "options": { "orientation": "horizontal", "xField": "genre", "showValue": "auto", "legend": { "showLegend": false } }
+        },
+        {
+          "id": 53, "type": "table", "title": "Skip rate by top artist (>= 50 plays)",
+          "gridPos": { "x": 0, "y": 93, "w": 12, "h": 10 },
+          "datasource": { "type": "postgres", "uid": "spotify-postgres" },
+          "description": "Most-played artists ranked by how often you skip them. Requires a linked artist_id (GDPR name-only rows excluded).",
+          "targets": [ { "refId": "A", "format": "table", "rawSql":
+            "SELECT a.name AS artist, count(*) AS plays, round((100.0 * avg(pe.skipped::int))::numeric, 1) AS skip_pct FROM play_events pe JOIN tracks t ON t.track_id = pe.track_id JOIN artists a ON a.artist_id = t.artist_id WHERE pe.skipped IS NOT NULL AND $__timeFilter(pe.played_at) GROUP BY a.name HAVING count(*) >= 50 ORDER BY skip_pct DESC, plays DESC LIMIT 25" } ],
+          "fieldConfig": { "defaults": { "custom": { "align": "auto" } }, "overrides": [ { "matcher": { "id": "byName", "options": "skip_pct" }, "properties": [ { "id": "unit", "value": "percent" }, { "id": "custom.cellOptions", "value": { "type": "gauge", "mode": "gradient" } }, { "id": "max", "value": 100 } ] } ] },
+          "options": { "showHeader": true, "sortBy": [ { "displayName": "skip_pct", "desc": true } ] }
+        },
+        {
+          "id": 54, "type": "timeseries", "title": "Shuffle vs deliberate over time (weekly shuffle %)",
+          "gridPos": { "x": 12, "y": 93, "w": 12, "h": 10 },
+          "datasource": { "type": "postgres", "uid": "spotify-postgres" },
+          "description": "Weekly share of plays started in shuffle. The remainder is deliberate (queue/album/click) listening.",
+          "targets": [ { "refId": "A", "format": "time_series", "rawSql":
+            "SELECT date_trunc('week', played_at) AS time, round((100.0 * avg(shuffle::int))::numeric, 1) AS shuffle_pct FROM play_events WHERE shuffle IS NOT NULL AND $__timeFilter(played_at) GROUP BY 1 ORDER BY 1" } ],
+          "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100, "custom": { "drawStyle": "line", "fillOpacity": 20, "lineWidth": 2, "spanNulls": true }, "color": { "mode": "fixed", "fixedColor": "orange" } } },
+          "options": { "legend": { "showLegend": false }, "tooltip": { "mode": "single" } }
+        },
+        {
+          "id": 55, "type": "table", "title": "\"Machine-gun skip\" days (most sub-5s plays)",
+          "gridPos": { "x": 0, "y": 103, "w": 12, "h": 10 },
+          "datasource": { "type": "postgres", "uid": "spotify-postgres" },
+          "description": "Days with the most plays under 5 seconds — rapid-fire skipping through a queue.",
+          "targets": [ { "refId": "A", "format": "table", "rawSql":
+            "SELECT played_at::date AS day, count(*) FILTER (WHERE ms_played < 5000) AS sub5s_plays, count(*) AS total_plays, round((100.0 * count(*) FILTER (WHERE ms_played < 5000) / NULLIF(count(*),0))::numeric, 1) AS sub5s_pct FROM play_events WHERE ms_played IS NOT NULL AND $__timeFilter(played_at) GROUP BY 1 HAVING count(*) FILTER (WHERE ms_played < 5000) >= 20 ORDER BY sub5s_plays DESC LIMIT 20" } ],
+          "fieldConfig": { "defaults": { "custom": { "align": "auto" } }, "overrides": [ { "matcher": { "id": "byName", "options": "sub5s_pct" }, "properties": [ { "id": "unit", "value": "percent" } ] }, { "matcher": { "id": "byName", "options": "sub5s_plays" }, "properties": [ { "id": "custom.cellOptions", "value": { "type": "gauge", "mode": "gradient" } } ] } ] },
+          "options": { "showHeader": true, "sortBy": [ { "displayName": "sub5s_plays", "desc": true } ] }
+        },
+        {
+          "id": 56, "type": "table", "title": "Start-but-never-finish (high plays, ~100% skip)",
+          "gridPos": { "x": 12, "y": 103, "w": 12, "h": 10 },
+          "datasource": { "type": "postgres", "uid": "spotify-postgres" },
+          "description": "Tracks you keep starting but almost never let finish — high play count with a near-total skip rate.",
+          "targets": [ { "refId": "A", "format": "table", "rawSql":
+            "SELECT COALESCE(t.name, pe.track_id) AS track, count(*) AS plays, round((100.0 * avg(pe.skipped::int))::numeric, 1) AS skip_pct FROM play_events pe LEFT JOIN tracks t ON t.track_id = pe.track_id WHERE pe.skipped IS NOT NULL AND $__timeFilter(pe.played_at) GROUP BY 1 HAVING count(*) >= 10 AND avg(pe.skipped::int) >= 0.97 ORDER BY plays DESC, skip_pct DESC LIMIT 25" } ],
+          "fieldConfig": { "defaults": { "custom": { "align": "auto" } }, "overrides": [ { "matcher": { "id": "byName", "options": "skip_pct" }, "properties": [ { "id": "unit", "value": "percent" } ] }, { "matcher": { "id": "byName", "options": "plays" }, "properties": [ { "id": "custom.cellOptions", "value": { "type": "gauge", "mode": "gradient" } } ] } ] },
+          "options": { "showHeader": true, "sortBy": [ { "displayName": "plays", "desc": true } ] }
         }
       ]
     }
