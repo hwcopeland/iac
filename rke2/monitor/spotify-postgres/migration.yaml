@@ -388,14 +388,77 @@ data:
     INSERT INTO schema_migrations (version, description)
     VALUES (2, 'genre enrichment (musicbrainz): music_ids, track_genres, artist_genres_enriched, track_genre_effective fine sub-genre view')
     ON CONFLICT (version) DO NOTHING;
+  003_behavioral_fields.sql: |
+    -- ============================================================== --
+    --  Spotify analytics — schema migration 003 (behavioural fields) --
+    --                                                                 --
+    --  Adds the rich per-play columns that exist ONLY in Spotify's    --
+    --  "Extended Streaming History" GDPR export (NOT in the live      --
+    --  /recently-played feed): skip flag, start/end reasons, shuffle, --
+    --  platform/device, connection country, offline & incognito.      --
+    --  These power the "Spotify — Listening Behavior" dashboard       --
+    --  (skip rate, completion rate, intent, shuffle %, device split)  --
+    --  and the geo travel trail. The one-time importer backfills them --
+    --  onto the ~54k already-imported rows via ON CONFLICT DO UPDATE; --
+    --  future live rows leave them NULL (expected).                   --
+    --                                                                  --
+    --  Also widens play_events.ms_played integer -> bigint (headroom;  --
+    --  ALTER is a no-op replan, no rewrite needed for widening).       --
+    --  Idempotent: ADD COLUMN IF NOT EXISTS + guarded short-circuit.  --
+    -- ============================================================== --
+    DO $mig3$
+    BEGIN
+      IF EXISTS (SELECT 1 FROM schema_migrations WHERE version = 3) THEN
+        RAISE NOTICE 'migration 003 already applied; skipping';
+        RETURN;
+      END IF;
+      RAISE NOTICE 'applying migration 003';
+
+      -- ---- widen ms_played to bigint ----------------------------- --
+      -- recently-played gave NULL; the GDPR export gives real durations.
+      -- bigint is future-proof (audiobook chapters etc.); widening an
+      -- integer column to bigint is a cheap catalog-only change.
+      ALTER TABLE play_events
+        ALTER COLUMN ms_played TYPE bigint;
+
+      -- ---- rich behavioural columns (export-only, nullable) ------ --
+      ALTER TABLE play_events ADD COLUMN IF NOT EXISTS skipped        boolean DEFAULT false;
+      ALTER TABLE play_events ADD COLUMN IF NOT EXISTS reason_start   text;
+      ALTER TABLE play_events ADD COLUMN IF NOT EXISTS reason_end     text;
+      ALTER TABLE play_events ADD COLUMN IF NOT EXISTS shuffle        boolean DEFAULT false;
+      ALTER TABLE play_events ADD COLUMN IF NOT EXISTS platform       text;
+      ALTER TABLE play_events ADD COLUMN IF NOT EXISTS conn_country   text;
+      ALTER TABLE play_events ADD COLUMN IF NOT EXISTS offline        boolean DEFAULT false;
+      ALTER TABLE play_events ADD COLUMN IF NOT EXISTS incognito_mode boolean DEFAULT false;
+
+      -- ---- indexes for the GROUP BY / filter targets ------------- --
+      CREATE INDEX IF NOT EXISTS play_events_skipped_idx       ON play_events (skipped);
+      CREATE INDEX IF NOT EXISTS play_events_reason_end_idx    ON play_events (reason_end);
+      CREATE INDEX IF NOT EXISTS play_events_platform_idx      ON play_events (platform);
+      CREATE INDEX IF NOT EXISTS play_events_conn_country_idx  ON play_events (conn_country);
+      -- composite for the geo travel-trail (filter conn_country, order by time)
+      CREATE INDEX IF NOT EXISTS play_events_country_time_idx  ON play_events (conn_country, played_at);
+    END
+    $mig3$;
+
+    -- ---- grant the new columns to grafana_ro ------------------- --
+    -- (New columns are auto-covered by the existing table-level grant +
+    -- DEFAULT PRIVILEGES, but grant explicitly for clarity/idempotence.)
+    GRANT SELECT ON play_events TO grafana_ro;
+
+    -- ---- record the migration (idempotent) --------------------- --
+    INSERT INTO schema_migrations (version, description)
+    VALUES (3, 'behavioural play_events columns (skipped, reason_start/end, shuffle, platform, conn_country, offline, incognito_mode) + ms_played bigint, from the GDPR Extended Streaming History export')
+    ON CONFLICT (version) DO NOTHING;
 ---
 apiVersion: batch/v1
 kind: Job
 metadata:
-  # Renamed to -migrate-002 when migration 002 was added: a Job's pod template
-  # is immutable, so re-applying a same-named Job after editing args fails. Bump
-  # this suffix (-migrate-00N) each time a new migration key is added.
-  name: spotify-postgres-migrate-002
+  # Renamed to -migrate-00N each time a migration key is added: a Job's pod
+  # template is immutable, so re-applying a same-named Job after editing args
+  # fails. Bump this suffix (and the workflow delete/wait references) per
+  # migration. Now -migrate-003 (added behavioural play_events columns).
+  name: spotify-postgres-migrate-003
   namespace: monitor
   labels:
     app: spotify-postgres
@@ -434,6 +497,11 @@ spec:
               psql -v ON_ERROR_STOP=1 \
                    -h spotify-postgres -U postgres -d spotify \
                    -f /migrations/002_genre_enrichment.sql
+              # 003 is likewise guarded (short-circuits if version 3 recorded)
+              # and uses ADD COLUMN IF NOT EXISTS, so it is idempotent.
+              psql -v ON_ERROR_STOP=1 \
+                   -h spotify-postgres -U postgres -d spotify \
+                   -f /migrations/003_behavioral_fields.sql
               echo "migration complete; current schema_migrations:"
               psql -h spotify-postgres -U postgres -d spotify \
                    -c "SELECT version, description, applied_at FROM schema_migrations ORDER BY version;"
