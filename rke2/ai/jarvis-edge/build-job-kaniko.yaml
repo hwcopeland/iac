@@ -1,0 +1,73 @@
+---
+# In-cluster Kaniko build for jarvis-edge on the feat/jarvis-identity-gate ref.
+#
+# The ARC GH-Actions workflow (build-jarvis-edge.yml) only fires on `main`;
+# this job is the off-`main` build path, mirroring the mem0 kaniko idiom.
+# Builds from the iac git context at hwcopeland/iac on feat/jarvis-identity-gate,
+# sub-context rke2/ai/jarvis-edge (FROM zot.hwcopeland.net/ai/jarvis-edge-base:latest),
+# and pushes zot.hwcopeland.net/ai/jarvis-edge:latest (+ a sha tag).
+#
+# Reuses the push-capable `zot-pull-secret` dockerconfigjson, remapped to
+# /kaniko/.docker/config.json. Kept off nixos-gpu so the build can't starve
+# whisper/chatterbox/the GPU.
+#
+# ONE-SHOT. Re-run by deleting + re-applying. Intentionally UNCOMMITTED
+# (deploy-only artifact).
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: jarvis-edge-build
+  namespace: ai
+  labels:
+    app: jarvis-stack
+    app.kubernetes.io/component: build
+spec:
+  backoffLimit: 1
+  activeDeadlineSeconds: 1800
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app: jarvis-stack
+        app.kubernetes.io/component: build
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values:
+                      - nixos-gpu
+      containers:
+        - name: kaniko
+          image: gcr.io/kaniko-project/executor:latest
+          args:
+            - "--context=git://github.com/hwcopeland/iac.git#refs/heads/feat/jarvis-identity-gate"
+            - "--context-sub-path=rke2/ai/jarvis-edge"
+            - "--dockerfile=Dockerfile"
+            - "--destination=zot.hwcopeland.net/ai/jarvis-edge:latest"
+            - "--destination=zot.hwcopeland.net/ai/jarvis-edge:sha-766412a"
+            - "--cache=false"
+            - "--snapshot-mode=redo"
+            - "--verbosity=info"
+          resources:
+            requests:
+              cpu: "1"
+              memory: 1Gi
+            limits:
+              cpu: "4"
+              memory: 4Gi
+          volumeMounts:
+            - name: docker-config
+              mountPath: /kaniko/.docker
+      volumes:
+        - name: docker-config
+          secret:
+            secretName: zot-pull-secret
+            items:
+              - key: .dockerconfigjson
+                path: config.json

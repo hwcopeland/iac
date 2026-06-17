@@ -1,0 +1,148 @@
+---
+# mem0-exporter — Prometheus exporter for JARVIS unified memory (mem0/qdrant).
+#
+# WHY: qdrant's /metrics only exposes collection-wide point totals. The JARVIS
+# Grafana dashboard's MEMORY section needs per-SCOPE (user_id: jarvis/owner/runs)
+# and per-PROJECT (payload domain) fact counts. Those are payload-derived and
+# qdrant won't compute them without a payload index we deliberately don't create.
+# This tiny stdlib exporter scrolls the collection read-only and tallies them.
+#
+# DESIGN: NO custom image. A stock python:3-slim runs exporter/mem0_exporter.py
+# mounted from the mem0-exporter-script ConfigMap. That keeps this purely
+# additive/safe — no in-cluster image build, no edge rebuild. Read-only against
+# qdrant (scroll + count) and mem0 (/health).
+#
+# Apply (additive, safe):
+#   kubectl apply -f mem0-exporter-configmap.yaml
+#   kubectl apply -f mem0-exporter.yaml
+#
+# Lives in ns ai (next to qdrant/mem0); the ServiceMonitor carries the
+# `release: kube-prometheus-stack` label so the monitor-namespace operator
+# picks it up cross-namespace.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mem0-exporter
+  namespace: ai
+  labels:
+    app: mem0-exporter
+    component: jarvis-mem0
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mem0-exporter
+  template:
+    metadata:
+      labels:
+        app: mem0-exporter
+        component: jarvis-mem0
+    spec:
+      # CPU-only; schedule alongside the rest of the mem0 stack on microedge.
+      nodeSelector:
+        kubernetes.io/hostname: microedge
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: mem0-exporter
+          image: python:3.12-slim
+          command: ["python3", "/app/mem0_exporter.py"]
+          env:
+            - name: QDRANT_URL
+              value: "http://qdrant.ai.svc.cluster.local:6333"
+            - name: QDRANT_COLLECTION
+              value: "jarvis_mem0"
+            - name: MEM0_URL
+              value: "http://jarvis-mem0.ai.svc.cluster.local:8800"
+            # scope = which memory partition owns the fact (mem0 user_id).
+            - name: SCOPE_KEY
+              value: "user_id"
+            # project = worldsync payload "domain" (workload/db/...); facts
+            # without it fall into project="none".
+            - name: PROJECT_KEY
+              value: "domain"
+            - name: EMPTY_LABEL
+              value: "none"
+            - name: LISTEN_PORT
+              value: "9114"
+          ports:
+            - name: metrics
+              containerPort: 9114
+          resources:
+            requests:
+              cpu: 25m
+              memory: 32Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: metrics
+            initialDelaySeconds: 5
+            periodSeconds: 15
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: metrics
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: script
+              mountPath: /app
+              readOnly: true
+      volumes:
+        - name: script
+          configMap:
+            name: mem0-exporter-script
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mem0-exporter
+  namespace: ai
+  labels:
+    app: mem0-exporter
+    component: jarvis-mem0
+spec:
+  type: ClusterIP
+  selector:
+    app: mem0-exporter
+  ports:
+    - name: metrics
+      port: 9114
+      targetPort: metrics
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: mem0-exporter
+  namespace: ai
+  labels:
+    # Required for the kube-prometheus-stack operator (in ns monitor) to
+    # select this ServiceMonitor — matches serviceMonitorSelector default.
+    release: kube-prometheus-stack
+    app: mem0-exporter
+spec:
+  namespaceSelector:
+    matchNames:
+      - ai
+  selector:
+    matchLabels:
+      app: mem0-exporter
+  endpoints:
+    - port: metrics
+      path: /metrics
+      # Scroll-per-scrape over ~10^3 points is cheap, but memory changes
+      # slowly — 60s keeps load negligible.
+      interval: 60s
+      scrapeTimeout: 30s
