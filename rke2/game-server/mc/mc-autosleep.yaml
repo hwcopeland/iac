@@ -1,80 +1,3 @@
-# mc-autosleep — player-count-driven scale-DOWN for the Minecraft servers.
-#
-# WHY THIS EXISTS (the bug it replaces):
-# mc-router's built-in --auto-scale-down is NOT player-aware. Its
-# --auto-scale-down-after timer is armed when a connection is established and
-# fires ~N minutes later WITHOUT re-checking whether anyone is still connected.
-# Result: any single play session longer than the timer is force-killed at the
-# timer mark (observed 2026-06-07: player "hammycon" kicked at exactly
-# connect+15:00 while actively playing). So mc-router CANNOT express "scale down
-# only when no one has been online for 15 minutes" — it scales on connection age,
-# not player presence.
-#
-# THE FIX:
-# Keep mc-router's --auto-scale-UP (wake-on-connect works perfectly) but move
-# scale-DOWN here. This CronJob runs every 5 minutes, asks each AWAKE server how
-# many players are online via RCON (`rcon-cli list`, enabled by default in the
-# itzg/minecraft-server image used by all three backends), and scales the
-# StatefulSet to 0 ONLY after it has seen zero players for >= IDLE_SECONDS (15m).
-# It can never kick an active player because the decision is the live player
-# count, not a wall-clock timer.
-#
-# IDLE TRACKING:
-# A `last-active` epoch annotation on each StatefulSet is refreshed to "now"
-# whenever players>0 (or RCON is unreachable, i.e. the server is still booting —
-# treated as keep-alive so a freshly-woken server is never re-slept mid-boot).
-# A server is scaled to 0 once (now - last-active) >= IDLE_SECONDS with 0 players.
-#
-# SCOPE: all three mc-router-autoscaled StatefulSets (see SERVERS below). To add
-# a server, append its StatefulSet name — it must be itzg-based with RCON enabled,
-# else it will be kept awake forever (logged loudly) rather than risk a kick.
-#
-# Hand-applied (this namespace's mc manifests are not Flux-managed):
-#   kubectl apply -f rke2/game-server/mc/mc-autosleep.yaml
----
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: mc-autosleep
-  namespace: game-server
----
-# Namespaced Role: everything mc-autosleep touches lives in game-server.
-#   pods + pods/exec : run `rcon-cli list` inside each server pod
-#   statefulsets     : read .spec.replicas, patch the last-active annotation
-#   statefulsets/scale : `kubectl scale --replicas=0`
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: mc-autosleep
-  namespace: game-server
-rules:
-  - apiGroups: [""]
-    resources: ["pods"]
-    verbs: ["get", "list"]
-  - apiGroups: [""]
-    resources: ["pods/exec"]
-    verbs: ["create"]
-  - apiGroups: ["apps"]
-    resources: ["statefulsets"]
-    verbs: ["get", "list", "patch"]
-  - apiGroups: ["apps"]
-    resources: ["statefulsets/scale"]
-    verbs: ["get", "update", "patch"]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata:
-  name: mc-autosleep
-  namespace: game-server
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: Role
-  name: mc-autosleep
-subjects:
-  - kind: ServiceAccount
-    name: mc-autosleep
-    namespace: game-server
----
 apiVersion: batch/v1
 kind: CronJob
 metadata:
@@ -83,15 +6,15 @@ metadata:
   labels:
     app: mc-autosleep
 spec:
-  schedule: "*/5 * * * *"          # every 5 minutes
-  concurrencyPolicy: Forbid        # never overlap runs
+  schedule: '*/5 * * * *'
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 120
   successfulJobsHistoryLimit: 1
   failedJobsHistoryLimit: 3
-  startingDeadlineSeconds: 120
   jobTemplate:
     spec:
-      backoffLimit: 0
       activeDeadlineSeconds: 240
+      backoffLimit: 0
       template:
         metadata:
           labels:
@@ -100,70 +23,77 @@ spec:
           serviceAccountName: mc-autosleep
           restartPolicy: Never
           containers:
-            - name: autosleep
-              # alpine-based kubectl: provides /bin/sh + date/sed/grep for the
-              # script below, and is pullable from Docker Hub like the itzg images.
-              image: alpine/kubectl:1.34.2
-              resources:
-                requests: { cpu: "20m", memory: "32Mi" }
-                limits:   { cpu: "200m", memory: "64Mi" }
-              command: ["/bin/sh", "-c"]
-              args:
-                - |
-                  set -u
-                  NS=game-server
-                  SERVERS="atm9skies atm9skies-island mc-earth"
-                  IDLE_SECONDS=900          # 15 minutes of zero players
-                  ANN=mc.hwcopeland.net/last-active
-                  # jsonpath needs the dots in the annotation key escaped:
-                  ANN_JP='{.metadata.annotations.mc\.hwcopeland\.net/last-active}'
+          - name: autosleep
+            image: alpine/kubectl:1.34.2
+            command:
+            - /bin/sh
+            - -c
+            args:
+            - |
+              set -u
+              NS=game-server
+              SERVERS="atm9skies atm9skies-island mc-earth"
+              IDLE_SECONDS=900          # 15 minutes of zero players
+              ANN=mc.hwcopeland.net/last-active
+              # jsonpath needs the dots in the annotation key escaped:
+              ANN_JP='{.metadata.annotations.mc\.hwcopeland\.net/last-active}'
 
-                  now=$(date +%s)
-                  for s in $SERVERS; do
-                    repl=$(kubectl -n "$NS" get sts "$s" -o jsonpath='{.spec.replicas}' 2>/dev/null)
-                    if [ -z "$repl" ]; then
-                      echo "$s: not found, skipping"; continue
-                    fi
-                    if [ "$repl" = "0" ]; then
-                      echo "$s: asleep (replicas=0), nothing to do"; continue
-                    fi
+              now=$(date +%s)
+              for s in $SERVERS; do
+                repl=$(kubectl -n "$NS" get sts "$s" -o jsonpath='{.spec.replicas}' 2>/dev/null)
+                if [ -z "$repl" ]; then
+                  echo "$s: not found, skipping"; continue
+                fi
+                if [ "$repl" = "0" ]; then
+                  echo "$s: asleep (replicas=0), nothing to do"; continue
+                fi
 
-                    # Ask the live server for its player count. If RCON is
-                    # unreachable the server is still booting (or RCON is down) —
-                    # treat as keep-alive so we never re-sleep a waking server.
-                    if ! out=$(kubectl -n "$NS" exec "${s}-0" -- rcon-cli list 2>/dev/null); then
-                      echo "$s: rcon unreachable (booting?), keep-alive"
-                      kubectl -n "$NS" annotate sts "$s" "$ANN=$now" --overwrite >/dev/null
-                      continue
-                    fi
+                # Ask the live server for its player count. If RCON is
+                # unreachable the server is still booting (or RCON is down) —
+                # treat as keep-alive so we never re-sleep a waking server.
+                if ! out=$(kubectl -n "$NS" exec "${s}-0" -- rcon-cli list 2>/dev/null); then
+                  echo "$s: rcon unreachable (booting?), keep-alive"
+                  kubectl -n "$NS" annotate sts "$s" "$ANN=$now" --overwrite >/dev/null
+                  continue
+                fi
 
-                    # "There are N of a max of M players online: ..."
-                    n=$(echo "$out" | sed -n 's/.*There are \([0-9][0-9]*\) of.*/\1/p')
-                    if [ -z "$n" ]; then
-                      echo "$s: unparseable rcon output [$out], keep-alive"
-                      kubectl -n "$NS" annotate sts "$s" "$ANN=$now" --overwrite >/dev/null
-                      continue
-                    fi
+                # Extract the player count: the first integer after "There are".
+                # Handles both RCON "list" formats:
+                #   modern: "There are N of a max of M players online: ..."
+                #   legacy Forge (mc-earth, 1.12.2): "There are N/M players online:"
+                n=$(echo "$out" | sed -n 's/.*There are \([0-9][0-9]*\).*/\1/p')
+                if [ -z "$n" ]; then
+                  echo "$s: unparseable rcon output [$out], keep-alive"
+                  kubectl -n "$NS" annotate sts "$s" "$ANN=$now" --overwrite >/dev/null
+                  continue
+                fi
 
-                    if [ "$n" -gt 0 ]; then
-                      echo "$s: $n player(s) online, keep-alive"
-                      kubectl -n "$NS" annotate sts "$s" "$ANN=$now" --overwrite >/dev/null
-                      continue
-                    fi
+                if [ "$n" -gt 0 ]; then
+                  echo "$s: $n player(s) online, keep-alive"
+                  kubectl -n "$NS" annotate sts "$s" "$ANN=$now" --overwrite >/dev/null
+                  continue
+                fi
 
-                    # Zero players. Scale down only once idle >= threshold.
-                    last=$(kubectl -n "$NS" get sts "$s" -o jsonpath="$ANN_JP" 2>/dev/null)
-                    if [ -z "$last" ]; then
-                      echo "$s: 0 online, no last-active marker yet, initializing"
-                      kubectl -n "$NS" annotate sts "$s" "$ANN=$now" --overwrite >/dev/null
-                      continue
-                    fi
-                    idle=$((now - last))
-                    if [ "$idle" -ge "$IDLE_SECONDS" ]; then
-                      echo "$s: 0 online for ${idle}s >= ${IDLE_SECONDS}s -> scaling to 0"
-                      kubectl -n "$NS" scale sts "$s" --replicas=0
-                    else
-                      echo "$s: 0 online for ${idle}s (< ${IDLE_SECONDS}s), waiting"
-                    fi
-                  done
-                  echo "mc-autosleep done"
+                # Zero players. Scale down only once idle >= threshold.
+                last=$(kubectl -n "$NS" get sts "$s" -o jsonpath="$ANN_JP" 2>/dev/null)
+                if [ -z "$last" ]; then
+                  echo "$s: 0 online, no last-active marker yet, initializing"
+                  kubectl -n "$NS" annotate sts "$s" "$ANN=$now" --overwrite >/dev/null
+                  continue
+                fi
+                idle=$((now - last))
+                if [ "$idle" -ge "$IDLE_SECONDS" ]; then
+                  echo "$s: 0 online for ${idle}s >= ${IDLE_SECONDS}s -> scaling to 0"
+                  kubectl -n "$NS" scale sts "$s" --replicas=0
+                else
+                  echo "$s: 0 online for ${idle}s (< ${IDLE_SECONDS}s), waiting"
+                fi
+              done
+              echo "mc-autosleep done"
+            resources:
+              requests:
+                cpu: 20m
+                memory: 32Mi
+              limits:
+                cpu: 200m
+                memory: 64Mi

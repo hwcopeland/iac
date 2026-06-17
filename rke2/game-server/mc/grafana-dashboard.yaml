@@ -1,0 +1,274 @@
+---
+# Grafana dashboard ConfigMap for the Minecraft server fleet (D2 audit rec).
+#
+# Auto-imported via the `grafana_dashboard: "1"` label. Lands in the "Projects"
+# folder per grafana_folder (same convention as the CS2 dashboard — there is no
+# separate "Games" folder).
+#
+# SCOPE: the three Minecraft StatefulSets in ns game-server — atm9skies,
+# atm9skies-island, mc-earth. Satisfactory is EXCLUDED (not Minecraft).
+# The consistent key per server is the StatefulSet/pod name (pods are <sts>-0);
+# there is NO clean `server` label, so panels key off `statefulset=~...` /
+# `pod=~"$server-0"`.
+#
+# DATA SOURCES (UIDs reused from the CS2 dashboard, looked up live):
+#   prometheus        — default Prometheus (kube-state-metrics + cAdvisor)
+#   P8E80F9AEF21F6940 — Loki (chart-provisioned)
+#
+# METRIC NOTES:
+#   * Awake/asleep == kube_statefulset_replicas (0 asleep / 1 awake), driven by
+#     mc-router --auto-scale-up and the mc-autosleep CronJob.
+#   * mc-router rows use mc_router_* series, which exist ONLY because mc-router
+#     runs with --metrics-backend=prometheus (see mc-router/mc-router.yaml) and
+#     is scraped by the mc-router ServiceMonitor. CONFIRMED-real names (live):
+#       - mc_router_frontend_connections (gauge, label side="frontend")
+#       - mc_router_errors (counter, label type=backend_failed|read|...)
+#       - mc_router_rate_limit_available (gauge, no extra label)
+#   * Player count + online/health are now REAL via the mc-monitor exporter
+#     (itzg/mc-monitor export-for-prometheus), scraped by the mc-monitor
+#     ServiceMonitor. CONFIRMED-real series (live):
+#       - minecraft_status_healthy            (1 up / 0 down; ALWAYS present,
+#                                              even while a server is asleep)
+#       - minecraft_status_players_online_count  (only present when the server
+#                                              responds AND is fully ready)
+#       - minecraft_status_players_max_count
+#       - minecraft_status_response_time_seconds
+#     The per-server distinguishing label is server_host = the FQDN target, e.g.
+#     "atm9skies.game-server.svc.cluster.local". We map server_host -> a friendly
+#     `server` label (atm9skies / atm9skies-island / mc-earth) with label_replace
+#     so panels align with the $server template variable (which comes from
+#     kube_statefulset_replicas' `statefulset` label).
+#     WHILE ASLEEP: minecraft_status_healthy=0 exists, but the players_* series
+#     do NOT (mc-monitor can't read player counts off an unreachable host) — so
+#     player panels show 0/No-data, which is correct.
+#   * TPS / MSPT / heap still have NO native metric — those need an RCON-based
+#     exporter per server (deeper follow-up; see the top text panel).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: minecraft-fleet-dashboard
+  namespace: monitor
+  labels:
+    grafana_dashboard: "1"
+  annotations:
+    grafana_folder: Projects
+data:
+  minecraft-fleet.json: |-
+    {
+      "uid": "minecraft-fleet",
+      "title": "Minecraft Servers — Fleet",
+      "tags": ["projects", "minecraft", "game-server"],
+      "timezone": "browser",
+      "refresh": "30s",
+      "schemaVersion": 39,
+      "time": {"from": "now-12h", "to": "now"},
+      "editable": true,
+      "templating": {
+        "list": [
+          {
+            "name": "server",
+            "label": "Server",
+            "type": "query",
+            "datasource": {"type": "prometheus", "uid": "prometheus"},
+            "query": "label_values(kube_statefulset_replicas{namespace=\"game-server\", statefulset=~\"atm9skies|atm9skies-island|mc-earth\"}, statefulset)",
+            "refresh": 2,
+            "sort": 1,
+            "includeAll": true,
+            "multi": true,
+            "current": {"text": "All", "value": "$__all"}
+          }
+        ]
+      },
+      "panels": [
+        {"type": "text", "title": "About this dashboard", "gridPos": {"x": 0, "y": 0, "w": 24, "h": 3},
+          "options": {"mode": "markdown", "content": "**Minecraft fleet** — atm9skies, atm9skies-island, mc-earth (Satisfactory excluded). Awake/asleep + CPU/RAM/net/restarts come from **real metrics** (kube-state-metrics, cAdvisor). **Player count + online/health are now REAL** via the **mc-monitor** exporter (`minecraft_status_*`, keyed on `server_host` → mapped to a friendly `server` label). A server reads **0 players / offline while asleep** (replicas:0) — that is correct, not an error: `minecraft_status_healthy=0` is still emitted, the `players_*` series simply don't exist for an unreachable host. **TPS / MSPT / heap still have no native metric** — those need an **RCON-based exporter** per server (deeper follow-up). mc-router routing/error/rate-limit panels require mc-router's `--metrics-backend=prometheus`."}},
+
+        {"collapsed": false, "type": "row", "title": "Fleet Overview", "gridPos": {"x": 0, "y": 3, "w": 24, "h": 1}, "id": 100},
+
+        {"type": "state-timeline", "title": "Awake / asleep per server (kube_statefulset_replicas: 1 = awake, 0 = scaled-to-zero)", "gridPos": {"x": 0, "y": 4, "w": 16, "h": 5},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"expr": "kube_statefulset_replicas{namespace=\"game-server\", statefulset=~\"atm9skies|atm9skies-island|mc-earth\"}", "legendFormat": "{{statefulset}}", "refId": "A"}],
+          "options": {"showValue": "never", "mergeValues": true, "rowHeight": 0.9, "legend": {"showLegend": true, "displayMode": "list", "placement": "bottom"}},
+          "fieldConfig": {"defaults": {"custom": {"fillOpacity": 90}, "mappings": [{"type": "value", "options": {"0": {"text": "asleep", "color": "gray"}, "1": {"text": "awake", "color": "green"}}}], "thresholds": {"mode": "absolute", "steps": [{"color": "gray"}, {"color": "green", "value": 1}]}, "color": {"mode": "thresholds"}}}},
+
+        {"type": "state-timeline", "title": "Online / offline per server (mc-monitor minecraft_status_healthy: 1 = reachable & ready)", "gridPos": {"x": 0, "y": 9, "w": 16, "h": 5},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "description": "From the mc-monitor exporter. healthy=1 means the server answered a status ping AND is fully ready (booted). Compare with the awake/asleep row above: replicas=1 but healthy=0 = the pod is up but still BOOTING (ATM9 ~62s, mc-earth up to ~10m worldgen).",
+          "targets": [{"expr": "label_replace(minecraft_status_healthy{namespace=\"game-server\"}, \"server\", \"$1\", \"server_host\", \"([^.]+)\\\\..*\")", "legendFormat": "{{server}}", "refId": "A"}],
+          "options": {"showValue": "never", "mergeValues": true, "rowHeight": 0.9, "legend": {"showLegend": true, "displayMode": "list", "placement": "bottom"}},
+          "fieldConfig": {"defaults": {"custom": {"fillOpacity": 90}, "mappings": [{"type": "value", "options": {"0": {"text": "offline", "color": "gray"}, "1": {"text": "online", "color": "green"}}}], "thresholds": {"mode": "absolute", "steps": [{"color": "gray"}, {"color": "green", "value": 1}]}, "color": {"mode": "thresholds"}}}},
+
+        {"type": "stat", "title": "Players online (fleet)", "gridPos": {"x": 16, "y": 4, "w": 4, "h": 5},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "description": "Real, from mc-monitor: sum of minecraft_status_players_online_count across all reachable servers. Asleep servers contribute no series (treated as 0).",
+          "targets": [{"expr": "sum(minecraft_status_players_online_count{namespace=\"game-server\"}) or vector(0)", "refId": "A"}],
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
+          "fieldConfig": {"defaults": {"unit": "short", "thresholds": {"mode": "absolute", "steps": [{"color": "gray"}, {"color": "green", "value": 1}, {"color": "blue", "value": 10}]}, "color": {"mode": "thresholds"}}}},
+
+        {"type": "stat", "title": "Servers online", "gridPos": {"x": 20, "y": 4, "w": 4, "h": 5},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "description": "Count of servers mc-monitor sees as healthy (reachable & ready). May be < 'servers awake' during boot.",
+          "targets": [{"expr": "sum(minecraft_status_healthy{namespace=\"game-server\"}) or vector(0)", "refId": "A"}],
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
+          "fieldConfig": {"defaults": {"unit": "short", "thresholds": {"mode": "absolute", "steps": [{"color": "gray"}, {"color": "green", "value": 1}]}, "color": {"mode": "thresholds"}}}},
+
+        {"type": "stat", "title": "Servers awake", "gridPos": {"x": 16, "y": 9, "w": 3, "h": 5},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"expr": "sum(kube_statefulset_replicas{namespace=\"game-server\", statefulset=~\"atm9skies|atm9skies-island|mc-earth\"})", "refId": "A"}],
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
+          "fieldConfig": {"defaults": {"unit": "short", "thresholds": {"mode": "absolute", "steps": [{"color": "gray"}, {"color": "green", "value": 1}]}, "color": {"mode": "thresholds"}}}},
+
+        {"type": "stat", "title": "Fleet restarts (12h)", "gridPos": {"x": 19, "y": 9, "w": 2, "h": 5},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"expr": "sum(increase(kube_pod_container_status_restarts_total{namespace=\"game-server\", pod=~\"atm9skies-0|atm9skies-island-0|mc-earth-0\"}[12h]))", "refId": "A"}],
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
+          "fieldConfig": {"defaults": {"thresholds": {"mode": "absolute", "steps": [{"color": "green"}, {"color": "orange", "value": 1}, {"color": "red", "value": 5}]}, "color": {"mode": "thresholds"}}}},
+
+        {"type": "stat", "title": "RAM (awake)", "gridPos": {"x": 21, "y": 9, "w": 2, "h": 5},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"expr": "sum(container_memory_working_set_bytes{namespace=\"game-server\", pod=~\"atm9skies-0|atm9skies-island-0|mc-earth-0\", container!=\"\"})", "refId": "A"}],
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
+          "fieldConfig": {"defaults": {"unit": "bytes", "color": {"mode": "fixed", "fixedColor": "blue"}}}},
+
+        {"type": "stat", "title": "CPU (awake)", "gridPos": {"x": 23, "y": 9, "w": 1, "h": 5},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"expr": "sum(rate(container_cpu_usage_seconds_total{namespace=\"game-server\", pod=~\"atm9skies-0|atm9skies-island-0|mc-earth-0\", container!=\"\"}[2m]))", "refId": "A"}],
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
+          "fieldConfig": {"defaults": {"unit": "short", "decimals": 2, "color": {"mode": "fixed", "fixedColor": "orange"}}}},
+
+        {"type": "timeseries", "title": "Players online per server (mc-monitor)", "gridPos": {"x": 0, "y": 14, "w": 12, "h": 7},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "description": "Real per-server player count from mc-monitor (minecraft_status_players_online_count), server_host mapped to a friendly server name. A server drops to no-data while asleep (series absent).",
+          "targets": [{"expr": "label_replace(minecraft_status_players_online_count{namespace=\"game-server\"}, \"server\", \"$1\", \"server_host\", \"([^.]+)\\\\..*\")", "legendFormat": "{{server}}", "refId": "A"}],
+          "fieldConfig": {"defaults": {"unit": "short", "decimals": 0, "min": 0, "custom": {"fillOpacity": 12, "lineWidth": 2, "spanNulls": false, "drawStyle": "line", "pointSize": 5, "showPoints": "auto"}}}},
+
+        {"type": "timeseries", "title": "Fleet players online (total) over time", "gridPos": {"x": 12, "y": 14, "w": 12, "h": 7},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "description": "Sum of mc-monitor player counts across reachable servers. 0 when the whole fleet is asleep.",
+          "targets": [{"expr": "sum(minecraft_status_players_online_count{namespace=\"game-server\"}) or vector(0)", "legendFormat": "fleet total", "refId": "A"}],
+          "fieldConfig": {"defaults": {"unit": "short", "decimals": 0, "min": 0, "custom": {"fillOpacity": 15, "lineWidth": 2, "drawStyle": "line"}, "color": {"mode": "fixed", "fixedColor": "green"}}}},
+
+        {"type": "timeseries", "title": "Fleet CPU per server over time", "gridPos": {"x": 0, "y": 21, "w": 12, "h": 7},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [
+            {"expr": "sum by (pod) (rate(container_cpu_usage_seconds_total{namespace=\"game-server\", pod=~\"atm9skies-0|atm9skies-island-0|mc-earth-0\", container!=\"\"}[2m]))", "legendFormat": "{{pod}} cpu (cores)", "refId": "A"}
+          ],
+          "fieldConfig": {"defaults": {"unit": "short", "custom": {"fillOpacity": 8, "lineWidth": 2}}}},
+
+        {"type": "timeseries", "title": "Fleet memory working set per server", "gridPos": {"x": 12, "y": 21, "w": 12, "h": 7},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [
+            {"expr": "sum by (pod) (container_memory_working_set_bytes{namespace=\"game-server\", pod=~\"atm9skies-0|atm9skies-island-0|mc-earth-0\", container!=\"\"})", "legendFormat": "{{pod}}", "refId": "A"}
+          ],
+          "fieldConfig": {"defaults": {"unit": "bytes", "custom": {"fillOpacity": 8, "lineWidth": 2}}}},
+
+        {"collapsed": false, "type": "row", "title": "mc-router (routing front door)", "gridPos": {"x": 0, "y": 28, "w": 24, "h": 1}, "id": 150},
+
+        {"type": "timeseries", "title": "mc-router — frontend connections (mc_router_frontend_connections)", "gridPos": {"x": 0, "y": 29, "w": 8, "h": 7},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "description": "Current connection gauge held by mc-router (label side=\"frontend\"). This is mc-router's view of live client connections; it is NOT per-backend (mc-router 1.42.1 does not expose a per-host connection series).",
+          "targets": [{"expr": "sum by (side) (mc_router_frontend_connections{namespace=\"game-server\"})", "legendFormat": "{{side}}", "refId": "A"}],
+          "fieldConfig": {"defaults": {"unit": "short", "decimals": 0, "min": 0, "custom": {"fillOpacity": 12, "lineWidth": 2}}}},
+
+        {"type": "timeseries", "title": "mc-router — errors by type (rate, mc_router_errors)", "gridPos": {"x": 8, "y": 29, "w": 8, "h": 7},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "description": "Per-type error rate. Confirmed-real label `type` (e.g. backend_failed, read). backend_failed climbing = a backend (server) was unreachable when a client tried to connect.",
+          "targets": [{"expr": "sum by (type) (rate(mc_router_errors{namespace=\"game-server\"}[5m]))", "legendFormat": "{{type}}", "refId": "A"}],
+          "fieldConfig": {"defaults": {"unit": "short", "custom": {"fillOpacity": 10, "lineWidth": 1}, "color": {"mode": "palette-classic"}}}},
+
+        {"type": "timeseries", "title": "mc-router — rate-limit tokens available (mc_router_rate_limit_available)", "gridPos": {"x": 16, "y": 29, "w": 8, "h": 7},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "description": "Remaining connection rate-limit tokens. Dropping toward 0 = mc-router is throttling new connections (possible connection storm / scan).",
+          "targets": [{"expr": "mc_router_rate_limit_available{namespace=\"game-server\"}", "legendFormat": "tokens available", "refId": "A"}],
+          "fieldConfig": {"defaults": {"unit": "short", "decimals": 0, "min": 0, "custom": {"fillOpacity": 8, "lineWidth": 2}, "color": {"mode": "fixed", "fixedColor": "purple"}}}},
+
+        {"collapsed": false, "type": "row", "title": "Per server — $server", "gridPos": {"x": 0, "y": 36, "w": 24, "h": 1}, "id": 200,
+          "repeat": "server", "repeatDirection": "h"},
+
+        {"type": "stat", "title": "$server — ready / replicas", "gridPos": {"x": 0, "y": 37, "w": 4, "h": 4},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [
+            {"expr": "kube_statefulset_status_replicas_ready{namespace=\"game-server\", statefulset=\"$server\"}", "legendFormat": "ready", "refId": "A"},
+            {"expr": "kube_statefulset_replicas{namespace=\"game-server\", statefulset=\"$server\"}", "legendFormat": "desired", "refId": "B"}
+          ],
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "textMode": "value_and_name"},
+          "fieldConfig": {"defaults": {"mappings": [{"type": "value", "options": {"0": {"text": "0", "color": "gray"}}}], "thresholds": {"mode": "absolute", "steps": [{"color": "gray"}, {"color": "green", "value": 1}]}, "color": {"mode": "thresholds"}}}},
+
+        {"type": "stat", "title": "$server — players online (mc-monitor)", "gridPos": {"x": 4, "y": 37, "w": 3, "h": 4},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "description": "Real player count from mc-monitor (minecraft_status_players_online_count), matched by server_host=~\"$server\\\\..*\". Series is absent while the server is asleep, so it shows 'asleep / offline' (noValue).",
+          "targets": [{"expr": "max(minecraft_status_players_online_count{namespace=\"game-server\", server_host=~\"$server\\\\..*\"})", "refId": "A"}],
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
+          "fieldConfig": {"defaults": {"unit": "short", "decimals": 0, "thresholds": {"mode": "absolute", "steps": [{"color": "gray"}, {"color": "green", "value": 1}, {"color": "blue", "value": 5}]}, "color": {"mode": "thresholds"}, "noValue": "asleep / offline"}}},
+
+        {"type": "stat", "title": "$server — online (mc-monitor healthy)", "gridPos": {"x": 7, "y": 37, "w": 3, "h": 4},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "description": "mc-monitor minecraft_status_healthy for this server. 1 = reachable & ready. If replicas/ready=1 (awake) but this reads 0, the server is still BOOTING (ATM9 ~62s, mc-earth up to ~10m worldgen).",
+          "targets": [{"expr": "max(minecraft_status_healthy{namespace=\"game-server\", server_host=~\"$server\\\\..*\"})", "refId": "A"}],
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
+          "fieldConfig": {"defaults": {"mappings": [{"type": "value", "options": {"0": {"text": "offline", "color": "gray"}, "1": {"text": "online", "color": "green"}}}], "thresholds": {"mode": "absolute", "steps": [{"color": "gray"}, {"color": "green", "value": 1}]}, "color": {"mode": "thresholds"}, "noValue": "offline"}}},
+
+        {"type": "stat", "title": "$server — CPU (cores)", "gridPos": {"x": 10, "y": 37, "w": 4, "h": 4},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"expr": "sum(rate(container_cpu_usage_seconds_total{namespace=\"game-server\", pod=~\"$server-0\", container!=\"\"}[2m]))", "refId": "A"}],
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
+          "fieldConfig": {"defaults": {"unit": "short", "decimals": 2, "color": {"mode": "fixed", "fixedColor": "orange"}}}},
+
+        {"type": "stat", "title": "$server — restarts (12h)", "gridPos": {"x": 14, "y": 37, "w": 4, "h": 4},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"expr": "sum(increase(kube_pod_container_status_restarts_total{namespace=\"game-server\", pod=~\"$server-0\"}[12h]))", "refId": "A"}],
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
+          "fieldConfig": {"defaults": {"thresholds": {"mode": "absolute", "steps": [{"color": "green"}, {"color": "orange", "value": 1}, {"color": "red", "value": 5}]}, "color": {"mode": "thresholds"}}}},
+
+        {"type": "stat", "title": "$server — last scale-up / start", "gridPos": {"x": 18, "y": 37, "w": 6, "h": 4},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "description": "Pod start time of the current $server-0 pod. Resets to 'now' on each cold wake, so it doubles as 'last scale-up'.",
+          "targets": [{"expr": "max(kube_pod_start_time{namespace=\"game-server\", pod=~\"$server-0\"}) * 1000", "refId": "A"}],
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
+          "fieldConfig": {"defaults": {"unit": "dateTimeFromNow", "color": {"mode": "fixed", "fixedColor": "blue"}, "noValue": "asleep"}}},
+
+        {"type": "timeseries", "title": "$server — memory working set vs ceiling", "gridPos": {"x": 0, "y": 41, "w": 12, "h": 7},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "description": "Working set vs the container memory limit (kube_pod_container_resource_limits). atm9skies has no limit set, so its ceiling line will be absent.",
+          "targets": [
+            {"expr": "max(container_memory_working_set_bytes{namespace=\"game-server\", pod=~\"$server-0\", container!=\"\"})", "legendFormat": "working set", "refId": "A"},
+            {"expr": "max(kube_pod_container_resource_limits{namespace=\"game-server\", pod=~\"$server-0\", resource=\"memory\"})", "legendFormat": "memory ceiling", "refId": "B"}
+          ],
+          "fieldConfig": {"defaults": {"unit": "bytes", "custom": {"fillOpacity": 6, "lineWidth": 2}},
+            "overrides": [{"matcher": {"id": "byName", "options": "memory ceiling"}, "properties": [{"id": "custom.lineStyle", "value": {"fill": "dash", "dash": [10, 10]}}, {"id": "color", "value": {"mode": "fixed", "fixedColor": "red"}}, {"id": "custom.fillOpacity", "value": 0}]}]}},
+
+        {"type": "timeseries", "title": "$server — network I/O", "gridPos": {"x": 12, "y": 41, "w": 12, "h": 7},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [
+            {"expr": "sum(rate(container_network_receive_bytes_total{namespace=\"game-server\", pod=~\"$server-0\"}[2m])) * 8", "legendFormat": "rx", "refId": "A"},
+            {"expr": "sum(rate(container_network_transmit_bytes_total{namespace=\"game-server\", pod=~\"$server-0\"}[2m])) * 8 * -1", "legendFormat": "tx", "refId": "B"}
+          ],
+          "fieldConfig": {"defaults": {"unit": "bps", "custom": {"fillOpacity": 10, "lineWidth": 1}}}},
+
+        {"type": "logs", "title": "$server — player join/leave (log detail)", "gridPos": {"x": 0, "y": 48, "w": 24, "h": 7},
+          "datasource": {"type": "loki", "uid": "P8E80F9AEF21F6940"},
+          "description": "itzg/Forge log lines for joins/leaves and the periodic 'There are N of M' count. Per-event detail (who joined/left); the authoritative live count is now the mc-monitor 'players online' stat above. Resilient to format drift (matches joined|left|There are).",
+          "targets": [{"expr": "{namespace=\"game-server\", pod=~\"$server-0\"} |~ \"(?i)joined the game|left the game|There are [0-9]+ ?(of|/)\" | decolorize", "refId": "A", "maxLines": 40}],
+          "options": {"showTime": true, "sortOrder": "Descending", "wrapLogMessage": true}},
+
+        {"collapsed": false, "type": "row", "title": "Autosleep activity", "gridPos": {"x": 0, "y": 55, "w": 24, "h": 1}, "id": 300},
+
+        {"type": "logs", "title": "mc-autosleep — slept / woke / why", "gridPos": {"x": 0, "y": 56, "w": 16, "h": 9},
+          "datasource": {"type": "loki", "uid": "P8E80F9AEF21F6940"},
+          "description": "Output of the mc-autosleep CronJob: which server is awake/asleep, player counts, idle timers, and scale-to-0 decisions.",
+          "targets": [{"expr": "{namespace=\"game-server\", pod=~\"mc-autosleep.*\"} |~ \"(?i)scaling to 0|keep-alive|asleep|online|waiting|unreachable|mc-autosleep done\"", "refId": "A", "maxLines": 60}],
+          "options": {"showTime": true, "sortOrder": "Descending", "wrapLogMessage": true}},
+
+        {"type": "table", "title": "mc-autosleep — recent CronJob runs", "gridPos": {"x": 16, "y": 56, "w": 8, "h": 9},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [
+            {"expr": "kube_job_status_succeeded{namespace=\"game-server\", job_name=~\"mc-autosleep.*\"} - 0", "legendFormat": "succeeded", "instant": true, "format": "table", "refId": "A"},
+            {"expr": "kube_job_status_failed{namespace=\"game-server\", job_name=~\"mc-autosleep.*\"} - 0", "legendFormat": "failed", "instant": true, "format": "table", "refId": "B"},
+            {"expr": "kube_job_status_completion_time{namespace=\"game-server\", job_name=~\"mc-autosleep.*\"}", "legendFormat": "completed_at", "instant": true, "format": "table", "refId": "C"}
+          ],
+          "transformations": [
+            {"id": "joinByField", "options": {"byField": "job_name", "mode": "outer"}},
+            {"id": "organize", "options": {"excludeByName": {"Time": true, "Time 1": true, "Time 2": true, "Time 3": true, "__name__": true, "__name__ 1": true, "__name__ 2": true, "__name__ 3": true, "namespace": true, "endpoint": true, "container": true, "instance": true, "job": true, "pod": true, "service": true, "uid": true}, "renameByName": {"Value #C": "completed_at"}}}
+          ]}
+      ]
+    }

@@ -5,8 +5,9 @@
 # "Projects" folder per the grafana_folder annotation.
 #
 # Organized into rows by concern:
-#   1. Top stats        — fleet-level "is it OK" tiles
-#   2. Performance      — pod CPU/RAM/net + host RAPL power attribution
+#   1. Top stats        — fleet-level "is it OK" tiles (incl. humanized uptime)
+#   2. Performance      — pod CPU/RAM/net, mem-vs-limit / cpu-vs-request
+#                         headroom, and (interim, Loki) update-watcher activity
 #   3. Live game state  — current players + map + voting (from Loki logs)
 #   4. Player activity  — connects, chat volume, time-of-day heatmap
 #   5. Leaderboard      — MySQL queries against source2surf_timer
@@ -50,31 +51,27 @@ data:
           "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
           "fieldConfig": {"defaults": {"thresholds": {"mode": "absolute", "steps": [{"color": "gray"}, {"color": "green", "value": 1}, {"color": "blue", "value": 5}, {"color": "purple", "value": 10}]}, "color": {"mode": "thresholds"}}}},
 
-        {"type": "stat", "title": "Current Map", "gridPos": {"x": 6, "y": 0, "w": 4, "h": 4},
+        {"type": "stat", "title": "Current Map", "gridPos": {"x": 6, "y": 0, "w": 5, "h": 4},
+          "description": "Latest map the server loaded, parsed from the engine HostStateRequest LevelName line (emitted on every map change/vote result).",
           "datasource": {"type": "loki", "uid": "P8E80F9AEF21F6940"},
-          "targets": [{"expr": "{namespace=\"game-server\", pod=~\"cs2-surf-server.*\"} |~ \"SurfMapCommand \\\\| surf_\" | regexp \"\\\\| (?P<map>surf_\\\\w+)\" | line_format \"{{.map}}\"", "refId": "A", "maxLines": 1}],
-          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "textMode": "value", "colorMode": "value"},
+          "targets": [{"expr": "{namespace=\"game-server\", pod=~\"cs2-surf-server.*\"} |~ \"LevelName=\\\\[surf_\" | regexp \"LevelName=\\\\[(?P<map>surf_[^\\\\]]+)\\\\]\" | line_format \"{{.map}}\"", "refId": "A", "maxLines": 1}],
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"], "fields": "/.*/"}, "textMode": "value", "colorMode": "value"},
           "fieldConfig": {"defaults": {"color": {"mode": "fixed", "fixedColor": "blue"}}}},
 
-        {"type": "stat", "title": "Server Uptime", "gridPos": {"x": 10, "y": 0, "w": 3, "h": 4},
+        {"type": "stat", "title": "Server Uptime", "gridPos": {"x": 11, "y": 0, "w": 4, "h": 4},
+          "description": "Current uptime of the cs2-surf-server pod (now − pod start time) as a humanized duration. Stat, not a graph — a single live value rather than a ramp.",
           "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "targets": [{"expr": "time() - max(kube_pod_start_time{namespace=\"game-server\",pod=~\"cs2-surf-server.*\"})", "refId": "A"}],
-          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
-          "fieldConfig": {"defaults": {"unit": "s", "color": {"mode": "fixed", "fixedColor": "green"}}}},
+          "targets": [{"expr": "time() - max(kube_pod_start_time{namespace=\"game-server\",pod=~\"cs2-surf-server.*\"})", "refId": "A", "instant": true}],
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "textMode": "value", "colorMode": "value"},
+          "fieldConfig": {"defaults": {"unit": "dtdurations", "decimals": 0, "color": {"mode": "fixed", "fixedColor": "green"}}}},
 
-        {"type": "stat", "title": "Restarts (12h)", "gridPos": {"x": 13, "y": 0, "w": 3, "h": 4},
+        {"type": "stat", "title": "Restarts (12h)", "gridPos": {"x": 15, "y": 0, "w": 4, "h": 4},
           "datasource": {"type": "prometheus", "uid": "prometheus"},
           "targets": [{"expr": "sum(increase(kube_pod_container_status_restarts_total{namespace=\"game-server\",pod=~\"cs2-surf-server.*\"}[12h]))", "refId": "A"}],
           "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
           "fieldConfig": {"defaults": {"thresholds": {"mode": "absolute", "steps": [{"color": "green"}, {"color": "orange", "value": 1}, {"color": "red", "value": 5}]}, "color": {"mode": "thresholds"}}}},
 
-        {"type": "stat", "title": "Node Power Draw", "gridPos": {"x": 16, "y": 0, "w": 4, "h": 4},
-          "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "targets": [{"expr": "rate(node_rapl_package_joules_total{instance=~\"10.41.0.4:9100|10.41.0.5:9100\"}[5m])", "legendFormat": "{{instance}}", "refId": "A"}],
-          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
-          "fieldConfig": {"defaults": {"unit": "watt", "color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "green"}, {"color": "orange", "value": 80}, {"color": "red", "value": 150}]}}}},
-
-        {"type": "stat", "title": "Unique Players (all-time)", "gridPos": {"x": 20, "y": 0, "w": 4, "h": 4},
+        {"type": "stat", "title": "Unique Players (all-time)", "gridPos": {"x": 19, "y": 0, "w": 5, "h": 4},
           "datasource": {"type": "mysql", "uid": "cs2-surf-mysql"},
           "targets": [{"rawSql": "SELECT COUNT(*) AS total FROM surf_players", "refId": "A", "format": "table"}],
           "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
@@ -117,142 +114,165 @@ data:
           "targets": [{"expr": "deriv(max(container_memory_working_set_bytes{namespace=\"game-server\",pod=~\"cs2-surf-server.*\",container!=\"\"})[10m:1m])", "legendFormat": "Δ bytes/s (10m window)", "refId": "A"}],
           "fieldConfig": {"defaults": {"unit": "Bps", "custom": {"fillOpacity": 10, "lineWidth": 2}, "thresholds": {"mode": "absolute", "steps": [{"color": "green"}, {"color": "orange", "value": 100000}, {"color": "red", "value": 1000000}]}, "color": {"mode": "thresholds"}}}},
 
-        {"collapsed": false, "type": "row", "title": "Live game state (Loki)", "gridPos": {"x": 0, "y": 18, "w": 24, "h": 1}, "id": 200},
+        {"type": "timeseries", "title": "Memory utilization vs limit (%)", "description": "container working set as a fraction of its memory limit (16Gi). Approaching 100% risks an OOMKill. Joined on pod so it stays correct across restarts.", "gridPos": {"x": 0, "y": 18, "w": 12, "h": 7},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"expr": "100 * max(container_memory_working_set_bytes{namespace=\"game-server\",pod=~\"cs2-surf-server.*\",container!=\"\"}) by (pod) / on(pod) max(kube_pod_container_resource_limits{namespace=\"game-server\",pod=~\"cs2-surf-server.*\",resource=\"memory\"}) by (pod)", "legendFormat": "mem % of limit", "refId": "A"}],
+          "fieldConfig": {"defaults": {"unit": "percent", "min": 0, "max": 100, "custom": {"fillOpacity": 10, "lineWidth": 2}, "thresholds": {"mode": "absolute", "steps": [{"color": "green"}, {"color": "orange", "value": 75}, {"color": "red", "value": 90}]}, "color": {"mode": "thresholds"}}}},
 
-        {"type": "table", "title": "Live player list", "gridPos": {"x": 0, "y": 19, "w": 8, "h": 7},
-          "datasource": {"type": "loki", "uid": "P8E80F9AEF21F6940"},
-          "targets": [{"expr": "{namespace=\"game-server\", pod=~\"cs2-surf-server.*\"} |~ \"PLAYERS \" | regexp \"PLAYERS (?P<count>\\\\d+)\" | line_format \"{{.count}} players online\"", "refId": "A", "maxLines": 5}]},
+        {"type": "timeseries", "title": "CPU usage vs request (%)", "description": "CPU usage as a fraction of the configured CPU request (2 cores). cs2-surf-server has no CPU limit, so this is proximity-to-request rather than limit; >100% means it is bursting above its reservation.", "gridPos": {"x": 12, "y": 18, "w": 12, "h": 7},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"expr": "100 * sum(rate(container_cpu_usage_seconds_total{namespace=\"game-server\",pod=~\"cs2-surf-server.*\",container!=\"\"}[5m])) / clamp_min(sum(kube_pod_container_resource_requests{namespace=\"game-server\",pod=~\"cs2-surf-server.*\",resource=\"cpu\"}), 0.001)", "legendFormat": "cpu % of request", "refId": "A"}],
+          "fieldConfig": {"defaults": {"unit": "percent", "min": 0, "custom": {"fillOpacity": 10, "lineWidth": 2}, "thresholds": {"mode": "absolute", "steps": [{"color": "green"}, {"color": "orange", "value": 80}, {"color": "red", "value": 100}]}, "color": {"mode": "thresholds"}}}},
 
-        {"type": "logs", "title": "Recent map changes", "gridPos": {"x": 8, "y": 19, "w": 8, "h": 7},
+        {"type": "logs", "title": "CS2 update-watcher activity (log-derived, interim — Loki)", "description": "Interim visibility for the Valve build-watcher CronJob, which emits no Prometheus metric. Surfaces its recent log activity (Valve up-to-date checks, new-build detections, rollout-restart triggers). Resilient to log-format drift via a broad keyword match; shows 'No data' until the watcher is deployed and runs.", "gridPos": {"x": 0, "y": 25, "w": 24, "h": 6},
           "datasource": {"type": "loki", "uid": "P8E80F9AEF21F6940"},
-          "targets": [{"expr": "{namespace=\"game-server\", pod=~\"cs2-surf-server.*\"} |~ \"Pending change executing\" | line_format \"{{__line__}}\" | decolorize", "refId": "A", "maxLines": 10}],
+          "targets": [{"expr": "{namespace=\"game-server\"} |~ \"(?i)cs2-update-watcher|update-watcher|UpToDateCheck|new build|build detected|rollout|restart(ing)? (the )?(active )?(deployment|server)|already up to date|PatchVersion\" | decolorize", "refId": "A", "maxLines": 50}],
+          "options": {"showTime": true, "sortOrder": "Descending", "wrapLogMessage": true, "enableLogDetails": true}},
+
+        {"collapsed": false, "type": "row", "title": "Live game state (Loki)", "gridPos": {"x": 0, "y": 31, "w": 24, "h": 1}, "id": 200},
+
+        {"type": "logs", "title": "Recent player sessions (connect / disconnect)", "gridPos": {"x": 0, "y": 32, "w": 8, "h": 7},
+          "description": "The server does not log a live roster — only an aggregate 'PLAYERS N' count and per-event CONNECT/DISCONNECT lines (which carry the player name). This shows the most recent join/leave events, the closest truthful 'who's here' signal. Live aggregate count is in the 'Current Players' stat above.",
+          "datasource": {"type": "loki", "uid": "P8E80F9AEF21F6940"},
+          "targets": [{"expr": "{namespace=\"game-server\", pod=~\"cs2-surf-server.*\"} |~ \"^(CONNECT|DISCONNECT) \" != \"reason=LoopShutdown\" != \"reason=LoopDeactivate\" | regexp \"^(?P<ev>CONNECT|DISCONNECT) \\\\d+ \\\\((?P<player>[^)]+)\\\\)\" | line_format \"{{.ev}}  {{.player}}\"", "refId": "A", "maxLines": 20}],
           "options": {"showTime": true, "sortOrder": "Descending", "wrapLogMessage": false}},
 
-        {"type": "stat", "title": "RTV Votes (range)", "gridPos": {"x": 16, "y": 19, "w": 4, "h": 4},
+        {"type": "logs", "title": "Recent map changes", "gridPos": {"x": 8, "y": 32, "w": 8, "h": 7},
+          "description": "Map loads parsed from the engine HostStateRequest LevelName line (ChangeLevel=[true]). One entry per actual map change.",
           "datasource": {"type": "loki", "uid": "P8E80F9AEF21F6940"},
-          "targets": [{"expr": "sum(count_over_time({namespace=\"game-server\", pod=~\"cs2-surf-server.*\"} |~ \"RTV threshold|RTV passed\" [$__range]))", "refId": "A"}],
+          "targets": [{"expr": "{namespace=\"game-server\", pod=~\"cs2-surf-server.*\"} |~ \"LevelName=\\\\[surf_\" |~ \"ChangeLevel=\\\\[true\\\\]\" | regexp \"LevelName=\\\\[(?P<map>surf_[^\\\\]]+)\\\\]\" | line_format \"→ {{.map}}\"", "refId": "A", "maxLines": 15}],
+          "options": {"showTime": true, "sortOrder": "Descending", "wrapLogMessage": false}},
+
+        {"type": "stat", "title": "RTV calls (range)", "gridPos": {"x": 16, "y": 32, "w": 4, "h": 4},
+          "description": "Count of '!rtv' (rock-the-vote) chat commands in the selected range. The surf plugin does not emit a distinct 'RTV passed' line, so this counts player RTV requests.",
+          "datasource": {"type": "loki", "uid": "P8E80F9AEF21F6940"},
+          "targets": [{"expr": "sum(count_over_time({namespace=\"game-server\", pod=~\"cs2-surf-server.*\"} |~ \"^CHAT .*: !rtv\" [$__range]))", "refId": "A"}],
           "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
           "fieldConfig": {"defaults": {"color": {"mode": "fixed", "fixedColor": "yellow"}}}},
 
-        {"type": "stat", "title": "Extends (range)", "gridPos": {"x": 20, "y": 19, "w": 4, "h": 4},
+        {"type": "stat", "title": "Map extends (range)", "gridPos": {"x": 20, "y": 32, "w": 4, "h": 4},
+          "description": "Count of 'Vote result: extend' lines (a map-extend vote that resolved to extend) in the selected range.",
           "datasource": {"type": "loki", "uid": "P8E80F9AEF21F6940"},
-          "targets": [{"expr": "sum(count_over_time({namespace=\"game-server\", pod=~\"cs2-surf-server.*\"} |~ \"Extend passed\" [$__range]))", "refId": "A"}],
+          "targets": [{"expr": "sum(count_over_time({namespace=\"game-server\", pod=~\"cs2-surf-server.*\"} |~ \"Vote result: extend\" [$__range]))", "refId": "A"}],
           "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
           "fieldConfig": {"defaults": {"color": {"mode": "fixed", "fixedColor": "orange"}}}},
 
-        {"type": "timeseries", "title": "Chat commands (cmds/min)", "gridPos": {"x": 16, "y": 23, "w": 8, "h": 3},
+        {"type": "timeseries", "title": "Chat commands (cmds/min)", "gridPos": {"x": 16, "y": 36, "w": 8, "h": 3},
+          "description": "Rate of in-game chat commands by command, parsed from 'CHAT <id> (name): !<cmd>' lines (e.g. !rtv, !r, !play). The server logs no separate 'CMD from' event — commands are ordinary chat starting with '!'.",
           "datasource": {"type": "loki", "uid": "P8E80F9AEF21F6940"},
-          "targets": [{"expr": "sum by (body) (count_over_time({namespace=\"game-server\", pod=~\"cs2-surf-server.*\"} |~ \"CMD from\" | regexp \"body=(?P<body>\\\\w+)\" [30s]))", "legendFormat": "!{{body}}", "refId": "A"}],
+          "targets": [{"expr": "sum by (cmd) (count_over_time({namespace=\"game-server\", pod=~\"cs2-surf-server.*\"} |~ \"^CHAT .*: !\" | regexp \": !(?P<cmd>\\\\w+)\" [1m]))", "legendFormat": "!{{cmd}}", "refId": "A"}],
           "fieldConfig": {"defaults": {"custom": {"fillOpacity": 10, "lineWidth": 1}}}},
 
-        {"collapsed": false, "type": "row", "title": "Player activity", "gridPos": {"x": 0, "y": 26, "w": 24, "h": 1}, "id": 300},
+        {"collapsed": false, "type": "row", "title": "Player activity", "gridPos": {"x": 0, "y": 39, "w": 24, "h": 1}, "id": 300},
 
-        {"type": "timeseries", "title": "Player connects / disconnects (per 5m)", "gridPos": {"x": 0, "y": 27, "w": 12, "h": 7},
+        {"type": "timeseries", "title": "Player connects / disconnects (per 5m)", "gridPos": {"x": 0, "y": 40, "w": 12, "h": 7},
           "datasource": {"type": "loki", "uid": "P8E80F9AEF21F6940"},
           "targets": [
-            {"expr": "sum(count_over_time({namespace=\"game-server\", pod=~\"cs2-surf-server.*\"} |~ \"CONNECT (?:from|by)\" [5m]))", "legendFormat": "connects", "refId": "A"},
-            {"expr": "sum(count_over_time({namespace=\"game-server\", pod=~\"cs2-surf-server.*\"} |~ \"DISCONNECT\" [5m]))", "legendFormat": "disconnects", "refId": "B"}
+            {"expr": "sum(count_over_time({namespace=\"game-server\", pod=~\"cs2-surf-server.*\"} |~ \"^CONNECT \" [5m]))", "legendFormat": "connects", "refId": "A"},
+            {"expr": "sum(count_over_time({namespace=\"game-server\", pod=~\"cs2-surf-server.*\"} |~ \"DISCONNECT\" != \"reason=LoopShutdown\" != \"reason=LoopDeactivate\" [5m]))", "legendFormat": "disconnects", "refId": "B"}
           ],
           "fieldConfig": {"defaults": {"custom": {"fillOpacity": 5, "lineWidth": 2}}}},
 
-        {"type": "heatmap", "title": "Activity heatmap (connects by hour-of-day)", "gridPos": {"x": 12, "y": 27, "w": 12, "h": 7},
+        {"type": "heatmap", "title": "Activity heatmap (connects by hour-of-day)", "gridPos": {"x": 12, "y": 40, "w": 12, "h": 7},
           "datasource": {"type": "loki", "uid": "P8E80F9AEF21F6940"},
-          "targets": [{"expr": "sum(count_over_time({namespace=\"game-server\", pod=~\"cs2-surf-server.*\"} |~ \"CONNECT\" [$__interval]))", "refId": "A"}],
+          "targets": [{"expr": "sum(count_over_time({namespace=\"game-server\", pod=~\"cs2-surf-server.*\"} |~ \"^CONNECT \" [$__interval]))", "refId": "A"}],
           "options": {"calculate": true, "yAxis": {"axisPlacement": "left"}}},
 
-        {"type": "logs", "title": "Player chat", "gridPos": {"x": 0, "y": 34, "w": 12, "h": 7},
+        {"type": "logs", "title": "Player chat", "gridPos": {"x": 0, "y": 47, "w": 12, "h": 7},
+          "description": "In-game chat, parsed from 'CHAT <steamid> (name): <msg>'. Includes '!' commands since those are sent as chat.",
           "datasource": {"type": "loki", "uid": "P8E80F9AEF21F6940"},
-          "targets": [{"expr": "{namespace=\"game-server\", pod=~\"cs2-surf-server.*\"} |~ \"CHAT \" | regexp \"CHAT \\\\[(?P<player>[^\\\\]]+)\\\\]:?\\\\s*(?P<msg>.*)\" | line_format \"{{.player}}: {{.msg}}\"", "refId": "A", "maxLines": 30}],
+          "targets": [{"expr": "{namespace=\"game-server\", pod=~\"cs2-surf-server.*\"} |~ \"^CHAT \" | regexp \"^CHAT \\\\d+ \\\\((?P<player>[^)]+)\\\\): (?P<msg>.*)\" | line_format \"{{.player}}: {{.msg}}\"", "refId": "A", "maxLines": 30}],
           "options": {"showTime": true, "sortOrder": "Descending", "wrapLogMessage": true}},
 
-        {"type": "logs", "title": "Game events (connect / disconnect / commands)", "gridPos": {"x": 12, "y": 34, "w": 12, "h": 7},
+        {"type": "logs", "title": "Game events (connect / disconnect / chat)", "gridPos": {"x": 12, "y": 47, "w": 12, "h": 7},
+          "description": "Raw player-facing events: CONNECT/DISCONNECT (with name + reason) and CHAT. Engine teardown disconnects (LoopShutdown/LoopDeactivate) are filtered out.",
           "datasource": {"type": "loki", "uid": "P8E80F9AEF21F6940"},
-          "targets": [{"expr": "{namespace=\"game-server\", pod=~\"cs2-surf-server.*\"} |~ \"CMD from|CONNECT|DISCONNECT\"", "refId": "A", "maxLines": 30}],
+          "targets": [{"expr": "{namespace=\"game-server\", pod=~\"cs2-surf-server.*\"} |~ \"^(CONNECT|DISCONNECT|CHAT) \" != \"reason=LoopShutdown\" != \"reason=LoopDeactivate\"", "refId": "A", "maxLines": 30}],
           "options": {"showTime": true, "sortOrder": "Descending"}},
 
-        {"collapsed": false, "type": "row", "title": "Leaderboard (MySQL)", "gridPos": {"x": 0, "y": 41, "w": 24, "h": 1}, "id": 400},
+        {"collapsed": false, "type": "row", "title": "Leaderboard (MySQL)", "gridPos": {"x": 0, "y": 54, "w": 24, "h": 1}, "id": 400},
 
-        {"type": "stat", "title": "Total runs", "gridPos": {"x": 0, "y": 42, "w": 4, "h": 4},
+        {"type": "stat", "title": "Total runs", "gridPos": {"x": 0, "y": 55, "w": 4, "h": 4},
           "datasource": {"type": "mysql", "uid": "cs2-surf-mysql"},
           "targets": [{"rawSql": "SELECT COUNT(*) FROM surf_runs", "refId": "A", "format": "table"}],
           "fieldConfig": {"defaults": {"color": {"mode": "fixed", "fixedColor": "purple"}}}},
 
-        {"type": "stat", "title": "Runs (last 24h)", "gridPos": {"x": 4, "y": 42, "w": 4, "h": 4},
+        {"type": "stat", "title": "Runs (last 24h)", "gridPos": {"x": 4, "y": 55, "w": 4, "h": 4},
           "datasource": {"type": "mysql", "uid": "cs2-surf-mysql"},
           "targets": [{"rawSql": "SELECT COUNT(*) FROM surf_runs WHERE Date >= NOW() - INTERVAL 1 DAY", "refId": "A", "format": "table"}],
           "fieldConfig": {"defaults": {"color": {"mode": "fixed", "fixedColor": "green"}}}},
 
-        {"type": "stat", "title": "Active players (24h)", "gridPos": {"x": 8, "y": 42, "w": 4, "h": 4},
+        {"type": "stat", "title": "Active players (24h)", "gridPos": {"x": 8, "y": 55, "w": 4, "h": 4},
           "datasource": {"type": "mysql", "uid": "cs2-surf-mysql"},
           "targets": [{"rawSql": "SELECT COUNT(DISTINCT SteamId) FROM surf_runs WHERE Date >= NOW() - INTERVAL 1 DAY", "refId": "A", "format": "table"}],
           "fieldConfig": {"defaults": {"color": {"mode": "fixed", "fixedColor": "blue"}}}},
 
-        {"type": "stat", "title": "Maps available", "gridPos": {"x": 12, "y": 42, "w": 4, "h": 4},
+        {"type": "stat", "title": "Maps available", "gridPos": {"x": 12, "y": 55, "w": 4, "h": 4},
           "datasource": {"type": "mysql", "uid": "cs2-surf-mysql"},
           "targets": [{"rawSql": "SELECT COUNT(*) FROM surf_maps", "refId": "A", "format": "table"}],
           "fieldConfig": {"defaults": {"color": {"mode": "fixed", "fixedColor": "yellow"}}}},
 
-        {"type": "stat", "title": "New players (7d)", "gridPos": {"x": 16, "y": 42, "w": 4, "h": 4},
+        {"type": "stat", "title": "New players (7d)", "gridPos": {"x": 16, "y": 55, "w": 4, "h": 4},
           "datasource": {"type": "mysql", "uid": "cs2-surf-mysql"},
           "targets": [{"rawSql": "SELECT COUNT(*) FROM surf_players WHERE UpdatedAt >= NOW() - INTERVAL 7 DAY", "refId": "A", "format": "table"}],
           "fieldConfig": {"defaults": {"color": {"mode": "fixed", "fixedColor": "green"}}}},
 
-        {"type": "stat", "title": "Personal bests stored", "gridPos": {"x": 20, "y": 42, "w": 4, "h": 4},
+        {"type": "stat", "title": "Personal bests stored", "gridPos": {"x": 20, "y": 55, "w": 4, "h": 4},
           "datasource": {"type": "mysql", "uid": "cs2-surf-mysql"},
           "targets": [{"rawSql": "SELECT COUNT(*) FROM surf_player_best_runs", "refId": "A", "format": "table"}],
           "fieldConfig": {"defaults": {"color": {"mode": "fixed", "fixedColor": "purple"}}}},
 
-        {"type": "table", "title": "Top 10 maps by completions", "gridPos": {"x": 0, "y": 46, "w": 12, "h": 8},
+        {"type": "table", "title": "Top 10 maps by completions", "gridPos": {"x": 0, "y": 59, "w": 12, "h": 8},
           "datasource": {"type": "mysql", "uid": "cs2-surf-mysql"},
           "targets": [{"rawSql": "SELECT m.File AS map, m.Tier AS tier, COUNT(r.Id) AS runs, COUNT(DISTINCT r.SteamId) AS players FROM surf_runs r JOIN surf_maps m ON r.MapId = m.MapId GROUP BY m.File, m.Tier ORDER BY runs DESC LIMIT 10", "refId": "A", "format": "table"}]},
 
-        {"type": "table", "title": "Top 10 players by points", "gridPos": {"x": 12, "y": 46, "w": 12, "h": 8},
+        {"type": "table", "title": "Top 10 players by points", "gridPos": {"x": 12, "y": 59, "w": 12, "h": 8},
           "datasource": {"type": "mysql", "uid": "cs2-surf-mysql"},
           "targets": [{"rawSql": "SELECT Name AS player, Points AS points, Runs AS runs FROM surf_players ORDER BY Points DESC LIMIT 10", "refId": "A", "format": "table"}]},
 
-        {"type": "table", "title": "Recent personal bests (24h)", "gridPos": {"x": 0, "y": 54, "w": 24, "h": 8},
+        {"type": "table", "title": "Recent personal bests (24h)", "gridPos": {"x": 0, "y": 67, "w": 24, "h": 8},
           "datasource": {"type": "mysql", "uid": "cs2-surf-mysql"},
           "targets": [{"rawSql": "SELECT p.Name AS player, m.File AS map, pbr.BestTime AS best_time_seconds, pbr.UpdatedAt AS set_at, CASE pbr.RunType WHEN 0 THEN 'Main' WHEN 1 THEN CONCAT('Stage ', pbr.Stage) ELSE 'Bonus' END AS run_type FROM surf_player_best_runs pbr JOIN surf_players p ON pbr.SteamId = p.SteamId JOIN surf_maps m ON pbr.MapId = m.MapId WHERE pbr.UpdatedAt >= NOW() - INTERVAL 1 DAY ORDER BY pbr.UpdatedAt DESC LIMIT 30", "refId": "A", "format": "table"}]},
 
-        {"collapsed": false, "type": "row", "title": "Leaderboard API & web (Tempo + Prometheus)", "gridPos": {"x": 0, "y": 62, "w": 24, "h": 1}, "id": 500},
+        {"collapsed": false, "type": "row", "title": "Leaderboard API & web (Tempo + Prometheus)", "gridPos": {"x": 0, "y": 75, "w": 24, "h": 1}, "id": 500},
 
-        {"type": "stat", "title": "surf-api req/s (5m)", "gridPos": {"x": 0, "y": 63, "w": 4, "h": 4},
+        {"type": "stat", "title": "surf-api req/s (5m)", "gridPos": {"x": 0, "y": 76, "w": 4, "h": 4},
           "datasource": {"type": "prometheus", "uid": "prometheus"},
           "targets": [{"expr": "sum(rate(traces_spanmetrics_calls_total{service=\"surf-api\"}[5m]))", "refId": "A"}],
           "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
           "fieldConfig": {"defaults": {"unit": "reqps", "color": {"mode": "fixed", "fixedColor": "blue"}}}},
 
-        {"type": "stat", "title": "surf-api errors/s (5m)", "gridPos": {"x": 4, "y": 63, "w": 4, "h": 4},
+        {"type": "stat", "title": "surf-api errors/s (5m)", "gridPos": {"x": 4, "y": 76, "w": 4, "h": 4},
           "datasource": {"type": "prometheus", "uid": "prometheus"},
           "targets": [{"expr": "sum(rate(traces_spanmetrics_calls_total{service=\"surf-api\",status_code=\"STATUS_CODE_ERROR\"}[5m]))", "refId": "A"}],
           "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
           "fieldConfig": {"defaults": {"unit": "reqps", "thresholds": {"mode": "absolute", "steps": [{"color": "green"}, {"color": "orange", "value": 0.01}, {"color": "red", "value": 0.1}]}, "color": {"mode": "thresholds"}}}},
 
-        {"type": "stat", "title": "surf-api p95 (5m)", "gridPos": {"x": 8, "y": 63, "w": 4, "h": 4},
+        {"type": "stat", "title": "surf-api p95 (5m)", "gridPos": {"x": 8, "y": 76, "w": 4, "h": 4},
           "datasource": {"type": "prometheus", "uid": "prometheus"},
           "targets": [{"expr": "histogram_quantile(0.95, sum by (le) (rate(traces_spanmetrics_latency_bucket{service=\"surf-api\"}[5m])))", "refId": "A"}],
           "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
           "fieldConfig": {"defaults": {"unit": "s", "thresholds": {"mode": "absolute", "steps": [{"color": "green"}, {"color": "orange", "value": 0.2}, {"color": "red", "value": 1}]}, "color": {"mode": "thresholds"}}}},
 
-        {"type": "stat", "title": "surf-api pod ready", "gridPos": {"x": 12, "y": 63, "w": 3, "h": 4},
+        {"type": "stat", "title": "surf-api pod ready", "gridPos": {"x": 12, "y": 76, "w": 3, "h": 4},
           "datasource": {"type": "prometheus", "uid": "prometheus"},
           "targets": [{"expr": "kube_pod_status_ready{namespace=\"game-server\",pod=~\"surf-api.*\",condition=\"true\"}", "refId": "A"}],
           "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
           "fieldConfig": {"defaults": {"mappings": [{"type": "value", "options": {"0": {"text": "DOWN"}, "1": {"text": "UP"}}}], "thresholds": {"mode": "absolute", "steps": [{"color": "red"}, {"color": "green", "value": 1}]}, "color": {"mode": "thresholds"}}}},
 
-        {"type": "stat", "title": "surf-web pod ready", "gridPos": {"x": 15, "y": 63, "w": 3, "h": 4},
+        {"type": "stat", "title": "surf-web pod ready", "gridPos": {"x": 15, "y": 76, "w": 3, "h": 4},
           "datasource": {"type": "prometheus", "uid": "prometheus"},
           "targets": [{"expr": "kube_pod_status_ready{namespace=\"game-server\",pod=~\"surf-web.*\",condition=\"true\"}", "refId": "A"}],
           "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
           "fieldConfig": {"defaults": {"mappings": [{"type": "value", "options": {"0": {"text": "DOWN"}, "1": {"text": "UP"}}}], "thresholds": {"mode": "absolute", "steps": [{"color": "red"}, {"color": "green", "value": 1}]}, "color": {"mode": "thresholds"}}}},
 
-        {"type": "stat", "title": "MySQL pod ready", "gridPos": {"x": 18, "y": 63, "w": 3, "h": 4},
+        {"type": "stat", "title": "MySQL pod ready", "gridPos": {"x": 18, "y": 76, "w": 3, "h": 4},
           "datasource": {"type": "prometheus", "uid": "prometheus"},
           "targets": [{"expr": "kube_pod_status_ready{namespace=\"game-server\",pod=~\"cs2-mysql.*\",condition=\"true\"}", "refId": "A"}],
           "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
           "fieldConfig": {"defaults": {"mappings": [{"type": "value", "options": {"0": {"text": "DOWN"}, "1": {"text": "UP"}}}], "thresholds": {"mode": "absolute", "steps": [{"color": "red"}, {"color": "green", "value": 1}]}, "color": {"mode": "thresholds"}}}},
 
-        {"type": "timeseries", "title": "surf-api req rate + p95 latency", "gridPos": {"x": 0, "y": 67, "w": 12, "h": 7},
+        {"type": "timeseries", "title": "surf-api req rate + p95 latency", "gridPos": {"x": 0, "y": 80, "w": 12, "h": 7},
           "datasource": {"type": "prometheus", "uid": "prometheus"},
           "targets": [
             {"expr": "sum(rate(traces_spanmetrics_calls_total{service=\"surf-api\"}[2m]))", "legendFormat": "req/s", "refId": "A"},
@@ -260,14 +280,14 @@ data:
           ],
           "fieldConfig": {"defaults": {"custom": {"fillOpacity": 5, "lineWidth": 2}}}},
 
-        {"type": "timeseries", "title": "surf-api errors by status", "gridPos": {"x": 12, "y": 67, "w": 12, "h": 7},
+        {"type": "timeseries", "title": "surf-api errors by status", "gridPos": {"x": 12, "y": 80, "w": 12, "h": 7},
           "datasource": {"type": "prometheus", "uid": "prometheus"},
           "targets": [{"expr": "sum by (status_code) (rate(traces_spanmetrics_calls_total{service=\"surf-api\"}[2m]))", "legendFormat": "{{status_code}}", "refId": "A"}],
           "fieldConfig": {"defaults": {"unit": "reqps", "custom": {"fillOpacity": 10, "lineWidth": 1}}}},
 
-        {"collapsed": false, "type": "row", "title": "Infrastructure (CronJobs + side workloads)", "gridPos": {"x": 0, "y": 74, "w": 24, "h": 1}, "id": 600},
+        {"collapsed": false, "type": "row", "title": "Infrastructure (CronJobs + side workloads)", "gridPos": {"x": 0, "y": 87, "w": 24, "h": 1}, "id": 600},
 
-        {"type": "table", "title": "Recent CronJob runs (cs2-demo-upload, cs2-surf-ads)", "gridPos": {"x": 0, "y": 75, "w": 24, "h": 8},
+        {"type": "table", "title": "Recent CronJob runs (cs2-demo-upload, cs2-surf-ads)", "gridPos": {"x": 0, "y": 88, "w": 24, "h": 8},
           "datasource": {"type": "prometheus", "uid": "prometheus"},
           "targets": [
             {"expr": "kube_job_status_succeeded{namespace=\"game-server\",job_name=~\"cs2-(demo-upload|surf-ads).*\"} - 0", "legendFormat": "{{job_name}} succeeded", "instant": true, "format": "table", "refId": "A"},
