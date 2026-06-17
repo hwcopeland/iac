@@ -1,0 +1,97 @@
+# OSIRIS — OSINT dashboard (Next.js 16 standalone SSR), replaces worldmonitor.
+# Serves osint.hwcopeland.net.
+#
+# Image is built in-cluster by build-job-kaniko.yaml and pushed to the private
+# zot registry. imagePullPolicy: Always + the :latest tag means a rollout
+# restart picks up a freshly built image (the build IS the deploy, same as
+# blog/periodic-table).
+#
+# Runs fully KEYLESS: every OSIRIS data-source API key is optional and missing
+# sources are gracefully skipped. envFrom osiris-env is marked optional so the
+# pod starts with zero keys. The existing worldmonitor-env secret holds reusable
+# keys (OPENSKY_CLIENT_ID/SECRET reuse as-is; NASA_FIRMS_API_KEY -> OSIRIS
+# FIRMS_API_KEY) — wire later by populating osiris-env, not now.
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: osiris
+  namespace: web-server
+  labels:
+    app.kubernetes.io/name: osiris
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+      protocol: TCP
+  selector:
+    app.kubernetes.io/name: osiris
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: osiris
+  namespace: web-server
+  labels:
+    app.kubernetes.io/name: osiris
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: osiris
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: osiris
+    spec:
+      # Reuses the pre-existing web-server/zot-pull-secret (private registry),
+      # same as blog/periodic-table.
+      imagePullSecrets:
+        - name: zot-pull-secret
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      containers:
+        - name: osiris
+          image: zot.hwcopeland.net/osiris:latest
+          imagePullPolicy: Always
+          # Next.js standalone server listens on 3000 (PORT=3000, HOSTNAME=0.0.0.0).
+          ports:
+            - name: http
+              containerPort: 3000
+              protocol: TCP
+          envFrom:
+            - secretRef:
+                name: osiris-env
+                optional: true
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 30
+          resources:
+            requests:
+              memory: 256Mi
+              cpu: 100m
+            limits:
+              memory: 1Gi
+              cpu: "1"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            runAsNonRoot: true
+            # The image's USER is the non-numeric name "nextjs" (uid 1001), which
+            # the kubelet can't verify against runAsNonRoot. Pin the numeric uid
+            # so the non-root check passes.
+            runAsUser: 1001
+            capabilities:
+              drop:
+                - ALL
