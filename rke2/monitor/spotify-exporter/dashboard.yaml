@@ -1,6 +1,23 @@
-# Grafana dashboard for the Spotify exporter. Loaded by the kube-prometheus
-# stack Grafana sidecar (label grafana_dashboard="1"); lands in the "Spotify"
-# folder. Datasource uid "prometheus" matches the stack default.
+# Grafana dashboard: Spotify (overview / landing page).
+#
+# Two-datasource board:
+#   * Now-playing panels use the Prometheus datasource (uid "prometheus") —
+#     Prometheus is the right store for real-time "what's playing now"
+#     (spotify_now_playing / _progress_ratio / _info, scraped live).
+#   * Everything else (summary, top artists/tracks, genres) reads the durable
+#     54k-play listening record from Postgres (datasource uid "spotify-postgres",
+#     the same store behind the Listening / Behavior / Library boards).
+#
+# History note: this board used to surface Spotify's /me/top endpoints
+# (spotify_top_artist_rank / spotify_top_track_rank / spotify_genre_score, driven
+# by a long/medium/short "range" template variable). That /me/top data is a
+# lagging multi-year aggregate and was misleading next to the real play_events
+# history, so those panels + the "range" variable were removed (PR repointing
+# spotify-overview to real data). Genres roll up via the keyword genre_parent()
+# classifier with per-play dedup (no unnest fan-out double-count).
+#
+# Loaded by the kube-prometheus Grafana sidecar (label grafana_dashboard="1"),
+# placed in the "Spotify" folder. Explicit top-level uid (spotify-overview).
 #
 # Applied by the build-spotify-exporter deploy job (kubectl apply).
 apiVersion: v1
@@ -18,30 +35,13 @@ data:
       "uid": "spotify-overview",
       "title": "Spotify",
       "schemaVersion": 38,
-      "version": 1,
+      "version": 2,
       "refresh": "30s",
-      "time": { "from": "now-30d", "to": "now" },
+      "time": { "from": "2024-09-01T00:00:00.000Z", "to": "now" },
       "tags": ["spotify", "music"],
-      "templating": {
-        "list": [
-          {
-            "name": "range",
-            "label": "Time range",
-            "type": "custom",
-            "query": "All-time (years) : long, 6 months : medium, 4 weeks : short",
-            "current": { "text": "All-time (years)", "value": "long" },
-            "options": [
-              { "text": "All-time (years)", "value": "long", "selected": true },
-              { "text": "6 months", "value": "medium", "selected": false },
-              { "text": "4 weeks", "value": "short", "selected": false }
-            ],
-            "includeAll": false,
-            "multi": false
-          }
-        ]
-      },
+      "templating": { "list": [] },
       "panels": [
-        { "id": 1, "type": "row", "title": "Now Playing", "gridPos": { "x": 0, "y": 0, "w": 24, "h": 1 } },
+        { "id": 1, "type": "row", "title": "Now Playing (live)", "gridPos": { "x": 0, "y": 0, "w": 24, "h": 1 } },
         {
           "id": 2, "type": "table", "title": "Now Playing",
           "gridPos": { "x": 0, "y": 1, "w": 12, "h": 5 },
@@ -73,90 +73,161 @@ data:
           "options": { "reduceOptions": { "calcs": ["lastNotNull"] } }
         },
 
-        { "id": 10, "type": "row", "title": "Top Artists & Tracks  ($range)", "gridPos": { "x": 0, "y": 6, "w": 24, "h": 1 } },
+        { "id": 9, "type": "row", "title": "All-time summary (real listening history)", "gridPos": { "x": 0, "y": 6, "w": 24, "h": 1 } },
         {
-          "id": 11, "type": "table", "title": "Top Artists",
-          "gridPos": { "x": 0, "y": 7, "w": 8, "h": 13 },
-          "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "targets": [ { "refId": "A", "expr": "spotify_top_artist_rank{range=\"$range\"}", "instant": true, "format": "table" } ],
-          "transformations": [
-            { "id": "organize", "options": {
-              "excludeByName": { "Time": true, "__name__": true, "range": true, "job": true, "instance": true, "namespace": true, "pod": true, "container": true, "endpoint": true, "service": true, "prometheus": true },
-              "renameByName": { "artist": "Artist", "genre": "Genre", "Value": "Rank" } } },
-            { "id": "sortBy", "options": { "fields": {}, "sort": [ { "field": "Rank", "desc": false } ] } }
-          ],
-          "fieldConfig": { "defaults": {}, "overrides": [ { "matcher": { "id": "byName", "options": "Rank" }, "properties": [ { "id": "custom.width", "value": 60 } ] } ] }
+          "id": 40, "type": "text", "title": "About this board",
+          "gridPos": { "x": 0, "y": 7, "w": 24, "h": 2 },
+          "options": { "mode": "markdown", "content": "Live **Now Playing** comes from Prometheus (`spotify_now_playing*`). Everything below is the **real ~54k-play listening record** from the GDPR Extended Streaming History export + live `/recently-played` trickle (Postgres). Defaults to full history (2024-09-01 -> now) — use the time picker to narrow. Deep dives: [Listening](/d/spotify-listening) · [Behavior](/d/spotify-listening-behavior) · [Library](/d/spotify-library)." }
         },
         {
-          "id": 12, "type": "bargauge", "title": "Artist Popularity (Spotify 0–100)",
-          "gridPos": { "x": 8, "y": 7, "w": 8, "h": 13 },
-          "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "targets": [ { "refId": "A", "expr": "topk(15, spotify_artist_popularity{range=\"$range\"})", "instant": true, "legendFormat": "{{artist}}" } ],
-          "fieldConfig": { "defaults": { "min": 0, "max": 100, "color": { "mode": "continuous-GrYlRd" } } },
-          "options": { "displayMode": "gradient", "orientation": "horizontal", "reduceOptions": { "calcs": ["lastNotNull"] } }
+          "id": 10, "type": "stat", "title": "Total plays",
+          "gridPos": { "x": 0, "y": 9, "w": 4, "h": 5 },
+          "datasource": { "type": "postgres", "uid": "spotify-postgres" },
+          "targets": [ { "refId": "A", "format": "table", "rawSql":
+            "SELECT count(*) AS plays FROM play_events WHERE $__timeFilter(played_at)" } ],
+          "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "fixed", "fixedColor": "green" } } },
+          "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } }
         },
         {
-          "id": 13, "type": "table", "title": "Top Tracks",
-          "gridPos": { "x": 16, "y": 7, "w": 8, "h": 13 },
-          "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "targets": [ { "refId": "A", "expr": "spotify_top_track_rank{range=\"$range\"}", "instant": true, "format": "table" } ],
-          "transformations": [
-            { "id": "organize", "options": {
-              "excludeByName": { "Time": true, "__name__": true, "range": true, "job": true, "instance": true, "namespace": true, "pod": true, "container": true, "endpoint": true, "service": true, "prometheus": true },
-              "renameByName": { "track": "Track", "artist": "Artist", "Value": "Rank" } } },
-            { "id": "sortBy", "options": { "fields": {}, "sort": [ { "field": "Rank", "desc": false } ] } }
-          ],
-          "fieldConfig": { "defaults": {}, "overrides": [ { "matcher": { "id": "byName", "options": "Rank" }, "properties": [ { "id": "custom.width", "value": 60 } ] } ] }
+          "id": 11, "type": "stat", "title": "Total hours",
+          "gridPos": { "x": 4, "y": 9, "w": 4, "h": 5 },
+          "datasource": { "type": "postgres", "uid": "spotify-postgres" },
+          "targets": [ { "refId": "A", "format": "table", "rawSql":
+            "SELECT round((SUM(ms_played)/3600000.0)::numeric, 0) AS hours FROM play_events WHERE ms_played IS NOT NULL AND $__timeFilter(played_at)" } ],
+          "fieldConfig": { "defaults": { "unit": "h", "color": { "mode": "fixed", "fixedColor": "blue" } } },
+          "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } }
+        },
+        {
+          "id": 12, "type": "stat", "title": "Distinct artists",
+          "gridPos": { "x": 8, "y": 9, "w": 4, "h": 5 },
+          "datasource": { "type": "postgres", "uid": "spotify-postgres" },
+          "targets": [ { "refId": "A", "format": "table", "rawSql":
+            "SELECT count(DISTINCT t.artist_id) AS artists FROM play_events pe JOIN tracks t ON t.track_id = pe.track_id WHERE t.artist_id IS NOT NULL AND $__timeFilter(pe.played_at)" } ],
+          "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "fixed", "fixedColor": "purple" } } },
+          "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } }
+        },
+        {
+          "id": 13, "type": "stat", "title": "Distinct tracks",
+          "gridPos": { "x": 12, "y": 9, "w": 4, "h": 5 },
+          "datasource": { "type": "postgres", "uid": "spotify-postgres" },
+          "targets": [ { "refId": "A", "format": "table", "rawSql":
+            "SELECT count(DISTINCT track_id) AS tracks FROM play_events WHERE $__timeFilter(played_at)" } ],
+          "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "fixed", "fixedColor": "orange" } } },
+          "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } }
+        },
+        {
+          "id": 14, "type": "stat", "title": "Skip rate",
+          "gridPos": { "x": 16, "y": 9, "w": 4, "h": 5 },
+          "datasource": { "type": "postgres", "uid": "spotify-postgres" },
+          "targets": [ { "refId": "A", "format": "table", "rawSql":
+            "SELECT round((100.0 * AVG(skipped::int))::numeric, 1) AS skip_rate FROM play_events WHERE skipped IS NOT NULL AND $__timeFilter(played_at)" } ],
+          "fieldConfig": { "defaults": { "unit": "percent", "decimals": 1, "min": 0, "max": 100, "color": { "mode": "continuous-GrYlRd" } } },
+          "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } }
+        },
+        {
+          "id": 15, "type": "stat", "title": "This month vs last (hours)",
+          "gridPos": { "x": 20, "y": 9, "w": 4, "h": 5 },
+          "datasource": { "type": "postgres", "uid": "spotify-postgres" },
+          "targets": [ { "refId": "A", "format": "table", "rawSql":
+            "WITH m AS (SELECT round((SUM(ms_played) FILTER (WHERE played_at >= date_trunc('month', now()))/3600000.0)::numeric, 1) AS this_month, round((SUM(ms_played) FILTER (WHERE played_at >= date_trunc('month', now()) - interval '1 month' AND played_at < date_trunc('month', now()))/3600000.0)::numeric, 1) AS last_month FROM play_events WHERE ms_played IS NOT NULL) SELECT this_month, last_month, round((this_month - last_month)::numeric, 1) AS delta_h FROM m" } ],
+          "fieldConfig": { "defaults": { "unit": "h", "decimals": 1, "color": { "mode": "thresholds" } } },
+          "options": { "colorMode": "value", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "/^this_month$/" }, "textMode": "value_and_name" }
         },
 
-        { "id": 20, "type": "row", "title": "Genres  ($range)", "gridPos": { "x": 0, "y": 20, "w": 24, "h": 1 } },
+        { "id": 19, "type": "row", "title": "Top artists & tracks (by plays and by hours)", "gridPos": { "x": 0, "y": 14, "w": 24, "h": 1 } },
         {
-          "id": 21, "type": "piechart", "title": "Genre Share",
-          "gridPos": { "x": 0, "y": 21, "w": 8, "h": 9 },
-          "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "targets": [ { "refId": "A", "expr": "spotify_genre_score{range=\"$range\"}", "instant": true, "legendFormat": "{{genre}}" } ],
-          "fieldConfig": { "defaults": { "unit": "percent" } },
-          "options": { "pieType": "donut", "legend": { "displayMode": "table", "placement": "right", "values": ["value"] }, "reduceOptions": { "calcs": ["lastNotNull"] } }
+          "id": 20, "type": "table", "title": "Top artists",
+          "gridPos": { "x": 0, "y": 15, "w": 12, "h": 11 },
+          "datasource": { "type": "postgres", "uid": "spotify-postgres" },
+          "targets": [ { "refId": "A", "format": "table", "rawSql":
+            "SELECT a.name AS artist, count(*) AS plays, round((SUM(pe.ms_played)/3600000.0)::numeric, 1) AS hours, count(DISTINCT pe.track_id) AS distinct_tracks FROM play_events pe JOIN tracks t ON t.track_id = pe.track_id JOIN artists a ON a.artist_id = t.artist_id WHERE $__timeFilter(pe.played_at) GROUP BY a.name ORDER BY plays DESC LIMIT 25" } ],
+          "fieldConfig": { "defaults": {}, "overrides": [ { "matcher": { "id": "byName", "options": "hours" }, "properties": [ { "id": "unit", "value": "h" } ] } ] },
+          "options": { "showHeader": true }
         },
         {
-          "id": 22, "type": "bargauge", "title": "Genre Share (ranked)",
-          "gridPos": { "x": 8, "y": 21, "w": 16, "h": 9 },
-          "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "targets": [ { "refId": "A", "expr": "topk(15, spotify_genre_score{range=\"$range\"})", "instant": true, "legendFormat": "{{genre}}" } ],
-          "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "color": { "mode": "continuous-BlPu" } } },
+          "id": 21, "type": "table", "title": "Top tracks",
+          "gridPos": { "x": 12, "y": 15, "w": 12, "h": 11 },
+          "datasource": { "type": "postgres", "uid": "spotify-postgres" },
+          "targets": [ { "refId": "A", "format": "table", "rawSql":
+            "SELECT t.name AS track, a.name AS artist, count(*) AS plays, round((SUM(pe.ms_played)/3600000.0)::numeric, 1) AS hours FROM play_events pe JOIN tracks t ON t.track_id = pe.track_id LEFT JOIN artists a ON a.artist_id = t.artist_id WHERE $__timeFilter(pe.played_at) GROUP BY t.name, a.name ORDER BY plays DESC LIMIT 25" } ],
+          "fieldConfig": { "defaults": {}, "overrides": [ { "matcher": { "id": "byName", "options": "hours" }, "properties": [ { "id": "unit", "value": "h" } ] } ] },
+          "options": { "showHeader": true }
+        },
+        {
+          "id": 22, "type": "bargauge", "title": "Top artists by hours",
+          "gridPos": { "x": 0, "y": 26, "w": 12, "h": 9 },
+          "datasource": { "type": "postgres", "uid": "spotify-postgres" },
+          "targets": [ { "refId": "A", "format": "table", "rawSql":
+            "SELECT a.name AS artist, round((SUM(pe.ms_played)/3600000.0)::numeric, 1) AS hours FROM play_events pe JOIN tracks t ON t.track_id = pe.track_id JOIN artists a ON a.artist_id = t.artist_id WHERE pe.ms_played IS NOT NULL AND $__timeFilter(pe.played_at) GROUP BY a.name ORDER BY hours DESC LIMIT 15" } ],
+          "fieldConfig": { "defaults": { "unit": "h", "min": 0, "color": { "mode": "continuous-GrYlRd" } } },
+          "options": { "displayMode": "gradient", "orientation": "horizontal", "reduceOptions": { "calcs": ["lastNotNull"] } }
+        },
+        {
+          "id": 23, "type": "bargauge", "title": "Top tracks by hours",
+          "gridPos": { "x": 12, "y": 26, "w": 12, "h": 9 },
+          "datasource": { "type": "postgres", "uid": "spotify-postgres" },
+          "targets": [ { "refId": "A", "format": "table", "rawSql":
+            "SELECT (t.name || ' - ' || COALESCE(a.name, '?')) AS track, round((SUM(pe.ms_played)/3600000.0)::numeric, 1) AS hours FROM play_events pe JOIN tracks t ON t.track_id = pe.track_id LEFT JOIN artists a ON a.artist_id = t.artist_id WHERE pe.ms_played IS NOT NULL AND $__timeFilter(pe.played_at) GROUP BY t.name, a.name ORDER BY hours DESC LIMIT 15" } ],
+          "fieldConfig": { "defaults": { "unit": "h", "min": 0, "color": { "mode": "continuous-BlPu" } } },
           "options": { "displayMode": "gradient", "orientation": "horizontal", "reduceOptions": { "calcs": ["lastNotNull"] } }
         },
 
-        { "id": 30, "type": "row", "title": "Listening Over Time", "gridPos": { "x": 0, "y": 30, "w": 24, "h": 1 } },
+        { "id": 29, "type": "row", "title": "Genres (parent rollup, per-play dedup)", "gridPos": { "x": 0, "y": 35, "w": 24, "h": 1 } },
         {
-          "id": 31, "type": "stat", "title": "Plays Observed (since exporter start)",
-          "gridPos": { "x": 0, "y": 31, "w": 4, "h": 6 },
-          "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "targets": [ { "refId": "A", "expr": "spotify_plays_total{artist=\"__all__\"}", "instant": true } ],
-          "fieldConfig": { "defaults": { "color": { "mode": "fixed", "fixedColor": "green" } } },
-          "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } }
+          "id": 30, "type": "piechart", "title": "Genre share by plays",
+          "gridPos": { "x": 0, "y": 36, "w": 8, "h": 10 },
+          "datasource": { "type": "postgres", "uid": "spotify-postgres" },
+          "targets": [ { "refId": "A", "format": "table", "rawSql":
+            "WITH play_parent AS (SELECT DISTINCT pe.played_at, pe.track_id, COALESCE(genre_parent(lower(g.raw)), 'Other') AS parent FROM play_events pe JOIN tracks t ON t.track_id = pe.track_id LEFT JOIN artists a ON a.artist_id = t.artist_id LEFT JOIN LATERAL unnest(COALESCE(a.genres, ARRAY[]::text[])) AS g(raw) ON true WHERE $__timeFilter(pe.played_at)) SELECT parent AS genre, count(*) AS plays FROM play_parent GROUP BY parent ORDER BY plays DESC" } ],
+          "fieldConfig": { "defaults": {} },
+          "options": { "pieType": "donut", "legend": { "displayMode": "table", "placement": "right", "values": ["value", "percent"] }, "reduceOptions": { "calcs": ["lastNotNull"] } }
         },
         {
-          "id": 32, "type": "timeseries", "title": "Plays per Hour",
-          "gridPos": { "x": 4, "y": 31, "w": 12, "h": 6 },
-          "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "targets": [ { "refId": "A", "expr": "sum(increase(spotify_plays_total{artist=\"__all__\"}[1h]))", "legendFormat": "plays/h" } ],
-          "fieldConfig": { "defaults": { "custom": { "drawStyle": "bars", "fillOpacity": 40 } } }
+          "id": 31, "type": "bargauge", "title": "Genre hours (parent rollup)",
+          "gridPos": { "x": 8, "y": 36, "w": 16, "h": 10 },
+          "datasource": { "type": "postgres", "uid": "spotify-postgres" },
+          "targets": [ { "refId": "A", "format": "table", "rawSql":
+            "WITH play_parent AS (SELECT DISTINCT pe.played_at, pe.track_id, pe.ms_played, COALESCE(genre_parent(lower(g.raw)), 'Other') AS parent FROM play_events pe JOIN tracks t ON t.track_id = pe.track_id LEFT JOIN artists a ON a.artist_id = t.artist_id LEFT JOIN LATERAL unnest(COALESCE(a.genres, ARRAY[]::text[])) AS g(raw) ON true WHERE pe.ms_played IS NOT NULL AND $__timeFilter(pe.played_at)) SELECT parent AS genre, round((SUM(ms_played)/3600000.0)::numeric, 1) AS hours FROM play_parent GROUP BY parent ORDER BY hours DESC LIMIT 15" } ],
+          "fieldConfig": { "defaults": { "unit": "h", "min": 0, "color": { "mode": "continuous-BlPu" } } },
+          "options": { "displayMode": "gradient", "orientation": "horizontal", "reduceOptions": { "calcs": ["lastNotNull"] } }
         },
+
+        { "id": 49, "type": "row", "title": "DnB vs Country — the rivalry", "gridPos": { "x": 0, "y": 46, "w": 24, "h": 1 } },
         {
-          "id": 33, "type": "bargauge", "title": "Most Played in Window",
-          "gridPos": { "x": 16, "y": 31, "w": 8, "h": 6 },
-          "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "targets": [ { "refId": "A", "expr": "topk(10, increase(spotify_plays_total{artist!=\"__all__\"}[$__range]))", "instant": true, "legendFormat": "{{artist}}" } ],
-          "fieldConfig": { "defaults": { "min": 0, "color": { "mode": "continuous-GrYlRd" } } },
+          "id": 50, "type": "bargauge", "title": "Hours — DnB vs Country",
+          "gridPos": { "x": 0, "y": 47, "w": 8, "h": 7 },
+          "datasource": { "type": "postgres", "uid": "spotify-postgres" },
+          "targets": [ { "refId": "A", "format": "table", "rawSql":
+            "WITH play_parent AS (SELECT DISTINCT pe.played_at, pe.track_id, pe.ms_played, COALESCE(genre_parent(lower(g.raw)), 'Other') AS parent FROM play_events pe JOIN tracks t ON t.track_id = pe.track_id LEFT JOIN artists a ON a.artist_id = t.artist_id LEFT JOIN LATERAL unnest(COALESCE(a.genres, ARRAY[]::text[])) AS g(raw) ON true WHERE pe.ms_played IS NOT NULL AND $__timeFilter(pe.played_at)) SELECT parent AS genre, round((SUM(ms_played)/3600000.0)::numeric, 1) AS hours FROM play_parent WHERE parent IN ('DnB','Country') GROUP BY parent ORDER BY hours DESC" } ],
+          "fieldConfig": { "defaults": { "unit": "h", "min": 0, "color": { "mode": "continuous-GrYlRd" } } },
           "options": { "displayMode": "gradient", "orientation": "horizontal", "reduceOptions": { "calcs": ["lastNotNull"] } }
         },
         {
-          "id": 34, "type": "timeseries", "title": "Plays Over Time by Artist (top movers)",
-          "gridPos": { "x": 0, "y": 37, "w": 24, "h": 8 },
-          "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "targets": [ { "refId": "A", "expr": "topk(8, increase(spotify_plays_total{artist!=\"__all__\"}[1h]) > 0)", "legendFormat": "{{artist}}" } ],
-          "fieldConfig": { "defaults": { "custom": { "drawStyle": "bars", "stacking": { "mode": "normal" }, "fillOpacity": 70 } } }
+          "id": 51, "type": "bargauge", "title": "Plays — DnB vs Country",
+          "gridPos": { "x": 8, "y": 47, "w": 8, "h": 7 },
+          "datasource": { "type": "postgres", "uid": "spotify-postgres" },
+          "targets": [ { "refId": "A", "format": "table", "rawSql":
+            "WITH play_parent AS (SELECT DISTINCT pe.played_at, pe.track_id, COALESCE(genre_parent(lower(g.raw)), 'Other') AS parent FROM play_events pe JOIN tracks t ON t.track_id = pe.track_id LEFT JOIN artists a ON a.artist_id = t.artist_id LEFT JOIN LATERAL unnest(COALESCE(a.genres, ARRAY[]::text[])) AS g(raw) ON true WHERE $__timeFilter(pe.played_at)) SELECT parent AS genre, count(*) AS plays FROM play_parent WHERE parent IN ('DnB','Country') GROUP BY parent ORDER BY plays DESC" } ],
+          "fieldConfig": { "defaults": { "unit": "short", "min": 0, "color": { "mode": "continuous-BlPu" } } },
+          "options": { "displayMode": "gradient", "orientation": "horizontal", "reduceOptions": { "calcs": ["lastNotNull"] } }
+        },
+        {
+          "id": 52, "type": "bargauge", "title": "Skip rate — DnB vs Country",
+          "gridPos": { "x": 16, "y": 47, "w": 8, "h": 7 },
+          "datasource": { "type": "postgres", "uid": "spotify-postgres" },
+          "targets": [ { "refId": "A", "format": "table", "rawSql":
+            "WITH play_parent AS (SELECT DISTINCT pe.played_at, pe.track_id, pe.skipped, COALESCE(genre_parent(lower(g.raw)), 'Other') AS parent FROM play_events pe JOIN tracks t ON t.track_id = pe.track_id LEFT JOIN artists a ON a.artist_id = t.artist_id LEFT JOIN LATERAL unnest(COALESCE(a.genres, ARRAY[]::text[])) AS g(raw) ON true WHERE pe.skipped IS NOT NULL AND $__timeFilter(pe.played_at)) SELECT parent AS genre, round((100.0 * AVG(skipped::int))::numeric, 1) AS skip_pct FROM play_parent WHERE parent IN ('DnB','Country') GROUP BY parent ORDER BY skip_pct DESC" } ],
+          "fieldConfig": { "defaults": { "unit": "percent", "decimals": 1, "min": 0, "max": 100, "color": { "mode": "continuous-GrYlRd" } } },
+          "options": { "displayMode": "gradient", "orientation": "horizontal", "reduceOptions": { "calcs": ["lastNotNull"] } }
+        },
+        {
+          "id": 53, "type": "timeseries", "title": "Hours per quarter — DnB vs Country (the rivalry narrowing in 2026)",
+          "gridPos": { "x": 0, "y": 54, "w": 24, "h": 8 },
+          "datasource": { "type": "postgres", "uid": "spotify-postgres" },
+          "targets": [ { "refId": "A", "format": "time_series", "rawSql":
+            "WITH play_parent AS (SELECT DISTINCT pe.played_at, pe.track_id, pe.ms_played, COALESCE(genre_parent(lower(g.raw)), 'Other') AS parent FROM play_events pe JOIN tracks t ON t.track_id = pe.track_id LEFT JOIN artists a ON a.artist_id = t.artist_id LEFT JOIN LATERAL unnest(COALESCE(a.genres, ARRAY[]::text[])) AS g(raw) ON true WHERE pe.ms_played IS NOT NULL AND $__timeFilter(pe.played_at)) SELECT date_trunc('quarter', played_at) AS time, parent AS metric, round((SUM(ms_played)/3600000.0)::numeric, 1) AS hours FROM play_parent WHERE parent IN ('DnB','Country') GROUP BY 1, 2 ORDER BY 1" } ],
+          "fieldConfig": { "defaults": { "unit": "h", "custom": { "drawStyle": "line", "fillOpacity": 15, "lineWidth": 2, "pointSize": 6, "showPoints": "always" } } },
+          "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } }
         }
       ]
     }
