@@ -1,8 +1,14 @@
 # One-time backfill of Spotify's GDPR "Extended Streaming History" export into
 # the play_events fact table. Reuses the exact spotify-exporter image (which
 # already bundles import_streaming_history.py + db.py + psycopg) — no separate
-# image build. Idempotent: ON CONFLICT (played_at, track_id) DO NOTHING, safe to
-# re-run and safe to run while the live exporter is also writing.
+# image build. Idempotent: ON CONFLICT (played_at, track_id) DO UPDATE SET — the
+# rich behavioural columns (skipped/reason_start/reason_end/shuffle/platform/
+# conn_country/offline/incognito_mode, added in schema migration 003) are
+# BACKFILLED onto rows already inserted by a prior run or the live writer, not
+# just fresh inserts. COALESCE on UPDATE means a NULL export field never erases
+# an existing value, so re-running and running alongside the live exporter are
+# both safe. (Re-run this Job AFTER migration 003 + the importer image with
+# backfill_play are deployed to populate the ~54k existing rows.)
 #
 # ════════════════════════════════════════════════════════════════════════════
 #  HOW TO RUN (when the export arrives, ~30 days after requesting it)

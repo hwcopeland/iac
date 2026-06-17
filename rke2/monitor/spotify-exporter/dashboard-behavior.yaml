@@ -1,0 +1,182 @@
+# Grafana dashboard: Spotify — Listening Behavior.
+# Behavioural analytics built on the rich GDPR-export columns added in schema
+# migration 003 (skipped / reason_start / reason_end / shuffle / platform /
+# conn_country / offline / incognito_mode). These columns exist ONLY in
+# Spotify's "Extended Streaming History" export — the live /recently-played feed
+# leaves them NULL — so every panel here is fed by the one-time backfill. Future
+# live rows simply don't contribute (NULL filtered out / counted as not-skipped).
+#
+# Loaded by the kube-prometheus Grafana sidecar (label grafana_dashboard="1"),
+# placed in the "Spotify" folder. Postgres datasource uid "spotify-postgres".
+# Explicit top-level uid (spotify-listening-behavior) avoids the sidecar
+# orphan-duplicate bug. Companion to "Spotify — Listening" (uid spotify-listening).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-spotify-behavior
+  namespace: monitor
+  labels:
+    grafana_dashboard: "1"
+  annotations:
+    grafana_folder: "Spotify"
+data:
+  spotify-behavior.json: |-
+    {
+      "uid": "spotify-listening-behavior",
+      "title": "Spotify — Listening Behavior",
+      "schemaVersion": 38,
+      "version": 1,
+      "refresh": "1h",
+      "time": { "from": "now-2y", "to": "now" },
+      "tags": ["spotify", "music", "behavior"],
+      "panels": [
+        {
+          "id": 1, "type": "text", "title": "Data note",
+          "gridPos": { "x": 0, "y": 0, "w": 24, "h": 2 },
+          "options": { "mode": "markdown", "content": "Behavioural fields (`skipped`, `reason_start`, `reason_end`, `shuffle`, `platform`, `conn_country`, `offline`, `incognito_mode`) come **only** from the Extended Streaming History GDPR export (one-time backfill). Live `/recently-played` rows leave them NULL and are excluded from these panels. Genre rivalry uses the MusicBrainz-enriched `genre_rollup` (parent buckets) and fills in as enrichment completes." }
+        },
+
+        { "id": 9, "type": "row", "title": "Skip behaviour", "gridPos": { "x": 0, "y": 2, "w": 24, "h": 1 } },
+        {
+          "id": 10, "type": "stat", "title": "Overall skip rate",
+          "gridPos": { "x": 0, "y": 3, "w": 6, "h": 6 },
+          "datasource": { "type": "postgres", "uid": "spotify-postgres" },
+          "targets": [ { "refId": "A", "format": "table", "rawSql":
+            "SELECT 100.0 * AVG(skipped::int) AS skip_rate FROM play_events WHERE skipped IS NOT NULL AND $__timeFilter(played_at)" } ],
+          "fieldConfig": { "defaults": { "unit": "percent", "decimals": 1, "min": 0, "max": 100, "color": { "mode": "continuous-GrYlRd" } } },
+          "options": { "colorMode": "background", "reduceOptions": { "calcs": ["lastNotNull"] } }
+        },
+        {
+          "id": 11, "type": "stat", "title": "Completion rate (trackdone)",
+          "gridPos": { "x": 6, "y": 3, "w": 6, "h": 6 },
+          "datasource": { "type": "postgres", "uid": "spotify-postgres" },
+          "targets": [ { "refId": "A", "format": "table", "rawSql":
+            "SELECT 100.0 * AVG((reason_end = 'trackdone')::int) AS completion_rate FROM play_events WHERE reason_end IS NOT NULL AND $__timeFilter(played_at)" } ],
+          "fieldConfig": { "defaults": { "unit": "percent", "decimals": 1, "min": 0, "max": 100, "color": { "mode": "continuous-RdYlGr" } } },
+          "options": { "colorMode": "background", "reduceOptions": { "calcs": ["lastNotNull"] } }
+        },
+        {
+          "id": 12, "type": "piechart", "title": "Why plays end (reason_end)",
+          "gridPos": { "x": 12, "y": 3, "w": 12, "h": 6 },
+          "datasource": { "type": "postgres", "uid": "spotify-postgres" },
+          "targets": [ { "refId": "A", "format": "table", "rawSql":
+            "SELECT COALESCE(reason_end, 'unknown') AS reason_end, count(*) AS plays FROM play_events WHERE reason_end IS NOT NULL AND $__timeFilter(played_at) GROUP BY 1 ORDER BY plays DESC" } ],
+          "options": { "pieType": "pie", "legend": { "displayMode": "table", "placement": "right", "values": ["value", "percent"] }, "reduceOptions": { "calcs": ["lastNotNull"] } }
+        },
+        {
+          "id": 13, "type": "table", "title": "Most-skipped artists (>= 50 plays)",
+          "gridPos": { "x": 0, "y": 9, "w": 12, "h": 10 },
+          "datasource": { "type": "postgres", "uid": "spotify-postgres" },
+          "targets": [ { "refId": "A", "format": "table", "rawSql":
+            "SELECT a.name AS artist, count(*) AS plays, round((100.0 * AVG(pe.skipped::int))::numeric, 1) AS skip_pct FROM play_events pe JOIN tracks t ON t.track_id = pe.track_id JOIN artists a ON a.artist_id = t.artist_id WHERE pe.skipped IS NOT NULL AND $__timeFilter(pe.played_at) GROUP BY a.name HAVING count(*) >= 50 ORDER BY skip_pct DESC LIMIT 25" } ],
+          "fieldConfig": { "defaults": { "unit": "percent" }, "overrides": [ { "matcher": { "id": "byName", "options": "plays" }, "properties": [ { "id": "unit", "value": "short" } ] } ] },
+          "options": { "showHeader": true }
+        },
+        {
+          "id": 14, "type": "table", "title": "Least-skipped artists (>= 50 plays)",
+          "gridPos": { "x": 12, "y": 9, "w": 12, "h": 10 },
+          "datasource": { "type": "postgres", "uid": "spotify-postgres" },
+          "targets": [ { "refId": "A", "format": "table", "rawSql":
+            "SELECT a.name AS artist, count(*) AS plays, round((100.0 * AVG(pe.skipped::int))::numeric, 1) AS skip_pct FROM play_events pe JOIN tracks t ON t.track_id = pe.track_id JOIN artists a ON a.artist_id = t.artist_id WHERE pe.skipped IS NOT NULL AND $__timeFilter(pe.played_at) GROUP BY a.name HAVING count(*) >= 50 ORDER BY skip_pct ASC LIMIT 25" } ],
+          "fieldConfig": { "defaults": { "unit": "percent" }, "overrides": [ { "matcher": { "id": "byName", "options": "plays" }, "properties": [ { "id": "unit", "value": "short" } ] } ] },
+          "options": { "showHeader": true }
+        },
+        {
+          "id": 15, "type": "timeseries", "title": "Weekly completion rate (reason_end = trackdone)",
+          "gridPos": { "x": 0, "y": 19, "w": 24, "h": 8 },
+          "datasource": { "type": "postgres", "uid": "spotify-postgres" },
+          "targets": [ { "refId": "A", "format": "time_series", "rawSql":
+            "SELECT date_trunc('week', played_at) AS time, AVG((reason_end = 'trackdone')::int) AS completion_rate FROM play_events WHERE reason_end IS NOT NULL AND $__timeFilter(played_at) GROUP BY 1 ORDER BY 1" } ],
+          "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1, "custom": { "drawStyle": "line", "fillOpacity": 20 } } }
+        },
+
+        { "id": 19, "type": "row", "title": "Intent & engagement", "gridPos": { "x": 0, "y": 27, "w": 24, "h": 1 } },
+        {
+          "id": 20, "type": "stat", "title": "Median play length",
+          "gridPos": { "x": 0, "y": 28, "w": 6, "h": 6 },
+          "datasource": { "type": "postgres", "uid": "spotify-postgres" },
+          "targets": [ { "refId": "A", "format": "table", "rawSql":
+            "SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY ms_played) / 1000.0 AS median_seconds FROM play_events WHERE ms_played IS NOT NULL AND $__timeFilter(played_at)" } ],
+          "fieldConfig": { "defaults": { "unit": "s", "decimals": 1, "color": { "mode": "fixed", "fixedColor": "red" } } },
+          "options": { "colorMode": "background", "reduceOptions": { "calcs": ["lastNotNull"] } }
+        },
+        {
+          "id": 21, "type": "gauge", "title": "Shuffle %",
+          "gridPos": { "x": 6, "y": 28, "w": 6, "h": 6 },
+          "datasource": { "type": "postgres", "uid": "spotify-postgres" },
+          "targets": [ { "refId": "A", "format": "table", "rawSql":
+            "SELECT 100.0 * AVG(shuffle::int) AS shuffle_pct FROM play_events WHERE shuffle IS NOT NULL AND $__timeFilter(played_at)" } ],
+          "fieldConfig": { "defaults": { "unit": "percent", "decimals": 1, "min": 0, "max": 100, "color": { "mode": "continuous-BlPu" } } },
+          "options": { "showThresholdLabels": false, "showThresholdMarkers": false, "reduceOptions": { "calcs": ["lastNotNull"] } }
+        },
+        {
+          "id": 22, "type": "piechart", "title": "Deliberate vs passive starts",
+          "gridPos": { "x": 12, "y": 28, "w": 12, "h": 6 },
+          "datasource": { "type": "postgres", "uid": "spotify-postgres" },
+          "targets": [ { "refId": "A", "format": "table", "rawSql":
+            "SELECT CASE WHEN reason_start IN ('clickrow','playbtn','backbtn') THEN 'deliberate' ELSE 'passive' END AS intent, count(*) AS plays FROM play_events WHERE reason_start IS NOT NULL AND $__timeFilter(played_at) GROUP BY 1 ORDER BY plays DESC" } ],
+          "options": { "pieType": "donut", "legend": { "displayMode": "table", "placement": "right", "values": ["value", "percent"] }, "reduceOptions": { "calcs": ["lastNotNull"] } }
+        },
+        {
+          "id": 23, "type": "piechart", "title": "Why plays start (reason_start)",
+          "gridPos": { "x": 0, "y": 34, "w": 12, "h": 9 },
+          "datasource": { "type": "postgres", "uid": "spotify-postgres" },
+          "targets": [ { "refId": "A", "format": "table", "rawSql":
+            "SELECT COALESCE(reason_start, 'unknown') AS reason_start, count(*) AS plays FROM play_events WHERE reason_start IS NOT NULL AND $__timeFilter(played_at) GROUP BY 1 ORDER BY plays DESC" } ],
+          "options": { "pieType": "pie", "legend": { "displayMode": "table", "placement": "right", "values": ["value", "percent"] }, "reduceOptions": { "calcs": ["lastNotNull"] } }
+        },
+        {
+          "id": 24, "type": "barchart", "title": "Play-length distribution",
+          "gridPos": { "x": 12, "y": 34, "w": 12, "h": 9 },
+          "datasource": { "type": "postgres", "uid": "spotify-postgres" },
+          "targets": [ { "refId": "A", "format": "table", "rawSql":
+            "WITH b AS (SELECT width_bucket(ms_played, ARRAY[5000, 30000, 120000]) AS bk FROM play_events WHERE ms_played IS NOT NULL AND $__timeFilter(played_at)) SELECT (ARRAY['<5s','5-30s','30s-2m','>2m'])[bk + 1] AS bucket, count(*) AS plays FROM b GROUP BY bk ORDER BY bk" } ],
+          "fieldConfig": { "defaults": { "color": { "mode": "continuous-YlBl" } } },
+          "options": { "orientation": "horizontal", "xField": "bucket" }
+        },
+
+        { "id": 29, "type": "row", "title": "Bingeing", "gridPos": { "x": 0, "y": 43, "w": 24, "h": 1 } },
+        {
+          "id": 30, "type": "table", "title": "Biggest listening days (by hours)",
+          "gridPos": { "x": 0, "y": 44, "w": 12, "h": 10 },
+          "datasource": { "type": "postgres", "uid": "spotify-postgres" },
+          "targets": [ { "refId": "A", "format": "table", "rawSql":
+            "SELECT played_at::date AS day, round((SUM(ms_played)/3600000.0)::numeric, 2) AS hours, count(*) AS plays FROM play_events WHERE ms_played IS NOT NULL AND $__timeFilter(played_at) GROUP BY played_at::date ORDER BY hours DESC LIMIT 25" } ],
+          "fieldConfig": { "defaults": {}, "overrides": [ { "matcher": { "id": "byName", "options": "hours" }, "properties": [ { "id": "unit", "value": "h" } ] } ] },
+          "options": { "showHeader": true }
+        },
+        {
+          "id": 31, "type": "table", "title": "On-repeat champion — most plays of one track in a single day",
+          "gridPos": { "x": 12, "y": 44, "w": 12, "h": 10 },
+          "datasource": { "type": "postgres", "uid": "spotify-postgres" },
+          "targets": [ { "refId": "A", "format": "table", "rawSql":
+            "SELECT pe.played_at::date AS day, t.name AS track, a.name AS artist, count(*) AS plays FROM play_events pe JOIN tracks t ON t.track_id = pe.track_id LEFT JOIN artists a ON a.artist_id = t.artist_id WHERE $__timeFilter(pe.played_at) GROUP BY pe.played_at::date, t.name, a.name ORDER BY plays DESC LIMIT 25" } ],
+          "options": { "showHeader": true }
+        },
+
+        { "id": 39, "type": "row", "title": "Genre rivalry — DnB vs Country", "gridPos": { "x": 0, "y": 54, "w": 24, "h": 1 } },
+        {
+          "id": 40, "type": "text", "title": "Note",
+          "gridPos": { "x": 0, "y": 55, "w": 24, "h": 2 },
+          "options": { "mode": "markdown", "content": "Hours and skip rate per parent genre, focused on **drum-and-bass vs country**. Genre comes from the MusicBrainz-enriched `genre_rollup` (parent buckets) joined via the artist's genres. Coverage fills in as the hourly enrichment CronJob drains its backlog — thin parents simply show fewer plays for now." }
+        },
+        {
+          "id": 41, "type": "bargauge", "title": "Hours per parent genre (DnB vs Country)",
+          "gridPos": { "x": 0, "y": 57, "w": 12, "h": 8 },
+          "datasource": { "type": "postgres", "uid": "spotify-postgres" },
+          "targets": [ { "refId": "A", "format": "table", "rawSql":
+            "SELECT gr.parent_genre AS genre, SUM(pe.ms_played)/3600000.0 AS hours FROM play_events pe JOIN tracks t ON t.track_id = pe.track_id JOIN artists a ON a.artist_id = t.artist_id JOIN LATERAL unnest(COALESCE(a.genres, ARRAY[]::text[])) AS g(raw) ON true JOIN genre_rollup gr ON gr.raw_genre = lower(g.raw) WHERE pe.ms_played IS NOT NULL AND gr.parent_genre IN ('DnB','Country') AND $__timeFilter(pe.played_at) GROUP BY gr.parent_genre ORDER BY hours DESC" } ],
+          "fieldConfig": { "defaults": { "unit": "h", "color": { "mode": "palette-classic" } } },
+          "options": { "displayMode": "gradient", "orientation": "horizontal", "reduceOptions": { "calcs": ["lastNotNull"] } }
+        },
+        {
+          "id": 42, "type": "bargauge", "title": "Skip rate per parent genre (DnB vs Country)",
+          "gridPos": { "x": 12, "y": 57, "w": 12, "h": 8 },
+          "datasource": { "type": "postgres", "uid": "spotify-postgres" },
+          "targets": [ { "refId": "A", "format": "table", "rawSql":
+            "SELECT gr.parent_genre AS genre, 100.0 * AVG(pe.skipped::int) AS skip_pct FROM play_events pe JOIN tracks t ON t.track_id = pe.track_id JOIN artists a ON a.artist_id = t.artist_id JOIN LATERAL unnest(COALESCE(a.genres, ARRAY[]::text[])) AS g(raw) ON true JOIN genre_rollup gr ON gr.raw_genre = lower(g.raw) WHERE pe.skipped IS NOT NULL AND gr.parent_genre IN ('DnB','Country') AND $__timeFilter(pe.played_at) GROUP BY gr.parent_genre ORDER BY skip_pct DESC" } ],
+          "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100, "color": { "mode": "continuous-GrYlRd" } } },
+          "options": { "displayMode": "gradient", "orientation": "horizontal", "reduceOptions": { "calcs": ["lastNotNull"] } }
+        }
+      ]
+    }
