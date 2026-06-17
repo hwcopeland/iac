@@ -1,0 +1,21 @@
+{
+  "_comment": "MCP surface for a jarvis cluster RUN (claude -p inside a Job). DELIBERATELY narrower than the edge brain's _write_mcp_config(): jarvis_runner is EXCLUDED (a run must not launch more runs — no recursion), and jarvis_sonos / jarvis_persona / jarvis_delegate are excluded (the Job IS the delegate; runs don't speak or self-tune). The run gets read-only kube + overview + mem0 + personal. mem0 writes land in the JARVIS_MEM_SCOPE='runs' scope set by the Job env. These paths match the jarvis-edge image /app layout.",
+  "mcpServers": {
+    "jarvis_kube": {
+      "command": "python3",
+      "args": ["/app/jarvis_kube_mcp.py"]
+    },
+    "jarvis_overview": {
+      "command": "python3",
+      "args": ["/app/jarvis_overview_mcp.py"]
+    },
+    "jarvis_mem0": {
+      "command": "python3",
+      "args": ["/app/jarvis_mem0_mcp.py"]
+    },
+    "jarvis_personal": {
+      "command": "python3",
+      "args": ["/app/jarvis_personal_mcp.py"]
+    }
+  }
+}

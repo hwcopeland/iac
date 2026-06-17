@@ -1,0 +1,103 @@
+---
+# RBAC for JARVIS cluster RUNS (charter roadmap #2, agent control-plane).
+#
+# Two distinct capabilities, deliberately split so the always-on voice pod
+# never gains Job-create power on its default SA (that would be a privilege-
+# escalation surface):
+#
+#   1. jarvis-runner SA  — what each RUN Job runs as. READ-ONLY: binds the
+#      built-in `view` ClusterRole (no secrets) + node-reader, exactly like
+#      jarvis-readonly. Apply-mode runs mutate the repo via `git push` to the
+#      `jarvis` branch (delegate's model), NOT via the k8s API — so a run
+#      itself can never apply/scale/delete cluster state.
+#
+#   2. jarvis-run-launcher Role — the ONE extra capability (create/get/list/
+#      watch Jobs in ns ai) that launch_run needs to spawn a run. Bound to a
+#      DEDICATED SA (jarvis-run-launcher) so launch_run uses that token
+#      explicitly; the edge's jarvis-readonly SA is NOT widened. The edge
+#      reads Jobs for the announce loop via its existing `view` binding (Jobs
+#      are covered by `view`), so no launcher token is needed for announce.
+#
+# Manual-apply (ns ai is not Flux): kubectl apply -f runner/rbac-runner.yaml
+# after owner confirmation.
+
+# ── 1. The SA each RUN executes as — read-only ───────────────────────────
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: jarvis-runner
+  namespace: ai
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: jarvis-runner-view
+subjects:
+  - kind: ServiceAccount
+    name: jarvis-runner
+    namespace: ai
+roleRef:
+  kind: ClusterRole
+  name: view              # built-in: reads pods/services/jobs/etc, NO secrets
+  apiGroup: rbac.authorization.k8s.io
+
+---
+# Reuse the node-reader ClusterRole the edge already defines (rbac.yaml in
+# jarvis-stack) so `kubectl top` / node reads work inside a run too.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: jarvis-runner-nodes
+subjects:
+  - kind: ServiceAccount
+    name: jarvis-runner
+    namespace: ai
+roleRef:
+  kind: ClusterRole
+  name: jarvis-node-reader   # defined in jarvis-stack/rbac.yaml
+  apiGroup: rbac.authorization.k8s.io
+
+---
+# ── 2. The narrow Job-create capability for launch_run ───────────────────
+# DECISION NEEDED from Hampton (charter principle 3 / risk #1): bind this to
+# a dedicated launcher SA (below, the safe default) OR additively to the
+# edge's jarvis-readonly SA. Default here = dedicated SA, keeping the voice
+# loop's default SA read-only. launch_run uses this SA's token explicitly.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: jarvis-run-launcher
+  namespace: ai
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: jarvis-run-launcher
+  namespace: ai
+rules:
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    # create = spawn a run; get/list/watch = track them. NO delete (runs are
+    # reaped by ttlSecondsAfterFinished, not torn down by the launcher) and
+    # NO update/patch (a run's spec is immutable once launched).
+    verbs: ["create", "get", "list", "watch"]
+  - apiGroups: ["batch"]
+    resources: ["jobs/status"]
+    verbs: ["get", "list", "watch"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: jarvis-run-launcher
+  namespace: ai
+subjects:
+  - kind: ServiceAccount
+    name: jarvis-run-launcher
+    namespace: ai
+roleRef:
+  kind: Role
+  name: jarvis-run-launcher
+  apiGroup: rbac.authorization.k8s.io

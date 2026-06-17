@@ -1,0 +1,22 @@
+---
+# Cluster-internal Service for the mem0 server. ClusterIP only — never
+# LoadBalancer/HTTPRoute. The only client is the jarvis_mem0_mcp.py stdio shim
+# running inside the jarvis-edge pod (OWNER brain only).
+#
+# Reachable at: http://jarvis-mem0.ai.svc.cluster.local:8800
+apiVersion: v1
+kind: Service
+metadata:
+  name: jarvis-mem0
+  namespace: ai
+  labels:
+    app: jarvis-mem0
+    component: jarvis-mem0
+spec:
+  type: ClusterIP
+  selector:
+    app: jarvis-mem0
+  ports:
+    - name: http
+      port: 8800
+      targetPort: 8800

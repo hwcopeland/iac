@@ -11,3 +11,20 @@ roleRef:
   kind: ClusterRole
   name: view
   apiGroup: rbac.authorization.k8s.io
+---
+# Florida Man Bioscience collaborators (Tom/jonesnoaht, Curtis/curtisdearing) get
+# cluster-wide READ-ONLY visibility (see deployments in zot/tooling, chem, arc-system
+# runners, etc.). The built-in `view` role excludes Secrets. Their write access stays
+# scoped to the theswamp namespace (rke2/tooling/flux/theswamp/rbac.yaml).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: oidc-fmb-view
+subjects:
+  - kind: Group
+    name: "oidc:Florida Man Bioscience"
+    apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: ClusterRole
+  name: view
+  apiGroup: rbac.authorization.k8s.io

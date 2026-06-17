@@ -1,0 +1,55 @@
+---
+# Apply Authentik OIDC auth to the kube-apiserver, ONE control plane at a time.
+#
+# SAFE BY DESIGN: this playbook only manages the RKE2 drop-in
+# /etc/rancher/rke2/config.yaml.d/oidc.yaml. It does NOT include the rke2-server role
+# and NEVER re-renders /etc/rancher/rke2/config.yaml — so it cannot touch the cluster
+# token (the 2026-06-14 incident was caused by a full config.yaml re-render with a
+# placeholder token). RKE2 merges config.yaml.d/*.yaml into the apiserver config.
+#
+# serial:1 + any_errors_fatal restart one apiserver at a time and stop the rollout
+# if a node fails to come back, keeping the HA VIP up throughout.
+#
+# Run:  ansible-playbook playbooks/apply-apiserver-oidc.yaml --ask-become-pass
+# Undo: remove the drop-in and restart rke2-server on each node.
+
+- name: Apply OIDC drop-in to kube-apiserver (rolling, HA-safe)
+  hosts: control_plane
+  become: true
+  serial: 1
+  any_errors_fatal: true
+  tasks:
+    - name: Ensure RKE2 config.yaml.d directory exists
+      ansible.builtin.file:
+        path: /etc/rancher/rke2/config.yaml.d
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Install OIDC apiserver drop-in
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../roles/rke2-server/files/config.yaml.d/oidc.yaml"
+        dest: /etc/rancher/rke2/config.yaml.d/oidc.yaml
+        owner: root
+        group: root
+        mode: '0644'
+      register: dropin
+
+    - name: Restart rke2-server to pick up OIDC apiserver args
+      ansible.builtin.systemd:
+        name: rke2-server
+        state: restarted
+      when: dropin.changed
+
+    - name: Wait for this node's kube-apiserver to be ready again
+      ansible.builtin.command: >-
+        /var/lib/rancher/rke2/bin/kubectl
+        --kubeconfig /etc/rancher/rke2/rke2.yaml
+        get --raw=/readyz
+      register: readyz
+      changed_when: false
+      retries: 30
+      delay: 10
+      until: readyz.rc == 0
+      when: dropin.changed

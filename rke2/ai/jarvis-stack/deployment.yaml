@@ -260,6 +260,14 @@ spec:
               # No hostPort — Cilium-on-RKE2 doesn't honor it reliably.
               # Exposed to the LAN via the jarvis-edge-audio NodePort
               # Service (nodePort 30088 → containerPort 8088).
+            - name: metrics
+              # edge.py binds prometheus_client.start_http_server(9090).
+              # Declaring the port (named) lets the jarvis-edge PodMonitor
+              # target it by name so the prometheus-operator generates a
+              # scrape endpoint (a numeric-only targetPort with no matching
+              # containerPort yields dropped targets under hostNetwork).
+              containerPort: 9090
+              protocol: TCP
           securityContext:
             # Run as the user that owns /run/user/1000 (PipeWire socket).
             # The pulse socket at /run/user/1000/pulse/native is
@@ -276,6 +284,15 @@ spec:
               value: "10.0.0.187"          # Bedroom Play:1
             - name: SONOS_VOLUME
               value: "30"
+            # Time-of-day volume: 45 during the day, 30 at night (8pm-7am local).
+            - name: SONOS_VOLUME_DAY
+              value: "45"
+            - name: SONOS_VOLUME_NIGHT
+              value: "30"
+            - name: SONOS_NIGHT_START_HOUR
+              value: "20"
+            - name: SONOS_NIGHT_END_HOUR
+              value: "7"
             - name: EDGE_HTTP_PORT
               value: "8088"
             # With hostNetwork the listener binds on the host's interfaces
@@ -286,6 +303,19 @@ spec:
             # — Sonos is on 10.0.0.0/24 and can only route to this one.
             - name: EDGE_HOST_IP
               value: "10.0.0.190"
+            # Shared secret for the /voice/ingest mesh endpoint (Mac thin
+            # client → edge gate). optional:true so the pod starts without it;
+            # the endpoint 403s (inert) until the secret exists. Activate with:
+            #   kubectl -n ai create secret generic jarvis-edge-ingest \
+            #     --from-literal=token=$(openssl rand -hex 32)
+            # then put the SAME token in the Mac's ~/.openjarvis/config.toml
+            # under [edge] token (+ ingest_url = http://10.0.0.190:8088/voice/ingest).
+            - name: EDGE_INGEST_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: jarvis-edge-ingest
+                  key: token
+                  optional: true
             - name: XDG_RUNTIME_DIR
               value: "/run/user/1000"
             - name: PULSE_SERVER

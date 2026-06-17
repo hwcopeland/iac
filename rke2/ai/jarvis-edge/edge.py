@@ -28,6 +28,8 @@ import hashlib
 import hmac
 import io
 import json
+import re
+import uuid
 import logging
 import os
 import queue
@@ -38,7 +40,7 @@ import threading
 import time
 import urllib.parse
 import urllib.request
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, HTTPServer, ThreadingHTTPServer
 from math import gcd
 
 import numpy as np
@@ -119,70 +121,114 @@ except Exception as _otel_exc:  # noqa: BLE001
 
 # Prometheus metrics. Histograms in seconds (Prom convention). Buckets tuned
 # for voice-assistant timings (sub-100ms STT chunks up to multi-second turns).
+#
+# IDEMPOTENT REGISTRATION — edge.py runs as __main__ (CMD ["python","-u","edge.py"]),
+# so it lives in sys.modules as "__main__", NOT "edge". At runtime several
+# sub-modules (jarvis_ig_consumer, jarvis_discord, jarvis_song_id,
+# jarvis_reel_context, …) do `import edge as _edge`. Because "edge" is absent
+# from sys.modules, Python imports edge.py a SECOND time under the name "edge",
+# re-executing this whole module — including this metrics block. Re-creating a
+# collector whose name already lives in the default REGISTRY raises
+# "ValueError: Duplicated timeseries in CollectorRegistry: jarvis_stt_..." which
+# the broad `except` below swallowed by replacing EVERY metric with a NoopMetric
+# → ALL jarvis_* metrics silently disabled. Fix: look up the existing collector
+# by name and reuse it instead of constructing a duplicate, so a second import
+# is a no-op and metrics keep exporting once.
 try:
     from prometheus_client import (
         Counter as _PromCounter,
         Histogram as _PromHistogram,
         start_http_server as _prom_start_http_server,
     )
+    from prometheus_client import REGISTRY as _PROM_REGISTRY
+
+    def _metric(_ctor, _name, *args, **kwargs):
+        """Create a collector, or reuse the one already in the default registry.
+
+        prometheus_client maps each timeseries name to its registered collector
+        in REGISTRY._names_to_collectors. On a second import of edge.py we find
+        the existing collector there and return it rather than raising on a
+        duplicate. Idempotent across any number of re-imports.
+        """
+        existing = getattr(_PROM_REGISTRY, "_names_to_collectors", {}).get(_name)
+        if existing is not None:
+            return existing
+        return _ctor(_name, *args, **kwargs)
+
     _DUR_BUCKETS = (0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 3.0, 5.0, 8.0, 13.0, 21.0)
-    METRIC_STT_DURATION = _PromHistogram(
+    METRIC_STT_DURATION = _metric(
+        _PromHistogram,
         "jarvis_stt_duration_seconds",
         "Whisper STT round-trip duration",
         buckets=_DUR_BUCKETS,
     )
-    METRIC_BRAIN_DURATION = _PromHistogram(
+    METRIC_BRAIN_DURATION = _metric(
+        _PromHistogram,
         "jarvis_brain_duration_seconds",
         "Brain (claude/echo/shortcut) response duration",
         buckets=_DUR_BUCKETS,
     )
-    METRIC_TTS_SEGMENT_DURATION = _PromHistogram(
+    METRIC_TTS_SEGMENT_DURATION = _metric(
+        _PromHistogram,
         "jarvis_tts_segment_duration_seconds",
         "Chatterbox TTS synthesis per segment",
         buckets=_DUR_BUCKETS,
     )
-    METRIC_SONOS_FIRST_AUDIO = _PromHistogram(
+    METRIC_SONOS_FIRST_AUDIO = _metric(
+        _PromHistogram,
         "jarvis_sonos_first_audio_seconds",
         "Time from stream start to Sonos first audio playing",
         buckets=_DUR_BUCKETS,
     )
-    METRIC_TURN_TOTAL_DURATION = _PromHistogram(
+    METRIC_TURN_TOTAL_DURATION = _metric(
+        _PromHistogram,
         "jarvis_turn_total_duration_seconds",
         "Full per-turn wall-clock: speech_start → stream_done",
         buckets=_DUR_BUCKETS,
     )
-    METRIC_TURNS_TOTAL = _PromCounter(
+    METRIC_TURNS_TOTAL = _metric(
+        _PromCounter,
         "jarvis_turns_total",
         "Per-turn outcomes",
         ["addressed", "ambient_drop", "echo_drop"],
     )
-    METRIC_ECHO_DROPS = _PromCounter(
+    METRIC_ECHO_DROPS = _metric(
+        _PromCounter,
         "jarvis_echo_drops_total",
         "Utterances dropped as JARVIS-self-echo",
     )
-    METRIC_UNKNOWN_SPEAKER_DROPS = _PromCounter(
+    METRIC_UNKNOWN_SPEAKER_DROPS = _metric(
+        _PromCounter,
         "jarvis_unknown_speaker_drops_total",
         "Utterances dropped because speaker did not match an enrolled voice",
     )
-    METRIC_BRAIN_ERRORS = _PromCounter(
+    METRIC_BRAIN_ERRORS = _metric(
+        _PromCounter,
         "jarvis_brain_errors_total",
         "Brain failures by reason",
         ["reason"],
     )
-    METRIC_IG_EVENTS = _PromCounter(
+    METRIC_IG_EVENTS = _metric(
+        _PromCounter,
         "jarvis_ig_webhook_events_total",
         "IG webhook events",
         ["type", "status"],
     )
-    METRIC_IG_SIG_FAILURES = _PromCounter(
+    METRIC_IG_SIG_FAILURES = _metric(
+        _PromCounter,
         "jarvis_ig_webhook_signature_failures_total",
         "IG webhook HMAC signature failures",
     )
-    try:
-        _prom_start_http_server(_PROM_PORT)
-        print(f"prometheus: /metrics on 0.0.0.0:{_PROM_PORT}")
-    except OSError as _prom_exc:
-        print(f"prometheus: port {_PROM_PORT} busy ({_prom_exc}) — metrics endpoint disabled")
+    # Only the FIRST execution (the __main__ process) should bind the HTTP
+    # server. A re-import under the name "edge" must never try to bind :9090
+    # again — that would either collide or, worse, be swallowed and look like a
+    # failure. Guard on __name__ so exactly one server starts per process.
+    if __name__ == "__main__":
+        try:
+            _prom_start_http_server(_PROM_PORT)
+            print(f"prometheus: /metrics on 0.0.0.0:{_PROM_PORT}")
+        except OSError as _prom_exc:
+            print(f"prometheus: port {_PROM_PORT} busy ({_prom_exc}) — metrics endpoint disabled")
 except Exception as _prom_exc:  # noqa: BLE001
     print(f"prometheus: client unavailable ({_prom_exc!r}) — metrics disabled")
 
@@ -310,24 +356,29 @@ def _vid_has_owner() -> bool:
     return _vid_cache["has_owner"]
 
 
-def _identify_speaker_from_audio(audio_16k: np.ndarray) -> tuple[str | None, float]:
-    """Embed the captured 16k mono float32 utterance and look it up against
-    enrolled voices. Returns ``(name, confidence)`` on match/borderline, or
-    ``(None, top_score)`` for unknown / no-enrollments / error. Soft-fails to
-    pass-through on any exception so STT/brain stay working even if the
-    voice-id module breaks."""
+def _identify_speaker_from_audio(audio_16k: np.ndarray):
+    """Resolve the captured 16k mono float32 utterance to a ``Principal`` via
+    the identity layer.
+
+    Returns ``None`` when NO owner is enrolled — open mode, back-compat
+    pass-through (the gate routes None straight to the full brain, exactly as
+    before speaker-id existed).
+
+    When an owner IS enrolled, always returns a Principal (OWNER / TRUSTED /
+    UNKNOWN). On any embedding/resolution error it FAILS CLOSED to a synthetic
+    TRUSTED principal — general help only, never owner data — rather than
+    UNKNOWN-dropping (which would look like open mode) or granting OWNER."""
+    if not _vid_has_owner():
+        return None  # open mode — no gate (back-compat for fresh deployments)
+    import jarvis_identity as _ji
     try:
-        import jarvis_voice_id as _vid
-        emb = _vid.embed_from_audio(audio_16k, sample_rate=16000)
-        result = _vid.identify(emb)
+        emb = _ji.embed_from_audio(audio_16k, sample_rate=16000)
+        return _ji.resolve_voice(emb)
     except Exception as exc:  # noqa: BLE001
-        print(f"  [vid] identify failed: {exc!r}")
-        return (None, 0.0)
-    status = result.get("status")
-    score = float(result.get("score", 0.0))
-    if status in ("match", "borderline"):
-        return (result.get("name"), score)
-    return (None, score)
+        print(f"  [vid] resolve failed — failing CLOSED to trusted-locked: {exc!r}")
+        return _ji.Principal(role=_ji.Role.TRUSTED, user_id="voice:unknown",
+                             source="voice", confidence=0.0,
+                             raw={"error": str(exc)})
 
 
 # ── Mic resolve ──────────────────────────────────────────────────────────────
@@ -443,8 +494,31 @@ Tools:
 - For "is the cluster healthy" / "how many devices" / "what's broken",
   use the mcp__jarvis_kube__* tools (kube_get_pods, kube_top_nodes,
   kube_events, etc). You have READ access only — no secrets, no writes.
+- UNIFIED MEMORY (mem0) + OVERVIEW — your understanding of the homelab.
+  For open-ended status questions ("what's going on", "how's the
+  cluster", "what's the deal with X", "where do things stand"): call
+  mcp__jarvis_overview__cluster_overview for the live digest, and/or
+  mcp__jarvis_mem0__memory_search to recall what you already know about
+  X, BEFORE answering — never guess. When the owner tells you a durable
+  fact worth keeping (a preference, a decision, a person, an ongoing
+  project, a correction), persist it with mcp__jarvis_mem0__memory_add.
+  Do NOT store transient chatter (weather, the time, small talk).
 - For longer / multi-step tasks use mcp__jarvis_delegate__delegate to
   spawn a sub-agent claude session.
+- CLUSTER RUNS (long-running, fire-and-forget). When sir asks for a
+  LONG-RUNNING task he wants done even if his laptop closes ("go figure
+  out why X is broken and let me know", "investigate Y and report back",
+  "spend a while digging into Z"), use mcp__jarvis_runner__launch_run.
+  This creates a tracked cluster-side job that survives the laptop closing
+  and ANNOUNCES its result on the speakers when done.
+  PROPOSE FIRST, THEN ACT: do NOT call launch_run on sir's first request.
+  First say one short line — "I'll launch a cluster run to <X> in
+  <read|apply> mode, sir. Confirm?" — and only call launch_run AFTER sir
+  explicitly confirms on a following turn. Default to mode="read"
+  (read-only investigation). Only pass mode="apply" when sir explicitly
+  said make / apply / fix / deploy / commit. Use
+  mcp__jarvis_runner__list_runs / run_status to answer "what's running" /
+  "did that finish" / "what did that run find".
 - WebSearch / WebFetch for live external facts.
 - For "volume up/down" / "louder/quieter" / "set the volume to X" /
   "mute" / "pause the music" / "what's playing": use the
@@ -493,6 +567,35 @@ def _write_mcp_config() -> None:
             "jarvis_persona": {
                 "command": "python3",
                 "args": ["/app/jarvis_persona_mcp.py"],
+            },
+            # Unified memory (mem0) — thin stdio shim that HTTP-calls the mem0
+            # REST service. Partition key (user_id) is taken from
+            # JARVIS_MEM_SCOPE in the subprocess env (threaded by the brain
+            # paths); the brain CANNOT override it. MEM0_URL defaults to the
+            # in-cluster Service, so no env override is needed here.
+            "jarvis_mem0": {
+                "command": "python3",
+                "args": ["/app/jarvis_mem0_mcp.py"],
+            },
+            # Live cluster overview — single read-only digest tool for
+            # open-ended "what's going on / status" questions. Uses the
+            # in-pod jarvis-readonly ServiceAccount like jarvis_kube.
+            "jarvis_overview": {
+                "command": "python3",
+                "args": ["/app/jarvis_overview_mcp.py"],
+            },
+            # Cluster-side agent runner (charter roadmap #2). launch_run
+            # creates a TRACKED, INDEPENDENT k8s Job that survives the laptop
+            # closing; list_runs/run_status read its status from the k8s API.
+            # This server is in EVERY brain's MCP config, but launch_run is
+            # only ADDED TO THE ALLOWLIST for the OWNER paths (see
+            # _OWNER_ALLOWED_TOOLS) — TRUSTED/UNKNOWN/open-mode brains cannot
+            # reach it. launch_run uses the jarvis-runner SA token (mounted
+            # via JARVIS_RUNNER_TOKEN_PATH) to create the Job; the always-on
+            # edge SA (jarvis-readonly) gains NO Job-create privilege.
+            "jarvis_runner": {
+                "command": "python3",
+                "args": ["/app/jarvis_runner_mcp.py"],
             },
         }
     }
@@ -620,6 +723,18 @@ def _now_context() -> str:
             "'is it late', overnight context, etc.")
 
 
+def _turn_context_prefix(include_persona: bool = False) -> str:
+    """Volatile per-turn context that MUST ride the USER message, never the
+    system prompt — so the cached tools+system prefix stays byte-stable and
+    Anthropic prompt caching actually hits. _now_context() changes every
+    minute; folding it into --append-system-prompt busts the ~30k-token
+    prefix on every turn. See docs/jarvis/cache-optimization.md."""
+    parts = [f"[context: {_now_context()}]"]
+    if include_persona:
+        parts.append(_render_persona_prompt())
+    return "\n".join(parts) + "\n"
+
+
 _RO_ALLOWED_TOOLS = " ".join([
     # Personal: briefing / weather / news / greeting (Calendar+Reminders
     # stubbed to "unauthorized" until CalDAV bridge).
@@ -665,6 +780,12 @@ _RO_ALLOWED_TOOLS = " ".join([
     "mcp__jarvis_sonos__sonos_now_playing",
     "mcp__jarvis_sonos__sonos_list_speakers",
     "mcp__jarvis_sonos__sonos_play_spotify",
+    # Unified memory (mem0) — read past facts before answering, persist
+    # durable facts. Scope is fixed by JARVIS_MEM_SCOPE env (no user_id arg).
+    "mcp__jarvis_mem0__memory_search",
+    "mcp__jarvis_mem0__memory_add",
+    # Live cluster overview — one digest tool for "what's going on" questions.
+    "mcp__jarvis_overview__cluster_overview",
     # Persona self-tuning (humor / formality / terseness / sass / TTS / vol)
     "mcp__jarvis_persona__persona_get",
     "mcp__jarvis_persona__persona_set",
@@ -688,6 +809,23 @@ _RO_ALLOWED_TOOLS = " ".join([
     "mcp__claude_ai_Google_Calendar__complete_authentication",
     "mcp__claude_ai_Google_Drive__authenticate",
     "mcp__claude_ai_Google_Drive__complete_authentication",
+])
+
+
+# OWNER-ONLY allowlist = the read-only toolbox PLUS the cluster-side agent
+# runner (charter roadmap #2). launch_run creates a tracked, independent
+# k8s Job that survives the laptop closing; list_runs/run_status track it.
+# This is wired ONLY into the OWNER brain paths (the warm session and the
+# cold owner subprocess when mem_scope=="owner") — TRUSTED, UNKNOWN,
+# open-mode, and Discord brains use _RO_ALLOWED_TOOLS and therefore PHYSICALLY
+# cannot launch a run. launch_run is additionally propose-then-confirm gated
+# (the model proposes first; the owner confirms on a following turn), per
+# charter principle 3 — but the allowlist split is the real security boundary.
+_OWNER_ALLOWED_TOOLS = " ".join([
+    _RO_ALLOWED_TOOLS,
+    "mcp__jarvis_runner__launch_run",
+    "mcp__jarvis_runner__list_runs",
+    "mcp__jarvis_runner__run_status",
 ])
 
 
@@ -738,7 +876,7 @@ def _claude_brain_discord(text: str, timeout: float = 60.0) -> str:
              "--append-system-prompt", persona_prompt,
              "--mcp-config", _MCP_CONFIG_PATH,
              "--allowed-tools", _RO_ALLOWED_TOOLS,
-             "--model", "claude-haiku-4-5-20251001",
+             "--model", "sonnet",
              "--max-turns", "6",
              "--output-format", "json"],
             capture_output=True, text=True, timeout=timeout,
@@ -792,7 +930,7 @@ def _claude_brain_discord_locked(text: str, timeout: float = 60.0) -> str:
             ["claude", "-p", text,
              "--append-system-prompt", persona_prompt,
              # No --mcp-config, no --allowed-tools = no tool access.
-             "--model", "claude-haiku-4-5-20251001",
+             "--model", "sonnet",
              "--max-turns", "1",
              "--output-format", "json"],
             capture_output=True, text=True, timeout=timeout,
@@ -820,7 +958,7 @@ def _claude_brain_discord_locked(text: str, timeout: float = 60.0) -> str:
         return ""
 
 
-def _claude_brain(text: str, timeout: float = 60.0) -> str:
+def _claude_brain(text: str, timeout: float = 60.0, mem_scope: str = "") -> str:
     """Subprocess `claude` with the persona + MCP config. Uses json
     output so we can see WHY claude returned nothing (auth fail, tool
     loop, etc) instead of silently shipping '' to TTS.
@@ -838,19 +976,32 @@ def _claude_brain(text: str, timeout: float = 60.0) -> str:
     # CLI keeps only the last when the flag is repeated, so we glue
     # them ourselves). Time of day matters: greetings, "is it late?",
     # "should I be sleeping?", scheduled-task awareness.
-    persona_prompt = (_PERSONA_SYSTEM
-                      + "\n\n" + _render_persona_prompt()
-                      + "\n\n" + _now_context())
+    persona_prompt = _PERSONA_SYSTEM  # byte-stable → cacheable prefix
+    # Volatile per-turn context (wall-clock + live persona) rides the USER
+    # message, NOT the system prompt, so the cached tools+system prefix stays
+    # stable and Anthropic prompt caching actually hits.
+    # See docs/jarvis/cache-optimization.md.
+    user_text = _turn_context_prefix(include_persona=True) + text
+    # mem_scope is threaded to the subprocess env so the mem0 MCP shim
+    # (jarvis_mem0_mcp.py) partitions unified memory by this key. The shim
+    # reads JARVIS_MEM_SCOPE and fails closed if it is absent — so when
+    # mem_scope is empty (open mode) no env override is passed and memory is
+    # simply unavailable for the turn, which is the intended owner-safe default.
+    _env = {**os.environ, "JARVIS_MEM_SCOPE": mem_scope} if mem_scope else None
+    # OWNER cold turns (mem_scope=="owner", the warm-brain-disabled fallback)
+    # get the runner tools; open-mode/other scopes stay read-only. The warm
+    # session is the usual owner path — this keeps the cold fallback at parity.
+    _allowed = _OWNER_ALLOWED_TOOLS if mem_scope == "owner" else _RO_ALLOWED_TOOLS
     try:
         proc = _sp.run(
-            ["claude", "-p", text,
+            ["claude", "-p", user_text,
              "--append-system-prompt", persona_prompt,
              "--mcp-config", _MCP_CONFIG_PATH,
-             "--allowed-tools", _RO_ALLOWED_TOOLS,
-             "--model", "claude-haiku-4-5-20251001",
+             "--allowed-tools", _allowed,
+             "--model", "sonnet",
              "--max-turns", "6",
              "--output-format", "json"],
-            capture_output=True, text=True, timeout=timeout,
+            capture_output=True, text=True, timeout=timeout, env=_env,
         )
         if proc.returncode != 0:
             print(f"  brain rc={proc.returncode}  stderr: {proc.stderr[:400]}")
@@ -880,6 +1031,252 @@ def _claude_brain(text: str, timeout: float = 60.0) -> str:
         return "That took too long, sir — try again."
     except Exception as exc:  # noqa: BLE001
         return f"Brain error, sir — {exc}"
+
+
+_VOICE_LOCKED_PERSONA_ADDENDUM = """
+
+NON-OWNER MODE — IMPORTANT: The person speaking is NOT sir (Hampton). You have NO MCP tools, NO sub-agents, NO Sonos/Spotify/Kube/Calendar/Email/Drive access in this conversation. Don't pretend to have them or claim to be running them. Answer from your own general knowledge only. NEVER reveal anything about sir — his schedule, location, whereabouts, calendar, reminders, contacts, music, homelab/cluster, network topology, hostnames, IPs, or any personal data. If asked anything about sir, briefly decline ("I can't share anything about him, but I can help you directly"). Keep replies short and spoken-aloud friendly: no markdown, no URLs, no lists.
+"""
+
+
+def _claude_brain_voice_locked(text: str, timeout: float = 60.0) -> str:
+    """Locked VOICE brain for TRUSTED (non-owner) speakers — the Layer-A
+    primary control. Same model + voice persona as _claude_brain but with NO
+    --mcp-config (→ no tools at all: a trusted user PHYSICALLY cannot invoke
+    calendar/kube/spotify/etc, no prompt can re-add them), --max-turns 1, and
+    NO local-brain fallthrough (the local model is unconstrained and would
+    leak). A trusted user gets a spoken chatbot, never owner data."""
+    import subprocess as _sp
+    has_creds = os.path.exists(os.path.expanduser("~/.claude/.credentials.json"))
+    has_api_key = bool(os.environ.get("ANTHROPIC_API_KEY"))
+    if not has_creds and not has_api_key:
+        return ""
+    persona_prompt = _PERSONA_SYSTEM + _VOICE_LOCKED_PERSONA_ADDENDUM  # byte-stable
+    # Only _now_context() is volatile here (addendum is static) → user turn.
+    # No persona line for the locked brain.
+    user_text = _turn_context_prefix(include_persona=False) + text
+    try:
+        proc = _sp.run(
+            ["claude", "-p", user_text,
+             "--append-system-prompt", persona_prompt,
+             # No --mcp-config, no --allowed-tools = no tool access (Layer A).
+             "--model", "sonnet",
+             "--max-turns", "1",
+             "--output-format", "json"],
+            capture_output=True, text=True, timeout=timeout,
+        )
+        if proc.returncode != 0:
+            print(f"  voice-locked brain rc={proc.returncode}  stderr: {proc.stderr[:400]}")
+            return ""
+        out = (proc.stdout or "").strip()
+        if not out:
+            return ""
+        try:
+            data = json.loads(out)
+            if data.get("is_error"):
+                return ""
+            result = (data.get("result") or "").strip()
+        except json.JSONDecodeError:
+            result = out
+        # No local-brain fallthrough for non-owner turns — keep it constrained.
+        return result
+    except _sp.TimeoutExpired:
+        return ""
+    except Exception as exc:  # noqa: BLE001
+        print(f"  voice-locked brain exception: {exc!r}")
+        return ""
+
+
+# ── Warm OWNER brain session (Phase 5) ───────────────────────────────────────
+# One long-lived `claude` stream-json process for the OWNER path ONLY, reused
+# across turns so the six MCP servers stay warm (the ~2-3s/turn cold-start) AND
+# the conversation stays alive (the prereq for mem0 continuity). Reached ONLY
+# via gate_and_respond's OWNER branch → brain_respond(mem_scope="owner");
+# TRUSTED/UNKNOWN never touch it. See docs/jarvis/phase5-warm-brain.md.
+_WARM_SESSION_ID_PATH = os.environ.get("WARM_SESSION_ID_PATH", "/state/warm_session_id")
+_WARM_BRAIN_ENABLED = os.environ.get("WARM_BRAIN", "1") == "1"
+
+
+class _WarmBrain:
+    """Long-lived `claude` stream-json session (OWNER only). Thread-safe via a
+    per-turn lock — the mic loop and the /voice/ingest endpoint can both call
+    in; concurrent owner turns serialize (one conversation, one turn)."""
+
+    def __init__(self):
+        self._proc = None
+        self._q: "queue.Queue" = queue.Queue()
+        self._reader = None
+        self._turn_lock = threading.Lock()
+        self._ever_spawned = False
+        # Whether a session id already existed BEFORE this process started
+        # (pod restart → resume the PVC-persisted transcript) vs a brand-new id.
+        self._sid_preexisted = os.path.exists(_WARM_SESSION_ID_PATH)
+        self._sid = self._load_or_mint_sid()
+
+    def _mint_sid(self) -> str:
+        sid = str(uuid.uuid4())
+        try:
+            with open(_WARM_SESSION_ID_PATH, "w") as f:
+                f.write(sid)
+        except OSError as exc:  # noqa: BLE001
+            print(f"warm brain: could not persist session id: {exc!r}")
+        return sid
+
+    def _load_or_mint_sid(self) -> str:
+        try:
+            with open(_WARM_SESSION_ID_PATH) as f:
+                sid = f.read().strip()
+            if sid:
+                return sid
+        except OSError:
+            pass
+        return self._mint_sid()
+
+    def _alive(self) -> bool:
+        return self._proc is not None and self._proc.poll() is None
+
+    def _spawn(self, force_new: bool = False) -> None:
+        import subprocess as _sp
+        if force_new:
+            self._sid = self._mint_sid()
+        # Resume an existing session on process-death or pod-restart; use a
+        # fresh --session-id only for a genuinely new conversation.
+        resume = (not force_new) and (self._ever_spawned or self._sid_preexisted)
+        # Frozen system prompt (cache-stable) — wall-clock/persona ride the
+        # per-turn user text, exactly like the cold path's cache fix.
+        argv = ["claude",
+                "--input-format", "stream-json",
+                "--output-format", "stream-json",
+                "--verbose",
+                "--append-system-prompt", _PERSONA_SYSTEM,
+                "--mcp-config", _MCP_CONFIG_PATH,
+                # OWNER warm session: gets the runner tools (launch_run etc).
+                # This path is OWNER-only (mem_scope=="owner") by construction
+                # in brain_respond, so only the owner can ever reach launch_run.
+                "--allowed-tools", _OWNER_ALLOWED_TOOLS,
+                "--model", "sonnet"]
+        argv += ["--resume", self._sid] if resume else ["--session-id", self._sid]
+        env = {**os.environ, "JARVIS_MEM_SCOPE": "owner"}
+        self._q = queue.Queue()
+        self._proc = _sp.Popen(
+            argv, stdin=_sp.PIPE, stdout=_sp.PIPE, stderr=_sp.DEVNULL,
+            text=True, bufsize=1, env=env)
+        self._reader = threading.Thread(
+            target=self._read_loop, args=(self._proc,), daemon=True)
+        self._reader.start()
+        self._ever_spawned = True
+
+    def _read_loop(self, proc) -> None:
+        try:
+            for line in iter(proc.stdout.readline, ""):
+                self._q.put(line)
+        except Exception:  # noqa: BLE001
+            pass
+        finally:
+            self._q.put(None)  # sentinel: stream closed
+
+    def ask(self, text: str, timeout: float = 60.0) -> str:
+        """One OWNER turn on the warm session. Returns spoken text, or the SAME
+        error strings _claude_brain returns so brain_respond's metric
+        classification keeps working unchanged."""
+        with self._turn_lock:
+            has_creds = os.path.exists(os.path.expanduser("~/.claude/.credentials.json"))
+            has_api_key = bool(os.environ.get("ANTHROPIC_API_KEY"))
+            if not has_creds and not has_api_key:
+                return "No brain credentials, sir — neither subscription nor API key configured."
+            for attempt in (0, 1):  # one respawn-and-retry; attempt 1 = fresh session
+                if not self._alive():
+                    try:
+                        self._spawn(force_new=(attempt == 1))
+                    except Exception as exc:  # noqa: BLE001
+                        print(f"warm brain: spawn failed: {exc!r}")
+                        return "I lost my connection there, sir."
+                turn_text = _turn_context_prefix(include_persona=True) + text
+                msg = json.dumps({"type": "user", "message": {
+                    "role": "user",
+                    "content": [{"type": "text", "text": turn_text}]}})
+                try:
+                    self._proc.stdin.write(msg + "\n")
+                    self._proc.stdin.flush()
+                except (BrokenPipeError, OSError) as exc:
+                    print(f"warm brain: write failed ({exc!r}) — respawning")
+                    self._proc = None
+                    continue
+                deadline = time.monotonic() + timeout
+                last_text = ""
+                stream_closed = False
+                while True:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        print("warm brain: turn deadline exceeded — marking for respawn")
+                        self._proc = None  # wedged mid-stream; next turn respawns
+                        return "That took too long, sir — try again."
+                    try:
+                        line = self._q.get(timeout=remaining)
+                    except queue.Empty:
+                        self._proc = None
+                        return "That took too long, sir — try again."
+                    if line is None:  # stream closed mid-turn → respawn-retry
+                        self._proc = None
+                        stream_closed = True
+                        break
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        ev = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    et = ev.get("type")
+                    if et == "result":
+                        if ev.get("is_error"):
+                            return "Something went wrong, sir — try again."
+                        result = (ev.get("result") or "").strip()
+                        return result or "I didn't have anything to say there, sir."
+                    if et == "assistant":
+                        try:
+                            for blk in ev["message"]["content"]:
+                                if blk.get("type") == "text" and blk.get("text"):
+                                    last_text = blk["text"].strip()
+                        except (KeyError, TypeError):
+                            pass
+                if stream_closed and last_text:
+                    return last_text  # got text but no result envelope
+                # else: loop for one respawn-retry
+            return "I lost my connection there, sir."
+
+    def shutdown(self) -> None:
+        try:
+            if self._proc is not None:
+                if self._proc.stdin:
+                    self._proc.stdin.close()
+                self._proc.terminate()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+_warm_brain = None
+_warm_brain_lock = threading.Lock()
+
+# Shared speaking lock: serializes Sonos output between the mic loop and the
+# run-announce daemon (charter roadmap #2) so a completion announcement never
+# interleaves mid-sentence with a live owner turn. The mic loop acquires it
+# around its _stream_on_sonos calls; jarvis_run_announce acquires it before
+# speaking a finished-run result. A re-entrant lock would let a single thread
+# double-acquire harmlessly, but a plain Lock is correct here since each
+# speaker holds it for exactly one stream.
+_speak_lock = threading.Lock()
+
+
+def _get_warm_brain() -> "_WarmBrain":
+    """Lazily construct + spawn the OWNER-only warm session singleton."""
+    global _warm_brain
+    with _warm_brain_lock:
+        if _warm_brain is None:
+            _warm_brain = _WarmBrain()
+        if not _warm_brain._alive():
+            _warm_brain._spawn()
+        return _warm_brain
 
 
 _BRAIN_REFUSAL_PREFIXES = (
@@ -945,7 +1342,7 @@ def _claude_brain_raw(text: str, system_prompt: str | None = None,
         print("brain raw: no credentials configured")
         return ""
     argv = ["claude", "-p", text,
-            "--model", "claude-haiku-4-5-20251001",
+            "--model", "sonnet",
             "--max-turns", "1",
             "--output-format", "json"]
     if system_prompt:
@@ -1059,7 +1456,7 @@ def _claude_brain_vision(text: str, image_paths: list, timeout: float = 90.0) ->
              "--input-format", "stream-json",
              "--output-format", "stream-json",
              "--verbose",
-             "--model", "claude-haiku-4-5-20251001",
+             "--model", "sonnet",
              "--max-turns", "1"],
             input=stdin_bytes,
             capture_output=True, timeout=timeout,
@@ -1133,7 +1530,7 @@ def _maybe_greeting_shortcircuit(text: str) -> str | None:
         return f"Briefing unavailable, sir — {exc}"
 
 
-def brain_respond(text: str) -> str:
+def brain_respond(text: str, mem_scope: str = "") -> str:
     t0 = time.time()
     with tracer.start_as_current_span("jarvis.brain") as span:
         span.set_attribute("prompt_chars", len(text or ""))
@@ -1152,7 +1549,16 @@ def brain_respond(text: str) -> str:
             if os.path.exists(os.path.expanduser("~/.claude/.credentials.json")):
                 mode = "subscription"
             span.set_attribute("mode", mode)
-            reply = _claude_brain(text)
+            # OWNER turns (mem_scope=="owner") run on the warm persistent
+            # session; open-mode (mem_scope=="") and the WARM_BRAIN=0 kill
+            # switch fall to the cold per-turn subprocess. TRUSTED/UNKNOWN
+            # never reach brain_respond (gate_and_respond routes them away).
+            if (_WARM_BRAIN_ENABLED and mem_scope == "owner"
+                    and os.environ.get("BRAIN_MODE", "claude") == "claude"):
+                span.set_attribute("warm", True)
+                reply = _get_warm_brain().ask(text)
+            else:
+                reply = _claude_brain(text, mem_scope=mem_scope)
             # Best-effort classification of brain error replies so the
             # Prometheus counter has useful reasons to slice by.
             low = (reply or "").lower()
@@ -1176,6 +1582,178 @@ def brain_respond(text: str) -> str:
             reply_local = locals().get("reply", "") or ""
             span.set_attribute("reply_chars", len(reply_local))
             METRIC_BRAIN_DURATION.observe(time.time() - t0)
+
+
+def gate_and_respond(principal, text: str) -> str:
+    """THE deterministic authorization gate. Capability is chosen HERE in
+    Python from the principal's role, BEFORE any model call — the model is
+    never the security boundary.
+
+      principal is None  → open mode (no owner enrolled): full brain (legacy).
+      OWNER              → full brain (all MCP tools), mem_scope=owner.
+      TRUSTED            → owner-referential query (Layer B)? deterministic
+                           deflection, NO brain spawned : locked brain
+                           (no --mcp-config → no tools, Layer A).
+      UNKNOWN            → no brain (mic loop drops these; Phase 2 adds
+                           name-capture). Defensive challenge here.
+
+    Used by BOTH the mic loop and the /voice/ingest endpoint so every front
+    end inherits the identical guarantees."""
+    import jarvis_identity as _ji
+    if principal is None:
+        return brain_respond(text)  # open mode — back-compat pass-through
+    role = principal.role
+    if role is _ji.Role.OWNER:
+        return brain_respond(text, mem_scope=principal.mem_scope)
+    if role is _ji.Role.TRUSTED:
+        if _ji.is_owner_referential(text):
+            print(f"  [gate] owner-referential query from {principal.user_id} "
+                  f"— deflected pre-brain (Layer B, no brain spawned)")
+            return ("Sorry, I can't share anything about him. "
+                    "But I can help you with something directly.")
+        return _claude_brain_voice_locked(text)
+    # UNKNOWN — Phase 2 wires the name-capture state machine here.
+    return "I don't recognise you. What's your name?"
+
+
+# ── Phase 2: owner-auth + enroll-by-voice state machine ──────────────────────
+# Deterministic, runs BEFORE the brain. Owner auth commands are CONSUMED here
+# and never reach the model (the model must never be able to enroll a voice).
+_AWAITING_NAME_TIMEOUT_S = 45.0
+_SAME_SPEAKER_COS = 0.55
+# Single in-flight challenge: the unknown speaker we just asked to name
+# themselves. Holds their voiceprint so the follow-up "I'm Alex" is matched to
+# the SAME voice (someone else can't answer for them).
+_awaiting_name: dict = {"active": False, "embedding": None, "ts": 0.0}
+
+_NAME_PATTERNS = [
+    re.compile(r"\bmy name is\s+([A-Za-z][A-Za-z .'-]{0,30})", re.I),
+    re.compile(r"\bi'?m\s+([A-Za-z][A-Za-z .'-]{0,30})", re.I),
+    re.compile(r"\bit'?s\s+([A-Za-z][A-Za-z .'-]{0,30})", re.I),
+    re.compile(r"\bthis is\s+([A-Za-z][A-Za-z .'-]{0,30})", re.I),
+    re.compile(r"\bcall me\s+([A-Za-z][A-Za-z .'-]{0,30})", re.I),
+]
+_AUTH_REMOVE_RE = re.compile(
+    r"\b(?:remove|delete|forget|unenroll|deauthori[sz]e)\s+([A-Za-z][A-Za-z .'-]{0,30})", re.I)
+_AUTH_REJECT_RE = re.compile(
+    r"\b(?:reject|deny|do\s*n'?t\s+(?:authenticate|authori[sz]e|trust))\b", re.I)
+_AUTH_THIS_IS_RE = re.compile(r"\bthis is\s+([A-Za-z][A-Za-z .'-]{0,30})", re.I)
+_AUTH_APPROVE_RE = re.compile(r"\b(?:authenticate|authori[sz]e|approve|trust)\b", re.I)
+
+
+_NAME_STOPWORDS = {"please", "now", "thanks", "thank", "you", "okay", "ok", "jarvis"}
+
+
+def _clean_name(s: str) -> str:
+    s = (s or "").strip(" .,!?").split(",")[0].strip()
+    words = s.split()
+    # Drop trailing filler ("forget sarah please" → "Sarah").
+    while words and words[-1].lower().strip(".,!?") in _NAME_STOPWORDS:
+        words.pop()
+    return " ".join(w.capitalize() for w in words[:2])
+
+
+def _extract_name(text: str) -> str:
+    for pat in _NAME_PATTERNS:
+        m = pat.search(text)
+        if m:
+            return _clean_name(m.group(1))
+    # Bare-name fallback: a short reply like "Alex" / "Alex Smith" (strip wake word).
+    cleaned = re.sub(r"\bjarvis\b", "", text, flags=re.I).strip(" .,!?")
+    words = cleaned.split()
+    if 1 <= len(words) <= 2 and all(w[:1].isalpha() for w in words):
+        return _clean_name(cleaned)
+    return ""
+
+
+def _cosine(a, b) -> float:
+    a = np.asarray(a, dtype=np.float32)
+    b = np.asarray(b, dtype=np.float32)
+    return float(np.dot(a, b) / ((np.linalg.norm(a) + 1e-9) * (np.linalg.norm(b) + 1e-9)))
+
+
+def _parse_owner_auth(text: str):
+    """Owner-only enrollment commands. Returns (action, name) or None.
+    action in {approve, reject, remove}."""
+    m = _AUTH_REMOVE_RE.search(text)
+    if m:
+        return ("remove", _clean_name(m.group(1)))
+    if _AUTH_REJECT_RE.search(text):
+        return ("reject", "")
+    m = _AUTH_THIS_IS_RE.search(text)
+    if m:
+        return ("approve", _clean_name(m.group(1)))
+    if _AUTH_APPROVE_RE.search(text):
+        return ("approve", "")
+    return None
+
+
+def _exec_owner_auth(action: str, name: str) -> str:
+    import jarvis_identity as _ji
+    owner_slug = _ji.get_owner_slug() or ""
+    if action == "approve":
+        res = _ji.authenticate_pending(owner_slug, override_name=name or "")
+        if res.get("status") == "ok":
+            return f"Done, sir. {res['name']} is now authorised."
+        return "There's no one waiting to be authorised, sir."
+    if action == "reject":
+        _ji.clear_pending()
+        return "Discarded, sir."
+    if action == "remove":
+        if name and _ji.remove(name):
+            return f"Removed {name}, sir."
+        return f"I don't have {name or 'them'} enrolled, sir."
+    return "I'm not sure what you'd like me to do, sir."
+
+
+def _identity_turn(principal, text: str, addressed: bool):
+    """Phase 2 deterministic identity state machine. Returns
+    ``(consumed, reply)``: when ``consumed`` is True the turn is an identity
+    action (owner auth command, name challenge, or name capture) and must NOT
+    go to the brain. ``reply`` (may be None) is spoken if present.
+
+    Order: owner auth commands first (consumed), then name-capture for an
+    awaiting challenger (matched by voiceprint so nobody can answer for them),
+    then challenge an addressed unknown. Owner/trusted normal turns fall
+    through to the gate."""
+    import jarvis_identity as _ji
+    role = principal.role
+    now = time.time()
+
+    # 1. Owner enrollment commands — consumed, never reach the brain. Gated on
+    #    addressed so ambient owner chatter can't trigger an enrollment.
+    if role is _ji.Role.OWNER:
+        if addressed:
+            cmd = _parse_owner_auth(text)
+            if cmd is not None:
+                return (True, _exec_owner_auth(cmd[0], cmd[1]))
+        return (False, None)
+
+    # 2. Name-capture: an unknown we just challenged states their name. Match
+    #    the SAME voiceprint so a different person can't answer for them.
+    if (_awaiting_name["active"]
+            and now - _awaiting_name["ts"] < _AWAITING_NAME_TIMEOUT_S
+            and principal.embedding is not None
+            and _awaiting_name["embedding"] is not None
+            and _cosine(principal.embedding, _awaiting_name["embedding"]) >= _SAME_SPEAKER_COS):
+        name = _extract_name(text)
+        if name:
+            _ji.stash_pending(name, principal.embedding)
+            _awaiting_name["active"] = False
+            owner = _ji.get_owner()
+            owner_name = (owner["name"] if owner else "Hampton")
+            return (True, f"Thank you, {name}. {owner_name} will need to authorise you.")
+        return (True, "I didn't catch your name — what is it?")
+
+    # 3. Unknown + addressed → challenge and stash the voiceprint.
+    if role is _ji.Role.UNKNOWN:
+        if addressed:
+            _awaiting_name.update(active=True, embedding=principal.embedding, ts=now)
+            return (True, "I don't recognise you. What's your name?")
+        return (False, None)  # unaddressed unknown → caller ambient-drops
+
+    # 4. Trusted normal turn → gate.
+    return (False, None)
 
 
 def _check_brain_auth() -> None:
@@ -1345,6 +1923,9 @@ class _AudioHandler(BaseHTTPRequestHandler):
         if parsed.path == "/ig/webhook":
             self._handle_ig_event()
             return
+        if parsed.path == "/voice/ingest":
+            self._handle_voice_ingest()
+            return
         self.send_response(404)
         self.end_headers()
 
@@ -1459,12 +2040,92 @@ class _AudioHandler(BaseHTTPRequestHandler):
                 except Exception:
                     pass
 
+    # ── Voice mesh ingress (Mac thin client → shared gate) ───────────
+    def _handle_voice_ingest(self) -> None:
+        """POST /voice/ingest — THE mesh point. A thin STT client (the Mac
+        `jarvis listen`) sends {text, embedding?, source}; we resolve it to a
+        Principal and run the SAME deterministic gate_and_respond the mic loop
+        uses, so every front end inherits identical guarantees with zero
+        client-side security code. Auth: X-Edge-Token shared secret.
+
+        The endpoint is INERT until EDGE_INGEST_TOKEN is set on the deployment
+        (missing token → 403), so shipping this code is safe before the secret
+        is wired."""
+        import jarvis_identity as _ji
+        with tracer.start_as_current_span("jarvis.voice.ingest") as span:
+            # 1. Auth — shared secret, constant-time compare. Missing/!match → 403.
+            expected = os.environ.get("EDGE_INGEST_TOKEN", "") or ""
+            got = self.headers.get("X-Edge-Token", "") or ""
+            if not expected or not hmac.compare_digest(got, expected):
+                span.set_attribute("ingest.auth", "reject")
+                self.send_response(403)
+                self.end_headers()
+                return
+            # 2. Read + parse body.
+            try:
+                length = int(self.headers.get("Content-Length", "0") or "0")
+            except ValueError:
+                length = 0
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body or b"{}")
+            except json.JSONDecodeError:
+                self._json(400, {"error": "bad_json"})
+                return
+            text = (payload.get("text") or "").strip()
+            source = (payload.get("source") or "mac").strip() or "mac"
+            emb = payload.get("embedding")
+            if not text:
+                self._json(400, {"error": "empty_text"})
+                return
+
+            # 3. Resolve → Principal (mirrors the mic loop's _identify logic).
+            principal = None
+            try:
+                if _ji.has_owner():
+                    if isinstance(emb, list) and emb:
+                        principal = _ji.resolve_voice(
+                            np.asarray(emb, dtype=np.float32), source=source)
+                    else:
+                        # Owner enrolled but no voiceprint sent → FAIL CLOSED.
+                        principal = _ji.Principal(
+                            role=_ji.Role.UNKNOWN, user_id=f"{source}:unknown",
+                            source=source, confidence=0.0)
+                # else: open mode (no owner) → principal stays None → full brain
+            except Exception as exc:  # noqa: BLE001
+                print(f"  [ingest] resolve failed — failing CLOSED: {exc!r}")
+                principal = _ji.Principal(
+                    role=_ji.Role.TRUSTED, user_id=f"{source}:unknown",
+                    source=source, confidence=0.0)
+
+            role = principal.role.value if principal is not None else "open"
+            speaker = principal.display_name if principal is not None else ""
+            span.set_attribute("ingest.role", role)
+            span.set_attribute("ingest.source", source)
+            # 4. SAME gate the mic loop uses — identical guarantees.
+            reply = gate_and_respond(principal, text)
+            self._json(200, {"reply": reply, "role": role, "speaker": speaker})
+
+    def _json(self, code: int, obj: dict) -> None:
+        body = json.dumps(obj).encode("utf-8")
+        try:
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        except (ConnectionResetError, BrokenPipeError):
+            pass
+
     def log_message(self, *args, **kwargs):  # silence default access log
         pass
 
 
-class _ReusableHTTPServer(HTTPServer):
-    # Allow restart without the kernel's TIME_WAIT keeping the port held.
+class _ReusableHTTPServer(ThreadingHTTPServer):
+    # Threaded so a slow /voice/ingest brain call doesn't block Sonos WAV GETs
+    # on the same server (single-threaded HTTPServer would serialize them).
+    # daemon_threads defaults True on ThreadingHTTPServer. allow_reuse_address:
+    # restart without the kernel's TIME_WAIT holding the port.
     allow_reuse_address = True
 
 
@@ -1737,6 +2398,16 @@ def main() -> None:
         # Verify the API key is valid before we start listening — surface
         # auth problems at startup instead of as silent empty replies.
         _check_brain_auth()
+        # Phase 5: prewarm the OWNER warm session so the MCP servers are warm
+        # before the first turn. Only when an owner is enrolled (no point
+        # warming an owner session in open mode). Fail-open like every other
+        # boot subsystem — falls back to lazy spawn / cold per-turn on error.
+        if _WARM_BRAIN_ENABLED and _vid_has_owner():
+            try:
+                _get_warm_brain()
+                print("warm brain: OWNER session prewarmed")
+            except Exception as exc:  # noqa: BLE001
+                print(f"warm brain: prewarm failed ({exc}) — cold per-turn fallback")
 
     stash = _AudioStash()
     _start_http_server(stash, EDGE_HTTP_PORT)
@@ -1826,6 +2497,24 @@ def main() -> None:
             jarvis_discord.start_thread()
         except Exception as exc:
             print(f"discord: failed to start — {exc}")
+
+    # Cluster-run completion announcer (charter roadmap #2). Polls k8s for
+    # finished runner Jobs and speaks the result on Sonos via _stream_on_sonos,
+    # serialized against the mic loop by _speak_lock. FAIL-OPEN — import or
+    # start failure must NOT take down the voice loop, exactly like the IG /
+    # Discord subsystems above. No-op until launch_run has produced a Job.
+    if os.environ.get("RUN_ANNOUNCE_ENABLED", "1") == "1":
+        try:
+            import jarvis_run_announce
+            jarvis_run_announce.start_announce_thread(
+                sonos=sonos, host_ip=host_ip,
+                http_port=EDGE_ADVERTISED_PORT,
+                stream_fn=_stream_on_sonos, stash=stash,
+                speak_lock=_speak_lock,
+            )
+            print("run announce: thread started")
+        except Exception as exc:
+            print(f"run announce: failed to start — {exc}")
 
     try:
         import torch  # noqa: F401
@@ -1982,27 +2671,53 @@ def main() -> None:
                     # If owner is enrolled, require voice match before letting
                     # through. Without enrollment, pass-through (back-compat for
                     # fresh deployments).
-                    spk_name, spk_confidence = _identify_speaker_from_audio(audio_16k)
-                    if _vid_has_owner() and spk_name is None:
-                        print(f"  (unknown speaker drop {dur:.1f}s): {user_text[:70]!r}  conf={spk_confidence:.2f}")
-                        turn_span.add_event("unknown_speaker_drop", {
-                            "dur_s": float(dur),
-                            "confidence": float(spk_confidence),
-                            "text_preview": user_text[:70],
-                        })
-                        turn_outcome = "unknown_speaker_drop"
-                        METRIC_UNKNOWN_SPEAKER_DROPS.inc()
-                        continue
-                    if spk_name:
-                        print(f"  speaker: {spk_name} (conf={spk_confidence:.2f})")
-                        turn_span.set_attribute("speaker", str(spk_name))
-                        turn_span.set_attribute("speaker_confidence", float(spk_confidence))
-
-                    # ── Ambient addressee gate ──────────────────────────
-                    # Must contain "jarvis" OR we're in the follow-up window
-                    # from a previous reply.
+                    # ── Speaker-ID + identity state machine (Phase 1/2) ──
+                    import jarvis_identity as _ji
+                    principal = _identify_speaker_from_audio(audio_16k)
                     low = user_text.lower()
                     addressed = ("jarvis" in low) or (time.time() < engaged_until)
+
+                    # Phase 2: owner-auth + enroll-by-voice. Runs BEFORE the
+                    # ambient drop so an unknown answering "I'm Alex" (no wake
+                    # word) is still captured. Owner auth commands are consumed
+                    # here and never reach the brain.
+                    if principal is not None:
+                        consumed, id_reply = _identity_turn(principal, user_text, addressed)
+                        if consumed:
+                            if id_reply:
+                                print(f"  JARVIS (identity): {id_reply!r}")
+                                turn_n += 1
+                                _sents = _split_sentences(id_reply)
+                                if _sents:
+                                    try:
+                                        with _speak_lock:
+                                            _stream_on_sonos(sonos, _sents, host_ip,
+                                                             EDGE_ADVERTISED_PORT, turn_n, stash)
+                                        engaged_until = time.time() + ADDRESSEE_WINDOW
+                                    except Exception as exc:
+                                        print(f"  sonos stream error: {exc}")
+                            turn_outcome = "identity_action"
+                            continue
+                        if principal.role is _ji.Role.UNKNOWN:
+                            # Unaddressed / unhandled unknown → ambient-drop
+                            # (don't broadcast that we're listening).
+                            print(f"  (unknown speaker drop {dur:.1f}s): {user_text[:70]!r}  conf={principal.confidence:.2f}")
+                            turn_span.add_event("unknown_speaker_drop", {
+                                "dur_s": float(dur),
+                                "confidence": float(principal.confidence),
+                                "text_preview": user_text[:70],
+                            })
+                            turn_outcome = "unknown_speaker_drop"
+                            METRIC_UNKNOWN_SPEAKER_DROPS.inc()
+                            continue
+                        print(f"  speaker: {principal.display_name or '?'} "
+                              f"(role={principal.role.value}, conf={principal.confidence:.2f})")
+                        turn_span.set_attribute("speaker", str(principal.display_name))
+                        turn_span.set_attribute("speaker_role", principal.role.value)
+                        turn_span.set_attribute("speaker_confidence", float(principal.confidence))
+
+                    # ── Ambient addressee gate (owner/trusted + open mode) ──
+                    # Must contain "jarvis" OR we're in the follow-up window.
                     if not addressed:
                         print(f"  (ambient drop {dur:.1f}s): {user_text[:70]!r}")
                         turn_span.add_event("ambient_drop", {
@@ -2019,8 +2734,8 @@ def main() -> None:
                           f"(dur={dur:.1f}s, stt {res.get('model_ms','?')}ms)")
                     notify("JARVIS", "Listening…", urgency="normal", expire_ms=1500)
 
-                    # ── Brain ───────────────────────────────────────────
-                    reply = brain_respond(user_text)
+                    # ── Gate + Brain (role-based, deterministic) ─────────
+                    reply = gate_and_respond(principal, user_text)
                     print(f"  JARVIS: {reply!r}")
                     if not reply or not reply.strip():
                         print("  → empty reply, skipping TTS")
@@ -2042,8 +2757,12 @@ def main() -> None:
                     turn_span.set_attribute("segment_count", len(sentences))
                     print(f"  streaming {len(sentences)} segment(s)")
                     try:
-                        _stream_on_sonos(sonos, sentences, host_ip,
-                                         EDGE_ADVERTISED_PORT, turn_n, stash)
+                        # Hold the shared speaking lock so a run-announce
+                        # completion can't interleave mid-sentence with this
+                        # live owner turn (charter roadmap #2).
+                        with _speak_lock:
+                            _stream_on_sonos(sonos, sentences, host_ip,
+                                             EDGE_ADVERTISED_PORT, turn_n, stash)
                         engaged_until = time.time() + ADDRESSEE_WINDOW
                     except Exception as exc:
                         print(f"  sonos stream error: {exc}")

@@ -1,0 +1,92 @@
+---
+# mem0 REST service — the JARVIS memory engine. CPU-only.
+#
+# Runs on microedge (Longhorn node), reaches Qdrant over Service DNS. NO GPU,
+# NO ollama — embeddings are fastembed on CPU, extraction is xAI Grok
+# (OpenAI-compatible API) over HTTPS. The RTX 3070 is untouched.
+#
+# Image is built on the cluster from build/ and pushed to zot; after a push,
+# restart this Deployment (`kubectl -n ai rollout restart deploy/jarvis-mem0`).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: jarvis-mem0
+  namespace: ai
+  labels:
+    app: jarvis-mem0
+    component: jarvis-mem0
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: jarvis-mem0
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: jarvis-mem0
+        component: jarvis-mem0
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: microedge
+      imagePullSecrets:
+        - name: zot-pull-secret
+      containers:
+        - name: jarvis-mem0
+          image: zot.hwcopeland.net/ai/jarvis-mem0:latest
+          ports:
+            - containerPort: 8800
+          env:
+            - name: MEM0_HTTP_PORT
+              value: "8800"
+            - name: FASTEMBED_MODEL
+              value: "BAAI/bge-small-en-v1.5"
+            - name: FASTEMBED_DIMS
+              value: "384"
+            - name: QDRANT_HOST
+              value: "qdrant.ai.svc.cluster.local"
+            - name: QDRANT_PORT
+              value: "6333"
+            - name: QDRANT_COLLECTION
+              value: "jarvis_mem0"
+            - name: EXTRACTION_MODEL
+              value: "grok-3-mini"
+            # xAI's OpenAI-compatible endpoint (mem0's openai provider uses it
+            # as base_url). Override only if xAI changes its API path.
+            - name: XAI_BASE_URL
+              value: "https://api.x.ai/v1"
+            # Extraction key — REUSES the single existing xAI Grok key from the
+            # homelab-bot-credentials Secret (same `ai` namespace; see
+            # external-secret-mem0.yaml). NOT the edge subscription OAuth, and
+            # NOT a new/dedicated key — one xAI key for the whole cluster.
+            - name: XAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: homelab-bot-credentials
+                  key: XAI_API_KEY
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              # fastembed/onnxruntime can spike on the first embed; give it room
+              # but cap it well under what the GPU workers need elsewhere.
+              cpu: "2"
+              memory: 2Gi
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8800
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8800
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 3

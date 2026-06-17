@@ -1,0 +1,11 @@
+# mem0 server — CPU-only memory service for JARVIS.
+# Pinned to known-good versions; bump deliberately, rebuild on the cluster.
+mem0ai==0.1.55
+qdrant-client==1.12.1
+fastembed==0.4.2
+# xAI Grok is reached via mem0's OpenAI-compatible provider (base_url override),
+# so the `openai` SDK is the LLM client dep (replaces `anthropic`).
+openai==1.59.6
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+pydantic==2.10.4

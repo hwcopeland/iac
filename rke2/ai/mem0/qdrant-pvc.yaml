@@ -1,0 +1,25 @@
+---
+# Qdrant on-disk storage. Longhorn-backed (microedge is a Longhorn node;
+# nixos-gpu has NO CSI driver, which is one reason the whole mem0 stack
+# deliberately runs OFF the GPU node). ReadWriteOnce — single Qdrant replica.
+#
+# NOTE: this PVC is defined here for clarity, but the StatefulSet also carries
+# a volumeClaimTemplate. Apply EITHER the StatefulSet's template OR this PVC,
+# not both for the same claim name. The StatefulSet below uses its own
+# volumeClaimTemplate (claim "qdrant-storage-qdrant-0"), so this standalone
+# PVC is OPTIONAL and only kept as documentation of the size/class intent.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: qdrant-storage-manual
+  namespace: ai
+  labels:
+    app: qdrant
+    component: jarvis-mem0
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: longhorn
+  resources:
+    requests:
+      storage: 10Gi

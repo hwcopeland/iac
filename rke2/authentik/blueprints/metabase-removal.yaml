@@ -1,0 +1,31 @@
+version: 1
+metadata:
+  name: Metabase Removal (decommissioned)
+# Metabase (metabase.hwcopeland.net) was retired. Its provider/app blueprint was
+# deleted in commit b6bcbce2, but blueprints do not delete live objects on removal,
+# so the OAuth2Provider, ProxyProvider, Application and the metabase-only policy
+# binding lingered in the Authentik DB. This blueprint purges them declaratively via
+# state: absent. The shared "Infrastructure" group and the embedded outpost are NOT
+# touched. Safe to delete this file once the live objects are confirmed gone.
+entries:
+# 1. Application. Deleting it cascades to the metabase-only PolicyBinding
+#    (720b531f-7194-48a9-9c78-0840d4f78f83), whose target FK -> this application is
+#    on_delete=CASCADE. We do NOT delete the binding explicitly: in 2026.2.x the
+#    blueprint importer runs PolicyBinding serializer validation even for state: absent,
+#    and the target hydrates to None mid-purge, crashing on
+#    `supported_policy_binding_targets`. Cascade-on-app-delete avoids that and still
+#    leaves the shared "Infrastructure" group untouched.
+- identifiers:
+    slug: metabase
+  model: authentik_core.application
+  state: absent
+# 2. Provider (proxy concrete row, base pk 13)
+- identifiers:
+    name: Provider for Metabase
+  model: authentik_providers_proxy.proxyprovider
+  state: absent
+# 3. Provider (oauth2 concrete row, base pk 13)
+- identifiers:
+    name: Provider for Metabase
+  model: authentik_providers_oauth2.oauth2provider
+  state: absent

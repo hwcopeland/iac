@@ -1,0 +1,100 @@
+---
+# Qdrant vector store for JARVIS mem0.
+#
+# Runs on microedge (a Longhorn node) — NOT nixos-gpu. mem0 is CPU-only by
+# design: the RTX 3070 stays free for Chatterbox/Whisper. Qdrant itself is
+# pure CPU (HNSW on disk), so the GPU is irrelevant here.
+#
+# StatefulSet (not Deployment) because Qdrant holds durable on-disk state and
+# we want a stable identity + its own PVC. Single replica — single-node
+# Qdrant is plenty for one owner's memory corpus.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: qdrant
+  namespace: ai
+  labels:
+    app: qdrant
+    component: jarvis-mem0
+spec:
+  serviceName: qdrant
+  replicas: 1
+  selector:
+    matchLabels:
+      app: qdrant
+  template:
+    metadata:
+      labels:
+        app: qdrant
+        component: jarvis-mem0
+    spec:
+      # Pin to a Longhorn node (matches open-webui's placement). Keeps the
+      # vector store off the GPU box and on real CSI storage.
+      nodeSelector:
+        kubernetes.io/hostname: microedge
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      containers:
+        - name: qdrant
+          image: qdrant/qdrant:v1.12.4
+          ports:
+            - name: http
+              containerPort: 6333
+            - name: grpc
+              containerPort: 6334
+          env:
+            # Bind both APIs to all interfaces inside the pod.
+            - name: QDRANT__SERVICE__HTTP_PORT
+              value: "6333"
+            - name: QDRANT__SERVICE__GRPC_PORT
+              value: "6334"
+            # Single-tenant homelab store — no API key auth (cluster-internal
+            # only, reachable solely from the mem0 server via Service DNS).
+            - name: QDRANT__TELEMETRY_DISABLED
+              value: "true"
+            # Snapshots default to /qdrant/snapshots on the image root fs,
+            # which is root-owned and unwritable under runAsUser 1000. Redirect
+            # them onto the fsGroup-writable PVC so qdrant can boot.
+            - name: QDRANT__STORAGE__SNAPSHOTS_PATH
+              value: /qdrant/storage/snapshots
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          volumeMounts:
+            - name: qdrant-storage
+              mountPath: /qdrant/storage
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 6333
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: 6333
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 3
+  volumeClaimTemplates:
+    - metadata:
+        name: qdrant-storage
+        labels:
+          app: qdrant
+          component: jarvis-mem0
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        storageClassName: longhorn
+        resources:
+          requests:
+            storage: 10Gi

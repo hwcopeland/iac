@@ -1,0 +1,167 @@
+---
+# worldsync-durable — nightly ANTI-DRIFT sync for the JARVIS unified memory.
+#
+# Keeps mem0 (user_id "jarvis", the shared WORLD scope) from drifting by
+# re-asserting only DURABLE homelab STRUCTURE every night and RECONCILING away
+# facts whose underlying resources have vanished. It writes NO volatile/live
+# state (readiness, replica counts, node placement, metrics) — per the charter,
+# the brain answers those live; mem0 holds only what things ARE.
+#
+# MANUAL kubectl-apply (ai namespace is NOT Flux). Apply this whole file:
+#     kubectl apply -f worldsync-cronjob.yaml
+# Trigger a one-off validation run:
+#     kubectl -n ai create job --from=cronjob/worldsync-durable worldsync-manual-1
+#     kubectl -n ai logs job/worldsync-manual-1 -f
+#
+# Runner image is the stock python:3.11-slim (already a pinned, trusted image we
+# use elsewhere) — NO custom build, NO kubectl binary. The script reads the
+# cluster through the in-cluster Kubernetes API using this Job's mounted
+# ServiceAccount token (read-only RBAC below), and writes to mem0 + qdrant over
+# their ClusterIP Services. The script ships via the ConfigMap below, so a script
+# change is just an `kubectl apply` + next run (no image rebuild).
+---
+# Read-only ServiceAccount the CronJob runs as.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: worldsync
+  namespace: ai
+  labels:
+    app: worldsync-durable
+    app.kubernetes.io/part-of: jarvis-mem0
+---
+# Cluster-wide READ-ONLY access to exactly the resources the sync inspects.
+# get/list/watch only — this SA can never mutate anything.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: worldsync-reader
+  labels:
+    app: worldsync-durable
+    app.kubernetes.io/part-of: jarvis-mem0
+rules:
+  - apiGroups: [""]
+    resources: ["nodes", "namespaces", "services", "persistentvolumeclaims"]
+    verbs: ["get", "list"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets", "daemonsets"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: worldsync-reader
+  labels:
+    app: worldsync-durable
+    app.kubernetes.io/part-of: jarvis-mem0
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: worldsync-reader
+subjects:
+  - kind: ServiceAccount
+    name: worldsync
+    namespace: ai
+# NOTE: the `worldsync-script` ConfigMap that holds worldsync_durable.py is
+# DELIBERATELY NOT defined in this file. Embedding the script inline would mean
+# every `kubectl apply -f worldsync-cronjob.yaml` silently clobbers the real
+# script with a stale copy. Instead it is generated straight from the source
+# file (single source of truth), so the deploy is two commands and the script
+# can never drift from what's on disk:
+#
+#   kubectl apply -f worldsync-cronjob.yaml          # SA + RBAC + CronJob
+#   kubectl -n ai create configmap worldsync-script \
+#       --from-file=worldsync_durable.py=worldsync_durable.py \
+#       --dry-run=client -o yaml | kubectl apply -f -   # (re)load the script
+#
+# Re-run the second command whenever worldsync_durable.py changes; the next
+# CronJob run picks it up automatically (no image rebuild).
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: worldsync-durable
+  namespace: ai
+  labels:
+    app: worldsync-durable
+    app.kubernetes.io/part-of: jarvis-mem0
+spec:
+  # 3:00am every day. timeZone makes "3am" the operator's local wall-clock time
+  # rather than UTC, so the run lands in the quiet overnight window regardless of
+  # DST. (RKE2/k8s >= 1.27 honour CronJob.spec.timeZone.)
+  schedule: "0 3 * * *"
+  timeZone: "America/New_York"
+  concurrencyPolicy: Forbid          # never overlap two syncs
+  startingDeadlineSeconds: 600       # if a run is missed, start within 10m or skip
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1                 # one retry, then surface failure
+      # mem0 /add runs a Grok reasoning-LLM extraction per fact (~10-15s each),
+      # so ~130 facts take ~30 min. Give generous headroom; a 3am batch has the
+      # window. concurrencyPolicy: Forbid still prevents overlap.
+      activeDeadlineSeconds: 2700     # 45 min ceiling
+      ttlSecondsAfterFinished: 172800 # keep finished Jobs 2 days for inspection
+      template:
+        metadata:
+          labels:
+            app: worldsync-durable
+        spec:
+          serviceAccountName: worldsync
+          restartPolicy: Never
+          # Stay off the GPU node; any CPU worker is fine.
+          affinity:
+            nodeAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+                nodeSelectorTerms:
+                  - matchExpressions:
+                      - key: kubernetes.io/hostname
+                        operator: NotIn
+                        values: ["nixos-gpu"]
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65534          # nobody
+            runAsGroup: 65534
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: worldsync
+              image: python:3.11-slim
+              # -u: unbuffered stdout so a long run streams progress to
+              # `kubectl logs` live instead of only at exit.
+              command: ["python3", "-u", "/app/worldsync_durable.py"]
+              env:
+                - name: MEM0_URL
+                  value: "http://jarvis-mem0.ai.svc.cluster.local:8800"
+                - name: QDRANT_URL
+                  value: "http://qdrant.ai.svc.cluster.local:6333"
+                - name: QDRANT_COLLECTION
+                  value: "jarvis_mem0"
+                - name: WORLDSYNC_USER_ID
+                  value: "jarvis"
+                # Extraction (Grok) makes /add slow-ish per fact; give the
+                # client generous timeouts. The whole run still finishes well
+                # within activeDeadlineSeconds.
+                - name: MEM0_HTTP_TIMEOUT
+                  value: "120"
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
+                limits:
+                  cpu: "1"
+                  memory: 256Mi
+              volumeMounts:
+                - name: script
+                  mountPath: /app
+                  readOnly: true
+          volumes:
+            - name: script
+              configMap:
+                name: worldsync-script

@@ -1,0 +1,9 @@
+---
+# Global Ansible variables — COMMITTED to a PUBLIC repo. No secrets here.
+ansible_user: k8s_user
+ansible_become: true
+
+# rke2_token (the live cluster join secret) is intentionally NOT defined here.
+# It must never land in this public repo. Supply it via the gitignored
+# group_vars/all/secret.yaml (copy from secret.yaml.example) or --extra-vars.
+# The rke2-server role asserts it is set and not a placeholder before rendering.

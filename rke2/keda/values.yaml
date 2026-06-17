@@ -1,0 +1,29 @@
+# KEDA Helm values.
+#
+# The live release `keda` (chart keda-2.19.0) was installed with NO user-supplied
+# values — `helm get values keda -n keda` returns `null`, i.e. pure chart
+# defaults. This file is therefore intentionally minimal: it pins the operator
+# image registry/repository to match the running release and otherwise relies on
+# chart defaults for keda-2.19.0.
+#
+# If/when this install is reconciled, keep this file the single source of values
+# truth. To reproduce the exact running defaults, an EMPTY values file is also
+# valid (the running release used no overrides) — see README.md.
+
+# Mirrors the chart default for keda-2.19.0; kept explicit so the operator image
+# source is visible in-repo rather than only in the chart.
+image:
+  keda:
+    registry: ghcr.io
+    repository: kedacore/keda
+  metricsApiServer:
+    registry: ghcr.io
+    repository: kedacore/keda-metrics-apiserver
+  webhooks:
+    registry: ghcr.io
+    repository: kedacore/keda-admission-webhooks
+
+# CRDs are installed by the chart (default). Leave true so a clean install brings
+# the ScaledObject/ScaledJob/TriggerAuthentication CRDs.
+crds:
+  install: true

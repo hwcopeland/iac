@@ -1,0 +1,74 @@
+# RKE2 upgrade Plans for the system-upgrade-controller.
+#
+# Two Plans target the SAME version (v1.35.5+rke2r2). Server runs first; the
+# agent Plan has a prepare step (`prepare rke2-server`) that blocks agent
+# upgrades until the server Plan completes. Nodes opt in via the label
+# rke2-upgrade=true. cordon=true drains each node before upgrading.
+#
+# To upgrade the cluster: take an etcd snapshot, bump BOTH version fields below,
+# label the target nodes (kubectl label node <n> rke2-upgrade=true), apply, wait
+# for the server Plan to complete, then for agents. Unlabel when done. Keep the
+# Ansible rke2_version var in sync. nixos-gpu is NOT covered by SUC and must be
+# upgraded separately.
+#
+# Captured from the live cluster; runtime/status fields stripped.
+---
+apiVersion: upgrade.cattle.io/v1
+kind: Plan
+metadata:
+  name: rke2-server
+  namespace: system-upgrade
+spec:
+  concurrency: 1
+  cordon: true
+  nodeSelector:
+    matchExpressions:
+    - key: rke2-upgrade
+      operator: In
+      values:
+      - "true"
+    - key: node-role.kubernetes.io/control-plane
+      operator: In
+      values:
+      - "true"
+  serviceAccountName: system-upgrade
+  tolerations:
+  - key: CriticalAddonsOnly
+    operator: Exists
+  - effect: NoSchedule
+    key: node-role.kubernetes.io/control-plane
+    operator: Exists
+  - effect: NoExecute
+    key: node-role.kubernetes.io/etcd
+    operator: Exists
+  upgrade:
+    image: rancher/rke2-upgrade
+  version: v1.35.5+rke2r2
+---
+apiVersion: upgrade.cattle.io/v1
+kind: Plan
+metadata:
+  name: rke2-agent
+  namespace: system-upgrade
+spec:
+  concurrency: 1
+  cordon: true
+  nodeSelector:
+    matchExpressions:
+    - key: rke2-upgrade
+      operator: In
+      values:
+      - "true"
+    - key: node-role.kubernetes.io/control-plane
+      operator: NotIn
+      values:
+      - "true"
+  prepare:
+    args:
+    - prepare
+    - rke2-server
+    image: rancher/rke2-upgrade
+  serviceAccountName: system-upgrade
+  upgrade:
+    image: rancher/rke2-upgrade
+  version: v1.35.5+rke2r2

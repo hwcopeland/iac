@@ -1,0 +1,38 @@
+# Routing for osint.hwcopeland.net -> OSIRIS.
+#
+# IMPORTANT — this HTTPRoute is intentionally still named "worldmonitor".
+# The cloudflare-operator annotations on this route are what manage the
+# osint.hwcopeland.net DNSRecord. Renaming/recreating the route risks the
+# operator tearing down and recreating that DNSRecord (a DNS gap). So instead
+# of creating a new "osiris" route + deleting the old one, we keep the same
+# route object and simply repoint its backendRef from Service worldmonitor to
+# Service osiris. End state: exactly ONE HTTPRoute claims osint.hwcopeland.net.
+#
+# The worldmonitor Deployment/Service are retired separately (see summary);
+# the worldmonitor-env Secret and the osint DNSRecord are intentionally kept.
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: worldmonitor
+  namespace: web-server
+  annotations:
+    cert-manager.io/cluster-issuer: cf-issuer
+    cloudflare-operator.io/content: osint.hwcopeland.net
+    cloudflare-operator.io/proxied: "true"
+    cloudflare-operator.io/type: CNAME
+spec:
+  parentRefs:
+    - name: hwcopeland-gateway
+      namespace: kube-system
+      sectionName: https
+  hostnames:
+    - "osint.hwcopeland.net"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: osiris
+          port: 80
