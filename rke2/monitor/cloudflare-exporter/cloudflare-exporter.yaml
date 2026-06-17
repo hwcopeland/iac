@@ -1,0 +1,126 @@
+# Cloudflare edge analytics exporter (lablabs/cloudflare-exporter).
+#
+# Polls the Cloudflare GraphQL Analytics API (NOT Logpush — Logpush is
+# Enterprise-only) and exposes per-zone Prometheus metrics: request volume,
+# status-code breakdown, country/geo, cached-vs-uncached, bandwidth, and
+# Cloudflare's own edge-computed threat aggregates. Pro plan: firewall /
+# threat data is available but sampled.
+#
+# Image: ghcr.io/lablabs/cloudflare_exporter:0.2.3 — the maintained community
+# fork (cyb3rjak3's repo is archived). Default listen :8080, /metrics path.
+#
+# Token comes from the `cloudflare-exporter` Secret rendered by
+# external-secret.yaml (key: api-token). Scope/setup documented there.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cloudflare-exporter
+  namespace: monitor
+  labels:
+    app: cloudflare-exporter
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: cloudflare-exporter
+  template:
+    metadata:
+      labels:
+        app: cloudflare-exporter
+    spec:
+      # Don't inject SVC env vars (the Service "cloudflare-exporter" would set
+      # CLOUDFLARE_EXPORTER_PORT=tcp://… and could clobber config).
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+      containers:
+        - name: cloudflare-exporter
+          image: ghcr.io/lablabs/cloudflare_exporter:0.2.3
+          ports:
+            - name: http-metrics
+              containerPort: 8080
+          env:
+            - name: CF_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: cloudflare-exporter   # rendered by external-secret.yaml
+                  key: api-token
+            # CF_ZONES — comma-separated zone IDs to export. Leave UNSET to
+            # export every zone on the account (hwcopeland.net, khemeia.net,
+            # flmanbiosci.net are the three live zones, declared as Zone CRs in
+            # rke2/kube-system/). To pin explicitly, set the zone IDs (find via
+            # `cloudflare dash → each zone → API section`, or the GraphQL API):
+            #   - name: CF_ZONES
+            #     value: "<hwcopeland-zone-id>,<khemeia-zone-id>,<flmanbiosci-zone-id>"
+            #
+            # SCRAPE_INTERVAL — how often the exporter queries Cloudflare's
+            # GraphQL API (seconds). The GraphQL API is rate-limited; 60s is the
+            # exporter default and a sane floor. Do NOT drop below 60s.
+            - name: SCRAPE_INTERVAL
+              value: "60"
+            # SCRAPE_DELAY — Cloudflare analytics lag behind realtime; the
+            # exporter offsets its query window by this many seconds (default
+            # 300). Keep the default so we don't query incomplete buckets.
+            - name: SCRAPE_DELAY
+              value: "300"
+            - name: LISTEN
+              value: ":8080"
+            - name: METRICS_PATH
+              value: "/metrics"
+            # FREE_TIER=false: keep Pro-plan metrics (firewall events, colo,
+            # per-country, latency percentiles). Set true only on a Free zone.
+            - name: FREE_TIER
+              value: "false"
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 250m
+              memory: 128Mi
+          livenessProbe:
+            httpGet:
+              path: /metrics
+              port: http-metrics
+            initialDelaySeconds: 15
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /metrics
+              port: http-metrics
+            initialDelaySeconds: 10
+            periodSeconds: 30
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cloudflare-exporter
+  namespace: monitor
+  labels:
+    app: cloudflare-exporter
+spec:
+  selector:
+    app: cloudflare-exporter
+  ports:
+    - name: http-metrics
+      port: 8080
+      targetPort: http-metrics
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: cloudflare-exporter
+  namespace: monitor
+  labels:
+    release: kube-prometheus-stack   # matched by the stack's serviceMonitorSelector
+spec:
+  selector:
+    matchLabels:
+      app: cloudflare-exporter
+  endpoints:
+    - port: http-metrics
+      path: /metrics
+      # 60s scrape: the exporter only refreshes from Cloudflare every
+      # SCRAPE_INTERVAL (60s), so scraping faster just re-reads stale values.
+      interval: 60s

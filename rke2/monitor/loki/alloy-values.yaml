@@ -37,6 +37,26 @@ alloy:
           db_type = "city"
         }
 
+        // Surface the geoip-derived fields as structured metadata so the
+        // mikrotik_firewall stream is map-able too. As with hubble_http, the
+        // stage.geoip city case emits coordinates under the LOCATION label
+        // keys geoip_location_latitude / geoip_location_longitude (NOT the
+        // bare geoip_latitude/geoip_longitude — those are never emitted), so
+        // read the real source keys and surface them under the short names the
+        // dashboards' Geomap markers layer expects.
+        stage.structured_metadata {
+          values = {
+            geoip_country_name = "geoip_country_name",
+            geoip_country_code = "geoip_country_code",
+            geoip_city_name    = "geoip_city_name",
+            geoip_latitude     = "geoip_location_latitude",
+            geoip_longitude    = "geoip_location_longitude",
+            geoip_subdivision_name = "geoip_subdivision_name",
+            geoip_autonomous_system_number = "geoip_autonomous_system_number",
+            geoip_autonomous_system_organization = "geoip_autonomous_system_organization",
+          }
+        }
+
         forward_to = [loki.write.local.receiver]
       }
 
@@ -103,6 +123,206 @@ alloy:
         forward_to = [loki.write.local.receiver]
       }
 
+      // ─── Cilium Hubble L7 HTTP flows ────────────────────────────────
+      // platform-engineer enables hubble.export.static, which makes each
+      // node's cilium-agent write L7 HTTP flow events as JSONL to
+      //   /var/run/cilium/hubble/events.log   (rotated by the agent).
+      // We tail that file node-locally (same model as pod_logs) and parse
+      // it into Loki. REQUEST and RESPONSE are SEPARATE flows on separate
+      // lines; we keep both and join them in LogQL on x_request_id.
+      local.file_match "hubble_http" {
+        path_targets = [{
+          __path__ = "/var/run/cilium/hubble/events.log",
+          job      = "hubble_http",
+        }]
+      }
+
+      loki.source.file "hubble_http" {
+        targets    = local.file_match.hubble_http.targets
+        forward_to = [loki.process.hubble_http.receiver]
+      }
+
+      loki.process "hubble_http" {
+        // First pass: pull the scalar HTTP fields, the timestamp, and the
+        // raw headers array. NOTE the top-level `flow` wrapper confirmed
+        // against the live /var/run/cilium/hubble/events.log schema — every
+        // canonical field lives under `flow.*` (there are duplicate
+        // top-level node_name/time fields too, but we read the flow ones).
+        // `http` is the presence probe for the drop stage; `latency_ns`
+        // sits at flow.l7.latency_ns (RESPONSE only), NOT flow.l7.http.*.
+        // Single JMESPath pass over the RAW line. The headers[] array is an
+        // array of {key,value}; we filter it INLINE here (not via a second
+        // stage.json with source=headers, which fails because the first
+        // stage hands the nested array to the next stage as a Go slice, not
+        // a JSON string — JMESPath then can't re-parse it). Filtering the
+        // array directly off the raw line in one pass avoids that entirely.
+        // Cf-* / User-Agent / X-Forwarded-For / X-Request-Id / Host carry
+        // REAL values (allow-listed); everything else is HUBBLE_REDACTED.
+        // These header keys exist only on REQUEST flows; on RESPONSE flows
+        // they resolve empty, which is fine.
+        stage.json {
+          expressions = {
+            ts         = "flow.time",
+            l7_type    = "flow.l7.type",
+            http       = "flow.l7.http",
+            method     = "flow.l7.http.method",
+            url        = "flow.l7.http.url",
+            code       = "flow.l7.http.code",
+            latency_ns = "flow.l7.latency_ns",
+            namespace  = "flow.destination.namespace",
+            node       = "flow.node_name",
+            client_ip  = "flow.l7.http.headers[?key=='Cf-Connecting-Ip'].value | [0]",
+            cf_country = "flow.l7.http.headers[?key=='Cf-Ipcountry'].value | [0]",
+            cf_ray     = "flow.l7.http.headers[?key=='Cf-Ray'].value | [0]",
+            user_agent = "flow.l7.http.headers[?key=='User-Agent'].value | [0]",
+            xff        = "flow.l7.http.headers[?key=='X-Forwarded-For'].value | [0]",
+            request_id = "flow.l7.http.headers[?key=='X-Request-Id'].value | [0]",
+            host_hdr   = "flow.l7.http.headers[?key=='Host'].value | [0]",
+          }
+        }
+
+        // Drop anything that isn't an L7 HTTP flow. The export may also
+        // carry L3/L4 or DNS events depending on platform-engineer's
+        // field-mask; those have no flow.l7.http object, so `http` is empty.
+        stage.drop {
+          source     = "http"
+          expression = "^$"
+        }
+
+        // Use the event's own RFC3339 time as the log timestamp.
+        stage.timestamp {
+          source = "ts"
+          format = "RFC3339"
+        }
+
+        // Extract the host (domain) out of the full URL, e.g.
+        //   https://vg.hwcopeland.net/api/admin/team  ->  vg.hwcopeland.net
+        // The Host header (host_hdr) is a fallback when present, but the
+        // URL is always set on HTTP flows so it's the primary source.
+        stage.regex {
+          source     = "url"
+          expression = "^https?://(?P<host>[^/:]+)"
+        }
+
+        // edge = "cf" when a Cf-Connecting-Ip header was present (external
+        // Cloudflare-fronted traffic), else "internal" (cluster-internal
+        // traffic, X-Forwarded-For=10.x). Dashboards filter edge="cf" to
+        // isolate real public traffic.
+        //
+        // IMPORTANT: the Alloy chart renders configMap.content through
+        // Helm's tpl, so Go-template double-brace syntax in the River
+        // config is consumed by Helm at install time. stage.template uses
+        // that same double-brace syntax, so we wrap the template value in a
+        // Helm backtick raw-string action so Helm emits the literal braces
+        // and Alloy receives the real Go template at runtime. (No braces
+        // appear anywhere else in this file, including comments, so tpl has
+        // nothing else to choke on.)
+        stage.template {
+          source   = "edge"
+          template = {{ printf "%q" "{{ if .client_ip }}cf{{ else }}internal{{ end }}" }}
+        }
+
+        // geoip on the REAL client IP (Cf-Connecting-Ip), NOT the L3 source
+        // which is a Cloudflare edge. Reuses the same mmdb DBs as mikrotik.
+        // On internal/RESPONSE flows client_ip is empty and geoip no-ops.
+        stage.geoip {
+          db      = "/var/lib/geoip/GeoLite2-ASN.mmdb"
+          source  = "client_ip"
+          db_type = "asn"
+        }
+        stage.geoip {
+          db      = "/var/lib/geoip/GeoLite2-City.mmdb"
+          source  = "client_ip"
+          db_type = "city"
+        }
+
+        // Low-cardinality indexed labels only. host is bounded by the set
+        // of ingress domains; method (~8), l7_type (2), edge (2) are tiny.
+        // code and country_code are ALSO promoted to labels here — solely so
+        // the stage.metrics counter below can carry them as Prometheus
+        // labels (the metric stage inherits the entry's CURRENT label set).
+        // They are stripped from the Loki index by stage.label_drop after
+        // the metric is emitted, so Loki keeps only host/method/l7_type/edge.
+        stage.labels {
+          values = {
+            host         = "host",
+            method       = "method",
+            l7_type      = "l7_type",
+            edge         = "edge",
+            code         = "code",
+            country_code = "geoip_country_code",
+          }
+        }
+
+        // Pre-aggregated Prometheus counter for Track D dashboards so they
+        // run on cheap counters instead of heavy LogQL. The counter inherits
+        // the label set above: BOUNDED dims ONLY — host (ingress domains),
+        // method (~8), l7_type (2), edge (2), code (~20), country_code
+        // (~200). client_ip / user_agent are NOT labels here (they live in
+        // structured metadata), so the metric can never blow up cardinality.
+        //
+        // NOTE: Alloy's loki.process metric stage ALWAYS prefixes the metric
+        // name with `loki_process_custom_`. The exposed series is therefore
+        // `loki_process_custom_hubble_http_requests_total` — that is the name
+        // Track D dashboards must query (NOT the bare `hubble_http_requests_
+        // total` set below, which is only the suffix). Scraped off Alloy's
+        // /metrics (:12345) via the serviceMonitor in this values file.
+        stage.metrics {
+          metric.counter {
+            name              = "hubble_http_requests_total"
+            description       = "Cilium Hubble L7 HTTP flow events by bounded dimensions (host, method, l7_type, edge, code, country_code)"
+            match_all         = true
+            action            = "inc"
+            max_idle_duration = "24h"
+          }
+        }
+
+        // Strip the metric-only dimensions back out of the Loki index so the
+        // index stays at host/method/l7_type/edge. code + country_code remain
+        // available as structured metadata (set below) for ad-hoc LogQL.
+        stage.label_drop {
+          values = ["code", "country_code"]
+        }
+
+        // Everything high-cardinality stays as structured metadata: the
+        // real client IP, UA string, status code, latency, request id, and
+        // the geoip-derived fields. These are queryable but NOT indexed.
+        stage.structured_metadata {
+          values = {
+            client_ip          = "client_ip",
+            user_agent         = "user_agent",
+            cf_country         = "cf_country",
+            cf_ray             = "cf_ray",
+            xff                = "xff",
+            request_id         = "request_id",
+            host_header        = "host_hdr",
+            code               = "code",
+            latency_ns         = "latency_ns",
+            namespace          = "namespace",
+            node               = "node",
+            geoip_country_name = "geoip_country_name",
+            geoip_country_code = "geoip_country_code",
+            geoip_city_name    = "geoip_city_name",
+            // Alloy's stage.geoip (db_type="city") emits coordinates from the
+            // GeoLite2-City Location block under the LOCATION label
+            // "geoip_location", suffixed _latitude/_longitude — i.e. the
+            // extracted keys are geoip_location_latitude / geoip_location_
+            // longitude (see alloy internal/.../stages/geoip.go LOCATION case).
+            // The bare geoip_latitude/geoip_longitude keys are NEVER emitted,
+            // which is why they were empty. Read the real source keys here and
+            // surface them under the short names the dashboards expect.
+            geoip_latitude     = "geoip_location_latitude",
+            geoip_longitude    = "geoip_location_longitude",
+            geoip_subdivision_name = "geoip_subdivision_name",
+            geoip_autonomous_system_number = "geoip_autonomous_system_number",
+            geoip_autonomous_system_organization = "geoip_autonomous_system_organization",
+          }
+        }
+
+        // Enriched line to Loki (index labels = host/method/l7_type/edge).
+        forward_to = [loki.write.local.receiver]
+      }
+
       // ─── Loki write endpoint ────────────────────────────────────────
       // Direct to loki:3100 — the chart's loki-gateway nginx was disabled
       // as part of Phase 3 (#21). SingleBinary Loki doesn't need it.
@@ -118,6 +338,12 @@ alloy:
     extra:
       - name: geoip-db
         mountPath: /var/lib/geoip
+        readOnly: true
+      # Host-written per-node Hubble L7 export dir. cilium-agent writes
+      # events.log here on every node (hubble.export.static, owned by
+      # platform-engineer). Read-only — Alloy only tails it.
+      - name: hubble-export
+        mountPath: /var/run/cilium/hubble
         readOnly: true
   # NODENAME lets the pod_logs relabel keep only this node's containers.
   extraEnv:
@@ -146,6 +372,14 @@ controller:
     extra:
       - name: geoip-db
         emptyDir: {}
+      # hostPath to the per-node Hubble export dir written by cilium-agent.
+      # type: DirectoryOrCreate so Alloy schedules even on a node where
+      # cilium-agent hasn't created the dir yet (events.log appears once
+      # the first L7 flow is exported).
+      - name: hubble-export
+        hostPath:
+          path: /var/run/cilium/hubble
+          type: DirectoryOrCreate
 
   # Init container to download and manage GeoIP databases with version checking
   initContainers:
@@ -254,6 +488,10 @@ controller:
           memory: "256Mi"
           cpu: "500m"
 
+  # NOTE: these prometheus.io/* annotations are a no-op on this cluster —
+  # kube-prometheus-stack only honors ServiceMonitor/PodMonitor CRs, not
+  # pod annotations (no annotation-based additionalScrapeConfig exists).
+  # Alloy's /metrics is actually scraped via the serviceMonitor block below.
   podAnnotations:
     prometheus.io/scrape: "true"
     prometheus.io/port: "12345"
@@ -277,3 +515,13 @@ service:
       port: 514
       targetPort: 514
       protocol: UDP
+
+# Scrape Alloy's own /metrics (:12345) into kube-prometheus-stack so the
+# hubble_http_requests_total counter (and Alloy's internal metrics) land in
+# Prometheus. kps only discovers ServiceMonitors carrying the
+# `release: kube-prometheus-stack` selector label — hence additionalLabels.
+serviceMonitor:
+  enabled: true
+  additionalLabels:
+    release: kube-prometheus-stack
+  interval: 30s

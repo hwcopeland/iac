@@ -1,0 +1,301 @@
+# Per-domain HTTP request analytics — traffic + geo. Two sources:
+#   1. Hubble HTTP (LIVE): the loki_process_custom_hubble_http_requests_total
+#      Prometheus counter + the {job="hubble_http"} Loki stream. edge="cf"
+#      isolates real public traffic arriving via Cloudflare. client_ip and the
+#      geoip_* fields are Loki STRUCTURED METADATA (queryable, not indexed) —
+#      so per-IP/geo panels query Loki, aggregate panels use the Prom counter.
+#   2. Cloudflare exporter (cloudflare_zone_*): DISABLED. All three zones are on
+#      the Cloudflare FREE plan, which does not expose the minute-resolution
+#      GraphQL analytics dataset (httpRequests1mGroups) the exporter needs. The
+#      cloudflare-exporter Deployment is intentionally scaled to 0. These panels
+#      are kept (collapsed, at the bottom of the dashboard) so they light up
+#      immediately if a zone is upgraded to Pro and the exporter is scaled up.
+#
+# GEO note: Alloy now attaches geoip_latitude / geoip_longitude (real City-DB
+# coordinates) alongside geoip_country_code / geoip_city_name as structured
+# metadata. The primary geomap layer is a PRECISE per-client-IP dot-map keyed on
+# those raw coords (location mode=coords); the country choropleth (gazetteer
+# lookup on geoip_country_code) is kept as a second/fallback layer for an
+# at-a-glance country view. See loki/alloy-values.yaml hubble_http geoip stage.
+#
+# Loki datasource UID is the Grafana-generated "P8E80F9AEF21F6940" (the Loki ds
+# in kube-prometheus-stack-values.yaml has no explicit uid); Prometheus is "prometheus".
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: domain-traffic-overview-dashboard
+  namespace: monitor
+  labels:
+    grafana_dashboard: "1"
+  annotations:
+    grafana_folder: Platform
+data:
+  domain-traffic-overview.json: |-
+    {
+      "uid": "domain-traffic-overview",
+      "title": "Domain Traffic — Overview",
+      "tags": ["platform", "http", "cloudflare", "hubble", "domains"],
+      "timezone": "browser",
+      "refresh": "30s",
+      "schemaVersion": 39,
+      "time": {"from": "now-6h", "to": "now"},
+      "editable": true,
+      "description": "Live per-domain HTTP traffic + geo from Hubble. Cloudflare edge-analytics panels are collapsed at the bottom and disabled (Free plan can't serve minute-resolution GraphQL analytics).",
+      "templating": {
+        "list": [
+          {
+            "name": "host",
+            "label": "Domain",
+            "type": "query",
+            "datasource": {"type": "prometheus", "uid": "prometheus"},
+            "query": {"query": "label_values(loki_process_custom_hubble_http_requests_total{edge=\"cf\"}, host)", "refId": "host"},
+            "includeAll": true,
+            "multi": true,
+            "current": {"text": "All", "value": "$__all"},
+            "refresh": 2,
+            "sort": 1
+          }
+        ]
+      },
+      "panels": [
+        {
+          "type": "stat",
+          "title": "Total public requests (cf, 6h)",
+          "gridPos": {"x": 0, "y": 0, "w": 6, "h": 4},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"expr": "sum(increase(loki_process_custom_hubble_http_requests_total{edge=\"cf\", l7_type=\"REQUEST\", host=~\"$host\"}[6h]))", "refId": "A"}],
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
+          "fieldConfig": {"defaults": {"unit": "short", "color": {"mode": "fixed", "fixedColor": "blue"}}}
+        },
+        {
+          "type": "stat",
+          "title": "Public req rate (cf, /s)",
+          "gridPos": {"x": 6, "y": 0, "w": 6, "h": 4},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"expr": "sum(rate(loki_process_custom_hubble_http_requests_total{edge=\"cf\", l7_type=\"REQUEST\", host=~\"$host\"}[5m]))", "refId": "A"}],
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
+          "fieldConfig": {"defaults": {"unit": "reqps", "color": {"mode": "fixed", "fixedColor": "green"}}}
+        },
+        {
+          "type": "stat",
+          "title": "Distinct public domains",
+          "gridPos": {"x": 12, "y": 0, "w": 6, "h": 4},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"expr": "count(count by (host) (loki_process_custom_hubble_http_requests_total{edge=\"cf\", host=~\"$host\"}))", "refId": "A"}],
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
+          "fieldConfig": {"defaults": {"unit": "short", "color": {"mode": "fixed", "fixedColor": "purple"}}}
+        },
+        {
+          "type": "timeseries",
+          "title": "Public request volume per domain (cf, req/s) — Hubble",
+          "gridPos": {"x": 0, "y": 4, "w": 24, "h": 8},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [
+            {"expr": "sum by (host) (rate(loki_process_custom_hubble_http_requests_total{edge=\"cf\", l7_type=\"REQUEST\", host=~\"$host\"}[5m]))", "legendFormat": "{{host}}", "refId": "A"}
+          ],
+          "fieldConfig": {"defaults": {"unit": "reqps", "custom": {"fillOpacity": 10, "lineWidth": 1, "stacking": {"mode": "normal"}}}}
+        },
+        {
+          "type": "timeseries",
+          "title": "Status-code class per domain (cf) — Hubble RESPONSE",
+          "gridPos": {"x": 0, "y": 12, "w": 12, "h": 8},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [
+            {"expr": "sum by (code) (rate(loki_process_custom_hubble_http_requests_total{l7_type=\"RESPONSE\", host=~\"$host\"}[5m]))", "legendFormat": "{{code}}", "refId": "A"}
+          ],
+          "fieldConfig": {"defaults": {"unit": "reqps", "custom": {"fillOpacity": 20, "lineWidth": 1, "stacking": {"mode": "normal"}}}}
+        },
+        {
+          "type": "piechart",
+          "title": "Status-code mix (cf, 6h) — Hubble RESPONSE",
+          "gridPos": {"x": 12, "y": 12, "w": 6, "h": 8},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [
+            {"expr": "sum by (code) (increase(loki_process_custom_hubble_http_requests_total{l7_type=\"RESPONSE\", host=~\"$host\"}[6h]))", "legendFormat": "{{code}}", "refId": "A"}
+          ],
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "pieType": "donut", "legend": {"displayMode": "table", "placement": "right", "values": ["value"]}}
+        },
+        {
+          "type": "timeseries",
+          "title": "Origin latency p50/p95/p99 (ms) — Hubble latency_ns",
+          "gridPos": {"x": 18, "y": 12, "w": 6, "h": 8},
+          "datasource": {"type": "loki", "uid": "P8E80F9AEF21F6940"},
+          "targets": [
+            {"expr": "quantile_over_time(0.50, {job=\"hubble_http\", l7_type=\"RESPONSE\", host=~\"$host\"} | latency_ns != \"\" | unwrap latency_ns [5m]) / 1e6", "legendFormat": "p50", "refId": "A"},
+            {"expr": "quantile_over_time(0.95, {job=\"hubble_http\", l7_type=\"RESPONSE\", host=~\"$host\"} | latency_ns != \"\" | unwrap latency_ns [5m]) / 1e6", "legendFormat": "p95", "refId": "B"},
+            {"expr": "quantile_over_time(0.99, {job=\"hubble_http\", l7_type=\"RESPONSE\", host=~\"$host\"} | latency_ns != \"\" | unwrap latency_ns [5m]) / 1e6", "legendFormat": "p99", "refId": "C"}
+          ],
+          "fieldConfig": {"defaults": {"unit": "ms", "custom": {"fillOpacity": 0, "lineWidth": 1}}}
+        },
+        {
+          "type": "row",
+          "title": "GEO — where requests originate",
+          "gridPos": {"x": 0, "y": 20, "w": 24, "h": 1},
+          "collapsed": false
+        },
+        {
+          "type": "geomap",
+          "title": "Requests by origin (cf) — per-client-IP dot-map + country fallback",
+          "description": "Primary layer: precise per-client-IP dots from Hubble geoip_latitude/geoip_longitude structured metadata (coords mode). Second layer: country choropleth via the built-in countries gazetteer on geoip_country_code as an at-a-glance fallback.",
+          "gridPos": {"x": 0, "y": 21, "w": 16, "h": 11},
+          "datasource": {"type": "loki", "uid": "P8E80F9AEF21F6940"},
+          "targets": [
+            {"expr": "sum by (geoip_latitude, geoip_longitude, client_ip, host, geoip_city_name) (count_over_time({job=\"hubble_http\", edge=\"cf\", l7_type=\"REQUEST\", host=~\"$host\"} | geoip_latitude != \"\" [$__range]))", "instant": true, "format": "table", "refId": "A"},
+            {"expr": "sum by (geoip_country_code) (count_over_time({job=\"hubble_http\", edge=\"cf\", l7_type=\"REQUEST\", host=~\"$host\"} | geoip_country_code != \"\" [$__range]))", "instant": true, "format": "table", "refId": "B"}
+          ],
+          "transformations": [
+            {"id": "convertFieldType", "options": {"conversions": [{"targetField": "geoip_latitude", "destinationType": "number"}, {"targetField": "geoip_longitude", "destinationType": "number"}]}}
+          ],
+          "options": {
+            "view": {"id": "coords", "lat": 38, "lon": -95, "zoom": 3},
+            "controls": {"showZoom": true, "mouseWheelZoom": true, "showAttribution": true},
+            "basemap": {"type": "default", "name": "Basemap"},
+            "layers": [
+              {
+                "type": "markers",
+                "name": "Per-client-IP requests",
+                "filterData": {"id": "byRefId", "options": "A"},
+                "location": {"mode": "coords", "latitude": "geoip_latitude", "longitude": "geoip_longitude"},
+                "config": {
+                  "showLegend": true,
+                  "style": {
+                    "size": {"field": "Value", "fixed": 6, "min": 4, "max": 30},
+                    "color": {"field": "Value", "fixed": "#FF780A"},
+                    "opacity": 0.7,
+                    "symbol": {"mode": "fixed", "fixed": "img/icons/marker/circle.svg"}
+                  }
+                }
+              },
+              {
+                "type": "markers",
+                "name": "Requests by country (fallback)",
+                "filterData": {"id": "byRefId", "options": "B"},
+                "location": {"mode": "lookup", "lookup": "geoip_country_code", "gazetteer": "public/gazetteer/countries.json"},
+                "config": {
+                  "showLegend": true,
+                  "style": {
+                    "size": {"field": "Value", "fixed": 5, "min": 4, "max": 30},
+                    "color": {"field": "Value", "fixed": "#3274D9"},
+                    "opacity": 0.25,
+                    "symbol": {"mode": "fixed", "fixed": "img/icons/marker/circle.svg"}
+                  }
+                }
+              }
+            ]
+          }
+        },
+        {
+          "type": "table",
+          "title": "Requests by country / city (cf) — Hubble",
+          "gridPos": {"x": 16, "y": 21, "w": 8, "h": 11},
+          "datasource": {"type": "loki", "uid": "P8E80F9AEF21F6940"},
+          "targets": [
+            {"expr": "sum by (geoip_country_code, geoip_city_name) (count_over_time({job=\"hubble_http\", edge=\"cf\", l7_type=\"REQUEST\", host=~\"$host\"} | geoip_country_code != \"\" [$__range]))", "instant": true, "format": "table", "refId": "A"}
+          ],
+          "transformations": [
+            {"id": "organize", "options": {"renameByName": {"geoip_country_code": "Country", "geoip_city_name": "City", "Value": "Requests"}, "excludeByName": {"Time": true}}},
+            {"id": "sortBy", "options": {"fields": "", "sort": [{"field": "Requests", "desc": true}]}}
+          ]
+        },
+        {
+          "type": "row",
+          "title": "Cloudflare Edge Analytics — requires Pro plan (disabled on Free)",
+          "gridPos": {"x": 0, "y": 32, "w": 24, "h": 1},
+          "collapsed": true,
+          "panels": [
+            {
+              "type": "text",
+              "title": "Why these panels are empty",
+              "gridPos": {"x": 0, "y": 33, "w": 24, "h": 4},
+              "options": {
+                "mode": "markdown",
+                "content": "**Cloudflare edge analytics requires a Pro plan ($20/mo/zone).** All three zones are on the Free plan, which can't serve the minute-resolution GraphQL analytics dataset (`httpRequests1mGroups`) the exporter needs, so `cloudflare-exporter` is intentionally scaled to 0. The token below is valid and correctly scoped — the Free plan is the only blocker. **To enable after upgrading a zone to Pro:** `kubectl scale deploy/cloudflare-exporter -n monitor --replicas=1`"
+              }
+            },
+            {
+              "type": "stat",
+              "title": "CF zone requests (Pro plan req'd)",
+              "gridPos": {"x": 0, "y": 37, "w": 6, "h": 4},
+              "datasource": {"type": "prometheus", "uid": "prometheus"},
+              "targets": [{"expr": "sum(increase(cloudflare_zone_requests_total[6h]))", "refId": "A"}],
+              "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
+              "fieldConfig": {"defaults": {"unit": "short", "color": {"mode": "fixed", "fixedColor": "orange"}, "noValue": "Cloudflare Pro plan required — exporter scaled to 0"}}
+            },
+            {
+              "type": "stat",
+              "title": "CF bandwidth (Pro plan req'd)",
+              "gridPos": {"x": 6, "y": 37, "w": 6, "h": 4},
+              "datasource": {"type": "prometheus", "uid": "prometheus"},
+              "targets": [{"expr": "sum(rate(cloudflare_zone_bandwidth_total[5m]))", "refId": "A"}],
+              "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
+              "fieldConfig": {"defaults": {"unit": "Bps", "color": {"mode": "fixed", "fixedColor": "orange"}, "noValue": "Cloudflare Pro plan required — exporter scaled to 0"}}
+            },
+            {
+              "type": "timeseries",
+              "title": "CF zone requests per domain (req/s) — Cloudflare (Pro plan req'd)",
+              "gridPos": {"x": 0, "y": 41, "w": 12, "h": 8},
+              "datasource": {"type": "prometheus", "uid": "prometheus"},
+              "targets": [
+                {"expr": "sum by (zone) (rate(cloudflare_zone_requests_total[5m]))", "legendFormat": "{{zone}}", "refId": "A"}
+              ],
+              "fieldConfig": {"defaults": {"unit": "reqps", "custom": {"fillOpacity": 10, "lineWidth": 1}, "noValue": "Cloudflare Pro plan required — exporter scaled to 0"}}
+            },
+            {
+              "type": "timeseries",
+              "title": "CF status-class per domain (Pro plan req'd)",
+              "gridPos": {"x": 12, "y": 41, "w": 12, "h": 8},
+              "datasource": {"type": "prometheus", "uid": "prometheus"},
+              "targets": [
+                {"expr": "sum by (zone, status) (rate(cloudflare_zone_requests_status[5m]))", "legendFormat": "{{zone}} {{status}}", "refId": "A"}
+              ],
+              "fieldConfig": {"defaults": {"unit": "reqps", "custom": {"fillOpacity": 15, "lineWidth": 1}, "noValue": "Cloudflare Pro plan required — exporter scaled to 0"}}
+            },
+            {
+              "type": "timeseries",
+              "title": "CF cached vs uncached (req/s) — Pro plan req'd",
+              "gridPos": {"x": 0, "y": 49, "w": 8, "h": 7},
+              "datasource": {"type": "prometheus", "uid": "prometheus"},
+              "targets": [
+                {"expr": "sum by (zone) (rate(cloudflare_zone_requests_cached[5m]))", "legendFormat": "{{zone}} cached", "refId": "A"},
+                {"expr": "sum by (zone) (rate(cloudflare_zone_requests_total[5m])) - sum by (zone) (rate(cloudflare_zone_requests_cached[5m]))", "legendFormat": "{{zone}} uncached", "refId": "B"}
+              ],
+              "fieldConfig": {"defaults": {"unit": "reqps", "custom": {"fillOpacity": 15, "lineWidth": 1}, "noValue": "Cloudflare Pro plan required — exporter scaled to 0"}}
+            },
+            {
+              "type": "timeseries",
+              "title": "CF latency p50/p95/p99 (ms) — Pro plan req'd",
+              "gridPos": {"x": 8, "y": 49, "w": 8, "h": 7},
+              "datasource": {"type": "prometheus", "uid": "prometheus"},
+              "targets": [
+                {"expr": "avg by (zone) (cloudflare_zone_requests_origin_status_country_host_p50_ms)", "legendFormat": "{{zone}} p50", "refId": "A"},
+                {"expr": "avg by (zone) (cloudflare_zone_requests_origin_status_country_host_p95_ms)", "legendFormat": "{{zone}} p95", "refId": "B"},
+                {"expr": "avg by (zone) (cloudflare_zone_requests_origin_status_country_host_p99_ms)", "legendFormat": "{{zone}} p99", "refId": "C"}
+              ],
+              "fieldConfig": {"defaults": {"unit": "ms", "custom": {"fillOpacity": 0, "lineWidth": 1}, "noValue": "Cloudflare Pro plan required — exporter scaled to 0"}}
+            },
+            {
+              "type": "geomap",
+              "title": "CF requests by country (Pro plan req'd)",
+              "gridPos": {"x": 0, "y": 56, "w": 24, "h": 10},
+              "datasource": {"type": "prometheus", "uid": "prometheus"},
+              "targets": [
+                {"expr": "sum by (country) (cloudflare_zone_requests_country)", "instant": true, "legendFormat": "{{country}}", "refId": "A"}
+              ],
+              "options": {
+                "view": {"id": "zero", "lat": 20, "lon": 0, "zoom": 1.5},
+                "controls": {"showZoom": true, "mouseWheelZoom": true},
+                "basemap": {"type": "default", "name": "Basemap"},
+                "layers": [
+                  {
+                    "type": "markers",
+                    "name": "CF requests by country",
+                    "location": {"mode": "lookup", "lookup": "country", "gazetteer": "public/gazetteer/countries.json"},
+                    "config": {"showLegend": true, "style": {"size": {"field": "Value", "fixed": 5, "min": 4, "max": 30}, "color": {"fixed": "#3274D9"}, "opacity": 0.6}}
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }

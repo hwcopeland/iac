@@ -1,0 +1,284 @@
+# Per-domain HTTP request SECURITY analytics — notable IPs, traffic
+# classification (human / bot / scanner), and Cloudflare's own threat signals.
+#
+# Source 1 — Hubble HTTP (LIVE): {job="hubble_http", edge="cf"} Loki stream.
+#   client_ip, user_agent, geoip_* are STRUCTURED METADATA — query by them
+#   directly. The request URL/path lives in the JSON line body at
+#   flow.l7.http.url, surfaced with `| json url="flow.l7.http.url"`.
+#   NOTE: client_ip is on REQUEST lines only; the HTTP status code is on
+#   RESPONSE lines only (joinable by request_id but Loki can't label-join
+#   across streams in one query). So per-IP 4xx is approximated via the
+#   path-enumeration / probe-path / bot-UA heuristics below, and 4xx VOLUME is
+#   shown per-host from the RESPONSE stream.
+#
+# Source 2 — Cloudflare exporter (cloudflare_zone_threats_*, firewall_events):
+#   DISABLED. All three zones are on the Cloudflare FREE plan, which does not
+#   expose the minute-resolution GraphQL analytics dataset (httpRequests1mGroups)
+#   the exporter needs, so cloudflare-exporter is intentionally scaled to 0.
+#   These panels are kept (collapsed, at the bottom) so they light up immediately
+#   if a zone is upgraded to Pro and the exporter is scaled back up.
+#
+# Loki ds UID "P8E80F9AEF21F6940"; Prometheus "prometheus".
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: domain-request-security-dashboard
+  namespace: monitor
+  labels:
+    grafana_dashboard: "1"
+  annotations:
+    grafana_folder: Platform
+data:
+  domain-request-security.json: |-
+    {
+      "uid": "domain-request-security",
+      "title": "Domain Traffic — Request Security",
+      "tags": ["platform", "http", "security", "hubble", "cloudflare", "domains"],
+      "timezone": "browser",
+      "refresh": "1m",
+      "schemaVersion": 39,
+      "time": {"from": "now-6h", "to": "now"},
+      "editable": true,
+      "description": "Live per-domain request-security analytics from Hubble (traffic classification, notable IPs, probe detection). Cloudflare edge threat-signal panels are collapsed at the bottom and disabled (Free plan can't serve minute-resolution GraphQL analytics).",
+      "templating": {
+        "list": [
+          {
+            "name": "host",
+            "label": "Domain",
+            "type": "query",
+            "datasource": {"type": "prometheus", "uid": "prometheus"},
+            "query": {"query": "label_values(loki_process_custom_hubble_http_requests_total{edge=\"cf\"}, host)", "refId": "host"},
+            "includeAll": true,
+            "multi": true,
+            "current": {"text": "All", "value": "$__all"},
+            "refresh": 2,
+            "sort": 1
+          },
+          {
+            "name": "client_ip",
+            "label": "Client IP (drilldown)",
+            "type": "textbox",
+            "current": {"text": ".+", "value": ".+"},
+            "query": ".+"
+          },
+          {
+            "name": "bot_re",
+            "type": "constant",
+            "hide": 2,
+            "current": {"text": "(?i).*(bot|crawl|spider|slurp|curl|wget|python-requests|go-http-client|libwww|nikto|nmap|masscan|zgrab|nuclei|sqlmap|semrush|ahrefs|censys|httpx).*", "value": "(?i).*(bot|crawl|spider|slurp|curl|wget|python-requests|go-http-client|libwww|nikto|nmap|masscan|zgrab|nuclei|sqlmap|semrush|ahrefs|censys|httpx).*"},
+            "query": "(?i).*(bot|crawl|spider|slurp|curl|wget|python-requests|go-http-client|libwww|nikto|nmap|masscan|zgrab|nuclei|sqlmap|semrush|ahrefs|censys|httpx).*"
+          }
+        ]
+      },
+      "panels": [
+        {
+          "type": "row",
+          "title": "Traffic classification — real / bot / scanner",
+          "gridPos": {"x": 0, "y": 0, "w": 24, "h": 1},
+          "collapsed": false
+        },
+        {
+          "type": "stat",
+          "title": "Likely-human reqs (cf, 6h)",
+          "description": "Non-bot User-Agent. Heuristic.",
+          "gridPos": {"x": 0, "y": 1, "w": 8, "h": 4},
+          "datasource": {"type": "loki", "uid": "P8E80F9AEF21F6940"},
+          "targets": [
+            {"expr": "sum(count_over_time({job=\"hubble_http\", edge=\"cf\", l7_type=\"REQUEST\", host=~\"$host\"} | user_agent !~ `${bot_re}` [$__range]))", "instant": true, "refId": "A"}
+          ],
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
+          "fieldConfig": {"defaults": {"unit": "short", "color": {"mode": "fixed", "fixedColor": "green"}, "noValue": "0"}}
+        },
+        {
+          "type": "stat",
+          "title": "Known bot/tool reqs (cf, 6h)",
+          "description": "User-Agent matches bot|crawl|curl|python-requests|nuclei|… Heuristic.",
+          "gridPos": {"x": 8, "y": 1, "w": 8, "h": 4},
+          "datasource": {"type": "loki", "uid": "P8E80F9AEF21F6940"},
+          "targets": [
+            {"expr": "sum(count_over_time({job=\"hubble_http\", edge=\"cf\", l7_type=\"REQUEST\", host=~\"$host\"} | user_agent =~ `${bot_re}` [$__range]))", "instant": true, "refId": "A"}
+          ],
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
+          "fieldConfig": {"defaults": {"unit": "short", "color": {"mode": "fixed", "fixedColor": "orange"}, "noValue": "0"}}
+        },
+        {
+          "type": "stat",
+          "title": "Scanner/probe reqs (cf, 6h)",
+          "description": "Requests to common probe paths (.env, wp-admin, .git, phpmyadmin, admin, etc).",
+          "gridPos": {"x": 16, "y": 1, "w": 8, "h": 4},
+          "datasource": {"type": "loki", "uid": "P8E80F9AEF21F6940"},
+          "targets": [
+            {"expr": "sum(count_over_time({job=\"hubble_http\", edge=\"cf\", l7_type=\"REQUEST\", host=~\"$host\"} | json url=\"flow.l7.http.url\" | url =~ `(?i).*(/\\\\.env|/wp-admin|/wp-login|/\\\\.git|/phpmyadmin|/phpMyAdmin|/admin|/\\\\.aws|/\\\\.ssh|/actuator|/config\\\\.|/vendor/|/xmlrpc).*` [$__range]))", "instant": true, "refId": "A"}
+          ],
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
+          "fieldConfig": {"defaults": {"unit": "short", "color": {"mode": "fixed", "fixedColor": "red"}, "noValue": "0"}}
+        },
+        {
+          "type": "timeseries",
+          "title": "Classified request rate (cf) — human vs bot vs probe",
+          "gridPos": {"x": 0, "y": 5, "w": 16, "h": 8},
+          "datasource": {"type": "loki", "uid": "P8E80F9AEF21F6940"},
+          "targets": [
+            {"expr": "sum(count_over_time({job=\"hubble_http\", edge=\"cf\", l7_type=\"REQUEST\", host=~\"$host\"} | user_agent !~ `${bot_re}` [$__interval]))", "legendFormat": "human", "refId": "A"},
+            {"expr": "sum(count_over_time({job=\"hubble_http\", edge=\"cf\", l7_type=\"REQUEST\", host=~\"$host\"} | user_agent =~ `${bot_re}` [$__interval]))", "legendFormat": "bot/tool", "refId": "B"},
+            {"expr": "sum(count_over_time({job=\"hubble_http\", edge=\"cf\", l7_type=\"REQUEST\", host=~\"$host\"} | json url=\"flow.l7.http.url\" | url =~ `(?i).*(/\\\\.env|/wp-admin|/wp-login|/\\\\.git|/phpmyadmin|/admin|/\\\\.aws|/\\\\.ssh|/actuator).*` [$__interval]))", "legendFormat": "scanner/probe", "refId": "C"}
+          ],
+          "fieldConfig": {"defaults": {"unit": "short", "custom": {"fillOpacity": 20, "lineWidth": 1, "stacking": {"mode": "normal"}}}}
+        },
+        {
+          "type": "table",
+          "title": "Top bot / tool User-Agents (cf, $__range)",
+          "gridPos": {"x": 16, "y": 5, "w": 8, "h": 8},
+          "datasource": {"type": "loki", "uid": "P8E80F9AEF21F6940"},
+          "targets": [
+            {"expr": "topk(15, sum by (user_agent) (count_over_time({job=\"hubble_http\", edge=\"cf\", l7_type=\"REQUEST\", host=~\"$host\"} | user_agent =~ `${bot_re}` [$__range])))", "instant": true, "format": "table", "refId": "A"}
+          ],
+          "transformations": [
+            {"id": "organize", "options": {"renameByName": {"user_agent": "User-Agent", "Value": "Requests"}, "excludeByName": {"Time": true}}},
+            {"id": "sortBy", "options": {"sort": [{"field": "Requests", "desc": true}]}}
+          ]
+        },
+        {
+          "type": "row",
+          "title": "Notable IPs",
+          "gridPos": {"x": 0, "y": 13, "w": 24, "h": 1},
+          "collapsed": false
+        },
+        {
+          "type": "table",
+          "title": "Top client IPs (cf, $__range) — IP / country / city / ASN / requests / UA",
+          "description": "client_ip + geoip + user_agent from Hubble structured metadata. Honors the Client IP drilldown variable. (Distinct-path count omitted: Loki 6.51 rejects `distinct` inside count_over_time; use the probe-path table below for the enumeration signal.)",
+          "gridPos": {"x": 0, "y": 14, "w": 24, "h": 10},
+          "datasource": {"type": "loki", "uid": "P8E80F9AEF21F6940"},
+          "targets": [
+            {"expr": "topk(50, sum by (client_ip, geoip_country_code, geoip_city_name, geoip_autonomous_system_organization, user_agent) (count_over_time({job=\"hubble_http\", edge=\"cf\", l7_type=\"REQUEST\", host=~\"$host\"} | client_ip =~ `$client_ip` [$__range])))", "instant": true, "format": "table", "refId": "A"}
+          ],
+          "transformations": [
+            {"id": "organize", "options": {"renameByName": {"client_ip": "Client IP", "geoip_country_code": "Country", "geoip_city_name": "City", "geoip_autonomous_system_organization": "ASN / Org", "user_agent": "User-Agent", "Value": "Requests"}, "excludeByName": {"Time": true}}},
+            {"id": "sortBy", "options": {"sort": [{"field": "Requests", "desc": true}]}}
+          ]
+        },
+        {
+          "type": "geomap",
+          "title": "Client-IP origin dot-map (cf, $__range) — Hubble geoip",
+          "description": "Precise per-client-IP dots from Hubble geoip_latitude/geoip_longitude structured metadata (coords mode). Honors the Client IP drilldown variable, so you can pinpoint a single suspicious IP geographically.",
+          "gridPos": {"x": 0, "y": 24, "w": 24, "h": 10},
+          "datasource": {"type": "loki", "uid": "P8E80F9AEF21F6940"},
+          "targets": [
+            {"expr": "topk(200, sum by (geoip_latitude, geoip_longitude, client_ip, host, geoip_city_name, geoip_autonomous_system_organization) (count_over_time({job=\"hubble_http\", edge=\"cf\", l7_type=\"REQUEST\", host=~\"$host\"} | client_ip =~ `$client_ip` | geoip_latitude != \"\" [$__range])))", "instant": true, "format": "table", "refId": "A"}
+          ],
+          "transformations": [
+            {"id": "convertFieldType", "options": {"conversions": [{"targetField": "geoip_latitude", "destinationType": "number"}, {"targetField": "geoip_longitude", "destinationType": "number"}]}}
+          ],
+          "options": {
+            "view": {"id": "coords", "lat": 38, "lon": -95, "zoom": 3},
+            "controls": {"showZoom": true, "mouseWheelZoom": true, "showAttribution": true},
+            "basemap": {"type": "default", "name": "Basemap"},
+            "layers": [
+              {
+                "type": "markers",
+                "name": "Per-client-IP requests",
+                "location": {"mode": "coords", "latitude": "geoip_latitude", "longitude": "geoip_longitude"},
+                "config": {
+                  "showLegend": true,
+                  "style": {
+                    "size": {"field": "Value", "fixed": 6, "min": 4, "max": 30},
+                    "color": {"field": "Value", "fixed": "#C4162A"},
+                    "opacity": 0.7,
+                    "symbol": {"mode": "fixed", "fixed": "img/icons/marker/circle.svg"}
+                  }
+                }
+              }
+            ]
+          }
+        },
+        {
+          "type": "table",
+          "title": "Suspicious IPs — probe-path / path-enumeration (cf, $__range)",
+          "description": "IPs hitting common vuln-scan / probe paths. Credential-stuffing & scanner signal. Empty until such traffic appears.",
+          "gridPos": {"x": 0, "y": 34, "w": 12, "h": 9},
+          "datasource": {"type": "loki", "uid": "P8E80F9AEF21F6940"},
+          "targets": [
+            {"expr": "topk(30, sum by (client_ip, geoip_country_code, geoip_autonomous_system_organization) (count_over_time({job=\"hubble_http\", edge=\"cf\", l7_type=\"REQUEST\", host=~\"$host\"} | json url=\"flow.l7.http.url\" | url =~ `(?i).*(/\\\\.env|/wp-admin|/wp-login|/\\\\.git|/phpmyadmin|/phpMyAdmin|/admin|/\\\\.aws|/\\\\.ssh|/actuator|/config\\\\.|/vendor/|/xmlrpc|/owa|/autodiscover).*` [$__range])))", "instant": true, "format": "table", "refId": "A"}
+          ],
+          "transformations": [
+            {"id": "organize", "options": {"renameByName": {"client_ip": "Client IP", "geoip_country_code": "Country", "geoip_autonomous_system_organization": "ASN / Org", "Value": "Probe hits"}, "excludeByName": {"Time": true}}},
+            {"id": "sortBy", "options": {"sort": [{"field": "Probe hits", "desc": true}]}}
+          ]
+        },
+        {
+          "type": "timeseries",
+          "title": "4xx response volume per domain (Hubble RESPONSE)",
+          "description": "Authoritative 4xx counts from the RESPONSE stream. (client_ip is REQUEST-only, so this is per-host, not per-IP.)",
+          "gridPos": {"x": 12, "y": 34, "w": 12, "h": 9},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [
+            {"expr": "sum by (host, code) (rate(loki_process_custom_hubble_http_requests_total{l7_type=\"RESPONSE\", code=~\"4..\", host=~\"$host\"}[5m]))", "legendFormat": "{{host}} {{code}}", "refId": "A"}
+          ],
+          "fieldConfig": {"defaults": {"unit": "reqps", "custom": {"fillOpacity": 15, "lineWidth": 1}}}
+        },
+        {
+          "type": "row",
+          "title": "Cloudflare Edge Analytics — requires Pro plan (disabled on Free)",
+          "gridPos": {"x": 0, "y": 43, "w": 24, "h": 1},
+          "collapsed": true,
+          "panels": [
+            {
+              "type": "text",
+              "title": "Why these panels are empty",
+              "gridPos": {"x": 0, "y": 44, "w": 24, "h": 4},
+              "options": {
+                "mode": "markdown",
+                "content": "**Cloudflare edge threat signals require a Pro plan ($20/mo/zone).** All three zones are on the Free plan, which can't serve the minute-resolution GraphQL analytics dataset (`httpRequests1mGroups`) the exporter needs, so `cloudflare-exporter` is intentionally scaled to 0. The token is valid and correctly scoped — the Free plan is the only blocker. When a zone is upgraded, CF's threats/firewall metrics become the authoritative \"edge flagged this\" signal. **To enable after upgrading a zone to Pro:** `kubectl scale deploy/cloudflare-exporter -n monitor --replicas=1`"
+              }
+            },
+            {
+              "type": "stat",
+              "title": "CF threats (Pro plan req'd)",
+              "description": "Cloudflare's authoritative edge threat count.",
+              "gridPos": {"x": 0, "y": 48, "w": 12, "h": 4},
+              "datasource": {"type": "prometheus", "uid": "prometheus"},
+              "targets": [{"expr": "sum(increase(cloudflare_zone_threats_total[6h]))", "refId": "A"}],
+              "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
+              "fieldConfig": {"defaults": {"unit": "short", "color": {"mode": "fixed", "fixedColor": "dark-red"}, "noValue": "Cloudflare Pro plan required — exporter scaled to 0"}}
+            },
+            {
+              "type": "stat",
+              "title": "CF firewall events (Pro plan req'd)",
+              "gridPos": {"x": 12, "y": 48, "w": 12, "h": 4},
+              "datasource": {"type": "prometheus", "uid": "prometheus"},
+              "targets": [{"expr": "sum(increase(cloudflare_zone_firewall_events_count[6h]))", "refId": "A"}],
+              "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
+              "fieldConfig": {"defaults": {"unit": "short", "color": {"mode": "fixed", "fixedColor": "dark-red"}, "noValue": "Cloudflare Pro plan required — exporter scaled to 0"}}
+            },
+            {
+              "type": "timeseries",
+              "title": "CF threats per zone (Pro plan req'd)",
+              "gridPos": {"x": 0, "y": 52, "w": 12, "h": 8},
+              "datasource": {"type": "prometheus", "uid": "prometheus"},
+              "targets": [
+                {"expr": "sum by (zone) (rate(cloudflare_zone_threats_total[5m]))", "legendFormat": "{{zone}}", "refId": "A"}
+              ],
+              "fieldConfig": {"defaults": {"unit": "short", "custom": {"fillOpacity": 15, "lineWidth": 1}, "noValue": "Cloudflare Pro plan required — exporter scaled to 0"}}
+            },
+            {
+              "type": "geomap",
+              "title": "CF threats by country (Pro plan req'd)",
+              "gridPos": {"x": 12, "y": 52, "w": 12, "h": 8},
+              "datasource": {"type": "prometheus", "uid": "prometheus"},
+              "targets": [
+                {"expr": "sum by (country) (cloudflare_zone_threats_country)", "instant": true, "legendFormat": "{{country}}", "refId": "A"}
+              ],
+              "options": {
+                "view": {"id": "zero", "lat": 20, "lon": 0, "zoom": 1.5},
+                "controls": {"showZoom": true, "mouseWheelZoom": true},
+                "basemap": {"type": "default", "name": "Basemap"},
+                "layers": [
+                  {"type": "markers", "name": "CF threats by country", "location": {"mode": "lookup", "lookup": "country", "gazetteer": "public/gazetteer/countries.json"}, "config": {"showLegend": true, "style": {"size": {"field": "Value", "fixed": 5, "min": 4, "max": 30}, "color": {"fixed": "#C4162A"}, "opacity": 0.6}}}
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
