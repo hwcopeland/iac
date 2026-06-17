@@ -68,7 +68,7 @@ data:
           "gridPos": { "x": 0, "y": 9, "w": 12, "h": 10 },
           "datasource": { "type": "postgres", "uid": "spotify-postgres" },
           "targets": [ { "refId": "A", "format": "table", "rawSql":
-            "SELECT a.name AS artist, count(*) AS plays, round((100.0 * AVG(pe.skipped::int))::numeric, 1) AS skip_pct FROM play_events pe JOIN tracks t ON t.track_id = pe.track_id JOIN artists a ON a.artist_id = t.artist_id WHERE pe.skipped IS NOT NULL AND $__timeFilter(pe.played_at) GROUP BY a.name HAVING count(*) >= 50 ORDER BY skip_pct DESC LIMIT 25" } ],
+            "SELECT COALESCE(a.name, t.artist_name, '(unknown artist)') AS artist, count(*) AS plays, round((100.0 * AVG(pe.skipped::int))::numeric, 1) AS skip_pct FROM play_events pe JOIN tracks t ON t.track_id = pe.track_id LEFT JOIN artists a ON a.artist_id = t.artist_id WHERE pe.skipped IS NOT NULL AND $__timeFilter(pe.played_at) GROUP BY COALESCE(a.name, t.artist_name, '(unknown artist)') HAVING count(*) >= 50 ORDER BY skip_pct DESC LIMIT 25" } ],
           "fieldConfig": { "defaults": { "unit": "percent" }, "overrides": [ { "matcher": { "id": "byName", "options": "plays" }, "properties": [ { "id": "unit", "value": "short" } ] } ] },
           "options": { "showHeader": true }
         },
@@ -77,7 +77,7 @@ data:
           "gridPos": { "x": 12, "y": 9, "w": 12, "h": 10 },
           "datasource": { "type": "postgres", "uid": "spotify-postgres" },
           "targets": [ { "refId": "A", "format": "table", "rawSql":
-            "SELECT a.name AS artist, count(*) AS plays, round((100.0 * AVG(pe.skipped::int))::numeric, 1) AS skip_pct FROM play_events pe JOIN tracks t ON t.track_id = pe.track_id JOIN artists a ON a.artist_id = t.artist_id WHERE pe.skipped IS NOT NULL AND $__timeFilter(pe.played_at) GROUP BY a.name HAVING count(*) >= 50 ORDER BY skip_pct ASC LIMIT 25" } ],
+            "SELECT COALESCE(a.name, t.artist_name, '(unknown artist)') AS artist, count(*) AS plays, round((100.0 * AVG(pe.skipped::int))::numeric, 1) AS skip_pct FROM play_events pe JOIN tracks t ON t.track_id = pe.track_id LEFT JOIN artists a ON a.artist_id = t.artist_id WHERE pe.skipped IS NOT NULL AND $__timeFilter(pe.played_at) GROUP BY COALESCE(a.name, t.artist_name, '(unknown artist)') HAVING count(*) >= 50 ORDER BY skip_pct ASC LIMIT 25" } ],
           "fieldConfig": { "defaults": { "unit": "percent" }, "overrides": [ { "matcher": { "id": "byName", "options": "plays" }, "properties": [ { "id": "unit", "value": "short" } ] } ] },
           "options": { "showHeader": true }
         },
@@ -150,7 +150,7 @@ data:
           "gridPos": { "x": 12, "y": 44, "w": 12, "h": 10 },
           "datasource": { "type": "postgres", "uid": "spotify-postgres" },
           "targets": [ { "refId": "A", "format": "table", "rawSql":
-            "SELECT pe.played_at::date AS day, t.name AS track, a.name AS artist, count(*) AS plays FROM play_events pe JOIN tracks t ON t.track_id = pe.track_id LEFT JOIN artists a ON a.artist_id = t.artist_id WHERE $__timeFilter(pe.played_at) GROUP BY pe.played_at::date, t.name, a.name ORDER BY plays DESC LIMIT 25" } ],
+            "SELECT pe.played_at::date AS day, t.name AS track, COALESCE(a.name, t.artist_name, '(unknown artist)') AS artist, count(*) AS plays FROM play_events pe JOIN tracks t ON t.track_id = pe.track_id LEFT JOIN artists a ON a.artist_id = t.artist_id WHERE $__timeFilter(pe.played_at) GROUP BY pe.played_at::date, t.name, COALESCE(a.name, t.artist_name, '(unknown artist)') ORDER BY plays DESC LIMIT 25" } ],
           "options": { "showHeader": true }
         },
         {
@@ -237,9 +237,9 @@ data:
           "id": 53, "type": "table", "title": "Skip rate by top artist (>= 50 plays)",
           "gridPos": { "x": 0, "y": 93, "w": 12, "h": 10 },
           "datasource": { "type": "postgres", "uid": "spotify-postgres" },
-          "description": "Most-played artists ranked by how often you skip them. Requires a linked artist_id (GDPR name-only rows excluded).",
+          "description": "Most-played artists ranked by how often you skip them. Artist identity is COALESCE(linked artists.name, GDPR-export artist_name), so name-only rows are now included.",
           "targets": [ { "refId": "A", "format": "table", "rawSql":
-            "SELECT a.name AS artist, count(*) AS plays, round((100.0 * avg(pe.skipped::int))::numeric, 1) AS skip_pct FROM play_events pe JOIN tracks t ON t.track_id = pe.track_id JOIN artists a ON a.artist_id = t.artist_id WHERE pe.skipped IS NOT NULL AND $__timeFilter(pe.played_at) GROUP BY a.name HAVING count(*) >= 50 ORDER BY skip_pct DESC, plays DESC LIMIT 25" } ],
+            "SELECT COALESCE(a.name, t.artist_name, '(unknown artist)') AS artist, count(*) AS plays, round((100.0 * avg(pe.skipped::int))::numeric, 1) AS skip_pct FROM play_events pe JOIN tracks t ON t.track_id = pe.track_id LEFT JOIN artists a ON a.artist_id = t.artist_id WHERE pe.skipped IS NOT NULL AND $__timeFilter(pe.played_at) GROUP BY COALESCE(a.name, t.artist_name, '(unknown artist)') HAVING count(*) >= 50 ORDER BY skip_pct DESC, plays DESC LIMIT 25" } ],
           "fieldConfig": { "defaults": { "custom": { "align": "auto" } }, "overrides": [ { "matcher": { "id": "byName", "options": "skip_pct" }, "properties": [ { "id": "unit", "value": "percent" }, { "id": "custom.cellOptions", "value": { "type": "gauge", "mode": "gradient" } }, { "id": "max", "value": 100 } ] } ] },
           "options": { "showHeader": true, "sortBy": [ { "displayName": "skip_pct", "desc": true } ] }
         },
