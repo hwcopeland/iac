@@ -25,7 +25,7 @@ data:
       "uid": "spotify-listening-behavior",
       "title": "Spotify — Listening Behavior",
       "schemaVersion": 38,
-      "version": 4,
+      "version": 5,
       "refresh": "1h",
       "time": { "from": "2024-09-01T00:00:00.000Z", "to": "now" },
       "tags": ["spotify", "music", "behavior"],
@@ -159,50 +159,7 @@ data:
           "options": { "mode": "markdown", "content": "**Counts distinct `(played_at, track_id)` rows, not raw export plays.** The fact table's PK is `(played_at, track_id)` at 1-second resolution, so rapid same-track replays that share a played_at *second* (this user skims tracks in ~2s) were de-duplicated at GDPR-import time — ~106 such plays were dropped (~0.2% of 54k, negligible overall). A heavy single-day repeat can therefore read low vs the raw export (e.g. SHY FX — *Risk It All*, 2025-07-06: 18 distinct-second rows here vs ~106 raw plays). The leaderboard *ranking* is unaffected; the absolute per-day count is a floor." }
         },
 
-        { "id": 39, "type": "row", "title": "Genre rivalry — DnB vs Country", "gridPos": { "x": 0, "y": 57, "w": 24, "h": 1 } },
-        {
-          "id": 40, "type": "text", "title": "Rivalry note",
-          "gridPos": { "x": 0, "y": 58, "w": 24, "h": 2 },
-          "options": { "mode": "markdown", "content": "The long-running head-to-head. Classified by the keyword `genre_parent()` rollup with **per-play dedup** — a play is counted once for a parent even when the artist carries several matching sub-genre tags (so DnB reads its honest ~208h, not the ~477h tag-fanout double-count). DnB led for most of 2024-2025; Country has been closing the gap and edges ahead in 2026." }
-        },
-        {
-          "id": 41, "type": "bargauge", "title": "Hours — DnB vs Country",
-          "gridPos": { "x": 0, "y": 60, "w": 8, "h": 7 },
-          "datasource": { "type": "postgres", "uid": "spotify-postgres" },
-          "targets": [ { "refId": "A", "format": "table", "rawSql":
-            "WITH play_parent AS (SELECT DISTINCT pe.played_at, pe.track_id, pe.ms_played, COALESCE(genre_parent(lower(g.raw)), 'Other') AS parent FROM play_events pe JOIN tracks t ON t.track_id = pe.track_id LEFT JOIN artists a ON a.artist_id = t.artist_id LEFT JOIN LATERAL unnest(COALESCE(a.genres, ARRAY[]::text[])) AS g(raw) ON true WHERE pe.ms_played IS NOT NULL AND $__timeFilter(pe.played_at)) SELECT parent AS genre, round((SUM(ms_played)/3600000.0)::numeric, 1) AS hours FROM play_parent WHERE parent IN ('DnB','Country') GROUP BY parent ORDER BY hours DESC" } ],
-          "fieldConfig": { "defaults": { "unit": "h", "min": 0, "color": { "mode": "continuous-GrYlRd" } } },
-          "options": { "displayMode": "gradient", "orientation": "horizontal", "reduceOptions": { "calcs": ["lastNotNull"] } }
-        },
-        {
-          "id": 42, "type": "bargauge", "title": "Plays — DnB vs Country",
-          "gridPos": { "x": 8, "y": 60, "w": 8, "h": 7 },
-          "datasource": { "type": "postgres", "uid": "spotify-postgres" },
-          "targets": [ { "refId": "A", "format": "table", "rawSql":
-            "WITH play_parent AS (SELECT DISTINCT pe.played_at, pe.track_id, COALESCE(genre_parent(lower(g.raw)), 'Other') AS parent FROM play_events pe JOIN tracks t ON t.track_id = pe.track_id LEFT JOIN artists a ON a.artist_id = t.artist_id LEFT JOIN LATERAL unnest(COALESCE(a.genres, ARRAY[]::text[])) AS g(raw) ON true WHERE $__timeFilter(pe.played_at)) SELECT parent AS genre, count(*) AS plays FROM play_parent WHERE parent IN ('DnB','Country') GROUP BY parent ORDER BY plays DESC" } ],
-          "fieldConfig": { "defaults": { "unit": "short", "min": 0, "color": { "mode": "continuous-BlPu" } } },
-          "options": { "displayMode": "gradient", "orientation": "horizontal", "reduceOptions": { "calcs": ["lastNotNull"] } }
-        },
-        {
-          "id": 43, "type": "bargauge", "title": "Skip rate — DnB vs Country",
-          "gridPos": { "x": 16, "y": 60, "w": 8, "h": 7 },
-          "datasource": { "type": "postgres", "uid": "spotify-postgres" },
-          "targets": [ { "refId": "A", "format": "table", "rawSql":
-            "WITH play_parent AS (SELECT DISTINCT pe.played_at, pe.track_id, pe.skipped, COALESCE(genre_parent(lower(g.raw)), 'Other') AS parent FROM play_events pe JOIN tracks t ON t.track_id = pe.track_id LEFT JOIN artists a ON a.artist_id = t.artist_id LEFT JOIN LATERAL unnest(COALESCE(a.genres, ARRAY[]::text[])) AS g(raw) ON true WHERE pe.skipped IS NOT NULL AND $__timeFilter(pe.played_at)) SELECT parent AS genre, round((100.0 * AVG(skipped::int))::numeric, 1) AS skip_pct FROM play_parent WHERE parent IN ('DnB','Country') GROUP BY parent ORDER BY skip_pct DESC" } ],
-          "fieldConfig": { "defaults": { "unit": "percent", "decimals": 1, "min": 0, "max": 100, "color": { "mode": "continuous-GrYlRd" } } },
-          "options": { "displayMode": "gradient", "orientation": "horizontal", "reduceOptions": { "calcs": ["lastNotNull"] } }
-        },
-        {
-          "id": 44, "type": "timeseries", "title": "Hours per quarter — DnB vs Country (the rivalry narrowing in 2026)",
-          "gridPos": { "x": 0, "y": 67, "w": 24, "h": 8 },
-          "datasource": { "type": "postgres", "uid": "spotify-postgres" },
-          "targets": [ { "refId": "A", "format": "time_series", "rawSql":
-            "WITH play_parent AS (SELECT DISTINCT pe.played_at, pe.track_id, pe.ms_played, COALESCE(genre_parent(lower(g.raw)), 'Other') AS parent FROM play_events pe JOIN tracks t ON t.track_id = pe.track_id LEFT JOIN artists a ON a.artist_id = t.artist_id LEFT JOIN LATERAL unnest(COALESCE(a.genres, ARRAY[]::text[])) AS g(raw) ON true WHERE pe.ms_played IS NOT NULL AND $__timeFilter(pe.played_at)) SELECT date_trunc('quarter', played_at) AS time, parent AS metric, round((SUM(ms_played)/3600000.0)::numeric, 1) AS hours FROM play_parent WHERE parent IN ('DnB','Country') GROUP BY 1, 2 ORDER BY 1" } ],
-          "fieldConfig": { "defaults": { "unit": "h", "custom": { "drawStyle": "line", "fillOpacity": 15, "lineWidth": 2, "pointSize": 6, "showPoints": "always" } } },
-          "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } }
-        },
-
-        { "id": 49, "type": "row", "title": "Skip patterns (deep dive)", "gridPos": { "x": 0, "y": 75, "w": 24, "h": 1 } },
+        { "id": 49, "type": "row", "title": "Skip patterns (deep dive)", "gridPos": { "x": 0, "y": 57, "w": 24, "h": 1 } },
         {
           "id": 50, "type": "timeseries", "title": "Completion rate over time (weekly trackdone %)",
           "gridPos": { "x": 0, "y": 76, "w": 24, "h": 8 },

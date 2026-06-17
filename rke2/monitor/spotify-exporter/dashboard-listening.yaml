@@ -28,7 +28,7 @@ data:
       "uid": "spotify-listening",
       "title": "Spotify — Listening",
       "schemaVersion": 38,
-      "version": 3,
+      "version": 4,
       "refresh": "1h",
       "time": { "from": "2024-09-01T00:00:00.000Z", "to": "now" },
       "tags": ["spotify", "music", "listening"],
@@ -138,22 +138,6 @@ data:
             "WITH play_parent AS (SELECT DISTINCT pe.played_at, pe.track_id, COALESCE(genre_parent(lower(g.raw)), 'Other') AS parent FROM play_events pe JOIN tracks t ON t.track_id = pe.track_id LEFT JOIN artists a ON a.artist_id = t.artist_id LEFT JOIN LATERAL unnest(COALESCE(a.genres, ARRAY[]::text[])) AS g(raw) ON true) SELECT date_trunc('week', played_at) AS time, parent AS metric, count(*) AS plays FROM play_parent GROUP BY 1, 2 ORDER BY 1" } ],
           "fieldConfig": { "defaults": { "custom": { "drawStyle": "bars", "stacking": { "mode": "normal" }, "fillOpacity": 80 } } }
         },
-        {
-          "id": 41, "type": "timeseries", "title": "Genre-diversity index — distinct parent genres per week",
-          "gridPos": { "x": 0, "y": 57, "w": 12, "h": 8 },
-          "datasource": { "type": "postgres", "uid": "spotify-postgres" },
-          "targets": [ { "refId": "A", "format": "time_series", "rawSql":
-            "SELECT date_trunc('week', pe.played_at) AS time, count(DISTINCT COALESCE(genre_parent(lower(g.raw)),'Other')) AS distinct_parent_genres FROM play_events pe JOIN tracks t ON t.track_id = pe.track_id LEFT JOIN artists a ON a.artist_id = t.artist_id LEFT JOIN LATERAL unnest(COALESCE(a.genres, ARRAY[]::text[])) AS g(raw) ON true GROUP BY 1 ORDER BY 1" } ],
-          "fieldConfig": { "defaults": { "custom": { "drawStyle": "bars", "fillOpacity": 60 } } }
-        },
-        {
-          "id": 42, "type": "timeseries", "title": "Genre-diversity index — Shannon entropy per week",
-          "gridPos": { "x": 12, "y": 57, "w": 12, "h": 8 },
-          "datasource": { "type": "postgres", "uid": "spotify-postgres" },
-          "targets": [ { "refId": "A", "format": "time_series", "rawSql":
-            "WITH play_parent AS (SELECT DISTINCT pe.played_at, pe.track_id, date_trunc('week', pe.played_at) AS w, COALESCE(genre_parent(lower(g.raw)),'Other') AS pg FROM play_events pe JOIN tracks t ON t.track_id = pe.track_id LEFT JOIN artists a ON a.artist_id = t.artist_id LEFT JOIN LATERAL unnest(COALESCE(a.genres, ARRAY[]::text[])) AS g(raw) ON true), wk AS (SELECT w, pg, count(*) AS n FROM play_parent GROUP BY 1,2), tot AS (SELECT w, sum(n) AS total FROM wk GROUP BY w) SELECT wk.w AS time, -sum((wk.n::float/tot.total) * ln(wk.n::float/tot.total)) AS entropy FROM wk JOIN tot ON tot.w = wk.w GROUP BY wk.w ORDER BY wk.w" } ],
-          "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "fillOpacity": 15 } } }
-        },
 
         { "id": 49, "type": "row", "title": "Discovery & mainstream-ness", "gridPos": { "x": 0, "y": 65, "w": 24, "h": 1 } },
         {
@@ -164,7 +148,7 @@ data:
             { "refId": "A", "format": "time_series", "rawSql":
               "SELECT date_trunc('week', first_play) AS time, 'new tracks' AS metric, count(*) AS n FROM (SELECT track_id, min(played_at) AS first_play FROM play_events GROUP BY track_id) f GROUP BY 1 ORDER BY 1" },
             { "refId": "B", "format": "time_series", "rawSql":
-              "SELECT date_trunc('week', first_play) AS time, 'new artists' AS metric, count(*) AS n FROM (SELECT t.artist_id, min(pe.played_at) AS first_play FROM play_events pe JOIN tracks t ON t.track_id = pe.track_id WHERE t.artist_id IS NOT NULL GROUP BY t.artist_id) f GROUP BY 1 ORDER BY 1" }
+              "SELECT date_trunc('week', first_play) AS time, 'new artists' AS metric, count(*) AS n FROM (SELECT COALESCE(a.name, t.artist_name) AS artist_key, min(pe.played_at) AS first_play FROM play_events pe JOIN tracks t ON t.track_id = pe.track_id LEFT JOIN artists a ON a.artist_id = t.artist_id WHERE COALESCE(a.name, t.artist_name) IS NOT NULL GROUP BY COALESCE(a.name, t.artist_name)) f GROUP BY 1 ORDER BY 1" }
           ],
           "fieldConfig": { "defaults": { "custom": { "drawStyle": "bars", "fillOpacity": 60 } } }
         },
@@ -186,34 +170,7 @@ data:
           "fieldConfig": { "defaults": { "min": 0, "max": 100, "custom": { "drawStyle": "line", "fillOpacity": 15 } } }
         },
 
-        { "id": 69, "type": "row", "title": "Totals (time-weighted)", "gridPos": { "x": 0, "y": 80, "w": 24, "h": 1 } },
-        {
-          "id": 70, "type": "stat", "title": "Total listening hours",
-          "gridPos": { "x": 0, "y": 91, "w": 8, "h": 6 },
-          "datasource": { "type": "postgres", "uid": "spotify-postgres" },
-          "targets": [ { "refId": "A", "format": "table", "rawSql":
-            "SELECT SUM(ms_played)/3600000.0 AS hours FROM play_events WHERE $__timeFilter(played_at)" } ],
-          "fieldConfig": { "defaults": { "unit": "h", "decimals": 1, "color": { "mode": "fixed", "fixedColor": "green" } } },
-          "options": { "colorMode": "background", "reduceOptions": { "calcs": ["lastNotNull"] } }
-        },
-        {
-          "id": 71, "type": "stat", "title": "Distinct artists",
-          "gridPos": { "x": 8, "y": 91, "w": 8, "h": 6 },
-          "datasource": { "type": "postgres", "uid": "spotify-postgres" },
-          "targets": [ { "refId": "A", "format": "table", "rawSql":
-            "SELECT count(DISTINCT COALESCE(a.name, t.artist_name)) AS artists FROM play_events pe JOIN tracks t ON t.track_id = pe.track_id LEFT JOIN artists a ON a.artist_id = t.artist_id WHERE COALESCE(a.name, t.artist_name) IS NOT NULL AND $__timeFilter(pe.played_at)" } ],
-          "options": { "colorMode": "value", "reduceOptions": { "calcs": ["lastNotNull"] } }
-        },
-        {
-          "id": 72, "type": "stat", "title": "Distinct tracks",
-          "gridPos": { "x": 16, "y": 91, "w": 8, "h": 6 },
-          "datasource": { "type": "postgres", "uid": "spotify-postgres" },
-          "targets": [ { "refId": "A", "format": "table", "rawSql":
-            "SELECT count(DISTINCT track_id) AS tracks FROM play_events WHERE $__timeFilter(played_at)" } ],
-          "options": { "colorMode": "value", "reduceOptions": { "calcs": ["lastNotNull"] } }
-        },
-
-        { "id": 79, "type": "row", "title": "Loyalty — TIME vs COUNT", "gridPos": { "x": 0, "y": 97, "w": 24, "h": 1 } },
+        { "id": 79, "type": "row", "title": "Loyalty — TIME vs COUNT", "gridPos": { "x": 0, "y": 80, "w": 24, "h": 1 } },
         {
           "id": 80, "type": "text", "title": "What this shows",
           "gridPos": { "x": 0, "y": 98, "w": 24, "h": 2 },
@@ -287,7 +244,7 @@ data:
           "gridPos": { "x": 12, "y": 140, "w": 12, "h": 9 },
           "datasource": { "type": "postgres", "uid": "spotify-postgres" },
           "targets": [ { "refId": "A", "format": "time_series", "rawSql":
-            "SELECT date_trunc('month', first_play) AS time, count(*) AS new_artists FROM (SELECT t.artist_id, min(pe.played_at) AS first_play FROM play_events pe JOIN tracks t ON t.track_id = pe.track_id WHERE t.artist_id IS NOT NULL GROUP BY t.artist_id) f WHERE $__timeFilter(first_play) GROUP BY 1 ORDER BY 1" } ],
+            "SELECT date_trunc('month', first_play) AS time, count(*) AS new_artists FROM (SELECT COALESCE(a.name, t.artist_name) AS artist_key, min(pe.played_at) AS first_play FROM play_events pe JOIN tracks t ON t.track_id = pe.track_id LEFT JOIN artists a ON a.artist_id = t.artist_id WHERE COALESCE(a.name, t.artist_name) IS NOT NULL GROUP BY COALESCE(a.name, t.artist_name)) f WHERE $__timeFilter(first_play) GROUP BY 1 ORDER BY 1" } ],
           "fieldConfig": { "defaults": { "custom": { "drawStyle": "bars", "fillOpacity": 60 } } }
         }
       ]

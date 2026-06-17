@@ -223,13 +223,24 @@ def resolve_track(row: dict) -> str:
     tags_written = DB.add_track_tags(tid, "musicbrainz", mb.get("tags") or [])
 
     # Artist-level fine tags (fills tracks whose recording had none, and every
-    # other track by the same artist via the view). Keyed on the SPOTIFY
-    # artist_id so the view can join artist_genres_enriched.artist_id = tracks.artist_id.
+    # other track by the same artist via the view).
     mb_artist_id = mb.get("mb_artist_id")
-    if mb_artist_id and artist_id:
+    if mb_artist_id:
         atags = mb_artist_tags(mb_artist_id)
         if atags:
-            DB.add_artist_tags(artist_id, "musicbrainz", atags)
+            if artist_id:
+                # Preferred: key on the SPOTIFY artist_id so the view's
+                # artist_genres_enriched.artist_id = tracks.artist_id join fans
+                # these tags onto EVERY track by the artist.
+                DB.add_artist_tags(artist_id, "musicbrainz", atags)
+            else:
+                # GDPR-import tracks (artist_name only, no Spotify artist_id —
+                # ~51% of the catalog). The artist_genres_enriched join is keyed
+                # on artist_id, so it can never reach them. Store the artist's
+                # tags at TRACK level instead so this track still gets a genre.
+                # (No cross-track fan-out for these — acceptable; the names were
+                # only recovered post-hoc and most lack a Spotify artist link.)
+                DB.add_track_tags(tid, "musicbrainz", atags)
             tags_written += len(atags)
 
     DB.upsert_music_ids(

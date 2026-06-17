@@ -35,7 +35,7 @@ data:
       "uid": "spotify-overview",
       "title": "Spotify",
       "schemaVersion": 38,
-      "version": 2,
+      "version": 3,
       "refresh": "30s",
       "time": { "from": "2024-09-01T00:00:00.000Z", "to": "now" },
       "tags": ["spotify", "music"],
@@ -190,44 +190,6 @@ data:
             "WITH play_parent AS (SELECT DISTINCT pe.played_at, pe.track_id, pe.ms_played, COALESCE(genre_parent(lower(g.raw)), 'Other') AS parent FROM play_events pe JOIN tracks t ON t.track_id = pe.track_id LEFT JOIN artists a ON a.artist_id = t.artist_id LEFT JOIN LATERAL unnest(COALESCE(a.genres, ARRAY[]::text[])) AS g(raw) ON true WHERE pe.ms_played IS NOT NULL AND $__timeFilter(pe.played_at)) SELECT parent AS genre, round((SUM(ms_played)/3600000.0)::numeric, 1) AS hours FROM play_parent GROUP BY parent ORDER BY hours DESC LIMIT 15" } ],
           "fieldConfig": { "defaults": { "unit": "h", "min": 0, "color": { "mode": "continuous-BlPu" } } },
           "options": { "displayMode": "gradient", "orientation": "horizontal", "reduceOptions": { "calcs": ["lastNotNull"] } }
-        },
-
-        { "id": 49, "type": "row", "title": "DnB vs Country — the rivalry", "gridPos": { "x": 0, "y": 46, "w": 24, "h": 1 } },
-        {
-          "id": 50, "type": "bargauge", "title": "Hours — DnB vs Country",
-          "gridPos": { "x": 0, "y": 47, "w": 8, "h": 7 },
-          "datasource": { "type": "postgres", "uid": "spotify-postgres" },
-          "targets": [ { "refId": "A", "format": "table", "rawSql":
-            "WITH play_parent AS (SELECT DISTINCT pe.played_at, pe.track_id, pe.ms_played, COALESCE(genre_parent(lower(g.raw)), 'Other') AS parent FROM play_events pe JOIN tracks t ON t.track_id = pe.track_id LEFT JOIN artists a ON a.artist_id = t.artist_id LEFT JOIN LATERAL unnest(COALESCE(a.genres, ARRAY[]::text[])) AS g(raw) ON true WHERE pe.ms_played IS NOT NULL AND $__timeFilter(pe.played_at)) SELECT parent AS genre, round((SUM(ms_played)/3600000.0)::numeric, 1) AS hours FROM play_parent WHERE parent IN ('DnB','Country') GROUP BY parent ORDER BY hours DESC" } ],
-          "fieldConfig": { "defaults": { "unit": "h", "min": 0, "color": { "mode": "continuous-GrYlRd" } } },
-          "options": { "displayMode": "gradient", "orientation": "horizontal", "reduceOptions": { "calcs": ["lastNotNull"] } }
-        },
-        {
-          "id": 51, "type": "bargauge", "title": "Plays — DnB vs Country",
-          "gridPos": { "x": 8, "y": 47, "w": 8, "h": 7 },
-          "datasource": { "type": "postgres", "uid": "spotify-postgres" },
-          "targets": [ { "refId": "A", "format": "table", "rawSql":
-            "WITH play_parent AS (SELECT DISTINCT pe.played_at, pe.track_id, COALESCE(genre_parent(lower(g.raw)), 'Other') AS parent FROM play_events pe JOIN tracks t ON t.track_id = pe.track_id LEFT JOIN artists a ON a.artist_id = t.artist_id LEFT JOIN LATERAL unnest(COALESCE(a.genres, ARRAY[]::text[])) AS g(raw) ON true WHERE $__timeFilter(pe.played_at)) SELECT parent AS genre, count(*) AS plays FROM play_parent WHERE parent IN ('DnB','Country') GROUP BY parent ORDER BY plays DESC" } ],
-          "fieldConfig": { "defaults": { "unit": "short", "min": 0, "color": { "mode": "continuous-BlPu" } } },
-          "options": { "displayMode": "gradient", "orientation": "horizontal", "reduceOptions": { "calcs": ["lastNotNull"] } }
-        },
-        {
-          "id": 52, "type": "bargauge", "title": "Skip rate — DnB vs Country",
-          "gridPos": { "x": 16, "y": 47, "w": 8, "h": 7 },
-          "datasource": { "type": "postgres", "uid": "spotify-postgres" },
-          "targets": [ { "refId": "A", "format": "table", "rawSql":
-            "WITH play_parent AS (SELECT DISTINCT pe.played_at, pe.track_id, pe.skipped, COALESCE(genre_parent(lower(g.raw)), 'Other') AS parent FROM play_events pe JOIN tracks t ON t.track_id = pe.track_id LEFT JOIN artists a ON a.artist_id = t.artist_id LEFT JOIN LATERAL unnest(COALESCE(a.genres, ARRAY[]::text[])) AS g(raw) ON true WHERE pe.skipped IS NOT NULL AND $__timeFilter(pe.played_at)) SELECT parent AS genre, round((100.0 * AVG(skipped::int))::numeric, 1) AS skip_pct FROM play_parent WHERE parent IN ('DnB','Country') GROUP BY parent ORDER BY skip_pct DESC" } ],
-          "fieldConfig": { "defaults": { "unit": "percent", "decimals": 1, "min": 0, "max": 100, "color": { "mode": "continuous-GrYlRd" } } },
-          "options": { "displayMode": "gradient", "orientation": "horizontal", "reduceOptions": { "calcs": ["lastNotNull"] } }
-        },
-        {
-          "id": 53, "type": "timeseries", "title": "Hours per quarter — DnB vs Country (the rivalry narrowing in 2026)",
-          "gridPos": { "x": 0, "y": 54, "w": 24, "h": 8 },
-          "datasource": { "type": "postgres", "uid": "spotify-postgres" },
-          "targets": [ { "refId": "A", "format": "time_series", "rawSql":
-            "WITH play_parent AS (SELECT DISTINCT pe.played_at, pe.track_id, pe.ms_played, COALESCE(genre_parent(lower(g.raw)), 'Other') AS parent FROM play_events pe JOIN tracks t ON t.track_id = pe.track_id LEFT JOIN artists a ON a.artist_id = t.artist_id LEFT JOIN LATERAL unnest(COALESCE(a.genres, ARRAY[]::text[])) AS g(raw) ON true WHERE pe.ms_played IS NOT NULL AND $__timeFilter(pe.played_at)) SELECT date_trunc('quarter', played_at) AS time, parent AS metric, round((SUM(ms_played)/3600000.0)::numeric, 1) AS hours FROM play_parent WHERE parent IN ('DnB','Country') GROUP BY 1, 2 ORDER BY 1" } ],
-          "fieldConfig": { "defaults": { "unit": "h", "custom": { "drawStyle": "line", "fillOpacity": 15, "lineWidth": 2, "pointSize": 6, "showPoints": "always" } } },
-          "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } }
         }
       ]
     }
