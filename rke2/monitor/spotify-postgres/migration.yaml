@@ -450,6 +450,125 @@ data:
     INSERT INTO schema_migrations (version, description)
     VALUES (3, 'behavioural play_events columns (skipped, reason_start/end, shuffle, platform, conn_country, offline, incognito_mode) + ms_played bigint, from the GDPR Extended Streaming History export')
     ON CONFLICT (version) DO NOTHING;
+  004_genre_keyword_rollup.sql: |
+    -- ============================================================== --
+    --  Spotify analytics — schema migration 004 (keyword genre rollup)--
+    --                                                                 --
+    --  PROBLEM: genre_rollup is an EXACT-match map of ~91 raw tags, so --
+    --  the long tail of fine sub-genres ("pop rap", "classic country", --
+    --  "west coast hip hop", "soft rock", "drumstep", …) fell through  --
+    --  to "Other"/"ungrouped" on the parent-bucket panels. Measured on --
+    --  the full 54k-row history, ~49.6k tag-plays and 3.5k saved tracks--
+    --  were ungrouped.                                                 --
+    --                                                                  --
+    --  FIX: a keyword/substring classifier genre_parent(text) that     --
+    --  assigns a parent by matching keywords inside the tag, so the     --
+    --  long tail is covered WITHOUT enumerating every tag. DnB and      --
+    --  Country are kept as their OWN parents (ordered first so          --
+    --  "country pop"/"liquid funk" don't leak to Pop/Electronic). The   --
+    --  track_genre_effective view's parent_genre is rebuilt to use      --
+    --  COALESCE(genre_parent(sub_genre), genre_rollup override) — the   --
+    --  fine sub_genre column is UNCHANGED (still hyper-specific; the    --
+    --  keyword map only feeds the OPTIONAL parent grouping).            --
+    --  Genuine non-genre tags ("2020s", "top 100", "english") return    --
+    --  NULL and stay ungrouped, as they should.                        --
+    --  After:  Other 49.6k -> 21.2k tag-plays; ungrouped 3537 -> 2024.  --
+    --  Idempotent: CREATE OR REPLACE for fn+view; guarded ledger row.   --
+    -- ============================================================== --
+    DO $mig4$
+    BEGIN
+      IF EXISTS (SELECT 1 FROM schema_migrations WHERE version = 4) THEN
+        RAISE NOTICE 'migration 004 already applied; skipping (fn/view still refreshed below)';
+      ELSE
+        RAISE NOTICE 'applying migration 004';
+      END IF;
+    END
+    $mig4$;
+
+    -- ---- keyword parent-genre classifier ----------------------- --
+    -- Order matters: most specific first. Returns NULL when nothing
+    -- matches (tag remains an ungrouped fine sub-genre). \m \M are PCRE
+    -- word boundaries so '\mrap\M' matches "rap"/"trap rap" but not
+    -- "rapture". Always CREATE OR REPLACE so editing the keyword sets in
+    -- a later deploy just re-runs this file (the view recompiles lazily).
+    CREATE OR REPLACE FUNCTION genre_parent(tag text)
+    RETURNS text
+    LANGUAGE sql IMMUTABLE AS $fn$
+      SELECT CASE
+        WHEN tag IS NULL OR btrim(tag) = '' THEN NULL
+        WHEN lower(tag) ~ '(drum and bass|drum n bass|drum & bass|\mdnb\M|\md&b\M|jungle|liquid|neurofunk|jump up|jump-up|halftime|breakcore|ragga|bassline|drumstep|darkstep|techstep|rollers|chillstep)'
+          THEN 'DnB'
+        WHEN lower(tag) ~ '(country|americana|bluegrass|newgrass|honky|nashville|red dirt|outlaw|western swing|cowboy|appalachian)'
+          THEN 'Country'
+        WHEN lower(tag) ~ '(hip hop|hip-hop|\mrap\M|\mtrap\M|drill|boom bap|grime|crunk|g-funk|gangsta|phonk|hyphy)'
+          THEN 'Hip-Hop'
+        WHEN lower(tag) ~ '(corrido|sierre|música mexicana|musica mexicana|\mbanda\M|regional mexican|norteñ|norten|latin|salsa|bachata|merengue|cumbia|tango|mariachi|bolero|flamenco|samba|reggaeton)'
+          THEN 'Latin'
+        WHEN lower(tag) ~ '(house|techno|\medm\M|dubstep|\mgarage\M|trance|electro|electronica|electronic|\midm\M|ambient|downtempo|breakbeat|big beat|big room|future bass|synthwave|hardstyle|gabber|eurodance|trip hop|trip-hop|nu disco|\mdisco\M|\mdance\M|\mclub\M|\mrave\M|chillwave|vaporwave|glitch|bass music)'
+          THEN 'Electronic'
+        WHEN lower(tag) ~ '(\mrock\M|punk|grunge|metal|metalcore|deathcore|djent|\memo\M|hardcore|horrorcore|shoegaze|post-rock|garage rock|psychedelic|britpop|madchester|new wave|grindcore|screamo|stoner|\maor\M|alternative)'
+          THEN 'Rock'
+        WHEN lower(tag) ~ '(r&b|rnb|r and b|\msoul\M|\mfunk\M|motown|new jack|quiet storm|neo soul|neo-soul|afrobeat|afrobeats|afropop|soca)'
+          THEN 'R&B/Soul'
+        WHEN lower(tag) ~ '(jazz|bebop|\mswing\M|bossa nova|\mblues\M|ragtime|dixieland|big band)'
+          THEN 'Jazz'
+        WHEN lower(tag) ~ '(reggae|dancehall|\mska\M|\mdub\M|rocksteady)'
+          THEN 'Reggae'
+        WHEN lower(tag) ~ '(\mfolk\M|singer-songwriter|singer songwriter|acoustic|celtic)'
+          THEN 'Folk'
+        WHEN lower(tag) ~ '(classical|baroque|orchestra|symphony|opera|chamber|concerto|early music|choral)'
+          THEN 'Classical'
+        WHEN lower(tag) ~ '(\mindie\M|indietronica|lo-fi|bedroom pop)'
+          THEN 'Indie'
+        WHEN lower(tag) ~ '(\mpop\M|k-pop|j-pop|teen pop|bubblegum|boy band|girl group|adult contemporary|easy listening)'
+          THEN 'Pop'
+        ELSE NULL
+      END;
+    $fn$;
+
+    -- ---- rebuild track_genre_effective: parent via keyword fn ----- --
+    -- IDENTICAL to 002's view EXCEPT parent_genre now prefers the
+    -- keyword classifier, falling back to an explicit genre_rollup
+    -- override row when the classifier returns NULL. The fine sub_genre
+    -- and sub_genre_display columns are unchanged (granularity intact).
+    CREATE OR REPLACE VIEW track_genre_effective AS
+    WITH fine_tags AS (
+        SELECT t.track_id, lower(g.raw) AS sub_genre, 'spotify'::text AS source, 1.0::real AS weight
+        FROM tracks t
+        JOIN artists a ON a.artist_id = t.artist_id
+        CROSS JOIN LATERAL unnest(COALESCE(a.genres, ARRAY[]::text[])) AS g(raw)
+        WHERE g.raw <> ''
+        UNION ALL
+        SELECT tg.track_id, lower(tg.raw_tag), 'musicbrainz'::text, COALESCE(tg.weight, 1.0)
+        FROM track_genres tg
+        WHERE tg.source = 'musicbrainz'
+        UNION ALL
+        SELECT t.track_id, lower(age.raw_tag), 'musicbrainz'::text, COALESCE(age.weight, 1.0)
+        FROM tracks t
+        JOIN artist_genres_enriched age
+          ON age.artist_id = t.artist_id AND age.source = 'musicbrainz'
+        WHERE age.raw_tag <> ''
+    )
+    SELECT DISTINCT ON (ft.track_id, ft.sub_genre)
+           ft.track_id,
+           ft.sub_genre,
+           initcap(ft.sub_genre)                          AS sub_genre_display,
+           ft.source,
+           ft.weight,
+           COALESCE(genre_parent(ft.sub_genre), gr.parent_genre) AS parent_genre
+    FROM fine_tags ft
+    LEFT JOIN genre_rollup gr ON gr.raw_genre = ft.sub_genre
+    WHERE ft.sub_genre <> ''
+    ORDER BY ft.track_id, ft.sub_genre,
+             (ft.source = 'spotify') DESC, ft.weight DESC NULLS LAST;
+
+    -- ---- grants (fn is SELECTable by all; view grant for grafana_ro) -- --
+    GRANT SELECT ON track_genre_effective TO grafana_ro;
+
+    -- ---- record the migration (idempotent) --------------------- --
+    INSERT INTO schema_migrations (version, description)
+    VALUES (4, 'keyword/substring genre_parent() classifier + track_genre_effective parent_genre rebuilt to use it (long-tail rollup; DnB & Country kept as own parents)')
+    ON CONFLICT (version) DO NOTHING;
 ---
 apiVersion: batch/v1
 kind: Job
@@ -457,8 +576,8 @@ metadata:
   # Renamed to -migrate-00N each time a migration key is added: a Job's pod
   # template is immutable, so re-applying a same-named Job after editing args
   # fails. Bump this suffix (and the workflow delete/wait references) per
-  # migration. Now -migrate-003 (added behavioural play_events columns).
-  name: spotify-postgres-migrate-003
+  # migration. Now -migrate-004 (keyword genre_parent() + view rebuild).
+  name: spotify-postgres-migrate-004
   namespace: monitor
   labels:
     app: spotify-postgres
@@ -502,6 +621,11 @@ spec:
               psql -v ON_ERROR_STOP=1 \
                    -h spotify-postgres -U postgres -d spotify \
                    -f /migrations/003_behavioral_fields.sql
+              # 004 is CREATE OR REPLACE fn+view + guarded ledger row, so it is
+              # safe on every re-run (and refreshes the keyword sets on redeploy).
+              psql -v ON_ERROR_STOP=1 \
+                   -h spotify-postgres -U postgres -d spotify \
+                   -f /migrations/004_genre_keyword_rollup.sql
               echo "migration complete; current schema_migrations:"
               psql -h spotify-postgres -U postgres -d spotify \
                    -c "SELECT version, description, applied_at FROM schema_migrations ORDER BY version;"

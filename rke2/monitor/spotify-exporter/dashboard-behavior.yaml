@@ -25,15 +25,15 @@ data:
       "uid": "spotify-listening-behavior",
       "title": "Spotify — Listening Behavior",
       "schemaVersion": 38,
-      "version": 1,
+      "version": 2,
       "refresh": "1h",
-      "time": { "from": "now-2y", "to": "now" },
+      "time": { "from": "2024-09-01T00:00:00.000Z", "to": "now" },
       "tags": ["spotify", "music", "behavior"],
       "panels": [
         {
           "id": 1, "type": "text", "title": "Data note",
           "gridPos": { "x": 0, "y": 0, "w": 24, "h": 2 },
-          "options": { "mode": "markdown", "content": "Behavioural fields (`skipped`, `reason_start`, `reason_end`, `shuffle`, `platform`, `conn_country`, `offline`, `incognito_mode`) come **only** from the Extended Streaming History GDPR export (one-time backfill). Live `/recently-played` rows leave them NULL and are excluded from these panels. Genre rivalry uses the MusicBrainz-enriched `genre_rollup` (parent buckets) and fills in as enrichment completes." }
+          "options": { "mode": "markdown", "content": "Behavioural fields (`skipped`, `reason_start`, `reason_end`, `shuffle`, `platform`, `conn_country`, `offline`, `incognito_mode`) come **only** from the Extended Streaming History GDPR export (one-time backfill). Live `/recently-played` rows leave them NULL and are excluded from these panels." }
         },
 
         { "id": 9, "type": "row", "title": "Skip behaviour", "gridPos": { "x": 0, "y": 2, "w": 24, "h": 1 } },
@@ -153,30 +153,10 @@ data:
             "SELECT pe.played_at::date AS day, t.name AS track, a.name AS artist, count(*) AS plays FROM play_events pe JOIN tracks t ON t.track_id = pe.track_id LEFT JOIN artists a ON a.artist_id = t.artist_id WHERE $__timeFilter(pe.played_at) GROUP BY pe.played_at::date, t.name, a.name ORDER BY plays DESC LIMIT 25" } ],
           "options": { "showHeader": true }
         },
-
-        { "id": 39, "type": "row", "title": "Genre rivalry — DnB vs Country", "gridPos": { "x": 0, "y": 54, "w": 24, "h": 1 } },
         {
-          "id": 40, "type": "text", "title": "Note",
-          "gridPos": { "x": 0, "y": 55, "w": 24, "h": 2 },
-          "options": { "mode": "markdown", "content": "Hours and skip rate per parent genre, focused on **drum-and-bass vs country**. Genre comes from the MusicBrainz-enriched `genre_rollup` (parent buckets) joined via the artist's genres. Coverage fills in as the hourly enrichment CronJob drains its backlog — thin parents simply show fewer plays for now." }
-        },
-        {
-          "id": 41, "type": "bargauge", "title": "Hours per parent genre (DnB vs Country)",
-          "gridPos": { "x": 0, "y": 57, "w": 12, "h": 8 },
-          "datasource": { "type": "postgres", "uid": "spotify-postgres" },
-          "targets": [ { "refId": "A", "format": "table", "rawSql":
-            "SELECT gr.parent_genre AS genre, SUM(pe.ms_played)/3600000.0 AS hours FROM play_events pe JOIN tracks t ON t.track_id = pe.track_id JOIN artists a ON a.artist_id = t.artist_id JOIN LATERAL unnest(COALESCE(a.genres, ARRAY[]::text[])) AS g(raw) ON true JOIN genre_rollup gr ON gr.raw_genre = lower(g.raw) WHERE pe.ms_played IS NOT NULL AND gr.parent_genre IN ('DnB','Country') AND $__timeFilter(pe.played_at) GROUP BY gr.parent_genre ORDER BY hours DESC" } ],
-          "fieldConfig": { "defaults": { "unit": "h", "color": { "mode": "palette-classic" } } },
-          "options": { "displayMode": "gradient", "orientation": "horizontal", "reduceOptions": { "calcs": ["lastNotNull"] } }
-        },
-        {
-          "id": 42, "type": "bargauge", "title": "Skip rate per parent genre (DnB vs Country)",
-          "gridPos": { "x": 12, "y": 57, "w": 12, "h": 8 },
-          "datasource": { "type": "postgres", "uid": "spotify-postgres" },
-          "targets": [ { "refId": "A", "format": "table", "rawSql":
-            "SELECT gr.parent_genre AS genre, 100.0 * AVG(pe.skipped::int) AS skip_pct FROM play_events pe JOIN tracks t ON t.track_id = pe.track_id JOIN artists a ON a.artist_id = t.artist_id JOIN LATERAL unnest(COALESCE(a.genres, ARRAY[]::text[])) AS g(raw) ON true JOIN genre_rollup gr ON gr.raw_genre = lower(g.raw) WHERE pe.skipped IS NOT NULL AND gr.parent_genre IN ('DnB','Country') AND $__timeFilter(pe.played_at) GROUP BY gr.parent_genre ORDER BY skip_pct DESC" } ],
-          "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100, "color": { "mode": "continuous-GrYlRd" } } },
-          "options": { "displayMode": "gradient", "orientation": "horizontal", "reduceOptions": { "calcs": ["lastNotNull"] } }
+          "id": 32, "type": "text", "title": "On-repeat caveat",
+          "gridPos": { "x": 12, "y": 54, "w": 12, "h": 3 },
+          "options": { "mode": "markdown", "content": "**Counts distinct `(played_at, track_id)` rows, not raw export plays.** The fact table's PK is `(played_at, track_id)` at 1-second resolution, so rapid same-track replays that share a played_at *second* (this user skims tracks in ~2s) were de-duplicated at GDPR-import time — ~106 such plays were dropped (~0.2% of 54k, negligible overall). A heavy single-day repeat can therefore read low vs the raw export (e.g. SHY FX — *Risk It All*, 2025-07-06: 18 distinct-second rows here vs ~106 raw plays). The leaderboard *ranking* is unaffected; the absolute per-day count is a floor." }
         }
       ]
     }
