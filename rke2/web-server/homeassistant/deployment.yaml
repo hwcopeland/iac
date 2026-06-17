@@ -16,6 +16,14 @@ spec:
       labels:
         app: home-assistant
     spec:
+      # hostNetwork so HA sees LAN/WiFi multicast (Sonos SSDP discovery). The
+      # WiFi itself is owned by the NODE (microedge2 netplan, use-routes:false) —
+      # HA only passively listens; it never runs wpa/dhcp, so it cannot touch the
+      # node's routing. Pinned to microedge2 because that's the node with the radio.
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet   # keep cluster DNS under hostNetwork
+      nodeSelector:
+        kubernetes.io/hostname: microedge2
       securityContext:
           fsGroup: 1000
       # Declarative custom_components — installed on every start, version-pinned.

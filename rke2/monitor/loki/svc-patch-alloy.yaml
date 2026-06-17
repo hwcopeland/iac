@@ -17,3 +17,7 @@ spec:
     port: 514
     targetPort: 514
     protocol: UDP
+  - name: syslog-dns
+    port: 5354
+    targetPort: 5354
+    protocol: UDP

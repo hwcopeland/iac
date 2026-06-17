@@ -79,6 +79,17 @@ spec:
           image: itzg/mc-router:1.42.1
           args:
             - "--api-binding=:8080"
+            # Expose Prometheus metrics on the API port (:8080/metrics). The
+            # default backend is "discard" (NO mc_router_* series), so this flag
+            # is REQUIRED for the ServiceMonitor below to have anything to scrape.
+            # Gives us mc_router_connections{host=...} and (with --record-logins)
+            # per-player login series. Scraped by the mc-router ServiceMonitor.
+            - "--metrics-backend=prometheus"
+            # Emit per-login metrics (mc_router_player_*). Only honored with the
+            # influxdb/prometheus backend (per --help). Powers the dashboard's
+            # "logins per backend" panel — a real metric for joins, unlike the
+            # log-derived player counts.
+            - "--record-logins"
             # Discover backends from annotated Services in-cluster.
             - "--in-kube-cluster"
             # Wake a sleeping (replicas:0) StatefulSet on first connect...
@@ -144,3 +155,36 @@ spec:
       protocol: TCP
       port: 25565
       targetPort: 25565
+    # API + Prometheus /metrics port. Exposed here so the ServiceMonitor can
+    # target it by the named port `api`. Type is LoadBalancer but only 25565 is
+    # the WAN dst-nat target; 8080 stays cluster-internal (scraped by Prometheus
+    # via the ClusterIP / endpoints, never published externally).
+    - name: api
+      protocol: TCP
+      port: 8080
+      targetPort: api
+---
+# ServiceMonitor — scrapes mc-router's Prometheus metrics (:8080/metrics).
+# MUST carry `release: kube-prometheus-stack`: the cluster Prometheus CR's
+# serviceMonitorSelector is matchLabels{release: kube-prometheus-stack}
+# (verified live). Its serviceMonitorNamespaceSelector is {} (all namespaces),
+# so this SM living in game-server is picked up fine.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: mc-router
+  namespace: game-server
+  labels:
+    app: mc-router
+    release: kube-prometheus-stack
+spec:
+  namespaceSelector:
+    matchNames:
+      - game-server
+  selector:
+    matchLabels:
+      app: mc-router
+  endpoints:
+    - port: api
+      path: /metrics
+      interval: 30s

@@ -1,0 +1,71 @@
+---
+# RBAC for the CS2 update watcher.
+#
+# The watcher is a CronJob (controller.yaml) that, when it detects the live
+# CS2 server is behind the current Valve build, issues a `kubectl rollout
+# restart` against whichever server Deployment is currently active. On reboot
+# the entrypoint's steamcmd `app_update 730` pulls the new build (see
+# cs2-surf/entrypoint.sh step 1).
+#
+# Least-privilege scope — namespace `game-server` only, no cluster-wide perms:
+#   deployments      get/list   → discover which deployment is active + read replicas
+#   deployments      patch      → `kubectl rollout restart` patches the pod-template
+#                                 annotation (kubectl.kubernetes.io/restartedAt)
+#   services         get/list   → read cs2-modded-service selector to learn the
+#                                 active `app` label (surf vs kus) without hardcoding
+#   pods             get/list   → confirm the new pod actually came up / is Running
+#   configmaps       get/update → persist attempt-count + cooldown state across runs
+#                                 (a CronJob is otherwise stateless — see controller)
+#
+# Deliberately NOT granted: create/delete on anything, exec, secrets, any
+# verb on Deployments beyond get/list/patch. The watcher can nudge a rollout
+# but cannot scale, delete pods, or read credentials.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: cs2-update-watcher
+  namespace: game-server
+  labels:
+    app.kubernetes.io/name: cs2-update-watcher
+    app.kubernetes.io/part-of: cs2-surf
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: cs2-update-watcher
+  namespace: game-server
+  labels:
+    app.kubernetes.io/name: cs2-update-watcher
+    app.kubernetes.io/part-of: cs2-surf
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "patch"]
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    # get/update only — the state ConfigMap is created declaratively in
+    # controller.yaml, so the SA never needs `create`.
+    verbs: ["get", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: cs2-update-watcher
+  namespace: game-server
+  labels:
+    app.kubernetes.io/name: cs2-update-watcher
+    app.kubernetes.io/part-of: cs2-surf
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: cs2-update-watcher
+subjects:
+  - kind: ServiceAccount
+    name: cs2-update-watcher
+    namespace: game-server

@@ -60,6 +60,23 @@ alloy:
         forward_to = [loki.write.local.receiver]
       }
 
+      // ─── Mikrotik DNS query syslog (udp/5354 → job=mikrotik_dns) ────
+      // Ported from github.com/publi0/mikrotik-dns: the router sends its
+      // `dns` logging topic here via remote syslog. Kept label-light
+      // (only job=mikrotik_dns) — client/domain/qtype are extracted at
+      // query time in Grafana via LogQL `| regexp`, so Loki's index stays
+      // low-cardinality. Dashboard: dashboards/mikrotik-dns.yaml.
+      loki.source.syslog "mikrotik_dns" {
+        listener {
+          address = "0.0.0.0:5354"
+          protocol = "udp"
+          syslog_format = "rfc3164"
+          use_incoming_timestamp = false
+          labels = { job = "mikrotik_dns" }
+        }
+        forward_to = [loki.write.local.receiver]
+      }
+
       // ─── Kubernetes container logs ──────────────────────────────────
       // Node-local file tailing of /var/log/pods. Each DaemonSet pod
       // tails only the containers scheduled on its own node (filtered by
@@ -514,6 +531,10 @@ service:
     syslog:
       port: 514
       targetPort: 514
+      protocol: UDP
+    syslog-dns:
+      port: 5354
+      targetPort: 5354
       protocol: UDP
 
 # Scrape Alloy's own /metrics (:12345) into kube-prometheus-stack so the

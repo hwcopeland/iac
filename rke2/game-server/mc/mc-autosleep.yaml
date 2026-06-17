@@ -1,0 +1,99 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: mc-autosleep
+  namespace: game-server
+  labels:
+    app: mc-autosleep
+spec:
+  schedule: '*/5 * * * *'
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 120
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      activeDeadlineSeconds: 240
+      backoffLimit: 0
+      template:
+        metadata:
+          labels:
+            app: mc-autosleep
+        spec:
+          serviceAccountName: mc-autosleep
+          restartPolicy: Never
+          containers:
+          - name: autosleep
+            image: alpine/kubectl:1.34.2
+            command:
+            - /bin/sh
+            - -c
+            args:
+            - |
+              set -u
+              NS=game-server
+              SERVERS="atm9skies atm9skies-island mc-earth"
+              IDLE_SECONDS=900          # 15 minutes of zero players
+              ANN=mc.hwcopeland.net/last-active
+              # jsonpath needs the dots in the annotation key escaped:
+              ANN_JP='{.metadata.annotations.mc\.hwcopeland\.net/last-active}'
+
+              now=$(date +%s)
+              for s in $SERVERS; do
+                repl=$(kubectl -n "$NS" get sts "$s" -o jsonpath='{.spec.replicas}' 2>/dev/null)
+                if [ -z "$repl" ]; then
+                  echo "$s: not found, skipping"; continue
+                fi
+                if [ "$repl" = "0" ]; then
+                  echo "$s: asleep (replicas=0), nothing to do"; continue
+                fi
+
+                # Ask the live server for its player count. If RCON is
+                # unreachable the server is still booting (or RCON is down) —
+                # treat as keep-alive so we never re-sleep a waking server.
+                if ! out=$(kubectl -n "$NS" exec "${s}-0" -- rcon-cli list 2>/dev/null); then
+                  echo "$s: rcon unreachable (booting?), keep-alive"
+                  kubectl -n "$NS" annotate sts "$s" "$ANN=$now" --overwrite >/dev/null
+                  continue
+                fi
+
+                # Extract the player count: the first integer after "There are".
+                # Handles both RCON "list" formats:
+                #   modern: "There are N of a max of M players online: ..."
+                #   legacy Forge (mc-earth, 1.12.2): "There are N/M players online:"
+                n=$(echo "$out" | sed -n 's/.*There are \([0-9][0-9]*\).*/\1/p')
+                if [ -z "$n" ]; then
+                  echo "$s: unparseable rcon output [$out], keep-alive"
+                  kubectl -n "$NS" annotate sts "$s" "$ANN=$now" --overwrite >/dev/null
+                  continue
+                fi
+
+                if [ "$n" -gt 0 ]; then
+                  echo "$s: $n player(s) online, keep-alive"
+                  kubectl -n "$NS" annotate sts "$s" "$ANN=$now" --overwrite >/dev/null
+                  continue
+                fi
+
+                # Zero players. Scale down only once idle >= threshold.
+                last=$(kubectl -n "$NS" get sts "$s" -o jsonpath="$ANN_JP" 2>/dev/null)
+                if [ -z "$last" ]; then
+                  echo "$s: 0 online, no last-active marker yet, initializing"
+                  kubectl -n "$NS" annotate sts "$s" "$ANN=$now" --overwrite >/dev/null
+                  continue
+                fi
+                idle=$((now - last))
+                if [ "$idle" -ge "$IDLE_SECONDS" ]; then
+                  echo "$s: 0 online for ${idle}s >= ${IDLE_SECONDS}s -> scaling to 0"
+                  kubectl -n "$NS" scale sts "$s" --replicas=0
+                else
+                  echo "$s: 0 online for ${idle}s (< ${IDLE_SECONDS}s), waiting"
+                fi
+              done
+              echo "mc-autosleep done"
+            resources:
+              requests:
+                cpu: 20m
+                memory: 32Mi
+              limits:
+                cpu: 200m
+                memory: 64Mi

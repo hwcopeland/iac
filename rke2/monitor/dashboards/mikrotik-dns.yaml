@@ -1,0 +1,138 @@
+# MikroTik DNS query analytics, ported from github.com/publi0/mikrotik-dns.
+# Instead of that project's bespoke Go+SQLite+Next.js stack, DNS query logs
+# are shipped from the router via remote syslog into the existing Alloy ->
+# Loki pipeline (dedicated listener job="mikrotik_dns" on udp/5354), and
+# every original panel (top domains, top clients, query types, QPS, IPv4 vs
+# IPv6, live query log + search) is reproduced here with LogQL.
+#
+# Parser (matches the upstream regex) applied at query time:
+#   dns query from <client>: #<id> <domain>. <TYPE>
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mikrotik-dns-dashboard
+  namespace: monitor
+  labels:
+    grafana_dashboard: "1"
+  annotations:
+    grafana_folder: Platform
+data:
+  mikrotik-dns.json: |-
+    {
+      "uid": "mikrotik-dns",
+      "title": "MikroTik — DNS Analytics",
+      "tags": ["platform", "mikrotik", "dns", "loki"],
+      "timezone": "browser",
+      "refresh": "30s",
+      "schemaVersion": 39,
+      "time": {"from": "now-6h", "to": "now"},
+      "editable": true,
+      "templating": {
+        "list": [
+          {
+            "name": "DS_LOKI",
+            "type": "datasource",
+            "label": "Loki datasource",
+            "query": "loki",
+            "current": {},
+            "hide": 0,
+            "refresh": 1,
+            "regex": ""
+          },
+          {
+            "name": "domain",
+            "type": "textbox",
+            "label": "Domain filter (regex)",
+            "current": {"text": "", "value": ""},
+            "query": ""
+          },
+          {
+            "name": "client",
+            "type": "textbox",
+            "label": "Client filter (regex)",
+            "current": {"text": "", "value": ""},
+            "query": ""
+          }
+        ]
+      },
+      "panels": [
+        {
+          "type": "stat",
+          "title": "Total queries",
+          "gridPos": {"x": 0, "y": 0, "w": 6, "h": 4},
+          "datasource": {"type": "loki", "uid": "${DS_LOKI}"},
+          "targets": [{"expr": "sum(count_over_time({job=\"mikrotik_dns\"} |~ `dns query from` [$__range]))", "refId": "A"}],
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "textMode": "value"},
+          "fieldConfig": {"defaults": {"unit": "short", "color": {"mode": "fixed", "fixedColor": "blue"}}}
+        },
+        {
+          "type": "stat",
+          "title": "Avg queries/sec",
+          "gridPos": {"x": 6, "y": 0, "w": 6, "h": 4},
+          "datasource": {"type": "loki", "uid": "${DS_LOKI}"},
+          "targets": [{"expr": "sum(rate({job=\"mikrotik_dns\"} |~ `dns query from` [$__range]))", "refId": "A"}],
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "textMode": "value"},
+          "fieldConfig": {"defaults": {"unit": "qps", "decimals": 1, "color": {"mode": "fixed", "fixedColor": "green"}}}
+        },
+        {
+          "type": "stat",
+          "title": "IPv4 queries",
+          "gridPos": {"x": 12, "y": 0, "w": 6, "h": 4},
+          "datasource": {"type": "loki", "uid": "${DS_LOKI}"},
+          "targets": [{"expr": "sum(count_over_time({job=\"mikrotik_dns\"} |~ `dns query from [0-9.]+: #` [$__range]))", "refId": "A"}],
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "textMode": "value"},
+          "fieldConfig": {"defaults": {"unit": "short", "color": {"mode": "fixed", "fixedColor": "purple"}}}
+        },
+        {
+          "type": "stat",
+          "title": "IPv6 queries",
+          "gridPos": {"x": 18, "y": 0, "w": 6, "h": 4},
+          "datasource": {"type": "loki", "uid": "${DS_LOKI}"},
+          "targets": [{"expr": "sum(count_over_time({job=\"mikrotik_dns\"} |~ `dns query from [^ :]*:[^ ]*: #` [$__range]))", "refId": "A"}],
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "textMode": "value"},
+          "fieldConfig": {"defaults": {"unit": "short", "color": {"mode": "fixed", "fixedColor": "orange"}}}
+        },
+        {
+          "type": "timeseries",
+          "title": "Queries per minute",
+          "gridPos": {"x": 0, "y": 4, "w": 16, "h": 9},
+          "datasource": {"type": "loki", "uid": "${DS_LOKI}"},
+          "targets": [{"expr": "sum(count_over_time({job=\"mikrotik_dns\"} |~ `dns query from` |~ `$domain` |~ `$client` [$__interval]))", "legendFormat": "queries", "refId": "A"}],
+          "fieldConfig": {"defaults": {"unit": "short", "custom": {"fillOpacity": 15, "lineWidth": 2, "drawStyle": "bars"}}}
+        },
+        {
+          "type": "piechart",
+          "title": "Query types",
+          "gridPos": {"x": 16, "y": 4, "w": 8, "h": 9},
+          "datasource": {"type": "loki", "uid": "${DS_LOKI}"},
+          "targets": [{"expr": "sum by (qtype) (count_over_time({job=\"mikrotik_dns\"} | regexp `dns query from (?P<client>.+?): #\\d+ (?P<domain>[^ ]+)\\. (?P<qtype>\\w+)` [$__range]))", "legendFormat": "{{qtype}}", "instant": true, "refId": "A"}],
+          "options": {"legend": {"displayMode": "list", "placement": "right", "values": ["value"]}, "pieType": "donut", "reduceOptions": {"calcs": ["lastNotNull"]}}
+        },
+        {
+          "type": "bargauge",
+          "title": "Top domains",
+          "gridPos": {"x": 0, "y": 13, "w": 12, "h": 11},
+          "datasource": {"type": "loki", "uid": "${DS_LOKI}"},
+          "targets": [{"expr": "topk(20, sum by (domain) (count_over_time({job=\"mikrotik_dns\"} |~ `$client` | regexp `dns query from (?P<client>.+?): #\\d+ (?P<domain>[^ ]+)\\. (?P<qtype>\\w+)` | domain =~ `(?i)$domain.*` [$__range])))", "legendFormat": "{{domain}}", "instant": true, "refId": "A"}],
+          "options": {"displayMode": "gradient", "orientation": "horizontal", "showUnfilled": true, "reduceOptions": {"calcs": ["lastNotNull"]}},
+          "fieldConfig": {"defaults": {"unit": "short", "color": {"mode": "continuous-GrYlRd"}}}
+        },
+        {
+          "type": "bargauge",
+          "title": "Top clients",
+          "gridPos": {"x": 12, "y": 13, "w": 12, "h": 11},
+          "datasource": {"type": "loki", "uid": "${DS_LOKI}"},
+          "targets": [{"expr": "topk(20, sum by (client) (count_over_time({job=\"mikrotik_dns\"} |~ `$domain` | regexp `dns query from (?P<client>.+?): #\\d+ (?P<domain>[^ ]+)\\. (?P<qtype>\\w+)` | client =~ `(?i)$client.*` [$__range])))", "legendFormat": "{{client}}", "instant": true, "refId": "A"}],
+          "options": {"displayMode": "gradient", "orientation": "horizontal", "showUnfilled": true, "reduceOptions": {"calcs": ["lastNotNull"]}},
+          "fieldConfig": {"defaults": {"unit": "short", "color": {"mode": "continuous-BlPu"}}}
+        },
+        {
+          "type": "logs",
+          "title": "Live query log  (use the Domain / Client filters above)",
+          "gridPos": {"x": 0, "y": 24, "w": 24, "h": 12},
+          "datasource": {"type": "loki", "uid": "${DS_LOKI}"},
+          "targets": [{"expr": "{job=\"mikrotik_dns\"} |~ `dns query from` |~ `$domain` |~ `$client`", "refId": "A"}],
+          "options": {"showTime": true, "wrapLogMessage": false, "sortOrder": "Descending", "enableLogDetails": true}
+        }
+      ]
+    }
