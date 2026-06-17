@@ -260,6 +260,14 @@ spec:
               # No hostPort — Cilium-on-RKE2 doesn't honor it reliably.
               # Exposed to the LAN via the jarvis-edge-audio NodePort
               # Service (nodePort 30088 → containerPort 8088).
+            - name: metrics
+              # edge.py binds prometheus_client.start_http_server(9090).
+              # Declaring the port (named) lets the jarvis-edge PodMonitor
+              # target it by name so the prometheus-operator generates a
+              # scrape endpoint (a numeric-only targetPort with no matching
+              # containerPort yields dropped targets under hostNetwork).
+              containerPort: 9090
+              protocol: TCP
           securityContext:
             # Run as the user that owns /run/user/1000 (PipeWire socket).
             # The pulse socket at /run/user/1000/pulse/native is

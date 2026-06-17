@@ -44,10 +44,12 @@ spec:
     matchLabels:
       app: jarvis-stack
   podMetricsEndpoints:
-    - # # TODO: change to the named port (e.g. `port: metrics`) once
-      # deployment.yaml's jarvis-edge container declares it. Until then,
-      # use the numeric target port directly.
-      targetPort: 9090
+    - # Named port `metrics` (containerPort 9090) declared on the
+      # jarvis-edge container in deployment.yaml. Targeting by name makes
+      # the operator generate a real scrape endpoint — a numeric-only
+      # targetPort with no matching containerPort yields dropped targets
+      # under hostNetwork.
+      port: metrics
       path: /metrics
       interval: 30s
       scrapeTimeout: 10s
