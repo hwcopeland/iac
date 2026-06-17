@@ -1,0 +1,152 @@
+# Grafana dashboard: Spotify — Sessions & Rhythm (Wave 1).
+# WHEN you listen, not what: a listening clock (hour-of-day x day-of-week),
+# session detection (30-min inter-play gap via a LAG window CTE), biggest
+# listening days, an on-repeat timeline, and a late-night-vs-daytime split.
+#
+# Datasource: Postgres uid "spotify-postgres". Every genre/parent aggregation
+# uses genre_parent() with PER-PLAY dedup (DISTINCT played_at,track_id before
+# aggregate) — never unnest fan-out. Time defaults to the full history window
+# 2024-09-01 -> now (play_events spans 2024-09-01..2026-06-15).
+#
+# Loaded by the kube-prometheus Grafana sidecar (label grafana_dashboard="1"),
+# placed in the "Spotify" folder. Explicit top-level uid (spotify-sessions)
+# avoids the sidecar orphan-duplicate bug.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-spotify-sessions
+  namespace: monitor
+  labels:
+    grafana_dashboard: "1"
+  annotations:
+    grafana_folder: "Spotify"
+data:
+  spotify-sessions.json: |-
+    {
+      "uid": "spotify-sessions",
+      "title": "Spotify — Sessions & Rhythm",
+      "schemaVersion": 38,
+      "version": 1,
+      "refresh": "1h",
+      "time": { "from": "2024-09-01T00:00:00.000Z", "to": "now" },
+      "tags": ["spotify", "music", "sessions", "rhythm"],
+      "panels": [
+        {
+          "id": 1, "type": "text", "title": "About",
+          "gridPos": { "x": 0, "y": 0, "w": 24, "h": 3 },
+          "options": { "mode": "markdown", "content": "**When** you listen, not what. A *session* is a run of plays with no gap longer than **30 minutes** (detected with a `LAG(played_at)` window over the 54k-row history). The on-repeat timeline counts **distinct-second** plays — same-second skims share a `(played_at, track_id)` primary key and were collapsed at GDPR import (~0.2% of plays), so a true 100+ replay day reads as its distinct-second count. Hours are derived from `ms_played` (Extended Streaming History only)." }
+        },
+
+        { "id": 9, "type": "row", "title": "Listening clock", "gridPos": { "x": 0, "y": 3, "w": 24, "h": 1 } },
+        {
+          "id": 10, "type": "heatmap", "title": "Listening clock — plays by hour-of-day x day-of-week",
+          "gridPos": { "x": 0, "y": 4, "w": 16, "h": 10 },
+          "datasource": { "type": "postgres", "uid": "spotify-postgres" },
+          "description": "Each cell = number of plays started in that weekday/hour bucket. Brighter = more listening.",
+          "targets": [ { "refId": "A", "format": "table", "rawSql":
+            "SELECT extract(hour FROM played_at)::int AS hour, trim(to_char(played_at,'Day')) AS dow, count(*) AS plays FROM play_events WHERE $__timeFilter(played_at) GROUP BY 1, 2 ORDER BY 1" } ],
+          "options": { "calculate": false, "cellGap": 1, "color": { "scheme": "Turbo", "mode": "scheme", "steps": 64 }, "yAxis": { "axisLabel": "day of week" }, "legend": { "show": true }, "tooltip": { "show": true } },
+          "fieldConfig": { "defaults": { "custom": { "scaleDistribution": { "type": "linear" } } } }
+        },
+        {
+          "id": 11, "type": "barchart", "title": "Plays by hour-of-day",
+          "gridPos": { "x": 16, "y": 4, "w": 8, "h": 10 },
+          "datasource": { "type": "postgres", "uid": "spotify-postgres" },
+          "description": "Total plays per hour of the day across the whole window. Peak hour is the tallest bar.",
+          "targets": [ { "refId": "A", "format": "table", "rawSql":
+            "SELECT lpad(extract(hour FROM played_at)::text, 2, '0') || ':00' AS hour, count(*) AS plays FROM play_events WHERE $__timeFilter(played_at) GROUP BY 1 ORDER BY 1" } ],
+          "fieldConfig": { "defaults": { "color": { "mode": "continuous-GrYlRd" }, "unit": "short" } },
+          "options": { "orientation": "horizontal", "xField": "hour", "showValue": "never", "legend": { "showLegend": false } }
+        },
+
+        { "id": 19, "type": "row", "title": "Sessions (30-min gap)", "gridPos": { "x": 0, "y": 14, "w": 24, "h": 1 } },
+        {
+          "id": 20, "type": "stat", "title": "Total sessions",
+          "gridPos": { "x": 0, "y": 15, "w": 6, "h": 5 },
+          "datasource": { "type": "postgres", "uid": "spotify-postgres" },
+          "targets": [ { "refId": "A", "format": "table", "rawSql":
+            "WITH marked AS (SELECT CASE WHEN lag(played_at) OVER (ORDER BY played_at) IS NULL OR played_at - lag(played_at) OVER (ORDER BY played_at) > interval '30 min' THEN 1 ELSE 0 END AS is_new FROM play_events WHERE $__timeFilter(played_at)) SELECT sum(is_new) AS sessions FROM marked" } ],
+          "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "fixed", "fixedColor": "blue" } } },
+          "options": { "colorMode": "value", "reduceOptions": { "calcs": ["lastNotNull"] } }
+        },
+        {
+          "id": 21, "type": "stat", "title": "Avg tracks / session",
+          "gridPos": { "x": 6, "y": 15, "w": 6, "h": 5 },
+          "datasource": { "type": "postgres", "uid": "spotify-postgres" },
+          "targets": [ { "refId": "A", "format": "table", "rawSql":
+            "WITH marked AS (SELECT CASE WHEN lag(played_at) OVER (ORDER BY played_at) IS NULL OR played_at - lag(played_at) OVER (ORDER BY played_at) > interval '30 min' THEN 1 ELSE 0 END AS is_new FROM play_events WHERE $__timeFilter(played_at)) SELECT round(count(*)::numeric / NULLIF(sum(is_new),0), 1) AS avg_tracks FROM marked" } ],
+          "fieldConfig": { "defaults": { "unit": "short", "decimals": 1, "color": { "mode": "fixed", "fixedColor": "purple" } } },
+          "options": { "colorMode": "value", "reduceOptions": { "calcs": ["lastNotNull"] } }
+        },
+        {
+          "id": 22, "type": "stat", "title": "Avg session length",
+          "gridPos": { "x": 12, "y": 15, "w": 6, "h": 5 },
+          "datasource": { "type": "postgres", "uid": "spotify-postgres" },
+          "description": "Average wall-clock span from the first to last play of a session (sessions with a single play are 0).",
+          "targets": [ { "refId": "A", "format": "table", "rawSql":
+            "WITH marked AS (SELECT played_at, CASE WHEN lag(played_at) OVER (ORDER BY played_at) IS NULL OR played_at - lag(played_at) OVER (ORDER BY played_at) > interval '30 min' THEN 1 ELSE 0 END AS is_new FROM play_events WHERE $__timeFilter(played_at)), grp AS (SELECT played_at, sum(is_new) OVER (ORDER BY played_at) AS sess FROM marked) SELECT round(avg(extract(epoch FROM (mx - mn)))::numeric, 0) AS avg_secs FROM (SELECT min(played_at) mn, max(played_at) mx FROM grp GROUP BY sess) s" } ],
+          "fieldConfig": { "defaults": { "unit": "s", "color": { "mode": "fixed", "fixedColor": "green" } } },
+          "options": { "colorMode": "value", "reduceOptions": { "calcs": ["lastNotNull"] } }
+        },
+        {
+          "id": 23, "type": "stat", "title": "Avg gap between sessions",
+          "gridPos": { "x": 18, "y": 15, "w": 6, "h": 5 },
+          "datasource": { "type": "postgres", "uid": "spotify-postgres" },
+          "description": "Average time between the start of consecutive sessions.",
+          "targets": [ { "refId": "A", "format": "table", "rawSql":
+            "WITH marked AS (SELECT played_at, CASE WHEN lag(played_at) OVER (ORDER BY played_at) IS NULL OR played_at - lag(played_at) OVER (ORDER BY played_at) > interval '30 min' THEN 1 ELSE 0 END AS is_new FROM play_events WHERE $__timeFilter(played_at)), grp AS (SELECT played_at, sum(is_new) OVER (ORDER BY played_at) AS sess FROM marked), starts AS (SELECT min(played_at) AS s FROM grp GROUP BY sess), gaps AS (SELECT extract(epoch FROM (s - lag(s) OVER (ORDER BY s))) AS gap_secs FROM starts) SELECT round(avg(gap_secs)::numeric, 0) AS avg_gap_secs FROM gaps" } ],
+          "fieldConfig": { "defaults": { "unit": "s", "color": { "mode": "fixed", "fixedColor": "orange" } } },
+          "options": { "colorMode": "value", "reduceOptions": { "calcs": ["lastNotNull"] } }
+        },
+        {
+          "id": 24, "type": "timeseries", "title": "Sessions over time (per week)",
+          "gridPos": { "x": 0, "y": 20, "w": 24, "h": 8 },
+          "datasource": { "type": "postgres", "uid": "spotify-postgres" },
+          "targets": [ { "refId": "A", "format": "time_series", "rawSql":
+            "WITH marked AS (SELECT played_at, CASE WHEN lag(played_at) OVER (ORDER BY played_at) IS NULL OR played_at - lag(played_at) OVER (ORDER BY played_at) > interval '30 min' THEN 1 ELSE 0 END AS is_new FROM play_events WHERE $__timeFilter(played_at)), grp AS (SELECT played_at, sum(is_new) OVER (ORDER BY played_at) AS sess FROM marked) SELECT date_trunc('week', min(played_at)) AS time, count(*) AS sessions FROM grp GROUP BY sess ORDER BY 1" } ],
+          "fieldConfig": { "defaults": { "custom": { "drawStyle": "bars", "fillOpacity": 60, "lineWidth": 1 }, "unit": "short", "color": { "mode": "fixed", "fixedColor": "blue" } } },
+          "options": { "legend": { "showLegend": false }, "tooltip": { "mode": "single" } }
+        },
+
+        { "id": 29, "type": "row", "title": "Biggest days & repeats", "gridPos": { "x": 0, "y": 28, "w": 24, "h": 1 } },
+        {
+          "id": 30, "type": "table", "title": "Biggest listening days (by hours)",
+          "gridPos": { "x": 0, "y": 29, "w": 12, "h": 10 },
+          "datasource": { "type": "postgres", "uid": "spotify-postgres" },
+          "targets": [ { "refId": "A", "format": "table", "rawSql":
+            "SELECT played_at::date AS day, round((sum(ms_played)/3600000.0)::numeric, 1) AS hours, count(*) AS plays FROM play_events WHERE ms_played IS NOT NULL AND $__timeFilter(played_at) GROUP BY 1 ORDER BY hours DESC LIMIT 20" } ],
+          "fieldConfig": { "defaults": { "custom": { "align": "auto" } }, "overrides": [ { "matcher": { "id": "byName", "options": "hours" }, "properties": [ { "id": "unit", "value": "h" }, { "id": "custom.cellOptions", "value": { "type": "gauge", "mode": "gradient" } }, { "id": "max", "value": 17 } ] } ] },
+          "options": { "showHeader": true, "sortBy": [ { "displayName": "hours", "desc": true } ] }
+        },
+        {
+          "id": 31, "type": "table", "title": "On-repeat timeline — (track, day, count) events",
+          "gridPos": { "x": 12, "y": 29, "w": 12, "h": 10 },
+          "datasource": { "type": "postgres", "uid": "spotify-postgres" },
+          "description": "Days a single track was played many times. Counts are distinct-second plays (same-second skims collapse on the (played_at, track_id) PK — ~0.2% of plays), so a real 100x-replay day reads slightly lower.",
+          "targets": [ { "refId": "A", "format": "table", "rawSql":
+            "SELECT pe.played_at::date AS day, COALESCE(t.name, pe.track_id) AS track, count(*) AS plays FROM play_events pe LEFT JOIN tracks t ON t.track_id = pe.track_id WHERE $__timeFilter(pe.played_at) GROUP BY 1, 2 HAVING count(*) >= 6 ORDER BY plays DESC, day DESC LIMIT 25" } ],
+          "fieldConfig": { "defaults": { "custom": { "align": "auto" } }, "overrides": [ { "matcher": { "id": "byName", "options": "plays" }, "properties": [ { "id": "custom.cellOptions", "value": { "type": "gauge", "mode": "gradient" } }, { "id": "max", "value": 20 } ] } ] },
+          "options": { "showHeader": true, "sortBy": [ { "displayName": "plays", "desc": true } ] }
+        },
+
+        { "id": 39, "type": "row", "title": "Late-night vs daytime", "gridPos": { "x": 0, "y": 39, "w": 24, "h": 1 } },
+        {
+          "id": 40, "type": "piechart", "title": "Late-night (22:00–05:59) vs daytime split — plays",
+          "gridPos": { "x": 0, "y": 40, "w": 8, "h": 8 },
+          "datasource": { "type": "postgres", "uid": "spotify-postgres" },
+          "targets": [ { "refId": "A", "format": "table", "rawSql":
+            "SELECT CASE WHEN extract(hour FROM played_at) >= 22 OR extract(hour FROM played_at) < 6 THEN 'Late-night (22:00–05:59)' ELSE 'Daytime (06:00–21:59)' END AS bucket, count(*) AS plays FROM play_events WHERE $__timeFilter(played_at) GROUP BY 1 ORDER BY 2 DESC" } ],
+          "fieldConfig": { "defaults": { "unit": "short" } },
+          "options": { "pieType": "donut", "legend": { "displayMode": "table", "placement": "right", "values": ["value", "percent"] }, "reduceOptions": { "calcs": ["lastNotNull"], "values": true } }
+        },
+        {
+          "id": 41, "type": "timeseries", "title": "Late-night share over time (% of weekly plays)",
+          "gridPos": { "x": 8, "y": 40, "w": 16, "h": 8 },
+          "datasource": { "type": "postgres", "uid": "spotify-postgres" },
+          "targets": [ { "refId": "A", "format": "time_series", "rawSql":
+            "SELECT date_trunc('week', played_at) AS time, round(100.0 * avg((extract(hour FROM played_at) >= 22 OR extract(hour FROM played_at) < 6)::int)::numeric, 1) AS late_night_pct FROM play_events WHERE $__timeFilter(played_at) GROUP BY 1 ORDER BY 1" } ],
+          "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "fillOpacity": 20, "lineWidth": 2, "spanNulls": true }, "unit": "percent", "min": 0, "max": 100, "color": { "mode": "fixed", "fixedColor": "purple" } } },
+          "options": { "legend": { "showLegend": false }, "tooltip": { "mode": "single" } }
+        }
+      ]
+    }
