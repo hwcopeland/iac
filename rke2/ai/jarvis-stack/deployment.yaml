@@ -276,6 +276,15 @@ spec:
               value: "10.0.0.187"          # Bedroom Play:1
             - name: SONOS_VOLUME
               value: "30"
+            # Time-of-day volume: 45 during the day, 30 at night (8pm-7am local).
+            - name: SONOS_VOLUME_DAY
+              value: "45"
+            - name: SONOS_VOLUME_NIGHT
+              value: "30"
+            - name: SONOS_NIGHT_START_HOUR
+              value: "20"
+            - name: SONOS_NIGHT_END_HOUR
+              value: "7"
             - name: EDGE_HTTP_PORT
               value: "8088"
             # With hostNetwork the listener binds on the host's interfaces
