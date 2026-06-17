@@ -131,6 +131,12 @@ def import_path(path: str) -> tuple[int, int, int]:
             ts = rec.get("ts")
             track_uri = rec.get("spotify_track_uri")
             track_name = rec.get("master_metadata_track_name")
+            # The export carries the artist & album NAME strings on EVERY row.
+            # We store them denormalized on the track (migration 005) so the
+            # ~51% of tracks whose Spotify artist_id we can't resolve here still
+            # keep a usable artist identity for genre enrichment + dashboards.
+            artist_name = rec.get("master_metadata_album_artist_name")
+            album_name = rec.get("master_metadata_album_album_name")
             track_id = _track_id_from_uri(track_uri)
 
             # Podcast episodes / local files / ads have a null track name or a
@@ -169,7 +175,14 @@ def import_path(path: str) -> tuple[int, int, int]:
 
             # Dimension: store the track NAME so name-joined panels work even
             # before the API enrichment links artist_id/album_id. artist_id and
-            # album_id are NULL here (the export has names only, not IDs).
+            # album_id are NULL here (the export has names only, not IDs) — but
+            # we now persist the artist/album NAME strings (migration 005) so a
+            # track with no resolvable artist_id is NOT identity-less: genre
+            # enrichment matches it by name, and dashboards rank it via
+            # COALESCE(artists.name, tracks.artist_name). upsert_track uses
+            # ON CONFLICT (track_id) DO UPDATE with COALESCE, so re-running this
+            # importer BACKFILLS artist_name/album_name onto the existing
+            # (artist_id-NULL) rows without clobbering anything.
             if track_id not in upserted_tracks:
                 DB.upsert_track(
                     track_id=track_id,
@@ -178,6 +191,8 @@ def import_path(path: str) -> tuple[int, int, int]:
                     album_id=None,
                     duration_ms=None,
                     popularity=None,
+                    artist_name=artist_name,
+                    album_name=album_name,
                 )
                 upserted_tracks.add(track_id)
 

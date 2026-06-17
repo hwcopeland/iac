@@ -219,7 +219,9 @@ class DB:
     def upsert_track(self, track_id: str, name: str, artist_id: Optional[str],
                      album_id: Optional[str], duration_ms: Optional[int],
                      popularity: Optional[int],
-                     isrc: Optional[str] = None) -> bool:
+                     isrc: Optional[str] = None,
+                     artist_name: Optional[str] = None,
+                     album_name: Optional[str] = None) -> bool:
         """Upsert a track dimension. Returns True on success.
 
         Returns False (without raising) when the row can't be written, so the
@@ -233,6 +235,17 @@ class DB:
         downstream genre-enrichment pipeline (ISRC → MusicBrainz recording →
         genre/style tags), so it MUST be populated when present. COALESCE keeps a
         previously-written isrc if a later slim payload omits external_ids.
+
+        `artist_name` / `album_name` are the GDPR export's
+        master_metadata_album_artist_name / _album_album_name strings (migration
+        005). They are stored DENORMALIZED on the track so a track with NO
+        resolvable Spotify artist_id (the ~51% of import rows that previously
+        lost their artist entirely) still carries a usable artist identity:
+          * genre enrichment matches them by NAME → MusicBrainz, and
+          * dashboards rank them via COALESCE(artists.name, tracks.artist_name).
+        COALESCE on UPDATE means a NULL never erases a previously-stored name, so
+        re-running the importer BACKFILLS names onto existing rows and the live
+        exporter (which passes them NULL) never clobbers them.
         """
         if not track_id:
             return False
@@ -241,17 +254,22 @@ class DB:
         # stay NULL and are filled by a future backfill if a source appears.
         return self._exec(
             """
-            INSERT INTO tracks (track_id, name, artist_id, album_id, duration_ms, popularity, isrc)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            INSERT INTO tracks (track_id, name, artist_id, album_id, duration_ms,
+                                popularity, isrc, artist_name, album_name)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (track_id) DO UPDATE
               SET name = EXCLUDED.name,
                   artist_id = COALESCE(EXCLUDED.artist_id, tracks.artist_id),
                   album_id = COALESCE(EXCLUDED.album_id, tracks.album_id),
                   duration_ms = COALESCE(EXCLUDED.duration_ms, tracks.duration_ms),
                   popularity = COALESCE(EXCLUDED.popularity, tracks.popularity),
-                  isrc = COALESCE(EXCLUDED.isrc, tracks.isrc)
+                  isrc = COALESCE(EXCLUDED.isrc, tracks.isrc),
+                  artist_name = COALESCE(EXCLUDED.artist_name, tracks.artist_name),
+                  album_name = COALESCE(EXCLUDED.album_name, tracks.album_name)
             """,
-            (track_id, name[:500], artist_id, album_id, duration_ms, popularity, isrc),
+            (track_id, name[:500], artist_id, album_id, duration_ms, popularity,
+             isrc, (artist_name[:300] if artist_name else None),
+             (album_name[:300] if album_name else None)),
         )
 
     # ── play events ──────────────────────────────────────────────────────────
@@ -454,6 +472,13 @@ class DB:
         music_ids row, or its row is still 'unmatched' (so a previous partial
         run is retried). Returns the columns the resolver needs: track_id, isrc,
         track name, artist name, primary release year.
+
+        `artist_name` is COALESCE(linked artists.name, tracks.artist_name): the
+        ~51% of tracks with NO resolved artist_id (artists.name is NULL) fall
+        back to the GDPR export's denormalized name (migration 005). Without
+        this, those rows returned a NULL artist and the artist-name → MusicBrainz
+        fallback skipped them — the exact cause of their missing genres. With it,
+        a link-less track is still matchable by name (the ISRC-less path).
         """
         return self._query(
             """
@@ -461,7 +486,7 @@ class DB:
                    t.isrc,
                    t.artist_id,
                    t.name                       AS track_name,
-                   a.name                       AS artist_name,
+                   COALESCE(a.name, t.artist_name) AS artist_name,
                    EXTRACT(year FROM al.release_date)::int AS year,
                    (lt.track_id IS NOT NULL
                     OR pe.track_id IS NOT NULL) AS active
@@ -477,6 +502,20 @@ class DB:
             ) pe ON true
             WHERE mi.track_id IS NULL
                OR mi.match_status = 'unmatched'
+               -- One-shot retry of the link-less backlog: tracks previously
+               -- marked 'nomatch' purely because they had NO artist to match on
+               -- (artist_id NULL AND no recovered name) but that NOW carry a
+               -- recovered tracks.artist_name (migration 005 backfill) and still
+               -- have no MusicBrainz genre tags. This drains the ~4.7k tracks
+               -- that the artist-name fallback can newly resolve, WITHOUT
+               -- re-hammering genuinely-unmatchable rows (those keep their
+               -- 'nomatch' once they've been tried WITH a name and a tag exists).
+               OR (mi.match_status = 'nomatch'
+                   AND t.artist_id IS NULL
+                   AND t.artist_name IS NOT NULL
+                   AND NOT EXISTS (SELECT 1 FROM track_genres tg2
+                                    WHERE tg2.track_id = t.track_id
+                                      AND tg2.source = 'musicbrainz'))
             ORDER BY active DESC, mi.track_id NULLS FIRST
             LIMIT %s
             """,

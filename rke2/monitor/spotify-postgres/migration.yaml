@@ -569,6 +569,63 @@ data:
     INSERT INTO schema_migrations (version, description)
     VALUES (4, 'keyword/substring genre_parent() classifier + track_genre_effective parent_genre rebuilt to use it (long-tail rollup; DnB & Country kept as own parents)')
     ON CONFLICT (version) DO NOTHING;
+  005_track_artist_name.sql: |
+    -- ============================================================== --
+    --  Spotify analytics — schema migration 005 (recover artist name) --
+    --                                                                 --
+    --  ROOT CAUSE: the GDPR Extended Streaming History importer kept   --
+    --  only artist LINKS it could resolve to a Spotify artist_id and   --
+    --  discarded the export's artist-NAME string. ~51% of `tracks`     --
+    --  (~4.7k of 9.2k) therefore have artist_id NULL -> no artist name --
+    --  -> no genres -> MusicBrainz enrichment (which keys on artist    --
+    --  name for the ISRC-less fallback) skips them entirely. They      --
+    --  vanish from top-artist rankings and genre breakdowns.           --
+    --                                                                  --
+    --  FIX: persist the export's name strings ON the track row so they --
+    --  survive even with no linked dimension:                          --
+    --    * tracks.artist_name  <- master_metadata_album_artist_name    --
+    --    * tracks.album_name    <- master_metadata_album_album_name     --
+    --  (track NAME is already stored in tracks.name, so no track_name   --
+    --  column is added.) artist_name is the JOIN-less key the genre     --
+    --  enrichment uses for artist-name -> MusicBrainz matching, and the --
+    --  COALESCE fallback dashboards group on, so it is indexed. The     --
+    --  importer backfills these onto the existing ~9.2k rows via        --
+    --  ON CONFLICT (track_id) DO UPDATE.                                --
+    --  Idempotent: ADD COLUMN IF NOT EXISTS + guarded ledger row.       --
+    -- ============================================================== --
+    DO $mig5$
+    BEGIN
+      IF EXISTS (SELECT 1 FROM schema_migrations WHERE version = 5) THEN
+        RAISE NOTICE 'migration 005 already applied; skipping';
+        RETURN;
+      END IF;
+      RAISE NOTICE 'applying migration 005';
+
+      -- Denormalized name strings from the GDPR export. NULL until the
+      -- importer (re-)runs; the live exporter leaves them NULL (it links
+      -- the real artist_id/album_id dimensions instead). These are the
+      -- recovery path for the ~4.7k artist_id-NULL tracks.
+      ALTER TABLE tracks ADD COLUMN IF NOT EXISTS artist_name text;
+      ALTER TABLE tracks ADD COLUMN IF NOT EXISTS album_name  text;
+
+      -- Indexed: the dashboards GROUP BY COALESCE(a.name, t.artist_name)
+      -- and the enrichment candidate query reads it. Partial index keeps
+      -- it small (only the recovered, link-less rows carry a value that
+      -- the live exporter doesn't already cover via artists.name).
+      CREATE INDEX IF NOT EXISTS tracks_artist_name_idx
+          ON tracks (artist_name) WHERE artist_name IS NOT NULL;
+
+      RAISE NOTICE 'migration 005 columns + index created';
+    END
+    $mig5$;
+
+    -- ---- grants (new columns auto-covered, granted explicitly) ---- --
+    GRANT SELECT ON tracks TO grafana_ro;
+
+    -- ---- record the migration (idempotent) --------------------- --
+    INSERT INTO schema_migrations (version, description)
+    VALUES (5, 'tracks.artist_name + tracks.album_name (GDPR export names) + partial index — recover artist identity for artist_id-NULL tracks so genre enrichment can match by name and dashboards can rank them')
+    ON CONFLICT (version) DO NOTHING;
 ---
 apiVersion: batch/v1
 kind: Job
@@ -576,8 +633,8 @@ metadata:
   # Renamed to -migrate-00N each time a migration key is added: a Job's pod
   # template is immutable, so re-applying a same-named Job after editing args
   # fails. Bump this suffix (and the workflow delete/wait references) per
-  # migration. Now -migrate-004 (keyword genre_parent() + view rebuild).
-  name: spotify-postgres-migrate-004
+  # migration. Now -migrate-005 (tracks.artist_name/album_name recovery).
+  name: spotify-postgres-migrate-005
   namespace: monitor
   labels:
     app: spotify-postgres
@@ -626,6 +683,10 @@ spec:
               psql -v ON_ERROR_STOP=1 \
                    -h spotify-postgres -U postgres -d spotify \
                    -f /migrations/004_genre_keyword_rollup.sql
+              # 005 is ADD COLUMN IF NOT EXISTS + guarded ledger row, idempotent.
+              psql -v ON_ERROR_STOP=1 \
+                   -h spotify-postgres -U postgres -d spotify \
+                   -f /migrations/005_track_artist_name.sql
               echo "migration complete; current schema_migrations:"
               psql -h spotify-postgres -U postgres -d spotify \
                    -c "SELECT version, description, applied_at FROM schema_migrations ORDER BY version;"
