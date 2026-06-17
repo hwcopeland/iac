@@ -1,0 +1,19 @@
+# Authentik OIDC auth for kube-apiserver (kubelogin SSO).
+#
+# Deployed as an RKE2 drop-in to /etc/rancher/rke2/config.yaml.d/oidc.yaml on each
+# control plane. RKE2 merges config.yaml.d/*.yaml into the main config, so this adds
+# the apiserver OIDC flags WITHOUT re-rendering config.yaml (which carries the cluster
+# token — see the 2026-06-14 incident where a templated config.yaml clobbered the
+# token and bricked ctlpln1). Apply by hand, one node at a time, restarting
+# rke2-server and confirming the node returns Ready before moving on.
+#
+# Issuer = per-provider URL of the "kubernetes" Authentik OAuth2 application.
+# Groups arrive in the `groups` claim, bound in RBAC with the `oidc:` prefix
+# (e.g. "oidc:Florida Man Bioscience").
+kube-apiserver-arg:
+  - "oidc-issuer-url=https://auth.hwcopeland.net/application/o/kubernetes/"
+  - "oidc-client-id=kubernetes"
+  - "oidc-username-claim=email"
+  - "oidc-username-prefix=oidc:"
+  - "oidc-groups-claim=groups"
+  - "oidc-groups-prefix=oidc:"

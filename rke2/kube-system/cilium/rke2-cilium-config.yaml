@@ -75,6 +75,77 @@ spec:
           - flow
           - icmp
           - http
+
+      # ----------------------------------------
+      # SECURITY: redact credential-bearing data from ALL Hubble L7 flows
+      # ----------------------------------------
+      # MUST be enabled before export — without it, Authorization/Cookie
+      # values appear UNREDACTED in flows and would be shipped to Loki.
+      # Cilium applies redact to the flow BEFORE it is written to the
+      # export file, so the file never contains the raw secrets.
+      #
+      # We use an ALLOW list (fail-closed): ONLY these 7 headers survive into
+      # the export; EVERY other header (authorization, cookie, set-cookie,
+      # x-api-key, proxy-authorization, anything new) is redacted by default.
+      # This is the correct posture because the export ships off-box to Loki —
+      # a deny list would leak any credential header we forgot to enumerate.
+      # NOTE: header matching is case-insensitive; list lowercase canonical
+      # names. headers.allow and headers.deny are MUTUALLY EXCLUSIVE — set
+      # only allow here.
+      redact:
+        enabled: true
+        http:
+          # Redact the URL query string (tokens/session ids often ride here)
+          # NOTE: chart key is camelCase urlQuery — lowercase is silently ignored.
+          urlQuery: true
+          # Redact userinfo in URLs (user:pass@host) — chart key is userInfo.
+          userInfo: true
+          headers:
+            allow:
+              - cf-connecting-ip
+              - cf-ipcountry
+              - cf-ray
+              - user-agent
+              - x-forwarded-for
+              - host
+              # request-correlation UUID (Cloudflare/Envoy); NOT a credential.
+              # Needed to join REQUEST<->RESPONSE Hubble flow records.
+              - x-request-id
+
+      # ----------------------------------------
+      # Static flow export -> per-node rotated JSONL file (Alloy tails it)
+      # ----------------------------------------
+      # Writes one JSON object per line to filePath on EACH node where a
+      # cilium-agent runs. Bounded disk via size + backups + compression.
+      # allowList limits the file to L7/HTTP flows only (no L3/L4 noise).
+      # fieldMask trims each record to only the fields the parser needs.
+      export:
+        static:
+          enabled: true
+          filePath: "/var/run/cilium/hubble/events.log"
+          fileMaxSizeMb: 50
+          fileMaxBackups: 5
+          fileCompress: true
+          # L7/HTTP-only: protocol l7 AND a populated http block.
+          # event_type 129 == EventTypeL7 (Hubble flow event type for L7).
+          allowList:
+            - '{"protocol":["http"],"event_type":[{"type":129}]}'
+          # Keep ONLY these fields in the exported record. Drops the chatty
+          # source.labels / *.labels / node_labels arrays. Field paths use
+          # the flow proto field names.
+          fieldMask:
+            - time
+            - node_name
+            - l7.type
+            - l7.http.method
+            - l7.http.url
+            - l7.http.code
+            # latency_ns lives directly under l7, NOT under l7.http (verified
+            # against flow.Flow proto on v1.19.3 — l7.http.latency_ns is invalid
+            # and the agent FATALS on it).
+            - l7.latency_ns
+            - l7.http.headers
+            - destination.namespace
     # ========================================
     # Local Redirect Policy
     # ========================================

@@ -1,4 +1,19 @@
 ---
+# Refuse to run if the cluster token is missing or still the placeholder. Rendering
+# /etc/rancher/rke2/config.yaml with a wrong token bricks etcd nodes on restart
+# (2026-06-14 incident). Real token lives in the gitignored group_vars/all/secret.yaml.
+- name: Assert the cluster token is real (not unset / not the placeholder)
+  assert:
+    that:
+      - rke2_token is defined
+      - rke2_token | length > 0
+      - rke2_token != "CHANGE_ME_TO_A_SECURE_TOKEN"
+    fail_msg: >-
+      rke2_token is unset or still the placeholder. Refusing to proceed — a wrong
+      token clobbers config.yaml and breaks rke2-server. Provide the real token via
+      group_vars/all/secret.yaml (gitignored) or --extra-vars.
+    quiet: true
+
 # Prerequisites
 - name: Install required packages
   package:

@@ -1,8 +1,12 @@
 # RKE2 Server Configuration
 # https://docs.rke2.io/install/configuration
 
-write-kubeconfig-mode: "0600"
+write-kubeconfig-mode: "0644"
 
+# Live cluster join secret. Sourced from the gitignored group_vars/all/secret.yaml
+# (NEVER commit the real value — this is a public repo). The rke2-server role asserts
+# this is set and not the placeholder before rendering, because a wrong token bricks
+# etcd nodes on restart (see the 2026-06-14 incident).
 token: "{{ rke2_token }}"
 
 node-taint:
@@ -27,3 +31,4 @@ service-cidr: "10.43.0.0/16"
 # Join existing cluster via VIP
 server: https://10.41.0.100:9345
 {% endif %}
+etcd-expose-metrics: true

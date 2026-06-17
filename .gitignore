@@ -39,3 +39,6 @@ __pycache__/
 
 # Compiled job binaries — built in CI, never tracked (see commit ccb9ebc2)
 rke2/chem/compute-infrastructure/k8s-jobs/result-writer/result-writer
+
+# Ansible secret — real rke2 cluster join token (public repo, never commit)
+ansible/inventory/group_vars/all/secret.yaml
