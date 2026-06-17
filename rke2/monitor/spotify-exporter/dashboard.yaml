@@ -102,7 +102,7 @@ data:
           "gridPos": { "x": 8, "y": 9, "w": 4, "h": 5 },
           "datasource": { "type": "postgres", "uid": "spotify-postgres" },
           "targets": [ { "refId": "A", "format": "table", "rawSql":
-            "SELECT count(DISTINCT t.artist_id) AS artists FROM play_events pe JOIN tracks t ON t.track_id = pe.track_id WHERE t.artist_id IS NOT NULL AND $__timeFilter(pe.played_at)" } ],
+            "SELECT count(DISTINCT COALESCE(a.name, t.artist_name)) AS artists FROM play_events pe JOIN tracks t ON t.track_id = pe.track_id LEFT JOIN artists a ON a.artist_id = t.artist_id WHERE COALESCE(a.name, t.artist_name) IS NOT NULL AND $__timeFilter(pe.played_at)" } ],
           "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "fixed", "fixedColor": "purple" } } },
           "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } }
         },
@@ -140,7 +140,7 @@ data:
           "gridPos": { "x": 0, "y": 15, "w": 12, "h": 11 },
           "datasource": { "type": "postgres", "uid": "spotify-postgres" },
           "targets": [ { "refId": "A", "format": "table", "rawSql":
-            "SELECT a.name AS artist, count(*) AS plays, round((SUM(pe.ms_played)/3600000.0)::numeric, 1) AS hours, count(DISTINCT pe.track_id) AS distinct_tracks FROM play_events pe JOIN tracks t ON t.track_id = pe.track_id JOIN artists a ON a.artist_id = t.artist_id WHERE $__timeFilter(pe.played_at) GROUP BY a.name ORDER BY plays DESC LIMIT 25" } ],
+            "SELECT COALESCE(a.name, t.artist_name, '(unknown artist)') AS artist, count(*) AS plays, round((SUM(pe.ms_played)/3600000.0)::numeric, 1) AS hours, count(DISTINCT pe.track_id) AS distinct_tracks FROM play_events pe JOIN tracks t ON t.track_id = pe.track_id LEFT JOIN artists a ON a.artist_id = t.artist_id WHERE $__timeFilter(pe.played_at) GROUP BY COALESCE(a.name, t.artist_name, '(unknown artist)') ORDER BY plays DESC LIMIT 25" } ],
           "fieldConfig": { "defaults": {}, "overrides": [ { "matcher": { "id": "byName", "options": "hours" }, "properties": [ { "id": "unit", "value": "h" } ] } ] },
           "options": { "showHeader": true }
         },
@@ -149,7 +149,7 @@ data:
           "gridPos": { "x": 12, "y": 15, "w": 12, "h": 11 },
           "datasource": { "type": "postgres", "uid": "spotify-postgres" },
           "targets": [ { "refId": "A", "format": "table", "rawSql":
-            "SELECT t.name AS track, a.name AS artist, count(*) AS plays, round((SUM(pe.ms_played)/3600000.0)::numeric, 1) AS hours FROM play_events pe JOIN tracks t ON t.track_id = pe.track_id LEFT JOIN artists a ON a.artist_id = t.artist_id WHERE $__timeFilter(pe.played_at) GROUP BY t.name, a.name ORDER BY plays DESC LIMIT 25" } ],
+            "SELECT t.name AS track, COALESCE(a.name, t.artist_name, '(unknown artist)') AS artist, count(*) AS plays, round((SUM(pe.ms_played)/3600000.0)::numeric, 1) AS hours FROM play_events pe JOIN tracks t ON t.track_id = pe.track_id LEFT JOIN artists a ON a.artist_id = t.artist_id WHERE $__timeFilter(pe.played_at) GROUP BY t.name, COALESCE(a.name, t.artist_name, '(unknown artist)') ORDER BY plays DESC LIMIT 25" } ],
           "fieldConfig": { "defaults": {}, "overrides": [ { "matcher": { "id": "byName", "options": "hours" }, "properties": [ { "id": "unit", "value": "h" } ] } ] },
           "options": { "showHeader": true }
         },
@@ -158,7 +158,7 @@ data:
           "gridPos": { "x": 0, "y": 26, "w": 12, "h": 9 },
           "datasource": { "type": "postgres", "uid": "spotify-postgres" },
           "targets": [ { "refId": "A", "format": "table", "rawSql":
-            "SELECT a.name AS artist, round((SUM(pe.ms_played)/3600000.0)::numeric, 1) AS hours FROM play_events pe JOIN tracks t ON t.track_id = pe.track_id JOIN artists a ON a.artist_id = t.artist_id WHERE pe.ms_played IS NOT NULL AND $__timeFilter(pe.played_at) GROUP BY a.name ORDER BY hours DESC LIMIT 15" } ],
+            "SELECT COALESCE(a.name, t.artist_name, '(unknown artist)') AS artist, round((SUM(pe.ms_played)/3600000.0)::numeric, 1) AS hours FROM play_events pe JOIN tracks t ON t.track_id = pe.track_id LEFT JOIN artists a ON a.artist_id = t.artist_id WHERE pe.ms_played IS NOT NULL AND $__timeFilter(pe.played_at) GROUP BY COALESCE(a.name, t.artist_name, '(unknown artist)') ORDER BY hours DESC LIMIT 15" } ],
           "fieldConfig": { "defaults": { "unit": "h", "min": 0, "color": { "mode": "continuous-GrYlRd" } } },
           "options": { "displayMode": "gradient", "orientation": "horizontal", "reduceOptions": { "calcs": ["lastNotNull"] } }
         },
@@ -167,7 +167,7 @@ data:
           "gridPos": { "x": 12, "y": 26, "w": 12, "h": 9 },
           "datasource": { "type": "postgres", "uid": "spotify-postgres" },
           "targets": [ { "refId": "A", "format": "table", "rawSql":
-            "SELECT (t.name || ' - ' || COALESCE(a.name, '?')) AS track, round((SUM(pe.ms_played)/3600000.0)::numeric, 1) AS hours FROM play_events pe JOIN tracks t ON t.track_id = pe.track_id LEFT JOIN artists a ON a.artist_id = t.artist_id WHERE pe.ms_played IS NOT NULL AND $__timeFilter(pe.played_at) GROUP BY t.name, a.name ORDER BY hours DESC LIMIT 15" } ],
+            "SELECT (t.name || ' - ' || COALESCE(a.name, t.artist_name, '?')) AS track, round((SUM(pe.ms_played)/3600000.0)::numeric, 1) AS hours FROM play_events pe JOIN tracks t ON t.track_id = pe.track_id LEFT JOIN artists a ON a.artist_id = t.artist_id WHERE pe.ms_played IS NOT NULL AND $__timeFilter(pe.played_at) GROUP BY t.name, COALESCE(a.name, t.artist_name, '?') ORDER BY hours DESC LIMIT 15" } ],
           "fieldConfig": { "defaults": { "unit": "h", "min": 0, "color": { "mode": "continuous-BlPu" } } },
           "options": { "displayMode": "gradient", "orientation": "horizontal", "reduceOptions": { "calcs": ["lastNotNull"] } }
         },

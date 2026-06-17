@@ -129,18 +129,43 @@ jobs:
           # ── Genre enrichment (MusicBrainz) — schema migration + CronJob ──
           # Apply the idempotent schema migrations (each block is guarded and
           # short-circuits once its version is recorded). The Job's pod template
-          # is immutable, so it's named -migrate-004 (current head); delete any
+          # is immutable, so it's named -migrate-005 (current head); delete any
           # prior instance so a re-apply after editing the migration SQL doesn't
           # hit the immutable error, then wait for it before the CronJob runs.
           cd ../spotify-postgres
-          /tmp/kubectl -n monitor delete job spotify-postgres-migrate-003 --ignore-not-found
           /tmp/kubectl -n monitor delete job spotify-postgres-migrate-004 --ignore-not-found
+          /tmp/kubectl -n monitor delete job spotify-postgres-migrate-005 --ignore-not-found
           /tmp/kubectl apply -f migration.yaml
           /tmp/kubectl -n monitor wait --for=condition=complete \
-            job/spotify-postgres-migrate-004 --timeout=180s
+            job/spotify-postgres-migrate-005 --timeout=180s
           # MusicBrainz enrichment CronJob (no API key — runs immediately).
           /tmp/kubectl apply -f cronjob-enrich.yaml
+          # ── Re-run the GDPR streaming-history import IF its PVC still holds
+          # the export JSON. Migration 005 added tracks.artist_name/album_name;
+          # the new image's importer writes master_metadata_album_artist_name /
+          # _album_album_name via ON CONFLICT (track_id) DO UPDATE, so this
+          # BACKFILLS the recovered names onto the ~9.2k existing rows (the ~4.7k
+          # artist_id-NULL ones especially) — without which genre enrichment
+          # can't match them by name. No-op for play_events (DO UPDATE COALESCE).
+          # Guarded on PVC existence so a routine image rebuild after the PVC was
+          # reclaimed doesn't fail the deploy; the manual import doc still applies
+          # when the export is re-provisioned.
+          cd ../spotify-exporter
+          if /tmp/kubectl -n monitor get pvc spotify-import >/dev/null 2>&1; then
+            echo "spotify-import PVC present — re-running streaming-history import to backfill artist_name"
+            /tmp/kubectl -n monitor delete job spotify-streaming-history-import --ignore-not-found
+            /tmp/kubectl apply -f import/streaming-history-import.yaml
+            /tmp/kubectl -n monitor wait --for=condition=complete \
+              job/spotify-streaming-history-import --timeout=600s || \
+              echo "import Job did not complete in time; check logs (backfill resumes on re-run)"
+          else
+            echo "spotify-import PVC absent — skipping import backfill (provision per import/streaming-history-import.yaml when the export is available)"
+          fi
+          cd ../spotify-postgres
+
           # Kick one run now so the first enrichment doesn't wait up to an hour.
+          # Runs AFTER the import backfill so the recovered artist_name rows are
+          # already candidates for artist-name -> MusicBrainz matching.
           /tmp/kubectl -n monitor delete job spotify-genre-enrich-bootstrap --ignore-not-found
           /tmp/kubectl -n monitor create job spotify-genre-enrich-bootstrap \
             --from=cronjob/spotify-genre-enrich

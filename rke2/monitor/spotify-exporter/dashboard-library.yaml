@@ -151,7 +151,7 @@ data:
           "gridPos": { "x": 0, "y": 46, "w": 24, "h": 10 },
           "datasource": { "type": "postgres", "uid": "spotify-postgres" },
           "targets": [ { "refId": "A", "format": "table", "rawSql":
-            "SELECT t.name AS track, a.name AS artist, count(*) AS play_count, max(pe.played_at) AS last_played FROM play_events pe JOIN tracks t ON t.track_id = pe.track_id LEFT JOIN artists a ON a.artist_id = t.artist_id LEFT JOIN library_tracks lt ON lt.track_id = pe.track_id AND lt.removed_at IS NULL WHERE lt.track_id IS NULL GROUP BY t.name, a.name HAVING count(*) >= 3 ORDER BY play_count DESC LIMIT 50" } ],
+            "SELECT t.name AS track, COALESCE(a.name, t.artist_name, '(unknown artist)') AS artist, count(*) AS play_count, max(pe.played_at) AS last_played FROM play_events pe JOIN tracks t ON t.track_id = pe.track_id LEFT JOIN artists a ON a.artist_id = t.artist_id LEFT JOIN library_tracks lt ON lt.track_id = pe.track_id AND lt.removed_at IS NULL WHERE lt.track_id IS NULL GROUP BY t.name, COALESCE(a.name, t.artist_name, '(unknown artist)') HAVING count(*) >= 3 ORDER BY play_count DESC LIMIT 50" } ],
           "options": { "showHeader": true }
         },
 
@@ -161,7 +161,7 @@ data:
           "gridPos": { "x": 0, "y": 57, "w": 12, "h": 10 },
           "datasource": { "type": "postgres", "uid": "spotify-postgres" },
           "targets": [ { "refId": "A", "format": "table", "rawSql":
-            "SELECT t.name AS track, a.name AS artist, lt.added_at, max(pe.played_at) AS last_played FROM library_tracks lt LEFT JOIN tracks t ON t.track_id = lt.track_id LEFT JOIN artists a ON a.artist_id = t.artist_id LEFT JOIN play_events pe ON pe.track_id = lt.track_id WHERE lt.removed_at IS NULL GROUP BY t.name, a.name, lt.added_at HAVING max(pe.played_at) IS NULL OR max(pe.played_at) < now() - make_interval(months => ${dormant_months}::int) ORDER BY last_played ASC NULLS FIRST LIMIT 50" } ],
+            "SELECT t.name AS track, COALESCE(a.name, t.artist_name, '(unknown artist)') AS artist, lt.added_at, max(pe.played_at) AS last_played FROM library_tracks lt LEFT JOIN tracks t ON t.track_id = lt.track_id LEFT JOIN artists a ON a.artist_id = t.artist_id LEFT JOIN play_events pe ON pe.track_id = lt.track_id WHERE lt.removed_at IS NULL GROUP BY t.name, COALESCE(a.name, t.artist_name, '(unknown artist)'), lt.added_at HAVING max(pe.played_at) IS NULL OR max(pe.played_at) < now() - make_interval(months => ${dormant_months}::int) ORDER BY last_played ASC NULLS FIRST LIMIT 50" } ],
           "options": { "showHeader": true }
         },
         {
@@ -169,7 +169,7 @@ data:
           "gridPos": { "x": 12, "y": 57, "w": 12, "h": 10 },
           "datasource": { "type": "postgres", "uid": "spotify-postgres" },
           "targets": [ { "refId": "A", "format": "table", "rawSql":
-            "SELECT t.name AS track, a.name AS artist, count(*) AS lifetime_plays, max(pe.played_at) AS last_played, count(*) FILTER (WHERE pe.played_at > now() - interval '90 days') AS plays_90d FROM play_events pe JOIN tracks t ON t.track_id = pe.track_id LEFT JOIN artists a ON a.artist_id = t.artist_id GROUP BY t.name, a.name HAVING count(*) >= 5 AND count(*) FILTER (WHERE pe.played_at > now() - interval '90 days') = 0 ORDER BY lifetime_plays DESC LIMIT 50" } ],
+            "SELECT t.name AS track, COALESCE(a.name, t.artist_name, '(unknown artist)') AS artist, count(*) AS lifetime_plays, max(pe.played_at) AS last_played, count(*) FILTER (WHERE pe.played_at > now() - interval '90 days') AS plays_90d FROM play_events pe JOIN tracks t ON t.track_id = pe.track_id LEFT JOIN artists a ON a.artist_id = t.artist_id GROUP BY t.name, COALESCE(a.name, t.artist_name, '(unknown artist)') HAVING count(*) >= 5 AND count(*) FILTER (WHERE pe.played_at > now() - interval '90 days') = 0 ORDER BY lifetime_plays DESC LIMIT 50" } ],
           "options": { "showHeader": true }
         }
       ]
