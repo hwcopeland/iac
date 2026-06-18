@@ -6,14 +6,12 @@ COPY edge.py .
 COPY jarvis_voice.wav /app/jarvis_voice.wav
 # MCP servers + their backing modules.
 COPY jarvis_personal.py jarvis_personal_mcp.py \
-     jarvis_spotify.py jarvis_spotify_mcp.py \
      jarvis_delegate_mcp.py \
      jarvis_kube_mcp.py \
      jarvis_overview_mcp.py \
      jarvis_mem0_mcp.py \
      jarvis_sonos_mcp.py \
      jarvis_persona_mcp.py \
-     jarvis_tv.py jarvis_tv_mcp.py \
      jarvis_voice_id.py jarvis_voice_enroll.py jarvis_identity.py \
      jarvis_local_brain.py \
      jarvis_runner_mcp.py \

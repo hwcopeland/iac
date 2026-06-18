@@ -163,30 +163,6 @@ _TOOLS = [
         "description": "List all Sonos speakers on the LAN with model + IP.",
         "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
     },
-    {
-        "name": "sonos_play_spotify",
-        "description": (
-            "Play a Spotify track DIRECTLY on the Sonos via Sonos's "
-            "native Spotify integration (NOT via Spotify Connect). "
-            "Prefer this over spotify_search_and_play when the user "
-            "wants playback on a Sonos speaker — works even when the "
-            "Sonos isn't currently registered as a Spotify Connect "
-            "device. Pass natural-language `query` like "
-            "'toot it and boot it by YG'. Default room is the Bedroom "
-            "Play:1; pass `room` for another speaker. Requires Spotify "
-            "linked on the Sonos (Sonos app → Settings → Services & "
-            "Voice → Music & Content → Spotify)."
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "query": {"type": "string"},
-                "room": {"type": "string"},
-            },
-            "required": ["query"],
-            "additionalProperties": False,
-        },
-    },
 ]
 
 
@@ -221,86 +197,6 @@ def _call(name: str, args: dict) -> dict:
             _persona_set_volume(None)
             return _text(json.dumps({"status": "ok",
                                       "message": "volume now follows day/night schedule"}))
-        if name == "sonos_play_spotify":
-            # Sonos-native Spotify playback via hand-built URI + DIDL
-            # metadata. Bypasses soco's old SOAP MusicService.search()
-            # (which fails authTokenExpired against modern Sonos cloud
-            # auth) AND Spotify Connect's "device must be awake to be
-            # targetable" gotcha. Steps:
-            #   1. Spotify Web API search for the track  (our scope)
-            #   2. Construct x-sonos-spotify:<uri>?sid=<n>&sn=<n>  URI
-            #   3. Construct DIDL-Lite metadata referencing the track id
-            #   4. add_uri_to_queue + play_from_queue
-            # The Sonos uses its own stored cloud token to fetch audio
-            # from Spotify's CDN — no token has to live on our end.
-            import urllib.parse as _up
-            import sys as _sys
-            _sys.path.insert(0, '/app')
-            try:
-                import jarvis_spotify as _spot  # type: ignore[import]
-            except Exception as exc:  # noqa: BLE001
-                return _text(json.dumps({"status": "error",
-                                          "detail": f"jarvis_spotify import failed: {exc!r}"}))
-            query = (args.get("query") or "").strip()
-            if not query:
-                return _text(json.dumps({"status": "error",
-                                          "detail": "query required"}))
-            srch = _spot.search_tracks(query, limit=1)
-            if srch.get("status") != "ok":
-                return _text(json.dumps({"status": "error",
-                                          "detail": f"Spotify search failed: {srch.get('detail', srch)}"}))
-            tracks = srch.get("tracks") or []
-            if not tracks:
-                return _text(json.dumps({"status": "error",
-                                          "detail": f"no Spotify results for {query!r}"}))
-            track = tracks[0]
-            spotify_uri = track["uri"]  # spotify:track:<id>
-            track_id = spotify_uri.split(":")[-1]
-            title = track["name"]
-            artist = (track["artists"] or ["Unknown"])[0]
-
-            # sid / sn are Sonos-side identifiers (Spotify service id +
-            # account serial). Defaults match the Bedroom Play:1 system;
-            # overridable via env when running on a different household.
-            sid = int(os.environ.get("SONOS_SPOTIFY_SID", "12"))
-            sn = int(os.environ.get("SONOS_SPOTIFY_SN", "0"))
-            encoded = _up.quote(spotify_uri, safe='')
-            sonos_uri = f"x-sonos-spotify:{encoded}?sid={sid}&flags=8224&sn={sn}"
-            # Escape ampersands in the title for XML safety
-            t_xml = (title or "").replace("&", "&amp;").replace("<", "&lt;")
-            a_xml = (artist or "").replace("&", "&amp;").replace("<", "&lt;")
-            didl = (
-                '<DIDL-Lite xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/" '
-                'xmlns:dc="http://purl.org/dc/elements/1.1/" '
-                'xmlns:upnp="urn:schemas-upnp-org:metadata-1-0/upnp/" '
-                'xmlns:r="urn:schemas-rinconnetworks-com:metadata-1-0/">'
-                f'<item id="00032020spotify%3atrack%3a{track_id}" '
-                f'parentID="00020000spotify%3atrack" restricted="true">'
-                f'<dc:title>{t_xml}</dc:title>'
-                f'<dc:creator>{a_xml}</dc:creator>'
-                '<upnp:class>object.item.audioItem.musicTrack</upnp:class>'
-                '<desc id="cdudn" nameSpace="urn:schemas-rinconnetworks-com:metadata-1-0/">'
-                'SA_RINCON2311_X_#Svc2311-0-Token</desc>'
-                '</item></DIDL-Lite>'
-            )
-
-            s = _soco_for(args.get("room"))
-            try: s.unjoin()
-            except Exception: pass
-            try: s.clear_queue()
-            except Exception: pass
-            try:
-                pos = s.add_uri_to_queue(sonos_uri, meta=didl)
-                s.play_from_queue(0)
-            except Exception as exc:  # noqa: BLE001
-                return _text(json.dumps({"status": "error",
-                                          "detail": f"sonos play failed: {str(exc)[:200]}"}))
-            return _text(json.dumps({"status": "ok",
-                                      "room": s.player_name,
-                                      "playing": title,
-                                      "artist": artist,
-                                      "queued_position": pos,
-                                      "via": "sonos-spotify-direct"}))
         if name == "sonos_mute":
             s = _soco_for(room)
             state = (args.get("state") or "toggle").lower()

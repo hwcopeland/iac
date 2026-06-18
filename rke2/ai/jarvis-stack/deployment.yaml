@@ -396,7 +396,8 @@ spec:
             - name: nix-store
               mountPath: /nix/store
               readOnly: true
-            # config.toml from the Secret — jarvis_tv.py reads ~/.openjarvis/
+            # config.toml from the Secret — jarvis_personal et al. read
+            # ~/.openjarvis/config.toml for their settings.
             - name: jarvis-config
               mountPath: /tmp/.openjarvis
               readOnly: true
@@ -442,9 +443,6 @@ spec:
             items:
               - key: config.toml
                 path: config.toml
-                mode: 0444   # readable by uid 1000 (Secret default owner is root)
-              - key: spotify_tokens.json
-                path: spotify_tokens.json
                 mode: 0444   # readable by uid 1000 (Secret default owner is root)
         # Read-only source for the init container; main container never
         # mounts this directly (uses claude-home / emptyDir instead).

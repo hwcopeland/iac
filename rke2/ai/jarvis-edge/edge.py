@@ -450,8 +450,6 @@ Tools:
   Murfreesboro, TN by default).
 - For "what happened overnight" / "any news", use
   mcp__jarvis_personal__news_overnight.
-- For "what am I listening to" / Spotify questions, use the
-  mcp__jarvis_spotify__* tools.
 - For "is the cluster healthy" / "how many devices" / "what's broken",
   use the mcp__jarvis_kube__* tools (kube_get_pods, kube_top_nodes,
   kube_events, etc). You have READ access only — no secrets, no writes.
@@ -485,9 +483,6 @@ Tools:
   "mute" / "pause the music" / "what's playing": use the
   mcp__jarvis_sonos__* tools. Default target is the Bedroom Play:1
   (where JARVIS speaks). For "the kitchen speaker" pass room="Kitchen".
-- TV control is NOT available (Apple TV migration pending). If asked
-  about the TV, say "I can't control the TV from here yet, sir" — do
-  NOT pretend, do NOT invent tool calls.
 - macOS Calendar + Reminders are NOT reachable from this pod (no
   AppleScript). calendar_today / reminders_* will return 'unauthorized'.
   Don't apologise about it — just say "no calendar wired up here yet."
@@ -495,9 +490,9 @@ Tools:
 You are running on a cluster pod (nixos-gpu) with a Yeti USB mic and a
 Sonos Play:1 in the bedroom. The current owner is Hampton."""
 
-# MCP servers the brain can invoke. TV is DEPRECATED until Apple TV
-# arrives. Spotify needs spotify_tokens.json mounted via Secret; if
-# missing it returns 'unauthorized' but doesn't crash the brain.
+# MCP servers the brain can invoke. Minimal clean-core set: personal
+# (calendar/weather/news/briefing), kube, sonos, persona, mem0,
+# overview, delegate, and the cluster-side runner.
 _MCP_CONFIG_PATH = "/tmp/jarvis_mcp.json"
 
 
@@ -507,10 +502,6 @@ def _write_mcp_config() -> None:
             "jarvis_personal": {
                 "command": "python3",
                 "args": ["/app/jarvis_personal_mcp.py"],
-            },
-            "jarvis_spotify": {
-                "command": "python3",
-                "args": ["/app/jarvis_spotify_mcp.py"],
             },
             "jarvis_kube": {
                 "command": "python3",
@@ -706,21 +697,6 @@ _RO_ALLOWED_TOOLS = " ".join([
     "mcp__jarvis_personal__calendar_today",
     "mcp__jarvis_personal__reminders_open",
     "mcp__jarvis_personal__reminders_due_today",
-    # Spotify (read)
-    "mcp__jarvis_spotify__current_track",
-    "mcp__jarvis_spotify__recently_played",
-    "mcp__jarvis_spotify__top_artists",
-    "mcp__jarvis_spotify__top_tracks",
-    # Spotify (playback — requires user-modify-playback-state scope;
-    # one-time re-auth needed after this scope was added).
-    "mcp__jarvis_spotify__spotify_search",
-    "mcp__jarvis_spotify__spotify_devices",
-    "mcp__jarvis_spotify__spotify_play_track",
-    "mcp__jarvis_spotify__spotify_search_and_play",
-    "mcp__jarvis_spotify__spotify_pause",
-    "mcp__jarvis_spotify__spotify_resume",
-    "mcp__jarvis_spotify__spotify_skip_next",
-    "mcp__jarvis_spotify__spotify_skip_previous",
     # Kube read-only (ServiceAccount jarvis-readonly → view+nodes)
     "mcp__jarvis_kube__kube_get_pods",
     "mcp__jarvis_kube__kube_logs",
@@ -740,7 +716,6 @@ _RO_ALLOWED_TOOLS = " ".join([
     "mcp__jarvis_sonos__sonos_play",
     "mcp__jarvis_sonos__sonos_now_playing",
     "mcp__jarvis_sonos__sonos_list_speakers",
-    "mcp__jarvis_sonos__sonos_play_spotify",
     # Unified memory (mem0) — read past facts before answering, persist
     # durable facts. Scope is fixed by JARVIS_MEM_SCOPE env (no user_id arg).
     "mcp__jarvis_mem0__memory_search",
@@ -867,7 +842,7 @@ def _claude_brain(text: str, timeout: float = 60.0, mem_scope: str = "") -> str:
 
 _VOICE_LOCKED_PERSONA_ADDENDUM = """
 
-NON-OWNER MODE — IMPORTANT: The person speaking is NOT sir (Hampton). You have NO MCP tools, NO sub-agents, NO Sonos/Spotify/Kube/Calendar/Email/Drive access in this conversation. Don't pretend to have them or claim to be running them. Answer from your own general knowledge only. NEVER reveal anything about sir — his schedule, location, whereabouts, calendar, reminders, contacts, music, homelab/cluster, network topology, hostnames, IPs, or any personal data. If asked anything about sir, briefly decline ("I can't share anything about him, but I can help you directly"). Keep replies short and spoken-aloud friendly: no markdown, no URLs, no lists.
+NON-OWNER MODE — IMPORTANT: The person speaking is NOT sir (Hampton). You have NO MCP tools, NO sub-agents, NO Sonos/Kube/Calendar/Email/Drive access in this conversation. Don't pretend to have them or claim to be running them. Answer from your own general knowledge only. NEVER reveal anything about sir — his schedule, location, whereabouts, calendar, reminders, contacts, music, homelab/cluster, network topology, hostnames, IPs, or any personal data. If asked anything about sir, briefly decline ("I can't share anything about him, but I can help you directly"). Keep replies short and spoken-aloud friendly: no markdown, no URLs, no lists.
 """
 
 
@@ -875,7 +850,7 @@ def _claude_brain_voice_locked(text: str, timeout: float = 60.0) -> str:
     """Locked VOICE brain for TRUSTED (non-owner) speakers — the Layer-A
     primary control. Same model + voice persona as _claude_brain but with NO
     --mcp-config (→ no tools at all: a trusted user PHYSICALLY cannot invoke
-    calendar/kube/spotify/etc, no prompt can re-add them), --max-turns 1, and
+    calendar/kube/sonos/etc, no prompt can re-add them), --max-turns 1, and
     NO local-brain fallthrough (the local model is unconstrained and would
     leak). A trusted user gets a spoken chatbot, never owner data."""
     import subprocess as _sp
@@ -2113,7 +2088,7 @@ def _stream_on_sonos_impl(sonos, sentences, host_ip, http_port, turn_n,
     global _jarvis_speaking, _jarvis_done_at
     _jarvis_speaking = True
 
-    # Snapshot whatever the Sonos was playing (Spotify, podcast, anything)
+    # Snapshot whatever the Sonos was playing (music, podcast, anything)
     # BEFORE we wipe the queue for the TTS turn. Restored at the end so
     # music resumes at the exact spot after JARVIS finishes speaking.
     # Snapshot failures are non-fatal — TTS still works, we just lose
