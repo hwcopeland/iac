@@ -483,9 +483,13 @@ Tools:
   "mute" / "pause the music" / "what's playing": use the
   mcp__jarvis_sonos__* tools. Default target is the Bedroom Play:1
   (where JARVIS speaks). For "the kitchen speaker" pass room="Kitchen".
-- macOS Calendar + Reminders are NOT reachable from this pod (no
-  AppleScript). calendar_today / reminders_* will return 'unauthorized'.
-  Don't apologise about it — just say "no calendar wired up here yet."
+- You HAVE access to the owner's iCloud Calendar + Reminders via CalDAV.
+  For any calendar / schedule / "what's on today" / appointment question,
+  call mcp__jarvis_personal__calendar_today. For reminders / to-dos / "what
+  do I need to do" questions, call mcp__jarvis_personal__reminders_open or
+  mcp__jarvis_personal__reminders_due_today. TRUST what these tools return
+  and answer from the real data. Never claim you have no calendar or that
+  it isn't wired up.
 
 You are running on a cluster pod (nixos-gpu) with a Yeti USB mic and a
 Sonos Play:1 in the bedroom. The current owner is Hampton."""
@@ -688,8 +692,8 @@ def _turn_context_prefix(include_persona: bool = False) -> str:
 
 
 _RO_ALLOWED_TOOLS = " ".join([
-    # Personal: briefing / weather / news / greeting (Calendar+Reminders
-    # stubbed to "unauthorized" until CalDAV bridge).
+    # Personal: briefing / weather / news / greeting + iCloud Calendar &
+    # Reminders (live via CalDAV — calendar_today / reminders_*).
     "mcp__jarvis_personal__briefing",
     "mcp__jarvis_personal__weather",
     "mcp__jarvis_personal__news_overnight",
@@ -1561,6 +1565,129 @@ def _identity_turn(principal, text: str, addressed: bool):
 
     # 4. Trusted normal turn → gate.
     return (False, None)
+
+
+# ── Owner enroll-by-voice (Approach A: in the running loop) ───────────────────
+# Deterministic, model-inaccessible bootstrap so the FIRST owner can be enrolled
+# purely by voice — no kubectl exec, no second mic stream. Closes the open-mode
+# gap: in open mode `_identify_speaker_from_audio` returns None and the Phase-2
+# state machine never runs, so it can never self-enroll the first owner. This
+# trigger runs REGARDLESS of has_owner, piggybacking on `audio_16k` the loop
+# already captured (zero second stream → zero mic contention with the daemon).
+#
+# Enrollment audio is CONSUMED here and never reaches the brain or mem0, and the
+# trigger is a fixed regex (never model-driven), preserving the invariant that
+# the model can never enroll a voice.
+_OWNER_ENROLL_TIMEOUT_S = 60.0
+_OWNER_ENROLL_TARGET = 3          # number of clips to average
+_OWNER_ENROLL_MIN_COS = 0.60     # clips must agree (reject noise/echo)
+_OWNER_ENROLL_NAME = os.environ.get("OWNER_NAME", "Hampton")
+
+_OWNER_ENROLL_TRIGGER_RE = re.compile(
+    r"\b(?:learn|enroll|register|remember)\s+my\s+voice\b"
+    r"|\benroll\s+me(?:\s+as\s+(?:the\s+)?owner)?\b"
+    r"|\b(?:learn|register)\s+me\s+as\s+(?:the\s+)?owner\b",
+    re.I,
+)
+_OWNER_ENROLL_CANCEL_RE = re.compile(
+    r"\b(?:cancel|never\s*mind|stop|forget\s+it|abort)\b", re.I)
+
+_owner_enroll: dict = {"active": False, "embeddings": [], "ts": 0.0}
+
+
+def _owner_enroll_reset() -> None:
+    _owner_enroll["active"] = False
+    _owner_enroll["embeddings"] = []
+    _owner_enroll["ts"] = 0.0
+
+
+def _owner_enroll_turn(audio_16k, text: str, addressed: bool):
+    """Deterministic owner enroll-by-voice. Returns ``(consumed, reply)``.
+
+    When ``consumed`` is True the utterance is part of an enrollment flow and
+    must NOT go to the brain. ``reply`` (may be None) is spoken if present.
+
+    Flow:
+      * trigger ("jarvis, learn my voice" + addressed) → start capture, embed
+        this utterance, prompt for more.
+      * each subsequent utterance → embed + append; at TARGET clips, average +
+        enroll(role="owner"), invalidate _vid_cache so the owner gate flips on
+        immediately, confirm by voice.
+      * clips that disagree (mean pairwise cosine < MIN_COS) → reject, no enroll
+        (fails closed against noise / self-echo).
+      * timeout / "cancel" / "never mind" → reset."""
+    import jarvis_voice_id as _vid
+    now = time.time()
+
+    # Expire a stale in-flight enrollment.
+    if _owner_enroll["active"] and now - _owner_enroll["ts"] > _OWNER_ENROLL_TIMEOUT_S:
+        _owner_enroll_reset()
+
+    if not _owner_enroll["active"]:
+        # Only START on an explicit, addressed trigger. ambient chatter can't.
+        if not (addressed and _OWNER_ENROLL_TRIGGER_RE.search(text)):
+            return (False, None)
+        try:
+            emb = _vid.embed_from_audio(audio_16k, sample_rate=16000)
+        except Exception as exc:  # noqa: BLE001
+            print(f"  [enroll] embed failed on trigger: {exc!r}")
+            return (True, "I couldn't capture that clearly, sir. Try again.")
+        _owner_enroll["active"] = True
+        _owner_enroll["embeddings"] = [emb]
+        _owner_enroll["ts"] = now
+        print(f"  [enroll] owner enrollment STARTED ({len(_owner_enroll['embeddings'])}"
+              f"/{_OWNER_ENROLL_TARGET} clips)")
+        return (True, ("Certainly, sir. Say a sentence or two so I can learn your "
+                       "voice — I need three short phrases. Go ahead."))
+
+    # Active enrollment — allow an explicit cancel.
+    if _OWNER_ENROLL_CANCEL_RE.search(text):
+        _owner_enroll_reset()
+        return (True, "Cancelled, sir.")
+
+    try:
+        emb = _vid.embed_from_audio(audio_16k, sample_rate=16000)
+    except Exception as exc:  # noqa: BLE001
+        print(f"  [enroll] embed failed mid-flow: {exc!r}")
+        return (True, "I didn't catch that, sir — say the phrase again.")
+    _owner_enroll["embeddings"].append(emb)
+    _owner_enroll["ts"] = now
+    n = len(_owner_enroll["embeddings"])
+    print(f"  [enroll] captured clip {n}/{_OWNER_ENROLL_TARGET}")
+
+    if n < _OWNER_ENROLL_TARGET:
+        remaining = _OWNER_ENROLL_TARGET - n
+        more = "one more" if remaining == 1 else f"{remaining} more"
+        return (True, f"Got it — {more}, sir.")
+
+    # We have enough clips. Verify they agree before committing.
+    embs = _owner_enroll["embeddings"]
+    pairs = [_cosine(embs[i], embs[j])
+             for i in range(len(embs)) for j in range(i + 1, len(embs))]
+    mean_cos = float(np.mean(pairs)) if pairs else 1.0
+    if mean_cos < _OWNER_ENROLL_MIN_COS:
+        print(f"  [enroll] clips disagree (mean cosine {mean_cos:.2f} < "
+              f"{_OWNER_ENROLL_MIN_COS}) — NOT enrolling")
+        _owner_enroll_reset()
+        return (True, ("Those didn't sound consistent, sir — too much background "
+                       "noise, perhaps. Let's try again: say \"learn my voice\"."))
+
+    try:
+        meta = _vid.enroll(_OWNER_ENROLL_NAME, embs, role="owner",
+                           enrolled_by="self")
+    except Exception as exc:  # noqa: BLE001
+        print(f"  [enroll] enroll() failed: {exc!r}")
+        _owner_enroll_reset()
+        return (True, "Something went wrong saving your voice, sir. Try again.")
+
+    # Flip the owner-only gate on for the VERY NEXT turn.
+    _vid_cache["ts"] = 0.0
+    _owner_enroll_reset()
+    print(f"  [enroll] OWNER enrolled: {meta.get('name')} "
+          f"(slug={meta.get('slug')}, clips={meta.get('num_clips')}) "
+          f"— owner gate now active")
+    return (True, ("I've got your voice now, sir. From now on I'll only "
+                   "answer to you."))
 
 
 def _check_brain_auth() -> None:
@@ -2491,6 +2618,36 @@ def main() -> None:
                     principal = _identify_speaker_from_audio(audio_16k)
                     low = user_text.lower()
                     addressed = ("jarvis" in low) or (time.time() < engaged_until)
+
+                    # ── Owner enroll-by-voice (Approach A) ───────────────
+                    # Deterministic bootstrap. In OPEN mode (principal is None,
+                    # no owner yet) this is the ONLY way to self-enroll the
+                    # first owner. In ENROLLED mode, gate on principal.role ==
+                    # OWNER so a stranger can't overwrite the owner's voice (a
+                    # stranger is UNKNOWN and dropped below anyway). Enrollment
+                    # audio is CONSUMED — it never reaches the brain or mem0.
+                    _enroll_eligible = (principal is None
+                                        or (principal is not None
+                                            and principal.role is _ji.Role.OWNER))
+                    if _enroll_eligible or _owner_enroll["active"]:
+                        en_consumed, en_reply = _owner_enroll_turn(
+                            audio_16k, user_text, addressed)
+                        if en_consumed:
+                            if en_reply:
+                                print(f"  JARVIS (enroll): {en_reply!r}")
+                                turn_n += 1
+                                _ens = _split_sentences(en_reply)
+                                if _ens:
+                                    try:
+                                        with _speak_lock:
+                                            _stream_on_sonos(sonos, _ens, host_ip,
+                                                             EDGE_ADVERTISED_PORT,
+                                                             turn_n, stash)
+                                        engaged_until = time.time() + ADDRESSEE_WINDOW
+                                    except Exception as exc:
+                                        print(f"  sonos stream error: {exc}")
+                            turn_outcome = "owner_enroll"
+                            continue
 
                     # Phase 2: owner-auth + enroll-by-voice. Runs BEFORE the
                     # ambient drop so an unknown answering "I'm Alex" (no wake
