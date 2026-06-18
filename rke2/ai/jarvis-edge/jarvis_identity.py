@@ -57,10 +57,10 @@ _STATE_ROOT = Path(os.environ.get("JARVIS_STATE_ROOT", "/state"))
 # ── owner session hysteresis ──────────────────────────────────────────────────
 # Resemblyzer owner self-similarity drifts turn-to-turn (illness, time of day,
 # mic distance, prosody) — live owner turns range ~0.72–0.89, straddling the
-# OWNER_THRESHOLD (0.75) grant bar. A borderline DIP used to downgrade the OWNER
-# to TRUSTED mid-conversation, which (a) routed Hampton to the TOOLLESS locked
-# brain ("I have no tool access") and (b) tripped the identity challenge
-# ("I don't recognise you") on the real owner.
+# OWNER_THRESHOLD (0.75) grant bar. A borderline DIP downgrades the OWNER to
+# TRUSTED mid-conversation. Under the owner-only policy a non-owner gets NO
+# spoken reply, so without hysteresis a real owner whose voice dipped would be
+# silently dropped mid-conversation — JARVIS would just go quiet on Hampton.
 #
 # Fix: once an owner is CONFIDENTLY established (top match is the owner template
 # AND score >= OWNER_THRESHOLD), a subsequent borderline owner match
@@ -156,9 +156,9 @@ def resolve_voice(embedding, *, source: str = "voice") -> Principal:
           and _last_confident_owner_ts > 0.0
           and (_time.time() - _last_confident_owner_ts) <= OWNER_STICKY_S):
         # BORDERLINE owner match inside an established owner session: keep OWNER
-        # so a normal voice dip doesn't drop Hampton onto the toolless brain or
-        # the identity challenge. Refresh the window — an active conversation of
-        # borderline turns stays sticky as long as turns keep coming < STICKY_S.
+        # so a normal voice dip doesn't get Hampton silently dropped as a
+        # non-owner. Refresh the window — an active conversation of borderline
+        # turns stays sticky as long as turns keep coming < STICKY_S.
         role = Role.OWNER
         sticky = True
         _last_confident_owner_ts = _time.time()
@@ -274,9 +274,12 @@ def _owner_patterns():
 
 
 def is_owner_referential(text: str) -> bool:
-    """True if ``text`` (from a NON-owner) is asking about the owner. The gate
-    calls this for TRUSTED turns and deflects deterministically on a hit — no
-    brain is ever spawned, so the model can't be talked into answering."""
+    """True if ``text`` (from a NON-owner) is asking about the owner.
+
+    NOTE: no longer wired to the gate. Under the owner-only policy non-owner
+    turns get no spoken reply at all, so there's nothing to deflect — the gate
+    drops them before any brain runs. Kept as a reusable classifier for any
+    future non-voice front end that wants Layer-B deflection."""
     if not text:
         return False
     name_re, pii_re = _owner_patterns()
@@ -290,9 +293,12 @@ def is_owner_referential(text: str) -> bool:
 # ── capability tiers ─────────────────────────────────────────────────────────
 
 def capability_for(role: Role) -> str:
-    """Base capability for a role: 'full' (owner brain + all MCP tools),
-    'locked' (no MCP tools at all), or 'none' (no brain). The gate layers the
-    owner-referential deflection on top of 'locked' for TRUSTED turns."""
+    """Base capability tier for a role: 'full' (owner brain + all MCP tools),
+    'locked' (no MCP tools at all), or 'none' (no brain).
+
+    NOTE: the voice gate no longer consults this — it grants the full brain to
+    OWNER and silently drops everyone else. Retained as a reference tier map
+    for non-voice front ends."""
     if role is Role.OWNER:
         return "full"
     if role is Role.TRUSTED:

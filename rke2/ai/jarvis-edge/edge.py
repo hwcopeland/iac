@@ -851,60 +851,6 @@ def _claude_brain(text: str, timeout: float = 60.0, mem_scope: str = "") -> str:
         return f"Brain error, sir — {exc}"
 
 
-_VOICE_LOCKED_PERSONA_ADDENDUM = """
-
-NON-OWNER MODE — IMPORTANT: The person speaking is NOT sir (Hampton). You have NO MCP tools, NO sub-agents, NO Sonos/Kube/Calendar/Email/Drive access in this conversation. Don't pretend to have them or claim to be running them. Answer from your own general knowledge only. NEVER reveal anything about sir — his schedule, location, whereabouts, calendar, reminders, contacts, music, homelab/cluster, network topology, hostnames, IPs, or any personal data. If asked anything about sir, briefly decline ("I can't share anything about him, but I can help you directly"). Keep replies short and spoken-aloud friendly: no markdown, no URLs, no lists.
-"""
-
-
-def _claude_brain_voice_locked(text: str, timeout: float = 60.0) -> str:
-    """Locked VOICE brain for TRUSTED (non-owner) speakers — the Layer-A
-    primary control. Same model + voice persona as _claude_brain but with NO
-    --mcp-config (→ no tools at all: a trusted user PHYSICALLY cannot invoke
-    calendar/kube/sonos/etc, no prompt can re-add them), --max-turns 1, and
-    NO local-brain fallthrough (the local model is unconstrained and would
-    leak). A trusted user gets a spoken chatbot, never owner data."""
-    import subprocess as _sp
-    has_creds = os.path.exists(os.path.expanduser("~/.claude/.credentials.json"))
-    has_api_key = bool(os.environ.get("ANTHROPIC_API_KEY"))
-    if not has_creds and not has_api_key:
-        return ""
-    persona_prompt = _PERSONA_SYSTEM + _VOICE_LOCKED_PERSONA_ADDENDUM  # byte-stable
-    # Only _now_context() is volatile here (addendum is static) → user turn.
-    # No persona line for the locked brain.
-    user_text = _turn_context_prefix(include_persona=False) + text
-    try:
-        proc = _sp.run(
-            ["claude", "-p", user_text,
-             "--append-system-prompt", persona_prompt,
-             # No --mcp-config, no --allowed-tools = no tool access (Layer A).
-             "--model", "sonnet",
-             "--max-turns", "1",
-             "--output-format", "json"],
-            capture_output=True, text=True, timeout=timeout,
-        )
-        if proc.returncode != 0:
-            print(f"  voice-locked brain rc={proc.returncode}  stderr: {proc.stderr[:400]}")
-            return ""
-        out = (proc.stdout or "").strip()
-        if not out:
-            return ""
-        try:
-            data = json.loads(out)
-            if data.get("is_error"):
-                return ""
-            result = (data.get("result") or "").strip()
-        except json.JSONDecodeError:
-            result = out
-        # No local-brain fallthrough for non-owner turns — keep it constrained.
-        return result
-    except _sp.TimeoutExpired:
-        return ""
-    except Exception as exc:  # noqa: BLE001
-        print(f"  voice-locked brain exception: {exc!r}")
-        return ""
-
-
 # ── Warm OWNER brain session (Phase 5) ───────────────────────────────────────
 # One long-lived `claude` stream-json process for the OWNER path ONLY, reused
 # across turns so the six MCP servers stay warm (the ~2-3s/turn cold-start) AND
@@ -1407,50 +1353,36 @@ def gate_and_respond(principal, text: str) -> str:
     Python from the principal's role, BEFORE any model call — the model is
     never the security boundary.
 
-      principal is None  → open mode (no owner enrolled): full brain (legacy).
-      OWNER              → full brain (all MCP tools), mem_scope=owner.
-      TRUSTED            → owner-referential query (Layer B)? deterministic
-                           deflection, NO brain spawned : locked brain
-                           (no --mcp-config → no tools, Layer A).
-      UNKNOWN            → no brain (mic loop drops these; Phase 2 adds
-                           name-capture). Defensive challenge here.
+    Owner-only policy ("if it isn't me, don't respond"): ONLY the OWNER ever
+    gets a spoken reply. Everyone else — TRUSTED, UNKNOWN, and JARVIS's own
+    echo — is silently dropped (empty string → caller skips TTS).
+
+      principal is None  → open mode (no owner enrolled): full brain. Only
+                           reachable on a fresh deployment with no owner; once
+                           Hampton is enrolled this branch never fires.
+      OWNER              → full brain (all MCP tools), mem_scope=owner. The
+                           owner-sticky/hysteresis borderline match resolves to
+                           Role.OWNER upstream, so it lands here too.
+      TRUSTED            → silent drop (no brain, no spoken reply).
+      UNKNOWN            → silent drop (no brain, no name challenge).
 
     Used by BOTH the mic loop and the /voice/ingest endpoint so every front
     end inherits the identical guarantees."""
     import jarvis_identity as _ji
     if principal is None:
         return brain_respond(text)  # open mode — back-compat pass-through
-    role = principal.role
-    if role is _ji.Role.OWNER:
+    if principal.role is _ji.Role.OWNER:
         return brain_respond(text, mem_scope=principal.mem_scope)
-    if role is _ji.Role.TRUSTED:
-        if _ji.is_owner_referential(text):
-            print(f"  [gate] owner-referential query from {principal.user_id} "
-                  f"— deflected pre-brain (Layer B, no brain spawned)")
-            return ("Sorry, I can't share anything about him. "
-                    "But I can help you with something directly.")
-        return _claude_brain_voice_locked(text)
-    # UNKNOWN — Phase 2 wires the name-capture state machine here.
-    return "I don't recognise you. What's your name?"
+    # Non-owner (TRUSTED or UNKNOWN) → silent drop. The empty reply makes the
+    # caller skip TTS, so the room/strangers/echo never get a spoken response.
+    print(f"  [gate] non-owner ({principal.role.value}) — silent drop")
+    return ""
 
 
-# ── Phase 2: owner-auth + enroll-by-voice state machine ──────────────────────
-# Deterministic, runs BEFORE the brain. Owner auth commands are CONSUMED here
-# and never reach the model (the model must never be able to enroll a voice).
-_AWAITING_NAME_TIMEOUT_S = 45.0
-_SAME_SPEAKER_COS = 0.55
-# Single in-flight challenge: the unknown speaker we just asked to name
-# themselves. Holds their voiceprint so the follow-up "I'm Alex" is matched to
-# the SAME voice (someone else can't answer for them).
-_awaiting_name: dict = {"active": False, "embedding": None, "ts": 0.0}
-
-_NAME_PATTERNS = [
-    re.compile(r"\bmy name is\s+([A-Za-z][A-Za-z .'-]{0,30})", re.I),
-    re.compile(r"\bi'?m\s+([A-Za-z][A-Za-z .'-]{0,30})", re.I),
-    re.compile(r"\bit'?s\s+([A-Za-z][A-Za-z .'-]{0,30})", re.I),
-    re.compile(r"\bthis is\s+([A-Za-z][A-Za-z .'-]{0,30})", re.I),
-    re.compile(r"\bcall me\s+([A-Za-z][A-Za-z .'-]{0,30})", re.I),
-]
+# ── Owner-auth command parsing ───────────────────────────────────────────────
+# Deterministic, runs BEFORE the brain. Owner auth commands (approve / reject /
+# remove a pending enrollee) are CONSUMED here and never reach the model (the
+# model must never be able to enroll or authorise a voice).
 _AUTH_REMOVE_RE = re.compile(
     r"\b(?:remove|delete|forget|unenroll|deauthori[sz]e)\s+([A-Za-z][A-Za-z .'-]{0,30})", re.I)
 _AUTH_REJECT_RE = re.compile(
@@ -1469,19 +1401,6 @@ def _clean_name(s: str) -> str:
     while words and words[-1].lower().strip(".,!?") in _NAME_STOPWORDS:
         words.pop()
     return " ".join(w.capitalize() for w in words[:2])
-
-
-def _extract_name(text: str) -> str:
-    for pat in _NAME_PATTERNS:
-        m = pat.search(text)
-        if m:
-            return _clean_name(m.group(1))
-    # Bare-name fallback: a short reply like "Alex" / "Alex Smith" (strip wake word).
-    cleaned = re.sub(r"\bjarvis\b", "", text, flags=re.I).strip(" .,!?")
-    words = cleaned.split()
-    if 1 <= len(words) <= 2 and all(w[:1].isalpha() for w in words):
-        return _clean_name(cleaned)
-    return ""
 
 
 def _cosine(a, b) -> float:
@@ -1525,59 +1444,32 @@ def _exec_owner_auth(action: str, name: str) -> str:
 
 
 def _identity_turn(principal, text: str, addressed: bool):
-    """Phase 2 deterministic identity state machine. Returns
-    ``(consumed, reply)``: when ``consumed`` is True the turn is an identity
-    action (owner auth command, name challenge, or name capture) and must NOT
-    go to the brain. ``reply`` (may be None) is spoken if present.
+    """Deterministic identity state machine. Returns ``(consumed, reply)``:
+    when ``consumed`` is True the turn is an OWNER auth command and must NOT go
+    to the brain. ``reply`` (may be None) is spoken if present.
 
-    Order: owner auth commands first (consumed), then name-capture for an
-    awaiting challenger (matched by voiceprint so nobody can answer for them),
-    then challenge an addressed unknown. Owner/trusted normal turns fall
-    through to the gate."""
+    Owner-only policy: the ONLY thing consumed here is an addressed OWNER
+    enrollment/auth command. There is NO name challenge for unknowns and NO
+    name capture — non-owners are silently dropped by the caller (UNKNOWN) or
+    the gate (TRUSTED). Owner/trusted normal turns fall through to the gate."""
     import jarvis_identity as _ji
-    role = principal.role
-    now = time.time()
 
-    # 1. Owner enrollment commands — consumed, never reach the brain. Gated on
-    #    addressed so ambient owner chatter can't trigger an enrollment.
-    if role is _ji.Role.OWNER:
-        if addressed:
-            cmd = _parse_owner_auth(text)
-            if cmd is not None:
-                return (True, _exec_owner_auth(cmd[0], cmd[1]))
-        return (False, None)
+    # Owner enrollment/auth commands — consumed, never reach the brain. Gated on
+    # addressed so ambient owner chatter can't trigger an enrollment.
+    if principal.role is _ji.Role.OWNER and addressed:
+        cmd = _parse_owner_auth(text)
+        if cmd is not None:
+            return (True, _exec_owner_auth(cmd[0], cmd[1]))
 
-    # 2. Name-capture: an unknown we just challenged states their name. Match
-    #    the SAME voiceprint so a different person can't answer for them.
-    if (_awaiting_name["active"]
-            and now - _awaiting_name["ts"] < _AWAITING_NAME_TIMEOUT_S
-            and principal.embedding is not None
-            and _awaiting_name["embedding"] is not None
-            and _cosine(principal.embedding, _awaiting_name["embedding"]) >= _SAME_SPEAKER_COS):
-        name = _extract_name(text)
-        if name:
-            _ji.stash_pending(name, principal.embedding)
-            _awaiting_name["active"] = False
-            owner = _ji.get_owner()
-            owner_name = (owner["name"] if owner else "Hampton")
-            return (True, f"Thank you, {name}. {owner_name} will need to authorise you.")
-        return (True, "I didn't catch your name — what is it?")
-
-    # 3. Unknown + addressed → challenge and stash the voiceprint.
-    if role is _ji.Role.UNKNOWN:
-        if addressed:
-            _awaiting_name.update(active=True, embedding=principal.embedding, ts=now)
-            return (True, "I don't recognise you. What's your name?")
-        return (False, None)  # unaddressed unknown → caller ambient-drops
-
-    # 4. Trusted normal turn → gate.
+    # Everyone else (and non-command owner turns) falls through to the gate /
+    # ambient drop. No challenge, no name capture.
     return (False, None)
 
 
 # ── Owner enroll-by-voice (Approach A: in the running loop) ───────────────────
 # Deterministic, model-inaccessible bootstrap so the FIRST owner can be enrolled
 # purely by voice — no kubectl exec, no second mic stream. Closes the open-mode
-# gap: in open mode `_identify_speaker_from_audio` returns None and the Phase-2
+# gap: in open mode `_identify_speaker_from_audio` returns None and the identity
 # state machine never runs, so it can never self-enroll the first owner. This
 # trigger runs REGARDLESS of has_owner, piggybacking on `audio_16k` the loop
 # already captured (zero second stream → zero mic contention with the daemon).
@@ -2081,8 +1973,8 @@ ECHO_TAIL_S = float(os.environ.get("ECHO_TAIL_S", "1.0"))
 ECHO_MATCH_RATIO = float(os.environ.get("ECHO_MATCH_RATIO", "0.80"))
 
 # Word-boundary, case-insensitive "jarvis" — the direct-address signal. Used
-# by BOTH the addressee gate AND the echo-exemption (FIX 1a): an utterance that
-# names JARVIS is ALWAYS honored and is never echo-dropped. Word-boundary so
+# by BOTH the addressee gate AND the echo-exemption: an utterance that names
+# JARVIS is ALWAYS honored and is never echo-dropped. Word-boundary so
 # substrings ("jarvises", a brand name) don't false-fire, but plain "jarvis"
 # anywhere in the sentence ("hey jarvis", "jarvis,", "ok jarvis what's up") does.
 _NAME_ADDR_RE = re.compile(r"\bjarvis\b", re.IGNORECASE)
@@ -2301,7 +2193,7 @@ def _stream_on_sonos_impl(sonos, sentences, host_ip, http_port, turn_n,
         print(f"  sonos vol set → {vol} ({'persona' if persona_vol is not None else 'schedule'})")
     except Exception as exc:
         print(f"  sonos vol set failed: {exc}")
-    # ── FIX 2: UNMUTE BEFORE EVERY REPLY ─────────────────────────────────
+    # ── Unmute before every reply ────────────────────────────────────────
     # JARVIS can device-mute the Sonos (e.g. the brain calls sonos_mute on a
     # "shut up") and nothing ever un-mutes it, silently swallowing all future
     # replies ("nothing came through the speaker"). Force mute=False before we
@@ -2311,7 +2203,7 @@ def _stream_on_sonos_impl(sonos, sentences, host_ip, http_port, turn_n,
     # idempotent SOAP call; non-fatal if it fails.
     try:
         if getattr(sonos, "mute", False):
-            print("  sonos: was muted — unmuting before reply (FIX 2)")
+            print("  sonos: was muted — unmuting before reply")
         sonos.mute = False
     except Exception as exc:
         print(f"  sonos unmute failed (continuing): {exc}")
@@ -2705,17 +2597,15 @@ def main() -> None:
                             "match_ratio": float(echo_ratio),
                         })
 
-                    # ── Speaker-ID gate (drops unknown voices in ambient mode) ──
-                    # If owner is enrolled, require voice match before letting
-                    # through. Without enrollment, pass-through (back-compat for
-                    # fresh deployments).
-                    # ── Speaker-ID + identity state machine (Phase 1/2) ──
+                    # ── Speaker-ID + identity state machine ──────────────
+                    # If an owner is enrolled, resolve the voice to a Principal
+                    # (OWNER/TRUSTED/UNKNOWN). Without enrollment, principal is
+                    # None → open mode (back-compat for fresh deployments).
                     import jarvis_identity as _ji
                     principal = _identify_speaker_from_audio(audio_16k)
-                    low = user_text.lower()
-                    # name_addressed computed above (FIX 1a echo exemption);
-                    # reuse it so the gate and the exemption agree on what
-                    # "the user said jarvis" means (word-boundary, case-insens).
+                    # name_addressed computed above (echo exemption); reuse it
+                    # so the gate and the exemption agree on what "the user said
+                    # jarvis" means (word-boundary, case-insensitive).
                     # Measure the follow-up window from when the owner STARTED
                     # speaking (t_speech_start), NOT from now: a long question
                     # + STT latency must not push a reply that began inside the
@@ -2754,10 +2644,11 @@ def main() -> None:
                             turn_outcome = "owner_enroll"
                             continue
 
-                    # Phase 2: owner-auth + enroll-by-voice. Runs BEFORE the
-                    # ambient drop so an unknown answering "I'm Alex" (no wake
-                    # word) is still captured. Owner auth commands are consumed
-                    # here and never reach the brain.
+                    # Owner-auth commands (approve/reject/remove a pending
+                    # enrollee) are consumed here and never reach the brain.
+                    # Non-owners produce no identity action — UNKNOWN drops
+                    # silently below, TRUSTED falls through to the gate (which
+                    # silently drops it too). No name challenge, no name capture.
                     if principal is not None:
                         consumed, id_reply = _identity_turn(principal, user_text, addressed)
                         if consumed:
@@ -2776,8 +2667,9 @@ def main() -> None:
                             turn_outcome = "identity_action"
                             continue
                         if principal.role is _ji.Role.UNKNOWN:
-                            # Unaddressed / unhandled unknown → ambient-drop
-                            # (don't broadcast that we're listening).
+                            # Any unknown speaker (addressed or not) → silent
+                            # drop. Owner-only policy: never broadcast that we're
+                            # listening, never challenge for a name.
                             print(f"  (unknown speaker drop {dur:.1f}s): {user_text[:70]!r}  conf={principal.confidence:.2f}")
                             turn_span.add_event("unknown_speaker_drop", {
                                 "dur_s": float(dur),
@@ -2793,7 +2685,7 @@ def main() -> None:
                         turn_span.set_attribute("speaker_role", principal.role.value)
                         turn_span.set_attribute("speaker_confidence", float(principal.confidence))
 
-                        # ── FIX 3: continuous voice adaptation ──────────
+                        # ── Continuous voice adaptation ─────────────────
                         # On a HIGH-confidence OWNER match, fold this turn's
                         # embedding into the owner template so recognition
                         # sharpens + tracks the owner over time. adapt_owner
