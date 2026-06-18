@@ -1,9 +1,9 @@
 ---
-# In-cluster Kaniko build for jarvis-edge on the feat/jarvis-identity-gate ref.
+# In-cluster Kaniko build for jarvis-edge on the fix/jarvis-edge-turntaking-barge-in-voice-adapt ref.
 #
 # The ARC GH-Actions workflow (build-jarvis-edge.yml) only fires on `main`;
 # this job is the off-`main` build path, mirroring the mem0 kaniko idiom.
-# Builds from the iac git context at hwcopeland/iac on feat/jarvis-identity-gate,
+# Builds from the iac git context at hwcopeland/iac on fix/jarvis-edge-turntaking-barge-in-voice-adapt,
 # sub-context rke2/ai/jarvis-edge (FROM zot.hwcopeland.net/ai/jarvis-edge-base:latest),
 # and pushes zot.hwcopeland.net/ai/jarvis-edge:latest (+ a sha tag).
 #
@@ -46,11 +46,11 @@ spec:
         - name: kaniko
           image: gcr.io/kaniko-project/executor:latest
           args:
-            - "--context=git://github.com/hwcopeland/iac.git#refs/heads/feat/jarvis-identity-gate"
+            - "--context=git://github.com/hwcopeland/iac.git#refs/heads/fix/jarvis-edge-turntaking-barge-in-voice-adapt"
             - "--context-sub-path=rke2/ai/jarvis-edge"
             - "--dockerfile=Dockerfile"
             - "--destination=zot.hwcopeland.net/ai/jarvis-edge:latest"
-            - "--destination=zot.hwcopeland.net/ai/jarvis-edge:sha-766412a"
+            - "--destination=zot.hwcopeland.net/ai/jarvis-edge:sha-turntaking"
             - "--cache=false"
             - "--snapshot-mode=redo"
             - "--verbosity=info"

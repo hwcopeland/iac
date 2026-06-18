@@ -483,6 +483,11 @@ Tools:
   "mute" / "pause the music" / "what's playing": use the
   mcp__jarvis_sonos__* tools. Default target is the Bedroom Play:1
   (where JARVIS speaks). For "the kitchen speaker" pass room="Kitchen".
+- For "shut up" / "be quiet" / "stop" / "stop talking" / "enough": this
+  means stop the CURRENT reply only. Reply with a SHORT acknowledgement
+  ("Of course, sir.") and do NOT call sonos_mute on — muting the device
+  silences ALL future replies, which is wrong. Use sonos_pause if you must
+  halt audio. Never leave the speaker muted.
 - You HAVE access to the owner's iCloud Calendar + Reminders via CalDAV.
   For any calendar / schedule / "what's on today" / appointment question,
   call mcp__jarvis_personal__calendar_today. For reminders / to-dos / "what
@@ -2065,6 +2070,13 @@ def _echo_ratio(a: str, b: str) -> float:
 ECHO_TAIL_S = float(os.environ.get("ECHO_TAIL_S", "1.0"))
 ECHO_MATCH_RATIO = float(os.environ.get("ECHO_MATCH_RATIO", "0.6"))
 
+# Word-boundary, case-insensitive "jarvis" — the direct-address signal. Used
+# by BOTH the addressee gate AND the echo-exemption (FIX 1a): an utterance that
+# names JARVIS is ALWAYS honored and is never echo-dropped. Word-boundary so
+# substrings ("jarvises", a brand name) don't false-fire, but plain "jarvis"
+# anywhere in the sentence ("hey jarvis", "jarvis,", "ok jarvis what's up") does.
+_NAME_ADDR_RE = re.compile(r"\bjarvis\b", re.IGNORECASE)
+
 
 def _is_self_echo(user_text: str, since_jarvis: float) -> tuple[bool, float]:
     """Return (drop_as_echo, match_ratio). Drop only when the utterance is
@@ -2094,12 +2106,22 @@ def _is_self_echo(user_text: str, since_jarvis: float) -> tuple[bool, float]:
 # shared stream feeding both capture and the spotter) could half-break the
 # loop, which the task explicitly forbids. See STATUS in the PR for the path
 # to flip this on safely.
-BARGEIN_ENABLED = os.environ.get("BARGEIN_ENABLED", "") == "1"
+# Barge-in is now ON by default. The contention risk the prior agent flagged
+# (a SECOND InputStream on the Yeti) is gone: the spotter reads from the SHARED
+# main InputStream opened in main(), so there is only ever ONE stream on the
+# device for the whole session. Set BARGEIN_ENABLED=0 to disable.
+BARGEIN_ENABLED = os.environ.get("BARGEIN_ENABLED", "1") == "1"
 BARGEIN_THRESHOLD = float(os.environ.get("BARGEIN_THRESHOLD", "0.6"))
-# Mic params published by main() so the barge-in spotter can open its own
-# stream from inside the speak path without threading args through every
-# _stream_on_sonos caller (the mic loop, identity replies, run-announce).
+# Mic params published by main() so the barge-in spotter can resample its
+# frames to 16k without threading args through every _stream_on_sonos caller
+# (the mic loop, identity replies, run-announce).
 _MIC_PARAMS: tuple | None = None
+# The SINGLE live sounddevice InputStream opened by main(). The barge-in
+# spotter reads from THIS during playback (the main loop is blocked in the
+# Sonos drain loop while JARVIS talks, so the stream is otherwise idle) —
+# one shared stream, no second-stream PortAudio contention. None until main()
+# opens it; the spotter no-ops (barge-in disabled this turn) if it's None.
+_SHARED_STREAM = None
 
 
 def _barge_in_available() -> bool:
@@ -2115,13 +2137,24 @@ def _barge_in_available() -> bool:
 
 
 class _BargeSpotter:
-    """Listens on its OWN short-lived mic stream during Sonos playback and
-    sets .hit True when 'jarvis' is heard above threshold. Fail-open: any
-    init/runtime error disables the spotter for this turn (normal playback
-    continues) rather than taking down the speak path."""
+    """Listens for "jarvis" DURING Sonos playback and sets .hit True when the
+    wake word is heard above threshold, so the user can interrupt JARVIS.
 
-    def __init__(self, mic_idx, native_rate, native_chunk):
-        self.mic_idx = mic_idx
+    Reads from the SHARED main InputStream (passed in) — NOT a second device
+    stream — so there is only ever one PortAudio stream on the Yeti for the
+    whole session. The main loop is blocked in the Sonos drain loop while
+    JARVIS talks, so draining the shared stream here doesn't race the capture
+    loop (which isn't reading during playback).
+
+    Gated to the wake word "jarvis" because there is NO acoustic echo
+    cancellation: the Yeti hears the Sonos, and JARVIS rarely says its own
+    name, so the Sonos audio itself can't self-trigger an interrupt.
+
+    Fail-open: any init/runtime error disables the spotter for this turn
+    (normal playback continues) rather than taking down the speak path."""
+
+    def __init__(self, stream, native_rate, native_chunk):
+        self.stream = stream
         self.native_rate = native_rate
         self.native_chunk = native_chunk
         self.hit = False
@@ -2135,9 +2168,12 @@ class _BargeSpotter:
     def stop(self):
         self._stop.set()
         if self._thread:
-            self._thread.join(timeout=1.0)
+            self._thread.join(timeout=1.5)
 
     def _run(self):
+        if self.stream is None:
+            print("barge-in: no shared stream — disabled this turn")
+            return
         try:
             from openwakeword.model import Model as _OWWModel
             oww = _OWWModel(wakeword_models=["hey_jarvis"], inference_framework="onnx")
@@ -2145,20 +2181,28 @@ class _BargeSpotter:
             print(f"barge-in: spotter init failed ({exc!r}) — disabled this turn")
             return
         try:
-            with sd.InputStream(samplerate=self.native_rate, channels=1,
-                                dtype="float32", blocksize=self.native_chunk,
-                                device=self.mic_idx) as stream:
-                buf = np.empty(0, dtype=np.float32)
-                while not self._stop.is_set():
-                    data, _ = stream.read(self.native_chunk)
-                    mono = data.flatten().astype(np.float32)
-                    buf = np.concatenate([buf, _to_16k(mono, self.native_rate)])
-                    while len(buf) >= OWW_CHUNK:
-                        frame, buf = buf[:OWW_CHUNK], buf[OWW_CHUNK:]
-                        scores = oww.predict((frame * 32767).astype(np.int16))
-                        if any(s >= BARGEIN_THRESHOLD for s in scores.values()):
-                            self.hit = True
-                            return
+            buf = np.empty(0, dtype=np.float32)
+            while not self._stop.is_set():
+                # read_available avoids blocking forever if playback ends and
+                # stop() fires; fall back to a fixed read if unsupported.
+                try:
+                    avail = self.stream.read_available
+                except Exception:
+                    avail = self.native_chunk
+                n = self.native_chunk if avail and avail >= self.native_chunk \
+                    else (avail or 0)
+                if not n:
+                    time.sleep(0.01)
+                    continue
+                data, _ = self.stream.read(n)
+                mono = data.flatten().astype(np.float32)
+                buf = np.concatenate([buf, _to_16k(mono, self.native_rate)])
+                while len(buf) >= OWW_CHUNK:
+                    frame, buf = buf[:OWW_CHUNK], buf[OWW_CHUNK:]
+                    scores = oww.predict((frame * 32767).astype(np.int16))
+                    if any(s >= BARGEIN_THRESHOLD for s in scores.values()):
+                        self.hit = True
+                        return
         except Exception as exc:  # noqa: BLE001
             print(f"barge-in: spotter run error ({exc!r}) — disabled this turn")
 
@@ -2247,6 +2291,20 @@ def _stream_on_sonos_impl(sonos, sentences, host_ip, http_port, turn_n,
         print(f"  sonos vol set → {vol} ({'persona' if persona_vol is not None else 'schedule'})")
     except Exception as exc:
         print(f"  sonos vol set failed: {exc}")
+    # ── FIX 2: UNMUTE BEFORE EVERY REPLY ─────────────────────────────────
+    # JARVIS can device-mute the Sonos (e.g. the brain calls sonos_mute on a
+    # "shut up") and nothing ever un-mutes it, silently swallowing all future
+    # replies ("nothing came through the speaker"). Force mute=False before we
+    # play so EVERY reply is audible regardless of prior state. A "shut up" /
+    # "be quiet" / "stop" should cut the CURRENT reply (stop playback) — it must
+    # never leave the device muted such that the next reply is silent. Cheap
+    # idempotent SOAP call; non-fatal if it fails.
+    try:
+        if getattr(sonos, "mute", False):
+            print("  sonos: was muted — unmuting before reply (FIX 2)")
+        sonos.mute = False
+    except Exception as exc:
+        print(f"  sonos unmute failed (continuing): {exc}")
     # Clear stale queue before we start enqueueing this turn.
     try:
         sonos.clear_queue()
@@ -2286,9 +2344,10 @@ def _stream_on_sonos_impl(sonos, sentences, host_ip, http_port, turn_n,
     # playback on its own stream; on a hit we stop the Sonos and break the
     # drain early so the main loop captures the interrupting turn next.
     spotter = None
-    if BARGEIN_ENABLED and _MIC_PARAMS is not None:
+    if BARGEIN_ENABLED and _SHARED_STREAM is not None and _MIC_PARAMS is not None:
         try:
-            spotter = _BargeSpotter(*_MIC_PARAMS)
+            _, native_rate_p, native_chunk_p = _MIC_PARAMS
+            spotter = _BargeSpotter(_SHARED_STREAM, native_rate_p, native_chunk_p)
             spotter.start()
         except Exception as exc:  # noqa: BLE001
             print(f"  barge-in: spotter start failed ({exc!r})")
@@ -2370,8 +2429,12 @@ def main() -> None:
     print(f"sonos: {SONOS_IP or 'NOT SET — set SONOS_IP env var'}")
     if BARGEIN_ENABLED:
         ok = _barge_in_available()
-        print(f"barge-in: ENABLED (openWakeWord available={ok}, "
-              f"threshold={BARGEIN_THRESHOLD})")
+        print(f"barge-in: ENABLED via shared stream (openWakeWord available={ok}, "
+              f"threshold={BARGEIN_THRESHOLD}) — say 'jarvis' during a reply to "
+              f"cut it off")
+        if not ok:
+            print("barge-in: openWakeWord unavailable — interrupt won't fire; "
+                  "capture still re-arms instantly when playback ends")
     else:
         print("barge-in: disabled (set BARGEIN_ENABLED=1 to enable wake-word interrupt)")
 
@@ -2459,6 +2522,10 @@ def main() -> None:
 
     with sd.InputStream(samplerate=native_rate, channels=1, dtype="float32",
                         blocksize=native_chunk, device=mic_idx) as stream:
+        # Publish the single live stream so the barge-in spotter reads from it
+        # during playback (one shared stream — no second-device contention).
+        global _SHARED_STREAM
+        _SHARED_STREAM = stream
         print("\nready — ambient mode (say 'jarvis' anywhere in a sentence). Ctrl-C to quit.\n")
         try:
             while True:
@@ -2575,6 +2642,16 @@ def main() -> None:
                         turn_outcome = "empty_text"
                         continue
 
+                    # ── DIRECT ADDRESS IS ALWAYS HONORED (highest priority) ──
+                    # If the user explicitly says "jarvis", JARVIS MUST respond
+                    # — never echo-suppressed, never dropped. Self-echo of
+                    # JARVIS's own speech rarely contains a FRESH "jarvis"
+                    # (JARVIS doesn't say its own name), and once the owner is
+                    # enrolled the owner-voice gate handles any true self-echo
+                    # that did. So a name-addressed utterance bypasses the
+                    # text-based echo drop entirely. (Word-boundary, case-insens.)
+                    name_addressed = bool(_NAME_ADDR_RE.search(user_text))
+
                     # ── Echo suppression (phase 2: smart, text-based) ────
                     # JARVIS has finished speaking. If this utterance landed
                     # in the short tail window AND fuzzy-matches what JARVIS
@@ -2584,6 +2661,15 @@ def main() -> None:
                     # replaces the old blanket ECHO_SUPPRESS_S window that ate
                     # the user's reply ~half the time.
                     is_echo, echo_ratio = _is_self_echo(user_text, since_jarvis)
+                    if is_echo and name_addressed:
+                        # Direct address overrides the echo drop — pass it through.
+                        print(f"  (echo exempt: name-addressed within tail, "
+                              f"match={echo_ratio:.2f}): {user_text[:60]!r}")
+                        turn_span.add_event("echo_exempt_name_addressed", {
+                            "since_jarvis_s": float(since_jarvis),
+                            "match_ratio": float(echo_ratio),
+                        })
+                        is_echo = False
                     if is_echo:
                         print(f"  (echo drop {dur:.1f}s; since_jarvis="
                               f"{since_jarvis:.1f}s, match={echo_ratio:.2f}): "
@@ -2617,7 +2703,10 @@ def main() -> None:
                     import jarvis_identity as _ji
                     principal = _identify_speaker_from_audio(audio_16k)
                     low = user_text.lower()
-                    addressed = ("jarvis" in low) or (time.time() < engaged_until)
+                    # name_addressed computed above (FIX 1a echo exemption);
+                    # reuse it so the gate and the exemption agree on what
+                    # "the user said jarvis" means (word-boundary, case-insens).
+                    addressed = name_addressed or (time.time() < engaged_until)
 
                     # ── Owner enroll-by-voice (Approach A) ───────────────
                     # Deterministic bootstrap. In OPEN mode (principal is None,
@@ -2687,6 +2776,34 @@ def main() -> None:
                         turn_span.set_attribute("speaker", str(principal.display_name))
                         turn_span.set_attribute("speaker_role", principal.role.value)
                         turn_span.set_attribute("speaker_confidence", float(principal.confidence))
+
+                        # ── FIX 3: continuous voice adaptation ──────────
+                        # On a HIGH-confidence OWNER match, fold this turn's
+                        # embedding into the owner template so recognition
+                        # sharpens + tracks the owner over time. adapt_owner
+                        # GUARDS HARD: it no-ops unless score >= ADAPT_MIN_SCORE
+                        # (well above the owner grant threshold), so it can
+                        # never be drifted onto a borderline/impostor voice.
+                        # Cheap (one dot product); fail-open — never blocks the
+                        # turn. Only when an embedding is actually attached.
+                        if (principal.role is _ji.Role.OWNER
+                                and getattr(principal, "embedding", None) is not None):
+                            try:
+                                import jarvis_voice_id as _vid
+                                _ad = _vid.adapt_owner(principal.embedding,
+                                                       float(principal.confidence))
+                                if _ad.get("status") == "adapted":
+                                    print(f"  [vid] owner voice adapted "
+                                          f"(score={principal.confidence:.3f}, "
+                                          f"template_cos={_ad.get('template_cos')}, "
+                                          f"n={_ad.get('adapt_count')})")
+                                    turn_span.add_event("voice_adapted", {
+                                        "score": float(principal.confidence),
+                                        "template_cos": float(_ad.get("template_cos", 1.0)),
+                                        "adapt_count": int(_ad.get("adapt_count", 0)),
+                                    })
+                            except Exception as _aexc:  # noqa: BLE001
+                                print(f"  [vid] adapt skipped ({_aexc!r})")
 
                     # ── Ambient addressee gate (owner/trusted + open mode) ──
                     # Must contain "jarvis" OR we're in the follow-up window.

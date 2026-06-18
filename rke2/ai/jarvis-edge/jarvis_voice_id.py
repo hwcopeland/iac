@@ -63,6 +63,26 @@ _THRESHOLD_BORDER = 0.60
 # identify() itself is unchanged — this only governs the OWNER *grant*.
 OWNER_THRESHOLD = 0.75
 
+# ── Continuous voice adaptation (learn the owner's voice over time) ───────────
+# Enrollment is a one-shot averaged reference; voices drift (time of day,
+# illness, mic position) and the static template slowly mismatches. We fold
+# HIGH-CONFIDENCE owner utterances back into the stored embedding via a decaying
+# running average so recognition sharpens + tracks the owner over time.
+#
+# GUARDED HARD against drift onto another voice:
+#   * Only adapt on a score WELL ABOVE the owner grant threshold
+#     (ADAPT_MIN_SCORE, default 0.82 ≫ OWNER_THRESHOLD 0.75). A borderline or
+#     impostor-range match NEVER adapts — the dangerous direction is pulling
+#     the owner template toward a stranger, so we bias far against it.
+#   * Tiny per-turn step (ADAPT_ALPHA, default 0.05): even a rare bad accept
+#     moves the template only marginally, and subsequent genuine owner turns
+#     pull it back. The template can never lurch onto a new voice in one turn.
+#   * Cheap: one dot product + normalize, no re-embedding, no disk scan beyond
+#     the single owner .npy. Safe to call every owner turn.
+ADAPT_ENABLED = os.environ.get("VOICE_ADAPT_ENABLED", "1") == "1"
+ADAPT_MIN_SCORE = float(os.environ.get("VOICE_ADAPT_MIN_SCORE", "0.82"))
+ADAPT_ALPHA = float(os.environ.get("VOICE_ADAPT_ALPHA", "0.05"))
+
 # Singleton encoder — loaded lazily so importing this module is cheap.
 _encoder = None
 
@@ -157,6 +177,70 @@ def enroll(name: str, embeddings: list[np.ndarray] | np.ndarray,
                 "person specifically. -->\n"
             )
     return meta
+
+
+def adapt_owner(embedding: np.ndarray, score: float) -> dict:
+    """Fold a HIGH-CONFIDENCE owner utterance into the owner's stored template
+    via a decaying running average. Returns a status dict (never raises into
+    the caller — fails closed by skipping adaptation).
+
+    Hard guards (see ADAPT_* constants):
+      * adaptation must be enabled,
+      * ``score`` MUST be >= ADAPT_MIN_SCORE (well above OWNER_THRESHOLD), so
+        only an unambiguous owner match can ever move the template,
+      * an owner must actually be enrolled.
+
+    On adapt: ``new = norm((1-α)·old + α·utterance)``. α is small, so a single
+    accidental accept barely moves the template and genuine owner turns pull it
+    back. ``num_clips`` is bumped so the metadata reflects the adaptation count.
+    Persisted in place to /state/voices/<owner>.npy + .json (atomic-ish: numpy
+    save then json dump)."""
+    if not ADAPT_ENABLED:
+        return {"status": "skipped", "reason": "disabled"}
+    # GUARD: only adapt on a score WELL above the owner grant threshold. This
+    # is the security-critical line — never adapt on borderline/impostor scores.
+    if not (float(score) >= ADAPT_MIN_SCORE):
+        return {"status": "skipped", "reason": "below_adapt_threshold",
+                "score": float(score), "min": ADAPT_MIN_SCORE}
+    owner = None
+    for e in _load_enrolled():
+        if e["role"] == "owner":
+            owner = e
+            break
+    if owner is None:
+        return {"status": "skipped", "reason": "no_owner"}
+    try:
+        emb = np.asarray(embedding, dtype=np.float32)
+        emb_n = emb / (np.linalg.norm(emb) + 1e-9)
+        old = np.asarray(owner["embedding"], dtype=np.float32)
+        old_n = old / (np.linalg.norm(old) + 1e-9)
+        blended = (1.0 - ADAPT_ALPHA) * old_n + ADAPT_ALPHA * emb_n
+        blended /= np.linalg.norm(blended) + 1e-9
+        blended = blended.astype(np.float32)
+
+        slug = owner["slug"]
+        np.save(_VOICES_DIR / f"{slug}.npy", blended)
+        # Bump metadata so list_enrolled / debugging shows the adaptation count.
+        meta_path = _VOICES_DIR / f"{slug}.json"
+        try:
+            with open(meta_path) as f:
+                meta = json.load(f)
+        except (OSError, ValueError):
+            meta = {k: v for k, v in owner.items()
+                    if k not in ("embedding", "profile_path")}
+        meta["num_clips"] = int(meta.get("num_clips", 1)) + 1
+        meta["adapted_at"] = int(time.time())
+        meta["adapt_count"] = int(meta.get("adapt_count", 0)) + 1
+        with open(meta_path, "w") as f:
+            json.dump(meta, f, indent=2)
+        # How far the template moved this turn (cosine of old vs new). Useful
+        # for spotting drift in logs/traces; should stay very close to 1.0.
+        moved = float(np.dot(old_n, blended))
+        return {"status": "adapted", "slug": slug, "score": float(score),
+                "alpha": ADAPT_ALPHA, "template_cos": round(moved, 5),
+                "adapt_count": meta["adapt_count"]}
+    except Exception as exc:  # noqa: BLE001
+        return {"status": "error", "message": str(exc)}
 
 
 def remove(name: str) -> bool:
