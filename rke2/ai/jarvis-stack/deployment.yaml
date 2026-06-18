@@ -253,6 +253,17 @@ spec:
         - name: jarvis-edge
           image: zot.hwcopeland.net/ai/jarvis-edge:latest
           imagePullPolicy: Always
+          # HOME=/tmp is ephemeral, so claude's config (~/.claude.json) is lost
+          # on every restart and the brain errors "config not found" → "I lost
+          # my connection" until restored. The .claude DIR (incl. backups) IS
+          # PVC-backed, so restore the newest backup SYNCHRONOUSLY here, before
+          # edge.py serves a single turn (a postStart hook races the first turn).
+          command: ["sh", "-c"]
+          args:
+            - |
+              BK=$(ls -t /tmp/.claude/backups/.claude.json.backup.* 2>/dev/null | head -1)
+              [ -n "$BK" ] && [ ! -s /tmp/.claude.json ] && cp "$BK" /tmp/.claude.json
+              exec python -u edge.py
           ports:
             - name: audio-http
               containerPort: 8088
@@ -275,6 +286,37 @@ spec:
             runAsUser: 1000
             runAsGroup: 100
           env:
+            # Claude Max headless token (1yr). Value lives ONLY in the
+            # jarvis-claude-token cluster Secret (ESO/Vaultwarden) — never here.
+            # Without this the brain 401s on every turn.
+            - name: CLAUDE_CODE_OAUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: jarvis-claude-token
+                  key: token
+            # iCloud CalDAV (Calendar + Reminders). Values ONLY in the
+            # jarvis-icloud-credentials cluster Secret. Names must match
+            # jarvis_personal.py _caldav() (ICLOUD_APPLE_ID / ICLOUD_APP_PASSWORD).
+            - name: ICLOUD_CALDAV_URL
+              value: "https://caldav.icloud.com"
+            - name: ICLOUD_APPLE_ID
+              valueFrom:
+                secretKeyRef:
+                  name: jarvis-icloud-credentials
+                  key: username
+            - name: ICLOUD_APP_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: jarvis-icloud-credentials
+                  key: password
+            # Local timezone so the SONOS day/night volume schedule resolves
+            # against local hours (else the container is UTC).
+            - name: TZ
+              value: "America/Chicago"
+            - name: TTS_CFG
+              value: "0.4"
+            - name: IG_FOLLOWUP_POLL_ENABLED
+              value: "0"
             # STT hits the sibling container over the shared pod localhost.
             - name: STT_URL
               value: "http://localhost:8766"
