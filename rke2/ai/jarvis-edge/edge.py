@@ -257,8 +257,10 @@ WAKE_THRESHOLD = 0.65        # was 0.5 — bumped to cut kitchen false-fires
 SILENCE_SECS = 0.6
 MAX_UTTERANCE_SECS = 8.0
 MIN_UTTERANCE_SECS = 0.4
-ADDRESSEE_WINDOW_S = 6.0     # post-reply follow-up window: speech in this
-                              # window doesn't need "jarvis"
+ADDRESSEE_WINDOW_S = 8.0     # follow-up window measured from when JARVIS
+                              # FINISHES speaking to when the owner STARTS
+                              # speaking — speech that starts in this window
+                              # doesn't need "jarvis".
 # Self-echo suppression knobs live next to _is_self_echo() (ECHO_TAIL_S,
 # ECHO_MATCH_RATIO). The old blanket ECHO_SUPPRESS_S window was removed — it
 # ate the user's genuine reply for 3.5s after every turn. Capture re-arms
@@ -2706,7 +2708,13 @@ def main() -> None:
                     # name_addressed computed above (FIX 1a echo exemption);
                     # reuse it so the gate and the exemption agree on what
                     # "the user said jarvis" means (word-boundary, case-insens).
-                    addressed = name_addressed or (time.time() < engaged_until)
+                    # Measure the follow-up window from when the owner STARTED
+                    # speaking (t_speech_start), NOT from now: a long question
+                    # + STT latency must not push a reply that began inside the
+                    # window back out of it. (Was the "do I have to say jarvis
+                    # every time" bug.)
+                    _t_addr = t_speech_start if t_speech_start is not None else time.time()
+                    addressed = name_addressed or (_t_addr < engaged_until)
 
                     # ── Owner enroll-by-voice (Approach A) ───────────────
                     # Deterministic bootstrap. In OPEN mode (principal is None,
