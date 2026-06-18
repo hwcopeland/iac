@@ -1586,7 +1586,8 @@ def _identity_turn(principal, text: str, addressed: bool):
 # trigger is a fixed regex (never model-driven), preserving the invariant that
 # the model can never enroll a voice.
 _OWNER_ENROLL_TIMEOUT_S = 60.0
-_OWNER_ENROLL_TARGET = 3          # number of clips to average
+_OWNER_ENROLL_TARGET = 5          # number of clips to average (more = tighter
+                                  # template, better owner/other separation)
 _OWNER_ENROLL_MIN_COS = 0.60     # clips must agree (reject noise/echo)
 _OWNER_ENROLL_NAME = os.environ.get("OWNER_NAME", "Hampton")
 
@@ -1645,7 +1646,7 @@ def _owner_enroll_turn(audio_16k, text: str, addressed: bool):
         print(f"  [enroll] owner enrollment STARTED ({len(_owner_enroll['embeddings'])}"
               f"/{_OWNER_ENROLL_TARGET} clips)")
         return (True, ("Certainly, sir. Say a sentence or two so I can learn your "
-                       "voice — I need three short phrases. Go ahead."))
+                       "voice — I need five short phrases. Go ahead."))
 
     # Active enrollment — allow an explicit cancel.
     if _OWNER_ENROLL_CANCEL_RE.search(text):
@@ -2069,8 +2070,15 @@ def _echo_ratio(a: str, b: str) -> float:
 # Sonos audio; only within this window do we even consider an echo drop for a
 # non-speaking-state utterance. ECHO_MATCH_RATIO is the fuzzy-match threshold
 # above which a transcript is judged to be JARVIS's own words echoed back.
+#
+# Raised to 0.80 (was 0.6): a real owner follow-up that QUOTES JARVIS's words
+# ("why do you have no tool access") fuzzy-matched JARVIS's last line at ~0.64
+# and got wrongly echo-dropped. Only near-verbatim echoes should drop now. This
+# is safe because the OWNER-VOICE gate is the real self-echo defense — JARVIS's
+# Sonos TTS never matches Hampton's voiceprint, so a genuine echo is caught by
+# voice id regardless; the text ratio is only a coarse tail-window backstop.
 ECHO_TAIL_S = float(os.environ.get("ECHO_TAIL_S", "1.0"))
-ECHO_MATCH_RATIO = float(os.environ.get("ECHO_MATCH_RATIO", "0.6"))
+ECHO_MATCH_RATIO = float(os.environ.get("ECHO_MATCH_RATIO", "0.80"))
 
 # Word-boundary, case-insensitive "jarvis" — the direct-address signal. Used
 # by BOTH the addressee gate AND the echo-exemption (FIX 1a): an utterance that

@@ -39,6 +39,7 @@ import jarvis_voice_id as _vid
 # Re-export the voiceprint + pending primitives so callers use ONE module.
 from jarvis_voice_id import (  # noqa: F401
     OWNER_THRESHOLD,
+    _THRESHOLD_MATCH,
     authenticate_pending,
     clear_pending,
     embed_from_audio,
@@ -52,6 +53,25 @@ from jarvis_voice_id import (  # noqa: F401
 )
 
 _STATE_ROOT = Path(os.environ.get("JARVIS_STATE_ROOT", "/state"))
+
+# ── owner session hysteresis ──────────────────────────────────────────────────
+# Resemblyzer owner self-similarity drifts turn-to-turn (illness, time of day,
+# mic distance, prosody) — live owner turns range ~0.72–0.89, straddling the
+# OWNER_THRESHOLD (0.75) grant bar. A borderline DIP used to downgrade the OWNER
+# to TRUSTED mid-conversation, which (a) routed Hampton to the TOOLLESS locked
+# brain ("I have no tool access") and (b) tripped the identity challenge
+# ("I don't recognise you") on the real owner.
+#
+# Fix: once an owner is CONFIDENTLY established (top match is the owner template
+# AND score >= OWNER_THRESHOLD), a subsequent borderline owner match
+# (score in [_THRESHOLD_MATCH, OWNER_THRESHOLD)) within OWNER_STICKY_S keeps
+# role=OWNER instead of downgrading. This NEVER lowers the COLD bar: a first /
+# stale match still needs the full 0.75, so a stranger gains nothing.
+OWNER_STICKY_S = float(os.environ.get("VOICE_OWNER_STICKY_S", "90.0"))
+
+# Timestamp (time.time()) of the last CONFIDENT owner turn, or 0.0 if none yet
+# this process. Module-level so it survives across turns within the daemon.
+_last_confident_owner_ts: float = 0.0
 
 
 class Role(str, Enum):
@@ -94,12 +114,21 @@ def _profile_path(slug: str) -> str:
 def resolve_voice(embedding, *, source: str = "voice") -> Principal:
     """Map a Resemblyzer embedding to a Principal.
 
-    OWNER is granted ONLY on a strong match (score ≥ OWNER_THRESHOLD). A weaker
-    match to the owner's voiceprint is DOWNGRADED to TRUSTED — the dangerous
-    direction is a stranger scoring high enough to impersonate the owner, so we
-    bias against it. A genuine trusted match stays TRUSTED; anything
-    borderline / unknown / no-enrollments is UNKNOWN.
+    OWNER is granted on a strong match (score ≥ OWNER_THRESHOLD), OR — via
+    session hysteresis — on a BORDERLINE owner match
+    (score ∈ [_THRESHOLD_MATCH, OWNER_THRESHOLD)) when a CONFIDENT owner turn
+    happened within OWNER_STICKY_S. A weaker / cold match to the owner's
+    voiceprint is DOWNGRADED to TRUSTED — the dangerous direction is a stranger
+    scoring high enough to impersonate the owner, so we bias against it. A
+    genuine trusted match stays TRUSTED; anything borderline / unknown /
+    no-enrollments is UNKNOWN.
+
+    The hysteresis NEVER lowers the cold bar: a first or stale match (no recent
+    confident owner turn) still requires the full OWNER_THRESHOLD, so a stranger
+    can never reach OWNER.
     """
+    global _last_confident_owner_ts
+    import time as _time
     res = _vid.identify(embedding)
     status = res.get("status")
     if status != "match":  # borderline / unknown / no_enrollments
@@ -117,12 +146,30 @@ def resolve_voice(embedding, *, source: str = "voice") -> Principal:
     score = float(res["score"])
     matched_role = res["role"]  # "owner" | "trusted"
 
+    sticky = False
     if matched_role == "owner" and score >= OWNER_THRESHOLD:
+        # CONFIDENT owner turn: grant OWNER and (re)arm the sticky window.
         role = Role.OWNER
+        _last_confident_owner_ts = _time.time()
+    elif (matched_role == "owner"
+          and _THRESHOLD_MATCH <= score < OWNER_THRESHOLD
+          and _last_confident_owner_ts > 0.0
+          and (_time.time() - _last_confident_owner_ts) <= OWNER_STICKY_S):
+        # BORDERLINE owner match inside an established owner session: keep OWNER
+        # so a normal voice dip doesn't drop Hampton onto the toolless brain or
+        # the identity challenge. Refresh the window — an active conversation of
+        # borderline turns stays sticky as long as turns keep coming < STICKY_S.
+        role = Role.OWNER
+        sticky = True
+        _last_confident_owner_ts = _time.time()
     else:
-        # Owner match below OWNER_THRESHOLD downgrades here; a trusted match
-        # stays trusted. Never UNKNOWN→OWNER.
+        # Cold/stale owner match below OWNER_THRESHOLD downgrades here; a trusted
+        # match stays trusted. Never UNKNOWN→OWNER, never sticky for a stranger.
         role = Role.TRUSTED
+
+    if role is Role.OWNER:
+        tag = "owner [sticky]" if sticky else "owner"
+        print(f"  [vid] speaker: {name} (role={tag}, conf={score:.2f})")
 
     return Principal(
         role=role,
@@ -132,7 +179,7 @@ def resolve_voice(embedding, *, source: str = "voice") -> Principal:
         confidence=score,
         profile_path=_profile_path(slug),
         embedding=embedding,
-        raw=res,
+        raw={**res, "sticky_owner": sticky},
     )
 
 
