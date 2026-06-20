@@ -24,7 +24,6 @@ Config via env vars (or edit defaults below):
 """
 from __future__ import annotations
 
-import hashlib
 import hmac
 import io
 import json
@@ -123,11 +122,10 @@ except Exception as _otel_exc:  # noqa: BLE001
 # for voice-assistant timings (sub-100ms STT chunks up to multi-second turns).
 #
 # IDEMPOTENT REGISTRATION — edge.py runs as __main__ (CMD ["python","-u","edge.py"]),
-# so it lives in sys.modules as "__main__", NOT "edge". At runtime several
-# sub-modules (jarvis_ig_consumer, jarvis_discord, jarvis_song_id,
-# jarvis_reel_context, …) do `import edge as _edge`. Because "edge" is absent
-# from sys.modules, Python imports edge.py a SECOND time under the name "edge",
-# re-executing this whole module — including this metrics block. Re-creating a
+# so it lives in sys.modules as "__main__", NOT "edge". If any sub-module ever
+# does `import edge as _edge`, Python imports edge.py a SECOND time under the
+# name "edge" (absent from sys.modules), re-executing this whole module —
+# including this metrics block. Defensive against that re-import. Re-creating a
 # collector whose name already lives in the default REGISTRY raises
 # "ValueError: Duplicated timeseries in CollectorRegistry: jarvis_stt_..." which
 # the broad `except` below swallowed by replacing EVERY metric with a NoopMetric
@@ -208,17 +206,6 @@ try:
         "Brain failures by reason",
         ["reason"],
     )
-    METRIC_IG_EVENTS = _metric(
-        _PromCounter,
-        "jarvis_ig_webhook_events_total",
-        "IG webhook events",
-        ["type", "status"],
-    )
-    METRIC_IG_SIG_FAILURES = _metric(
-        _PromCounter,
-        "jarvis_ig_webhook_signature_failures_total",
-        "IG webhook HMAC signature failures",
-    )
     # Only the FIRST execution (the __main__ process) should bind the HTTP
     # server. A re-import under the name "edge" must never try to bind :9090
     # again — that would either collide or, worse, be swallowed and look like a
@@ -251,8 +238,6 @@ except Exception as _prom_exc:  # noqa: BLE001
     METRIC_ECHO_DROPS = _NoopMetric()
     METRIC_UNKNOWN_SPEAKER_DROPS = _NoopMetric()
     METRIC_BRAIN_ERRORS = _NoopMetric()
-    METRIC_IG_EVENTS = _NoopMetric()
-    METRIC_IG_SIG_FAILURES = _NoopMetric()
 
 # ── Config ────────────────────────────────────────────────────────────────────
 STT_URL = os.environ.get("STT_URL", "http://10.44.0.20:8766")
@@ -268,18 +253,22 @@ EDGE_ADVERTISED_PORT = int(os.environ.get("EDGE_ADVERTISED_PORT",
 EDGE_HOST_IP = os.environ.get("EDGE_HOST_IP", "")
 BRAIN_MODE = os.environ.get("BRAIN_MODE", "claude")
 
-WAKE_THRESHOLD = 0.65        # was 0.5 — bumped to cut kitchen false-fires
-SILENCE_SECS = 0.6
-MAX_UTTERANCE_SECS = 8.0
-MIN_UTTERANCE_SECS = 0.4
-ADDRESSEE_WINDOW_S = 6.0     # post-reply follow-up window: speech in this
-                              # window doesn't need "jarvis"
-ECHO_SUPPRESS_S = 3.5        # drop any utterance whose speech_start fell
-                              # during JARVIS's own Sonos playback or up
-                              # to N seconds after. Prevents JARVIS from
-                              # transcribing its own voice and replying
-                              # to itself (the "Nineteen, sir. → 19, sir.
-                              # → Nineteen what, sir?" feedback loop).
+WAKE_THRESHOLD = float(os.environ.get("VOICE_WAKE_THRESHOLD", "0.65"))
+# End-of-speech: how long a pause ends your turn. 0.6s cut people off mid-
+# sentence on natural pauses; 1.3s lets you breathe/think without being
+# truncated. MAX caps a single utterance (was 8s — too short for a full
+# request). All env-tunable so tuning never needs a rebuild.
+SILENCE_SECS = float(os.environ.get("VOICE_SILENCE_SECS", "1.3"))
+MAX_UTTERANCE_SECS = float(os.environ.get("VOICE_MAX_UTTERANCE_SECS", "22.0"))
+MIN_UTTERANCE_SECS = float(os.environ.get("VOICE_MIN_UTTERANCE_SECS", "0.4"))
+ADDRESSEE_WINDOW_S = 8.0     # follow-up window measured from when JARVIS
+                              # FINISHES speaking to when the owner STARTS
+                              # speaking — speech that starts in this window
+                              # doesn't need "jarvis".
+# Self-echo suppression knobs live next to _is_self_echo() (ECHO_TAIL_S,
+# ECHO_MATCH_RATIO). The old blanket ECHO_SUPPRESS_S window was removed — it
+# ate the user's genuine reply for 3.5s after every turn. Capture re-arms
+# IMMEDIATELY after playback now; smart fuzzy matching kills only real echo.
 OWW_RATE = 16000
 OWW_CHUNK = 1280
 SONOS_VOLUME = int(os.environ.get("SONOS_VOLUME", "60"))  # 0-100
@@ -309,28 +298,6 @@ def _is_night_hours(now_hour: int) -> bool:
 def _scheduled_sonos_volume() -> int:
     """Pick the volume from the time-of-day band, in LOCAL time (TZ env)."""
     return SONOS_VOLUME_NIGHT if _is_night_hours(time.localtime().tm_hour) else SONOS_VOLUME_DAY
-
-# ── Instagram webhook config ─────────────────────────────────────────────────
-# Meta posts Messenger / IG event payloads to /ig/webhook on the same
-# embedded HTTP server that serves Sonos audio. Verification is a GET
-# handshake; events are POSTs signed with HMAC-SHA256 over the raw body
-# using the app's secret. Parsed events go on _ig_event_queue for a future
-# consumer thread (replies + DMs). FAIL-OPEN: if IG env is missing we
-# reject everything but the daemon keeps running for voice.
-_ig_event_queue: queue.Queue = queue.Queue(maxsize=1000)
-IG_ENABLED = os.environ.get("IG_ENABLED", "") == "1"
-IG_VERIFY_TOKEN = os.environ.get("IG_VERIFY_TOKEN", "")
-IG_APP_SECRET = os.environ.get("IG_APP_SECRET", "")
-IG_PAGE_TOKEN = os.environ.get("IG_PAGE_TOKEN", "")
-if IG_ENABLED:
-    if not IG_VERIFY_TOKEN or not IG_APP_SECRET:
-        print("ig: IG_ENABLED=1 but verify_token or app_secret missing — webhook will reject everything")
-    else:
-        print(f"ig: webhook ready; page_token len={len(IG_PAGE_TOKEN)}")
-# Throttle "signature mismatch" logs to one line per process — Meta spam
-# probes can otherwise fill the log with identical entries.
-_ig_sig_logged_once = False
-
 
 # ── Speaker-ID ───────────────────────────────────────────────────────────────
 # Lazy-loaded; only constructs the Resemblyzer encoder + reads /state/voices
@@ -489,8 +456,6 @@ Tools:
   Murfreesboro, TN by default).
 - For "what happened overnight" / "any news", use
   mcp__jarvis_personal__news_overnight.
-- For "what am I listening to" / Spotify questions, use the
-  mcp__jarvis_spotify__* tools.
 - For "is the cluster healthy" / "how many devices" / "what's broken",
   use the mcp__jarvis_kube__* tools (kube_get_pods, kube_top_nodes,
   kube_events, etc). You have READ access only — no secrets, no writes.
@@ -524,19 +489,25 @@ Tools:
   "mute" / "pause the music" / "what's playing": use the
   mcp__jarvis_sonos__* tools. Default target is the Bedroom Play:1
   (where JARVIS speaks). For "the kitchen speaker" pass room="Kitchen".
-- TV control is NOT available (Apple TV migration pending). If asked
-  about the TV, say "I can't control the TV from here yet, sir" — do
-  NOT pretend, do NOT invent tool calls.
-- macOS Calendar + Reminders are NOT reachable from this pod (no
-  AppleScript). calendar_today / reminders_* will return 'unauthorized'.
-  Don't apologise about it — just say "no calendar wired up here yet."
+- For "shut up" / "be quiet" / "stop" / "stop talking" / "enough": this
+  means stop the CURRENT reply only. Reply with a SHORT acknowledgement
+  ("Of course, sir.") and do NOT call sonos_mute on — muting the device
+  silences ALL future replies, which is wrong. Use sonos_pause if you must
+  halt audio. Never leave the speaker muted.
+- You HAVE access to the owner's iCloud Calendar + Reminders via CalDAV.
+  For any calendar / schedule / "what's on today" / appointment question,
+  call mcp__jarvis_personal__calendar_today. For reminders / to-dos / "what
+  do I need to do" questions, call mcp__jarvis_personal__reminders_open or
+  mcp__jarvis_personal__reminders_due_today. TRUST what these tools return
+  and answer from the real data. Never claim you have no calendar or that
+  it isn't wired up.
 
 You are running on a cluster pod (nixos-gpu) with a Yeti USB mic and a
 Sonos Play:1 in the bedroom. The current owner is Hampton."""
 
-# MCP servers the brain can invoke. TV is DEPRECATED until Apple TV
-# arrives. Spotify needs spotify_tokens.json mounted via Secret; if
-# missing it returns 'unauthorized' but doesn't crash the brain.
+# MCP servers the brain can invoke. Minimal clean-core set: personal
+# (calendar/weather/news/briefing), kube, sonos, persona, mem0,
+# overview, delegate, and the cluster-side runner.
 _MCP_CONFIG_PATH = "/tmp/jarvis_mcp.json"
 
 
@@ -546,10 +517,6 @@ def _write_mcp_config() -> None:
             "jarvis_personal": {
                 "command": "python3",
                 "args": ["/app/jarvis_personal_mcp.py"],
-            },
-            "jarvis_spotify": {
-                "command": "python3",
-                "args": ["/app/jarvis_spotify_mcp.py"],
             },
             "jarvis_kube": {
                 "command": "python3",
@@ -736,8 +703,8 @@ def _turn_context_prefix(include_persona: bool = False) -> str:
 
 
 _RO_ALLOWED_TOOLS = " ".join([
-    # Personal: briefing / weather / news / greeting (Calendar+Reminders
-    # stubbed to "unauthorized" until CalDAV bridge).
+    # Personal: briefing / weather / news / greeting + iCloud Calendar &
+    # Reminders (live via CalDAV — calendar_today / reminders_*).
     "mcp__jarvis_personal__briefing",
     "mcp__jarvis_personal__weather",
     "mcp__jarvis_personal__news_overnight",
@@ -745,21 +712,6 @@ _RO_ALLOWED_TOOLS = " ".join([
     "mcp__jarvis_personal__calendar_today",
     "mcp__jarvis_personal__reminders_open",
     "mcp__jarvis_personal__reminders_due_today",
-    # Spotify (read)
-    "mcp__jarvis_spotify__current_track",
-    "mcp__jarvis_spotify__recently_played",
-    "mcp__jarvis_spotify__top_artists",
-    "mcp__jarvis_spotify__top_tracks",
-    # Spotify (playback — requires user-modify-playback-state scope;
-    # one-time re-auth needed after this scope was added).
-    "mcp__jarvis_spotify__spotify_search",
-    "mcp__jarvis_spotify__spotify_devices",
-    "mcp__jarvis_spotify__spotify_play_track",
-    "mcp__jarvis_spotify__spotify_search_and_play",
-    "mcp__jarvis_spotify__spotify_pause",
-    "mcp__jarvis_spotify__spotify_resume",
-    "mcp__jarvis_spotify__spotify_skip_next",
-    "mcp__jarvis_spotify__spotify_skip_previous",
     # Kube read-only (ServiceAccount jarvis-readonly → view+nodes)
     "mcp__jarvis_kube__kube_get_pods",
     "mcp__jarvis_kube__kube_logs",
@@ -779,7 +731,6 @@ _RO_ALLOWED_TOOLS = " ".join([
     "mcp__jarvis_sonos__sonos_play",
     "mcp__jarvis_sonos__sonos_now_playing",
     "mcp__jarvis_sonos__sonos_list_speakers",
-    "mcp__jarvis_sonos__sonos_play_spotify",
     # Unified memory (mem0) — read past facts before answering, persist
     # durable facts. Scope is fixed by JARVIS_MEM_SCOPE env (no user_id arg).
     "mcp__jarvis_mem0__memory_search",
@@ -827,135 +778,6 @@ _OWNER_ALLOWED_TOOLS = " ".join([
     "mcp__jarvis_runner__list_runs",
     "mcp__jarvis_runner__run_status",
 ])
-
-
-_DISCORD_PERSONA_SYSTEM = """You are JARVIS, the Iron Man AI butler. The owner is sir (he/him), known elsewhere as Hampton — but to other people in chat you NEVER refer to him as "Hampton" by name in third person. To others he is "sir", "the boss", "my user", or just "he"/"him". Voice that as if you'd actually be embarrassed to broadcast his name. This conversation is happening in a Discord text channel — output is read with eyes, not ears.
-
-You CAN also be triggered by a handful of other allowed users (their request will be labelled "@username's request:" instead of "sir's request:"). Treat those as peer requesters — polite-equal, not deferential. Address them by their @ when responding. "Sir" stays reserved for the owner only.
-
-Discord-specific format:
-- Markdown is fine (bold, italics, code blocks, links) — Discord renders it.
-- Length is unbounded up to ~2000 chars per message. Match length to the ask.
-- Numbers in figures ("74°F", "10:30") — text not voice.
-- "Sir" — use sparingly. Maybe one in three replies. NOT every line.
-- You CAN address third parties when sir directs you to. When directed, write the reply AS IF speaking to that third party. Don't refuse the relay; just do it.
-- You CAN be playful / sarcastic / matter-of-fact, not just formal. Discord is conversational, not a butler-and-master script.
-
-This is a HOMELAB Discord — engineers shitposting. The bit-detection threshold is critical:
-
-- If a request is OBVIOUSLY a gag, satire, hypothetical, counterfactual, or rhetorical — engage WITH the bit. 50-megawatt pirate radio stations, alien invasion countermeasures, banana-powered nuclear reactors, weaponized printer toner, "how would I bench-press a Cybertruck" — none of these are real requests. Play along, deliver dry-witted technical pseudo-seriousness, riff back. The audience knows you're a bot in a homelab Discord; treating obvious comedy like a real intent is the embarrassing failure mode, not the safe one.
-- NEVER lecture about FCC limits, OSHA, PII, "the spirit of the request," "even as a gag," or any other moralizing preamble. That's the worst-case output. If you wouldn't take it seriously, don't refuse it seriously either.
-- "I appreciate the spirit, but…" / "I'm going to decline…" / "I'd rather not…" — these are FORBIDDEN response patterns. Never start a reply this way.
-- Genuine refusal territory is narrow: real CSAM, real specific-person doxxing, real weapons synthesis with named target, instructions for actual harm to an identified person. Decline those TERSELY without moralizing ("not that one, sir"). Everything else, engage.
-
-Tools: same MCP toolbox as voice — Spotify, Sonos, kube-read, personal (briefing/weather/news/calendar/reminders), persona dimensions, Google (Gmail/Calendar/Drive after first-time auth), web search/fetch. Use them when asked.
-
-Hard rules:
-- Never refuse simple text relays sir asks you to send.
-- Don't pretend tools are unavailable — they're wired. Try the call.
-- Don't TTS-format. Don't strip URLs. Don't say "let me check" — just do it.
-- If you genuinely don't know, say so plainly. Don't make things up.
-"""
-
-
-def _claude_brain_discord(text: str, timeout: float = 60.0) -> str:
-    """Like _claude_brain but with the Discord-optimised persona (markdown
-    allowed, length unbounded, third-party addressing permitted, no
-    TTS-shortening rules). Same MCP toolbox + same auth flow."""
-    import subprocess as _sp
-    has_creds = os.path.exists(os.path.expanduser("~/.claude/.credentials.json"))
-    has_api_key = bool(os.environ.get("ANTHROPIC_API_KEY"))
-    if not has_creds and not has_api_key:
-        return ""
-    persona_prompt = (_DISCORD_PERSONA_SYSTEM
-                      + "\n\n" + _render_persona_prompt()
-                      + "\n\n" + _now_context())
-    try:
-        proc = _sp.run(
-            ["claude", "-p", text,
-             "--append-system-prompt", persona_prompt,
-             "--mcp-config", _MCP_CONFIG_PATH,
-             "--allowed-tools", _RO_ALLOWED_TOOLS,
-             "--model", "sonnet",
-             "--max-turns", "6",
-             "--output-format", "json"],
-            capture_output=True, text=True, timeout=timeout,
-        )
-        if proc.returncode != 0:
-            print(f"  discord brain rc={proc.returncode}  stderr: {proc.stderr[:400]}")
-            return _local_brain_fallback(text, _DISCORD_PERSONA_SYSTEM, timeout, reason="rc_nonzero")
-        out = (proc.stdout or "").strip()
-        if not out:
-            return _local_brain_fallback(text, _DISCORD_PERSONA_SYSTEM, timeout, reason="empty")
-        try:
-            data = json.loads(out)
-            if data.get("is_error"):
-                return _local_brain_fallback(text, _DISCORD_PERSONA_SYSTEM, timeout, reason="is_error")
-            result = (data.get("result") or "").strip()
-        except json.JSONDecodeError:
-            result = out
-        if _looks_like_refusal(result):
-            local = _local_brain_fallback(text, _DISCORD_PERSONA_SYSTEM, timeout, reason="refusal")
-            return local or result
-        return result
-    except _sp.TimeoutExpired:
-        return _local_brain_fallback(text, _DISCORD_PERSONA_SYSTEM, timeout, reason="timeout")
-    except Exception as exc:  # noqa: BLE001
-        print(f"  discord brain exception: {exc!r}")
-        return _local_brain_fallback(text, _DISCORD_PERSONA_SYSTEM, timeout, reason="exception")
-
-
-_DISCORD_LOCKED_PERSONA_ADDENDUM = """
-
-NON-OWNER MODE — IMPORTANT: The requester is NOT sir. You have NO MCP tools, NO sub-agents, NO Sonos/Spotify/Kube/Calendar/Email/Drive access in this conversation. Don't pretend to have them. Don't claim to be running them. Don't say "let me check the cluster" or "checking your calendar" — you can't, in this conversation. Answer from your own knowledge. If the requester asks for owner-controlled things (sir's calendar, the homelab cluster status, sir's music, anything personal), politely decline ("not for non-sir requests") and offer a generic/text answer instead. Keep replies short and conversational. Don't reveal infrastructure details, network topology, hostnames, IPs, or anything else that would help someone target sir's homelab.
-"""
-
-
-def _claude_brain_discord_locked(text: str, timeout: float = 60.0) -> str:
-    """Locked-down Discord brain for non-owner allowed users. Same model
-    as _claude_brain_discord but with NO MCP tools, NO sub-agents, and
-    a persona addendum telling Claude not to pretend it has any of
-    that. Used when a non-owner user (DISCORD_ALLOWED_USER_IDS) tags
-    JARVIS — they get a chatbot, not a remote control."""
-    import subprocess as _sp
-    has_creds = os.path.exists(os.path.expanduser("~/.claude/.credentials.json"))
-    has_api_key = bool(os.environ.get("ANTHROPIC_API_KEY"))
-    if not has_creds and not has_api_key:
-        return ""
-    persona_prompt = (_DISCORD_PERSONA_SYSTEM
-                      + _DISCORD_LOCKED_PERSONA_ADDENDUM
-                      + "\n\n" + _now_context())
-    try:
-        proc = _sp.run(
-            ["claude", "-p", text,
-             "--append-system-prompt", persona_prompt,
-             # No --mcp-config, no --allowed-tools = no tool access.
-             "--model", "sonnet",
-             "--max-turns", "1",
-             "--output-format", "json"],
-            capture_output=True, text=True, timeout=timeout,
-        )
-        if proc.returncode != 0:
-            print(f"  discord-locked brain rc={proc.returncode}  stderr: {proc.stderr[:400]}")
-            return ""
-        out = (proc.stdout or "").strip()
-        if not out:
-            return ""
-        try:
-            data = json.loads(out)
-            if data.get("is_error"):
-                return ""
-            result = (data.get("result") or "").strip()
-        except json.JSONDecodeError:
-            result = out
-        # Don't fall through to local brain for non-owner users —
-        # local brain is unconstrained and would still expose stuff.
-        return result
-    except _sp.TimeoutExpired:
-        return ""
-    except Exception as exc:  # noqa: BLE001
-        print(f"  discord-locked brain exception: {exc!r}")
-        return ""
 
 
 def _claude_brain(text: str, timeout: float = 60.0, mem_scope: str = "") -> str:
@@ -1031,60 +853,6 @@ def _claude_brain(text: str, timeout: float = 60.0, mem_scope: str = "") -> str:
         return "That took too long, sir — try again."
     except Exception as exc:  # noqa: BLE001
         return f"Brain error, sir — {exc}"
-
-
-_VOICE_LOCKED_PERSONA_ADDENDUM = """
-
-NON-OWNER MODE — IMPORTANT: The person speaking is NOT sir (Hampton). You have NO MCP tools, NO sub-agents, NO Sonos/Spotify/Kube/Calendar/Email/Drive access in this conversation. Don't pretend to have them or claim to be running them. Answer from your own general knowledge only. NEVER reveal anything about sir — his schedule, location, whereabouts, calendar, reminders, contacts, music, homelab/cluster, network topology, hostnames, IPs, or any personal data. If asked anything about sir, briefly decline ("I can't share anything about him, but I can help you directly"). Keep replies short and spoken-aloud friendly: no markdown, no URLs, no lists.
-"""
-
-
-def _claude_brain_voice_locked(text: str, timeout: float = 60.0) -> str:
-    """Locked VOICE brain for TRUSTED (non-owner) speakers — the Layer-A
-    primary control. Same model + voice persona as _claude_brain but with NO
-    --mcp-config (→ no tools at all: a trusted user PHYSICALLY cannot invoke
-    calendar/kube/spotify/etc, no prompt can re-add them), --max-turns 1, and
-    NO local-brain fallthrough (the local model is unconstrained and would
-    leak). A trusted user gets a spoken chatbot, never owner data."""
-    import subprocess as _sp
-    has_creds = os.path.exists(os.path.expanduser("~/.claude/.credentials.json"))
-    has_api_key = bool(os.environ.get("ANTHROPIC_API_KEY"))
-    if not has_creds and not has_api_key:
-        return ""
-    persona_prompt = _PERSONA_SYSTEM + _VOICE_LOCKED_PERSONA_ADDENDUM  # byte-stable
-    # Only _now_context() is volatile here (addendum is static) → user turn.
-    # No persona line for the locked brain.
-    user_text = _turn_context_prefix(include_persona=False) + text
-    try:
-        proc = _sp.run(
-            ["claude", "-p", user_text,
-             "--append-system-prompt", persona_prompt,
-             # No --mcp-config, no --allowed-tools = no tool access (Layer A).
-             "--model", "sonnet",
-             "--max-turns", "1",
-             "--output-format", "json"],
-            capture_output=True, text=True, timeout=timeout,
-        )
-        if proc.returncode != 0:
-            print(f"  voice-locked brain rc={proc.returncode}  stderr: {proc.stderr[:400]}")
-            return ""
-        out = (proc.stdout or "").strip()
-        if not out:
-            return ""
-        try:
-            data = json.loads(out)
-            if data.get("is_error"):
-                return ""
-            result = (data.get("result") or "").strip()
-        except json.JSONDecodeError:
-            result = out
-        # No local-brain fallthrough for non-owner turns — keep it constrained.
-        return result
-    except _sp.TimeoutExpired:
-        return ""
-    except Exception as exc:  # noqa: BLE001
-        print(f"  voice-locked brain exception: {exc!r}")
-        return ""
 
 
 # ── Warm OWNER brain session (Phase 5) ───────────────────────────────────────
@@ -1383,8 +1151,8 @@ def _claude_brain_vision(text: str, image_paths: list, timeout: float = 90.0) ->
     """Multimodal brain call: claude CLI with a single user message that
     embeds the text + one or more images as base64 content blocks.
 
-    Used by jarvis_reel_context (reel keyframes) and the IG comment
-    responder's photo path. Same subscription auth as _claude_brain (no
+    General multimodal describe-the-image helper. Same subscription auth
+    as _claude_brain (no
     ANTHROPIC_API_KEY required when ~/.claude/.credentials.json is
     present). NO MCP tools wired — this is a pure describe-the-image
     call; tool loops would burn time and money for no benefit.
@@ -1584,55 +1352,108 @@ def brain_respond(text: str, mem_scope: str = "") -> str:
             METRIC_BRAIN_DURATION.observe(time.time() - t0)
 
 
+# ── Fail-OPEN degraded-owner gate (opt-in) ───────────────────────────────────
+# Historically a borderline/weak owner whose voiceprint dipped below the OWNER
+# grant bar was DOWNGRADED to TRUSTED and SILENTLY DROPPED — the owner locked
+# out of his own house (fail-CLOSED). VOICE_FAIL_OPEN flips this to a
+# fail-OPEN, AUTH-GATED path: a degraded-owner turn is met with a spoken
+# passphrase challenge ("Say your passphrase, sir." or, with no passphrase set,
+# "Is that you, sir? Say 'it's me' to confirm."). If the NEXT turn (from a
+# still-degraded-owner principal, within VOICE_FAILOPEN_WINDOW_S) supplies the
+# passphrase — or "it's me" when no passphrase is set — that turn is promoted to
+# the full OWNER brain. Anything else falls back to the historical silent drop.
+#
+# SAFETY: this NEVER makes the owner strictly worse off than before. Default
+# OFF (un-set flag = byte-for-byte the old silent-drop behaviour). It does NOT
+# grant OWNER on the voiceprint alone — the passphrase/confirmation is a second
+# factor. With no passphrase set, the "it's me" confirmation is weaker (anyone
+# who sounds enough like the owner to be the top match could say it) but it is
+# still strictly an IMPROVEMENT over locking the real owner out, and the
+# operator is nudged to set a passphrase. The challenge state is in-process and
+# single-slot, so it cannot be replayed across restarts.
+_FAIL_OPEN_ENABLED = os.environ.get("VOICE_FAIL_OPEN", "0") == "1"
+_FAILOPEN_WINDOW_S = float(os.environ.get("VOICE_FAILOPEN_WINDOW_S", "30.0"))
+# (challenge_armed_at_ts,) — module-level so it survives across turns.
+_degraded_challenge_ts: float = 0.0
+
+
 def gate_and_respond(principal, text: str) -> str:
     """THE deterministic authorization gate. Capability is chosen HERE in
     Python from the principal's role, BEFORE any model call — the model is
     never the security boundary.
 
-      principal is None  → open mode (no owner enrolled): full brain (legacy).
-      OWNER              → full brain (all MCP tools), mem_scope=owner.
-      TRUSTED            → owner-referential query (Layer B)? deterministic
-                           deflection, NO brain spawned : locked brain
-                           (no --mcp-config → no tools, Layer A).
-      UNKNOWN            → no brain (mic loop drops these; Phase 2 adds
-                           name-capture). Defensive challenge here.
+    Owner-only policy ("if it isn't me, don't respond"): ONLY the OWNER ever
+    gets a spoken reply. Everyone else — TRUSTED, UNKNOWN, and JARVIS's own
+    echo — is silently dropped (empty string → caller skips TTS).
+
+      principal is None  → open mode (no owner enrolled): full brain. Only
+                           reachable on a fresh deployment with no owner; once
+                           Hampton is enrolled this branch never fires.
+      OWNER              → full brain (all MCP tools), mem_scope=owner. The
+                           owner-sticky/hysteresis borderline match resolves to
+                           Role.OWNER upstream, so it lands here too.
+      TRUSTED            → silent drop (no brain, no spoken reply).
+      UNKNOWN            → silent drop (no brain, no name challenge).
+
+    FAIL-OPEN (opt-in, VOICE_FAIL_OPEN=1): a degraded-owner principal (weak
+    owner-template match, would otherwise be a silent drop) gets a spoken
+    passphrase / "it's me" challenge, and a correct follow-up is promoted to the
+    full OWNER brain. Off by default → identical to the historical gate.
 
     Used by BOTH the mic loop and the /voice/ingest endpoint so every front
     end inherits the identical guarantees."""
     import jarvis_identity as _ji
+    global _degraded_challenge_ts
+    import time as _time
+
     if principal is None:
         return brain_respond(text)  # open mode — back-compat pass-through
-    role = principal.role
-    if role is _ji.Role.OWNER:
+    if principal.role is _ji.Role.OWNER:
+        # A clean owner turn clears any pending degraded challenge.
+        _degraded_challenge_ts = 0.0
         return brain_respond(text, mem_scope=principal.mem_scope)
-    if role is _ji.Role.TRUSTED:
-        if _ji.is_owner_referential(text):
-            print(f"  [gate] owner-referential query from {principal.user_id} "
-                  f"— deflected pre-brain (Layer B, no brain spawned)")
-            return ("Sorry, I can't share anything about him. "
-                    "But I can help you with something directly.")
-        return _claude_brain_voice_locked(text)
-    # UNKNOWN — Phase 2 wires the name-capture state machine here.
-    return "I don't recognise you. What's your name?"
+
+    # ── Fail-OPEN degraded-owner path (opt-in) ──
+    if _FAIL_OPEN_ENABLED and getattr(principal, "degraded_owner", False):
+        now = _time.time()
+        challenge_live = (_degraded_challenge_ts > 0.0
+                          and (now - _degraded_challenge_ts) <= _FAILOPEN_WINDOW_S)
+        if challenge_live:
+            # Awaiting confirmation. Accept the passphrase, or "it's me" when no
+            # passphrase is configured. On success → promote to the OWNER brain.
+            has_pass = _ji.has_owner_passphrase()
+            passed = (_ji.check_owner_passphrase(text) if has_pass
+                      else bool(re.search(r"\b(?:it'?s me|it is me)\b", text, re.I)))
+            if passed:
+                _degraded_challenge_ts = 0.0
+                _via = "passphrase" if has_pass else "it-is-me"
+                print(f"  [gate] degraded-owner CONFIRMED via {_via} — granting OWNER")
+                # mem_scope 'owner' so the confirmed owner reaches the warm brain.
+                return brain_respond(text, mem_scope="owner")
+            # Wrong / unrelated reply while a challenge is live → drop, leave the
+            # window open for a retry within VOICE_FAILOPEN_WINDOW_S.
+            print("  [gate] degraded-owner challenge live, no passphrase match "
+                  "— silent drop (window stays open)")
+            return ""
+        # First degraded-owner turn → arm the challenge and SPEAK it.
+        _degraded_challenge_ts = now
+        if _ji.has_owner_passphrase():
+            print("  [gate] degraded-owner — issuing passphrase challenge")
+            return "I didn't quite recognise your voice, sir. Say your passphrase."
+        print("  [gate] degraded-owner — issuing 'it's me' confirmation "
+              "(no passphrase set)")
+        return "Is that you, sir? Say \"it's me\" to confirm."
+
+    # Non-owner (TRUSTED or UNKNOWN) → silent drop. The empty reply makes the
+    # caller skip TTS, so the room/strangers/echo never get a spoken response.
+    print(f"  [gate] non-owner ({principal.role.value}) — silent drop")
+    return ""
 
 
-# ── Phase 2: owner-auth + enroll-by-voice state machine ──────────────────────
-# Deterministic, runs BEFORE the brain. Owner auth commands are CONSUMED here
-# and never reach the model (the model must never be able to enroll a voice).
-_AWAITING_NAME_TIMEOUT_S = 45.0
-_SAME_SPEAKER_COS = 0.55
-# Single in-flight challenge: the unknown speaker we just asked to name
-# themselves. Holds their voiceprint so the follow-up "I'm Alex" is matched to
-# the SAME voice (someone else can't answer for them).
-_awaiting_name: dict = {"active": False, "embedding": None, "ts": 0.0}
-
-_NAME_PATTERNS = [
-    re.compile(r"\bmy name is\s+([A-Za-z][A-Za-z .'-]{0,30})", re.I),
-    re.compile(r"\bi'?m\s+([A-Za-z][A-Za-z .'-]{0,30})", re.I),
-    re.compile(r"\bit'?s\s+([A-Za-z][A-Za-z .'-]{0,30})", re.I),
-    re.compile(r"\bthis is\s+([A-Za-z][A-Za-z .'-]{0,30})", re.I),
-    re.compile(r"\bcall me\s+([A-Za-z][A-Za-z .'-]{0,30})", re.I),
-]
+# ── Owner-auth command parsing ───────────────────────────────────────────────
+# Deterministic, runs BEFORE the brain. Owner auth commands (approve / reject /
+# remove a pending enrollee) are CONSUMED here and never reach the model (the
+# model must never be able to enroll or authorise a voice).
 _AUTH_REMOVE_RE = re.compile(
     r"\b(?:remove|delete|forget|unenroll|deauthori[sz]e)\s+([A-Za-z][A-Za-z .'-]{0,30})", re.I)
 _AUTH_REJECT_RE = re.compile(
@@ -1651,19 +1472,6 @@ def _clean_name(s: str) -> str:
     while words and words[-1].lower().strip(".,!?") in _NAME_STOPWORDS:
         words.pop()
     return " ".join(w.capitalize() for w in words[:2])
-
-
-def _extract_name(text: str) -> str:
-    for pat in _NAME_PATTERNS:
-        m = pat.search(text)
-        if m:
-            return _clean_name(m.group(1))
-    # Bare-name fallback: a short reply like "Alex" / "Alex Smith" (strip wake word).
-    cleaned = re.sub(r"\bjarvis\b", "", text, flags=re.I).strip(" .,!?")
-    words = cleaned.split()
-    if 1 <= len(words) <= 2 and all(w[:1].isalpha() for w in words):
-        return _clean_name(cleaned)
-    return ""
 
 
 def _cosine(a, b) -> float:
@@ -1707,53 +1515,150 @@ def _exec_owner_auth(action: str, name: str) -> str:
 
 
 def _identity_turn(principal, text: str, addressed: bool):
-    """Phase 2 deterministic identity state machine. Returns
-    ``(consumed, reply)``: when ``consumed`` is True the turn is an identity
-    action (owner auth command, name challenge, or name capture) and must NOT
-    go to the brain. ``reply`` (may be None) is spoken if present.
+    """Deterministic identity state machine. Returns ``(consumed, reply)``:
+    when ``consumed`` is True the turn is an OWNER auth command and must NOT go
+    to the brain. ``reply`` (may be None) is spoken if present.
 
-    Order: owner auth commands first (consumed), then name-capture for an
-    awaiting challenger (matched by voiceprint so nobody can answer for them),
-    then challenge an addressed unknown. Owner/trusted normal turns fall
-    through to the gate."""
+    Owner-only policy: the ONLY thing consumed here is an addressed OWNER
+    enrollment/auth command. There is NO name challenge for unknowns and NO
+    name capture — non-owners are silently dropped by the caller (UNKNOWN) or
+    the gate (TRUSTED). Owner/trusted normal turns fall through to the gate."""
     import jarvis_identity as _ji
-    role = principal.role
+
+    # Owner enrollment/auth commands — consumed, never reach the brain. Gated on
+    # addressed so ambient owner chatter can't trigger an enrollment.
+    if principal.role is _ji.Role.OWNER and addressed:
+        cmd = _parse_owner_auth(text)
+        if cmd is not None:
+            return (True, _exec_owner_auth(cmd[0], cmd[1]))
+
+    # Everyone else (and non-command owner turns) falls through to the gate /
+    # ambient drop. No challenge, no name capture.
+    return (False, None)
+
+
+# ── Owner enroll-by-voice (Approach A: in the running loop) ───────────────────
+# Deterministic, model-inaccessible bootstrap so the FIRST owner can be enrolled
+# purely by voice — no kubectl exec, no second mic stream. Closes the open-mode
+# gap: in open mode `_identify_speaker_from_audio` returns None and the identity
+# state machine never runs, so it can never self-enroll the first owner. This
+# trigger runs REGARDLESS of has_owner, piggybacking on `audio_16k` the loop
+# already captured (zero second stream → zero mic contention with the daemon).
+#
+# Enrollment audio is CONSUMED here and never reaches the brain or mem0, and the
+# trigger is a fixed regex (never model-driven), preserving the invariant that
+# the model can never enroll a voice.
+_OWNER_ENROLL_TIMEOUT_S = 60.0
+_OWNER_ENROLL_TARGET = 5          # number of clips to average (more = tighter
+                                  # template, better owner/other separation)
+_OWNER_ENROLL_MIN_COS = 0.60     # clips must agree (reject noise/echo)
+_OWNER_ENROLL_NAME = os.environ.get("OWNER_NAME", "Hampton")
+
+_OWNER_ENROLL_TRIGGER_RE = re.compile(
+    r"\b(?:learn|enroll|register|remember)\s+my\s+voice\b"
+    r"|\benroll\s+me(?:\s+as\s+(?:the\s+)?owner)?\b"
+    r"|\b(?:learn|register)\s+me\s+as\s+(?:the\s+)?owner\b",
+    re.I,
+)
+_OWNER_ENROLL_CANCEL_RE = re.compile(
+    r"\b(?:cancel|never\s*mind|stop|forget\s+it|abort)\b", re.I)
+
+_owner_enroll: dict = {"active": False, "embeddings": [], "ts": 0.0}
+
+
+def _owner_enroll_reset() -> None:
+    _owner_enroll["active"] = False
+    _owner_enroll["embeddings"] = []
+    _owner_enroll["ts"] = 0.0
+
+
+def _owner_enroll_turn(audio_16k, text: str, addressed: bool):
+    """Deterministic owner enroll-by-voice. Returns ``(consumed, reply)``.
+
+    When ``consumed`` is True the utterance is part of an enrollment flow and
+    must NOT go to the brain. ``reply`` (may be None) is spoken if present.
+
+    Flow:
+      * trigger ("jarvis, learn my voice" + addressed) → start capture, embed
+        this utterance, prompt for more.
+      * each subsequent utterance → embed + append; at TARGET clips, average +
+        enroll(role="owner"), invalidate _vid_cache so the owner gate flips on
+        immediately, confirm by voice.
+      * clips that disagree (mean pairwise cosine < MIN_COS) → reject, no enroll
+        (fails closed against noise / self-echo).
+      * timeout / "cancel" / "never mind" → reset."""
+    import jarvis_voice_id as _vid
     now = time.time()
 
-    # 1. Owner enrollment commands — consumed, never reach the brain. Gated on
-    #    addressed so ambient owner chatter can't trigger an enrollment.
-    if role is _ji.Role.OWNER:
-        if addressed:
-            cmd = _parse_owner_auth(text)
-            if cmd is not None:
-                return (True, _exec_owner_auth(cmd[0], cmd[1]))
-        return (False, None)
+    # Expire a stale in-flight enrollment.
+    if _owner_enroll["active"] and now - _owner_enroll["ts"] > _OWNER_ENROLL_TIMEOUT_S:
+        _owner_enroll_reset()
 
-    # 2. Name-capture: an unknown we just challenged states their name. Match
-    #    the SAME voiceprint so a different person can't answer for them.
-    if (_awaiting_name["active"]
-            and now - _awaiting_name["ts"] < _AWAITING_NAME_TIMEOUT_S
-            and principal.embedding is not None
-            and _awaiting_name["embedding"] is not None
-            and _cosine(principal.embedding, _awaiting_name["embedding"]) >= _SAME_SPEAKER_COS):
-        name = _extract_name(text)
-        if name:
-            _ji.stash_pending(name, principal.embedding)
-            _awaiting_name["active"] = False
-            owner = _ji.get_owner()
-            owner_name = (owner["name"] if owner else "Hampton")
-            return (True, f"Thank you, {name}. {owner_name} will need to authorise you.")
-        return (True, "I didn't catch your name — what is it?")
+    if not _owner_enroll["active"]:
+        # Only START on an explicit, addressed trigger. ambient chatter can't.
+        if not (addressed and _OWNER_ENROLL_TRIGGER_RE.search(text)):
+            return (False, None)
+        try:
+            emb = _vid.embed_from_audio(audio_16k, sample_rate=16000)
+        except Exception as exc:  # noqa: BLE001
+            print(f"  [enroll] embed failed on trigger: {exc!r}")
+            return (True, "I couldn't capture that clearly, sir. Try again.")
+        _owner_enroll["active"] = True
+        _owner_enroll["embeddings"] = [emb]
+        _owner_enroll["ts"] = now
+        print(f"  [enroll] owner enrollment STARTED ({len(_owner_enroll['embeddings'])}"
+              f"/{_OWNER_ENROLL_TARGET} clips)")
+        return (True, ("Certainly, sir. Say a sentence or two so I can learn your "
+                       "voice — I need five short phrases. Go ahead."))
 
-    # 3. Unknown + addressed → challenge and stash the voiceprint.
-    if role is _ji.Role.UNKNOWN:
-        if addressed:
-            _awaiting_name.update(active=True, embedding=principal.embedding, ts=now)
-            return (True, "I don't recognise you. What's your name?")
-        return (False, None)  # unaddressed unknown → caller ambient-drops
+    # Active enrollment — allow an explicit cancel.
+    if _OWNER_ENROLL_CANCEL_RE.search(text):
+        _owner_enroll_reset()
+        return (True, "Cancelled, sir.")
 
-    # 4. Trusted normal turn → gate.
-    return (False, None)
+    try:
+        emb = _vid.embed_from_audio(audio_16k, sample_rate=16000)
+    except Exception as exc:  # noqa: BLE001
+        print(f"  [enroll] embed failed mid-flow: {exc!r}")
+        return (True, "I didn't catch that, sir — say the phrase again.")
+    _owner_enroll["embeddings"].append(emb)
+    _owner_enroll["ts"] = now
+    n = len(_owner_enroll["embeddings"])
+    print(f"  [enroll] captured clip {n}/{_OWNER_ENROLL_TARGET}")
+
+    if n < _OWNER_ENROLL_TARGET:
+        remaining = _OWNER_ENROLL_TARGET - n
+        more = "one more" if remaining == 1 else f"{remaining} more"
+        return (True, f"Got it — {more}, sir.")
+
+    # We have enough clips. Verify they agree before committing.
+    embs = _owner_enroll["embeddings"]
+    pairs = [_cosine(embs[i], embs[j])
+             for i in range(len(embs)) for j in range(i + 1, len(embs))]
+    mean_cos = float(np.mean(pairs)) if pairs else 1.0
+    if mean_cos < _OWNER_ENROLL_MIN_COS:
+        print(f"  [enroll] clips disagree (mean cosine {mean_cos:.2f} < "
+              f"{_OWNER_ENROLL_MIN_COS}) — NOT enrolling")
+        _owner_enroll_reset()
+        return (True, ("Those didn't sound consistent, sir — too much background "
+                       "noise, perhaps. Let's try again: say \"learn my voice\"."))
+
+    try:
+        meta = _vid.enroll(_OWNER_ENROLL_NAME, embs, role="owner",
+                           enrolled_by="self")
+    except Exception as exc:  # noqa: BLE001
+        print(f"  [enroll] enroll() failed: {exc!r}")
+        _owner_enroll_reset()
+        return (True, "Something went wrong saving your voice, sir. Try again.")
+
+    # Flip the owner-only gate on for the VERY NEXT turn.
+    _vid_cache["ts"] = 0.0
+    _owner_enroll_reset()
+    print(f"  [enroll] OWNER enrolled: {meta.get('name')} "
+          f"(slug={meta.get('slug')}, clips={meta.get('num_clips')}) "
+          f"— owner gate now active")
+    return (True, ("I've got your voice now, sir. From now on I'll only "
+                   "answer to you."))
 
 
 def _check_brain_auth() -> None:
@@ -1892,13 +1797,6 @@ class _AudioHandler(BaseHTTPRequestHandler):
     stash: _AudioStash = None  # type: ignore[assignment]
 
     def do_GET(self):  # noqa: N802
-        # Route IG verification handshake before the WAV-stash lookup.
-        # Path-and-query split: BaseHTTPRequestHandler hands us the raw
-        # request-target, which for GETs includes ?hub.mode=... etc.
-        parsed = urllib.parse.urlsplit(self.path)
-        if parsed.path == "/ig/webhook":
-            self._handle_ig_verify(parsed.query)
-            return
         wav = self.stash.get(self.path) if self.stash else None
         if not wav:
             self.send_response(404)
@@ -1920,125 +1818,11 @@ class _AudioHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):  # noqa: N802
         parsed = urllib.parse.urlsplit(self.path)
-        if parsed.path == "/ig/webhook":
-            self._handle_ig_event()
-            return
         if parsed.path == "/voice/ingest":
             self._handle_voice_ingest()
             return
         self.send_response(404)
         self.end_headers()
-
-    # ── IG: Meta verification handshake ──────────────────────────────
-    def _handle_ig_verify(self, raw_query: str) -> None:
-        with tracer.start_as_current_span("jarvis.ig.webhook_verify") as span:
-            qs = urllib.parse.parse_qs(raw_query)
-            mode = (qs.get("hub.mode") or [""])[0]
-            token = (qs.get("hub.verify_token") or [""])[0]
-            challenge = (qs.get("hub.challenge") or [""])[0]
-            span.set_attribute("ig.hub_mode", mode)
-            expected = os.environ.get("IG_VERIFY_TOKEN", "")
-            ok = (mode == "subscribe"
-                  and bool(expected)
-                  and hmac.compare_digest(token, expected))
-            span.set_attribute("ig.verify_ok", ok)
-            if not ok:
-                self.send_response(403)
-                self.end_headers()
-                return
-            body = challenge.encode("utf-8")
-            self.send_response(200)
-            self.send_header("Content-Type", "text/plain; charset=utf-8")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            try:
-                self.wfile.write(body)
-            except (ConnectionResetError, BrokenPipeError):
-                pass
-
-    # ── IG: signed event ingress ─────────────────────────────────────
-    def _handle_ig_event(self) -> None:
-        global _ig_sig_logged_once
-        with tracer.start_as_current_span("jarvis.ig.webhook_event") as span:
-            try:
-                # Read EXACTLY Content-Length bytes. Blind .read() hangs
-                # forever on keepalive connections (Meta reuses them).
-                try:
-                    length = int(self.headers.get("Content-Length", "0") or "0")
-                except ValueError:
-                    length = 0
-                body = self.rfile.read(length) if length > 0 else b""
-                span.set_attribute("ig.body_bytes", len(body))
-
-                # HMAC-SHA256 over the raw body, hex-encoded, prefixed.
-                app_secret = os.environ.get("IG_APP_SECRET", "")
-                if not app_secret:
-                    span.set_attribute("ig.reject_reason", "no_app_secret")
-                    METRIC_IG_SIG_FAILURES.inc()
-                    self.send_response(403)
-                    self.end_headers()
-                    return
-                expected = "sha256=" + hmac.new(
-                    app_secret.encode(), body, hashlib.sha256,
-                ).hexdigest()
-                got = self.headers.get("X-Hub-Signature-256", "") or ""
-                if not hmac.compare_digest(expected, got):
-                    METRIC_IG_SIG_FAILURES.inc()
-                    if not _ig_sig_logged_once:
-                        print("ig: signature mismatch (logging once; further mismatches counted silently)")
-                        _ig_sig_logged_once = True
-                    span.set_attribute("ig.reject_reason", "bad_signature")
-                    self.send_response(403)
-                    self.end_headers()
-                    return
-
-                # Signature valid → parse + enqueue. Meta retries any
-                # non-200, so on JSON parse failure we still answer 200
-                # (there's nothing useful to retry).
-                try:
-                    payload = json.loads(body or b"{}")
-                except json.JSONDecodeError as exc:
-                    span.set_attribute("ig.reject_reason", "bad_json")
-                    span.record_exception(exc)
-                    METRIC_IG_EVENTS.labels(type="other", status="bad_json").inc()
-                    self.send_response(200)
-                    self.end_headers()
-                    return
-
-                entries = payload.get("entry") if isinstance(payload, dict) else None
-                entry_count = len(entries) if isinstance(entries, list) else 0
-                obj_type_raw = payload.get("object") if isinstance(payload, dict) else None
-                # Bound metric cardinality — Meta sends a small known set
-                # (instagram, page, messages, messaging_postbacks, etc).
-                # Anything outside the allowlist gets folded into "other".
-                _KNOWN = {"instagram", "page", "messages",
-                          "messaging_postbacks", "comments", "mentions"}
-                obj_type = obj_type_raw if obj_type_raw in _KNOWN else "other"
-                span.set_attribute("ig.object_type", str(obj_type))
-                span.set_attribute("ig.entry_count", entry_count)
-                # Privacy: log entry count + type, NEVER payload content.
-                print(f"ig event type={obj_type} entries={entry_count}")
-
-                try:
-                    _ig_event_queue.put_nowait(payload)
-                    METRIC_IG_EVENTS.labels(type=str(obj_type), status="queued").inc()
-                except queue.Full:
-                    print("ig: event queue full — dropping event (consumer not draining)")
-                    METRIC_IG_EVENTS.labels(type=str(obj_type), status="dropped_full").inc()
-
-                self.send_response(200)
-                self.end_headers()
-            except Exception as exc:  # noqa: BLE001
-                # Never leak stack traces to Meta — log + 200 so they
-                # don't retry forever on a bug in our handler.
-                span.record_exception(exc)
-                print(f"ig: handler exception (returning 200 anyway): {exc!r}")
-                METRIC_IG_EVENTS.labels(type="other", status="handler_error").inc()
-                try:
-                    self.send_response(200)
-                    self.end_headers()
-                except Exception:
-                    pass
 
     # ── Voice mesh ingress (Mac thin client → shared gate) ───────────
     def _handle_voice_ingest(self) -> None:
@@ -2215,13 +1999,185 @@ def _split_sentences(text: str, max_len: int = 40) -> list[str]:
     return out or [text.strip()]
 
 
-# Timestamp of when JARVIS most recently finished speaking on Sonos.
-# Read by the main capture loop to drop self-echo — any utterance whose
-# speech_start fell during JARVIS's playback or within ECHO_SUPPRESS_S
-# afterward is the Yeti hearing JARVIS through the bedroom Play:1, not
-# the user, and gets dropped before STT-to-brain.
+# Timestamp of when JARVIS most recently finished speaking on Sonos, plus
+# the TEXT it last spoke. Read by the main capture loop for SMART echo
+# suppression: an utterance is dropped as self-echo only if JARVIS is still
+# audible (_jarvis_speaking) OR it started inside a SHORT tail window after
+# playback AND its STT transcript fuzzy-matches what JARVIS just said. A
+# genuine user reply right after a turn (which won't match JARVIS's words)
+# is PROCESSED — the old blanket ECHO_SUPPRESS_S window ate those ~half the
+# time. See _is_self_echo().
 _jarvis_done_at = 0.0
 _jarvis_speaking = False
+_jarvis_last_text = ""
+
+
+def _echo_ratio(a: str, b: str) -> float:
+    """Fuzzy similarity 0..1 between two transcripts. Combines difflib's
+    sequence ratio with bag-of-words token overlap (Jaccard) and returns
+    the max — robust to STT word-order / filler differences while still
+    scoring a near-verbatim echo high. Case/punctuation-insensitive."""
+    import difflib
+    ta = re.findall(r"[a-z0-9']+", (a or "").lower())
+    tb = re.findall(r"[a-z0-9']+", (b or "").lower())
+    if not ta or not tb:
+        return 0.0
+    sa, sb = set(ta), set(tb)
+    jacc = len(sa & sb) / len(sa | sb)
+    seq = difflib.SequenceMatcher(None, " ".join(ta), " ".join(tb)).ratio()
+    return max(jacc, seq)
+
+
+# Self-echo decision knobs. ECHO_TAIL_S is the short grace window after
+# JARVIS stops in which the Yeti may still be picking up reverb/tail of the
+# Sonos audio; only within this window do we even consider an echo drop for a
+# non-speaking-state utterance. ECHO_MATCH_RATIO is the fuzzy-match threshold
+# above which a transcript is judged to be JARVIS's own words echoed back.
+#
+# Raised to 0.80 (was 0.6): a real owner follow-up that QUOTES JARVIS's words
+# ("why do you have no tool access") fuzzy-matched JARVIS's last line at ~0.64
+# and got wrongly echo-dropped. Only near-verbatim echoes should drop now. This
+# is safe because the OWNER-VOICE gate is the real self-echo defense — JARVIS's
+# Sonos TTS never matches Hampton's voiceprint, so a genuine echo is caught by
+# voice id regardless; the text ratio is only a coarse tail-window backstop.
+ECHO_TAIL_S = float(os.environ.get("ECHO_TAIL_S", "1.0"))
+ECHO_MATCH_RATIO = float(os.environ.get("ECHO_MATCH_RATIO", "0.80"))
+
+# Word-boundary, case-insensitive "jarvis" — the direct-address signal. Used
+# by BOTH the addressee gate AND the echo-exemption: an utterance that names
+# JARVIS is ALWAYS honored and is never echo-dropped. Word-boundary so
+# substrings ("jarvises", a brand name) don't false-fire, but plain "jarvis"
+# anywhere in the sentence ("hey jarvis", "jarvis,", "ok jarvis what's up") does.
+_NAME_ADDR_RE = re.compile(r"\bjarvis\b", re.IGNORECASE)
+
+
+def _is_self_echo(user_text: str, since_jarvis: float) -> tuple[bool, float]:
+    """Return (drop_as_echo, match_ratio). Drop only when the utterance is
+    JARVIS hearing itself: either JARVIS is still speaking, OR it landed in
+    the short post-playback tail AND fuzzy-matches JARVIS's last spoken text.
+    A user's genuine reply (low match) is never dropped, even in the tail."""
+    if _jarvis_speaking:
+        return True, 1.0
+    if not (0 <= since_jarvis < ECHO_TAIL_S):
+        return False, 0.0
+    ratio = _echo_ratio(user_text, _jarvis_last_text)
+    return (ratio >= ECHO_MATCH_RATIO), ratio
+
+
+# ── Barge-in (interrupt JARVIS by saying "jarvis" during playback) ────────────
+# OPT-IN (BARGEIN_ENABLED=1, default OFF). The plain capture loop holds the
+# Yeti's only InputStream open for the whole session and BLOCKS in the Sonos
+# drain loop while JARVIS talks, so the mic isn't read during playback. Safe
+# real-time barge-in needs a wake-word spotter listening DURING playback; since
+# there is NO acoustic echo cancellation (the Yeti hears the Sonos), we gate it
+# to a wake word — only an explicit "jarvis" cuts playback, so the Sonos audio
+# itself can't self-trigger an interrupt (JARVIS rarely says its own name).
+#
+# This is wired but DEFAULT-OFF: opening a SECOND InputStream on the same Yeti
+# while the main stream is live risks PortAudio device contention, which can
+# only be validated on the live pod. Enabling it before that refactor (one
+# shared stream feeding both capture and the spotter) could half-break the
+# loop, which the task explicitly forbids. See STATUS in the PR for the path
+# to flip this on safely.
+# Barge-in is now ON by default. The contention risk the prior agent flagged
+# (a SECOND InputStream on the Yeti) is gone: the spotter reads from the SHARED
+# main InputStream opened in main(), so there is only ever ONE stream on the
+# device for the whole session. Set BARGEIN_ENABLED=0 to disable.
+BARGEIN_ENABLED = os.environ.get("BARGEIN_ENABLED", "1") == "1"
+BARGEIN_THRESHOLD = float(os.environ.get("BARGEIN_THRESHOLD", "0.6"))
+# Mic params published by main() so the barge-in spotter can resample its
+# frames to 16k without threading args through every _stream_on_sonos caller
+# (the mic loop, identity replies, run-announce).
+_MIC_PARAMS: tuple | None = None
+# The SINGLE live sounddevice InputStream opened by main(). The barge-in
+# spotter reads from THIS during playback (the main loop is blocked in the
+# Sonos drain loop while JARVIS talks, so the stream is otherwise idle) —
+# one shared stream, no second-stream PortAudio contention. None until main()
+# opens it; the spotter no-ops (barge-in disabled this turn) if it's None.
+_SHARED_STREAM = None
+
+
+def _barge_in_available() -> bool:
+    """True if openWakeWord (in the base image) can load — the dependency the
+    barge-in spotter needs. Logged once at startup so the PR/status report can
+    state honestly whether the spotter COULD run if enabled."""
+    try:
+        import openwakeword  # noqa: F401
+        return True
+    except Exception as exc:  # noqa: BLE001
+        print(f"barge-in: openWakeWord unavailable ({exc!r})")
+        return False
+
+
+class _BargeSpotter:
+    """Listens for "jarvis" DURING Sonos playback and sets .hit True when the
+    wake word is heard above threshold, so the user can interrupt JARVIS.
+
+    Reads from the SHARED main InputStream (passed in) — NOT a second device
+    stream — so there is only ever one PortAudio stream on the Yeti for the
+    whole session. The main loop is blocked in the Sonos drain loop while
+    JARVIS talks, so draining the shared stream here doesn't race the capture
+    loop (which isn't reading during playback).
+
+    Gated to the wake word "jarvis" because there is NO acoustic echo
+    cancellation: the Yeti hears the Sonos, and JARVIS rarely says its own
+    name, so the Sonos audio itself can't self-trigger an interrupt.
+
+    Fail-open: any init/runtime error disables the spotter for this turn
+    (normal playback continues) rather than taking down the speak path."""
+
+    def __init__(self, stream, native_rate, native_chunk):
+        self.stream = stream
+        self.native_rate = native_rate
+        self.native_chunk = native_chunk
+        self.hit = False
+        self._stop = threading.Event()
+        self._thread = None
+
+    def start(self):
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def stop(self):
+        self._stop.set()
+        if self._thread:
+            self._thread.join(timeout=1.5)
+
+    def _run(self):
+        if self.stream is None:
+            print("barge-in: no shared stream — disabled this turn")
+            return
+        try:
+            from openwakeword.model import Model as _OWWModel
+            oww = _OWWModel(wakeword_models=["hey_jarvis"], inference_framework="onnx")
+        except Exception as exc:  # noqa: BLE001
+            print(f"barge-in: spotter init failed ({exc!r}) — disabled this turn")
+            return
+        try:
+            buf = np.empty(0, dtype=np.float32)
+            while not self._stop.is_set():
+                # read_available avoids blocking forever if playback ends and
+                # stop() fires; fall back to a fixed read if unsupported.
+                try:
+                    avail = self.stream.read_available
+                except Exception:
+                    avail = self.native_chunk
+                n = self.native_chunk if avail and avail >= self.native_chunk \
+                    else (avail or 0)
+                if not n:
+                    time.sleep(0.01)
+                    continue
+                data, _ = self.stream.read(n)
+                mono = data.flatten().astype(np.float32)
+                buf = np.concatenate([buf, _to_16k(mono, self.native_rate)])
+                while len(buf) >= OWW_CHUNK:
+                    frame, buf = buf[:OWW_CHUNK], buf[OWW_CHUNK:]
+                    scores = oww.predict((frame * 32767).astype(np.int16))
+                    if any(s >= BARGEIN_THRESHOLD for s in scores.values()):
+                        self.hit = True
+                        return
+        except Exception as exc:  # noqa: BLE001
+            print(f"barge-in: spotter run error ({exc!r}) — disabled this turn")
 
 
 def _stream_on_sonos(sonos, sentences: list[str], host_ip: str,
@@ -2231,6 +2187,12 @@ def _stream_on_sonos(sonos, sentences: list[str], host_ip: str,
     while it plays, synth + enqueue sentences 2..N. Sonos walks the
     queue. End-to-end wall clock = synth(s1) + play(all), not synth(all)
     + play(all) — cuts perceived lag for multi-sentence replies."""
+    # Record what JARVIS is about to say so the main loop's smart echo
+    # suppression can fuzzy-match a captured utterance against it. Set BEFORE
+    # synth/playback so an early self-echo capture already has the text to
+    # compare against. Joined across sentences = the full spoken turn.
+    global _jarvis_last_text
+    _jarvis_last_text = " ".join(s for s in sentences if isinstance(s, str)).strip()
     timings: dict = {"first_audio_ms": None, "stream_done_ms": None}
     sonos_span = tracer.start_as_current_span("jarvis.sonos.stream")
     span = sonos_span.__enter__()
@@ -2270,7 +2232,7 @@ def _stream_on_sonos_impl(sonos, sentences, host_ip, http_port, turn_n,
     global _jarvis_speaking, _jarvis_done_at
     _jarvis_speaking = True
 
-    # Snapshot whatever the Sonos was playing (Spotify, podcast, anything)
+    # Snapshot whatever the Sonos was playing (music, podcast, anything)
     # BEFORE we wipe the queue for the TTS turn. Restored at the end so
     # music resumes at the exact spot after JARVIS finishes speaking.
     # Snapshot failures are non-fatal — TTS still works, we just lose
@@ -2302,6 +2264,20 @@ def _stream_on_sonos_impl(sonos, sentences, host_ip, http_port, turn_n,
         print(f"  sonos vol set → {vol} ({'persona' if persona_vol is not None else 'schedule'})")
     except Exception as exc:
         print(f"  sonos vol set failed: {exc}")
+    # ── Unmute before every reply ────────────────────────────────────────
+    # JARVIS can device-mute the Sonos (e.g. the brain calls sonos_mute on a
+    # "shut up") and nothing ever un-mutes it, silently swallowing all future
+    # replies ("nothing came through the speaker"). Force mute=False before we
+    # play so EVERY reply is audible regardless of prior state. A "shut up" /
+    # "be quiet" / "stop" should cut the CURRENT reply (stop playback) — it must
+    # never leave the device muted such that the next reply is silent. Cheap
+    # idempotent SOAP call; non-fatal if it fails.
+    try:
+        if getattr(sonos, "mute", False):
+            print("  sonos: was muted — unmuting before reply")
+        sonos.mute = False
+    except Exception as exc:
+        print(f"  sonos unmute failed (continuing): {exc}")
     # Clear stale queue before we start enqueueing this turn.
     try:
         sonos.clear_queue()
@@ -2337,9 +2313,35 @@ def _stream_on_sonos_impl(sonos, sentences, host_ip, http_port, turn_n,
     if not played_first:
         return timings
 
+    # Optional barge-in spotter (default OFF). Listens for "jarvis" during
+    # playback on its own stream; on a hit we stop the Sonos and break the
+    # drain early so the main loop captures the interrupting turn next.
+    spotter = None
+    if BARGEIN_ENABLED and _SHARED_STREAM is not None and _MIC_PARAMS is not None:
+        try:
+            _, native_rate_p, native_chunk_p = _MIC_PARAMS
+            spotter = _BargeSpotter(_SHARED_STREAM, native_rate_p, native_chunk_p)
+            spotter.start()
+        except Exception as exc:  # noqa: BLE001
+            print(f"  barge-in: spotter start failed ({exc!r})")
+            spotter = None
+
     # Wait for queue to drain (Sonos walks through enqueued items).
+    barged = False
     while True:
         time.sleep(0.4)
+        if spotter is not None and spotter.hit:
+            print("  barge-in: 'jarvis' heard during playback — stopping Sonos")
+            barged = True
+            try:
+                sonos.stop()
+            except Exception:
+                pass
+            try:
+                sonos.clear_queue()
+            except Exception:
+                pass
+            break
         try:
             state = sonos.get_current_transport_info().get(
                 "current_transport_state", "")
@@ -2350,6 +2352,11 @@ def _stream_on_sonos_impl(sonos, sentences, host_ip, http_port, turn_n,
         if time.time() - t0 > 90:
             print("  ! sonos stream timed out at 90s")
             break
+
+    if spotter is not None:
+        spotter.stop()
+    if barged:
+        timings["barged_in"] = True
 
     timings["stream_done_ms"] = int((time.time() - t0) * 1000)
     print(f"  sonos: stream done in {timings['stream_done_ms']}ms")
@@ -2386,10 +2393,23 @@ def _play_on_sonos(sonos, host_ip: str, http_port: int, turn: int) -> None:
 
 # ── Main loop ────────────────────────────────────────────────────────────────
 def main() -> None:
+    global _MIC_PARAMS
     mic_idx, native_rate, native_chunk = _pick_mic()
+    # Publish mic params for the barge-in spotter (opt-in; default OFF).
+    _MIC_PARAMS = (mic_idx, native_rate, native_chunk)
     print(f"stt: {STT_URL}")
     print(f"tts: {TTS_URL}")
     print(f"sonos: {SONOS_IP or 'NOT SET — set SONOS_IP env var'}")
+    if BARGEIN_ENABLED:
+        ok = _barge_in_available()
+        print(f"barge-in: ENABLED via shared stream (openWakeWord available={ok}, "
+              f"threshold={BARGEIN_THRESHOLD}) — say 'jarvis' during a reply to "
+              f"cut it off")
+        if not ok:
+            print("barge-in: openWakeWord unavailable — interrupt won't fire; "
+                  "capture still re-arms instantly when playback ends")
+    else:
+        print("barge-in: disabled (set BARGEIN_ENABLED=1 to enable wake-word interrupt)")
 
     # No wake-word loader — ambient mode runs VAD-gated continuous STT.
     if BRAIN_MODE == "claude":
@@ -2423,86 +2443,11 @@ def main() -> None:
         except Exception as exc:
             print(f"sonos init failed ({exc}); will print responses instead")
 
-    # Optional: IG DM polling fallback (instagrapi private-mobile-API).
-    # Webhook path is gated behind Meta Business Verification; this
-    # poller is the pragmatic workaround. FAIL-OPEN — import or start
-    # failures don't take down the voice loop.
-    if os.environ.get("IG_POLLING_ENABLED", "") == "1":
-        try:
-            import jarvis_ig_polling
-            jarvis_ig_polling.start_polling_thread()
-            print("ig polling: thread started")
-        except Exception as exc:
-            print(f"ig polling: failed to start — {exc}")
-
-    # IG DM consumer: drains _ig_event_queue and replies via instagrapi.
-    # Reuses the poller's logged-in Client (jarvis_ig_polling.get_client)
-    # — DO NOT start this without the poller, the consumer will idle
-    # until a client is available. FAIL-OPEN as above.
-    if os.environ.get("IG_CONSUMER_ENABLED", "1") == "1":
-        try:
-            import jarvis_ig_consumer
-            jarvis_ig_consumer.start_consumer_thread()
-            print("ig consumer: thread started")
-        except Exception as exc:
-            print(f"ig consumer: failed to start — {exc}")
-
-    # IG comment responder: poller (news_inbox_v1 every 60s) + consumer
-    # (drains _ig_comment_queue → vision pipeline → gaslight one-liner →
-    # client.media_comment). Shares the DM poller's logged-in Client +
-    # followed-set cache. FAIL-OPEN — import or start failures don't
-    # take down the voice loop or DM path.
-    if os.environ.get("IG_COMMENT_ENABLED", "1") == "1":
-        try:
-            import jarvis_ig_comment_responder
-            jarvis_ig_comment_responder.start_threads()
-            print("ig comment: threads started")
-        except Exception as exc:
-            print(f"ig comment: failed to start — {exc}")
-
-    # IG follow-up poller: catches replies to JARVIS's comment thread
-    # that don't re-tag @hmlbjarvis (mention notifications would never
-    # fire for those). Polls media JARVIS has commented on every ~60s
-    # for new comments by followed users. Same downstream consumer
-    # path as mentions — just an alternate trigger source.
-    if os.environ.get("IG_FOLLOWUP_POLL_ENABLED", "1") == "1":
-        try:
-            import jarvis_ig_followup_poller
-            jarvis_ig_followup_poller.start_thread()
-        except Exception as exc:
-            print(f"ig followup: failed to start — {exc}")
-
-    # IG DM-shared media downloader: drains _ig_media_queue and saves
-    # reels/photos/stories to the Synology-backed /media/reels PVC.
-    # Borrows the poller's logged-in Client + the consumer's followed-set
-    # cache; both must be running for this to do anything. FAIL-OPEN as
-    # above.
-    if os.environ.get("IG_MEDIA_DL_ENABLED", "1") == "1":
-        try:
-            import jarvis_ig_media_dl
-            jarvis_ig_media_dl.start_downloader_thread()
-            print("ig media: downloader thread started")
-        except Exception as exc:
-            print(f"ig media: failed to start — {exc}")
-
-    # Discord selfbot (text v1: mentions, DMs, replies). Runs an asyncio
-    # event loop in a daemon thread; reacts only on whitelisted guild
-    # mentions / replies-to-us / DMs from the owner. Reuses the IG
-    # comment responder's persona / Q&A / song-id pipelines. FAIL-OPEN
-    # — an ImportError on discord.py-self (base image not rebuilt yet)
-    # or a missing token must NOT take down the voice loop or IG paths.
-    if os.environ.get("DISCORD_ENABLED", "1") == "1":
-        try:
-            import jarvis_discord
-            jarvis_discord.start_thread()
-        except Exception as exc:
-            print(f"discord: failed to start — {exc}")
-
     # Cluster-run completion announcer (charter roadmap #2). Polls k8s for
     # finished runner Jobs and speaks the result on Sonos via _stream_on_sonos,
     # serialized against the mic loop by _speak_lock. FAIL-OPEN — import or
-    # start failure must NOT take down the voice loop, exactly like the IG /
-    # Discord subsystems above. No-op until launch_run has produced a Job.
+    # start failure must NOT take down the voice loop. No-op until launch_run
+    # has produced a Job.
     if os.environ.get("RUN_ANNOUNCE_ENABLED", "1") == "1":
         try:
             import jarvis_run_announce
@@ -2550,6 +2495,10 @@ def main() -> None:
 
     with sd.InputStream(samplerate=native_rate, channels=1, dtype="float32",
                         blocksize=native_chunk, device=mic_idx) as stream:
+        # Publish the single live stream so the barge-in spotter reads from it
+        # during playback (one shared stream — no second-device contention).
+        global _SHARED_STREAM
+        _SHARED_STREAM = stream
         print("\nready — ambient mode (say 'jarvis' anywhere in a sentence). Ctrl-C to quit.\n")
         try:
             while True:
@@ -2626,29 +2575,28 @@ def main() -> None:
                     if t_speech_start is not None:
                         turn_span.set_attribute("speech_start_ts", float(t_speech_start))
 
-                    # ── Echo suppression ────────────────────────────────
-                    # If JARVIS was speaking when this utterance started, or
-                    # finished < ECHO_SUPPRESS_S ago, this is almost certainly
-                    # the Yeti picking up the Sonos playback — drop without
-                    # transcribing. Prevents "Nineteen, sir. → 19, sir.
-                    # → Nineteen what, sir?" self-conversations.
-                    if t_speech_start is not None:
-                        since_jarvis = t_speech_start - _jarvis_done_at
-                        if _jarvis_speaking or (0 <= since_jarvis < ECHO_SUPPRESS_S):
-                            print(f"  (echo drop {dur:.1f}s; "
-                                  f"speaking={_jarvis_speaking}, "
-                                  f"since_jarvis={since_jarvis:.1f}s)")
-                            turn_span.add_event("echo_drop", {
-                                "dur_s": float(dur),
-                                "since_jarvis_s": float(since_jarvis),
-                                "jarvis_speaking": bool(_jarvis_speaking),
-                            })
-                            turn_outcome = "echo_drop"
-                            METRIC_ECHO_DROPS.inc()
-                            METRIC_TURNS_TOTAL.labels(
-                                addressed="0", ambient_drop="0", echo_drop="1",
-                            ).inc()
-                            continue
+                    # ── Echo suppression (phase 1: still-speaking) ───────
+                    # If JARVIS is AUDIBLE right now, anything the Yeti hears
+                    # is the Sonos, not the user — drop without transcribing.
+                    # (Barge-in, when enabled, is handled separately so a
+                    # genuine "jarvis" interrupt can cut playback; the plain
+                    # capture loop here only runs once playback has finished.)
+                    since_jarvis = (t_speech_start - _jarvis_done_at) \
+                        if t_speech_start is not None else 1e9
+                    if _jarvis_speaking:
+                        print(f"  (echo drop {dur:.1f}s; jarvis still speaking)")
+                        turn_span.add_event("echo_drop", {
+                            "dur_s": float(dur),
+                            "since_jarvis_s": float(since_jarvis),
+                            "jarvis_speaking": True,
+                            "reason": "speaking",
+                        })
+                        turn_outcome = "echo_drop"
+                        METRIC_ECHO_DROPS.inc()
+                        METRIC_TURNS_TOTAL.labels(
+                            addressed="0", ambient_drop="0", echo_drop="1",
+                        ).inc()
+                        continue
 
                     audio_native = np.concatenate(frames)
                     audio_16k = _to_16k(audio_native, native_rate)
@@ -2667,20 +2615,111 @@ def main() -> None:
                         turn_outcome = "empty_text"
                         continue
 
-                    # ── Speaker-ID gate (drops unknown voices in ambient mode) ──
-                    # If owner is enrolled, require voice match before letting
-                    # through. Without enrollment, pass-through (back-compat for
-                    # fresh deployments).
-                    # ── Speaker-ID + identity state machine (Phase 1/2) ──
+                    # ── DIRECT ADDRESS IS ALWAYS HONORED (highest priority) ──
+                    # If the user explicitly says "jarvis", JARVIS MUST respond
+                    # — never echo-suppressed, never dropped. Self-echo of
+                    # JARVIS's own speech rarely contains a FRESH "jarvis"
+                    # (JARVIS doesn't say its own name), and once the owner is
+                    # enrolled the owner-voice gate handles any true self-echo
+                    # that did. So a name-addressed utterance bypasses the
+                    # text-based echo drop entirely. (Word-boundary, case-insens.)
+                    name_addressed = bool(_NAME_ADDR_RE.search(user_text))
+
+                    # ── Echo suppression (phase 2: smart, text-based) ────
+                    # JARVIS has finished speaking. If this utterance landed
+                    # in the short tail window AND fuzzy-matches what JARVIS
+                    # just said, it's the Yeti echoing the Sonos — drop it.
+                    # A GENUINE user reply right after a turn (which won't
+                    # match JARVIS's words) scores low and is PROCESSED. This
+                    # replaces the old blanket ECHO_SUPPRESS_S window that ate
+                    # the user's reply ~half the time.
+                    is_echo, echo_ratio = _is_self_echo(user_text, since_jarvis)
+                    if is_echo and name_addressed:
+                        # Direct address overrides the echo drop — pass it through.
+                        print(f"  (echo exempt: name-addressed within tail, "
+                              f"match={echo_ratio:.2f}): {user_text[:60]!r}")
+                        turn_span.add_event("echo_exempt_name_addressed", {
+                            "since_jarvis_s": float(since_jarvis),
+                            "match_ratio": float(echo_ratio),
+                        })
+                        is_echo = False
+                    if is_echo:
+                        print(f"  (echo drop {dur:.1f}s; since_jarvis="
+                              f"{since_jarvis:.1f}s, match={echo_ratio:.2f}): "
+                              f"{user_text[:60]!r}")
+                        turn_span.add_event("echo_drop", {
+                            "dur_s": float(dur),
+                            "since_jarvis_s": float(since_jarvis),
+                            "jarvis_speaking": False,
+                            "match_ratio": float(echo_ratio),
+                            "reason": "fuzzy_tail_match",
+                        })
+                        turn_outcome = "echo_drop"
+                        METRIC_ECHO_DROPS.inc()
+                        METRIC_TURNS_TOTAL.labels(
+                            addressed="0", ambient_drop="0", echo_drop="1",
+                        ).inc()
+                        continue
+                    if 0 <= since_jarvis < ECHO_TAIL_S:
+                        # In the tail but NOT a match → genuine reply. Note it
+                        # so the trace shows we deliberately let it through.
+                        turn_span.add_event("echo_pass", {
+                            "since_jarvis_s": float(since_jarvis),
+                            "match_ratio": float(echo_ratio),
+                        })
+
+                    # ── Speaker-ID + identity state machine ──────────────
+                    # If an owner is enrolled, resolve the voice to a Principal
+                    # (OWNER/TRUSTED/UNKNOWN). Without enrollment, principal is
+                    # None → open mode (back-compat for fresh deployments).
                     import jarvis_identity as _ji
                     principal = _identify_speaker_from_audio(audio_16k)
-                    low = user_text.lower()
-                    addressed = ("jarvis" in low) or (time.time() < engaged_until)
+                    # name_addressed computed above (echo exemption); reuse it
+                    # so the gate and the exemption agree on what "the user said
+                    # jarvis" means (word-boundary, case-insensitive).
+                    # Measure the follow-up window from when the owner STARTED
+                    # speaking (t_speech_start), NOT from now: a long question
+                    # + STT latency must not push a reply that began inside the
+                    # window back out of it. (Was the "do I have to say jarvis
+                    # every time" bug.)
+                    _t_addr = t_speech_start if t_speech_start is not None else time.time()
+                    addressed = name_addressed or (_t_addr < engaged_until)
 
-                    # Phase 2: owner-auth + enroll-by-voice. Runs BEFORE the
-                    # ambient drop so an unknown answering "I'm Alex" (no wake
-                    # word) is still captured. Owner auth commands are consumed
-                    # here and never reach the brain.
+                    # ── Owner enroll-by-voice (Approach A) ───────────────
+                    # Deterministic bootstrap. In OPEN mode (principal is None,
+                    # no owner yet) this is the ONLY way to self-enroll the
+                    # first owner. In ENROLLED mode, gate on principal.role ==
+                    # OWNER so a stranger can't overwrite the owner's voice (a
+                    # stranger is UNKNOWN and dropped below anyway). Enrollment
+                    # audio is CONSUMED — it never reaches the brain or mem0.
+                    _enroll_eligible = (principal is None
+                                        or (principal is not None
+                                            and principal.role is _ji.Role.OWNER))
+                    if _enroll_eligible or _owner_enroll["active"]:
+                        en_consumed, en_reply = _owner_enroll_turn(
+                            audio_16k, user_text, addressed)
+                        if en_consumed:
+                            if en_reply:
+                                print(f"  JARVIS (enroll): {en_reply!r}")
+                                turn_n += 1
+                                _ens = _split_sentences(en_reply)
+                                if _ens:
+                                    try:
+                                        with _speak_lock:
+                                            _stream_on_sonos(sonos, _ens, host_ip,
+                                                             EDGE_ADVERTISED_PORT,
+                                                             turn_n, stash)
+                                        engaged_until = time.time() + ADDRESSEE_WINDOW
+                                    except Exception as exc:
+                                        print(f"  sonos stream error: {exc}")
+                            turn_outcome = "owner_enroll"
+                            continue
+
+                    # Owner-auth commands (approve/reject/remove a pending
+                    # enrollee) are consumed here and never reach the brain.
+                    # Non-owners produce no identity action — UNKNOWN drops
+                    # silently below, TRUSTED falls through to the gate (which
+                    # silently drops it too). No name challenge, no name capture.
                     if principal is not None:
                         consumed, id_reply = _identity_turn(principal, user_text, addressed)
                         if consumed:
@@ -2699,8 +2738,9 @@ def main() -> None:
                             turn_outcome = "identity_action"
                             continue
                         if principal.role is _ji.Role.UNKNOWN:
-                            # Unaddressed / unhandled unknown → ambient-drop
-                            # (don't broadcast that we're listening).
+                            # Any unknown speaker (addressed or not) → silent
+                            # drop. Owner-only policy: never broadcast that we're
+                            # listening, never challenge for a name.
                             print(f"  (unknown speaker drop {dur:.1f}s): {user_text[:70]!r}  conf={principal.confidence:.2f}")
                             turn_span.add_event("unknown_speaker_drop", {
                                 "dur_s": float(dur),
@@ -2715,6 +2755,34 @@ def main() -> None:
                         turn_span.set_attribute("speaker", str(principal.display_name))
                         turn_span.set_attribute("speaker_role", principal.role.value)
                         turn_span.set_attribute("speaker_confidence", float(principal.confidence))
+
+                        # ── Continuous voice adaptation ─────────────────
+                        # On a HIGH-confidence OWNER match, fold this turn's
+                        # embedding into the owner template so recognition
+                        # sharpens + tracks the owner over time. adapt_owner
+                        # GUARDS HARD: it no-ops unless score >= ADAPT_MIN_SCORE
+                        # (well above the owner grant threshold), so it can
+                        # never be drifted onto a borderline/impostor voice.
+                        # Cheap (one dot product); fail-open — never blocks the
+                        # turn. Only when an embedding is actually attached.
+                        if (principal.role is _ji.Role.OWNER
+                                and getattr(principal, "embedding", None) is not None):
+                            try:
+                                import jarvis_voice_id as _vid
+                                _ad = _vid.adapt_owner(principal.embedding,
+                                                       float(principal.confidence))
+                                if _ad.get("status") == "adapted":
+                                    print(f"  [vid] owner voice adapted "
+                                          f"(score={principal.confidence:.3f}, "
+                                          f"template_cos={_ad.get('template_cos')}, "
+                                          f"n={_ad.get('adapt_count')})")
+                                    turn_span.add_event("voice_adapted", {
+                                        "score": float(principal.confidence),
+                                        "template_cos": float(_ad.get("template_cos", 1.0)),
+                                        "adapt_count": int(_ad.get("adapt_count", 0)),
+                                    })
+                            except Exception as _aexc:  # noqa: BLE001
+                                print(f"  [vid] adapt skipped ({_aexc!r})")
 
                     # ── Ambient addressee gate (owner/trusted + open mode) ──
                     # Must contain "jarvis" OR we're in the follow-up window.

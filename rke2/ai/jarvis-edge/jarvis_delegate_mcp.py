@@ -31,7 +31,12 @@ import traceback
 from typing import Optional
 
 _JARVIS_BRANCH = "jarvis"
-_LOG_DIR = os.path.expanduser("~/.openjarvis/sub_agent_logs")
+# NOTE: HOME is /tmp and /tmp/.openjarvis is a READ-ONLY secret mount, so the
+# old default (~/.openjarvis/...) made os.makedirs crash → every delegate died
+# with "Read-only file system" before spawning. Point logs + the default
+# working dir at the writable /state PVC. Both env-overridable.
+_LOG_DIR = os.environ.get("JARVIS_SUBAGENT_LOG_DIR", "/state/sub_agent_logs")
+_DEFAULT_WD = os.environ.get("JARVIS_SUBAGENT_WORKDIR", "/state")
 
 
 def _claude_bin() -> str:
@@ -128,14 +133,16 @@ def _build_cmd(task: str, mode: str, wd: str,
 
 
 def delegate(task: str, mode: str = "diagnose",
-             directory: str = "~/iac",
+             directory: str = "",
              issue: Optional[int] = None) -> dict:
     """Spawn a Claude Code sub-agent detached. Returns job + log info."""
     task = (task or "").strip()
     if not task:
         return {"status": "error", "detail": "empty task"}
     mode = mode if mode in ("diagnose", "apply", "plan") else "diagnose"
-    wd = os.path.expanduser(directory or "~/iac")
+    wd = os.path.expanduser(directory or _DEFAULT_WD)
+    if not os.path.isdir(wd):   # ~/iac etc. don't exist in the edge container
+        wd = _DEFAULT_WD
     cmd = _build_cmd(task, mode, wd, issue)
 
     os.makedirs(_LOG_DIR, exist_ok=True)
@@ -231,7 +238,7 @@ def _call(name: str, args: dict) -> dict:
         return _text_result(json.dumps(delegate(
             task=args.get("task", ""),
             mode=args.get("mode", "diagnose"),
-            directory=args.get("directory", "~/iac"),
+            directory=args.get("directory", ""),
             issue=args.get("issue"),
         )))
     return {"content": [{"type": "text", "text": f"unknown tool: {name}"}],

@@ -39,19 +39,42 @@ import jarvis_voice_id as _vid
 # Re-export the voiceprint + pending primitives so callers use ONE module.
 from jarvis_voice_id import (  # noqa: F401
     OWNER_THRESHOLD,
+    _THRESHOLD_MATCH,
     authenticate_pending,
+    check_owner_passphrase,
     clear_pending,
     embed_from_audio,
     get_owner,
     get_owner_slug,
     get_pending,
     has_owner,
+    has_owner_passphrase,
     load_profile,
     remove,
+    set_owner_passphrase,
     stash_pending,
 )
 
 _STATE_ROOT = Path(os.environ.get("JARVIS_STATE_ROOT", "/state"))
+
+# ── owner session hysteresis ──────────────────────────────────────────────────
+# Resemblyzer owner self-similarity drifts turn-to-turn (illness, time of day,
+# mic distance, prosody) — live owner turns range ~0.72–0.89, straddling the
+# OWNER_THRESHOLD (0.75) grant bar. A borderline DIP downgrades the OWNER to
+# TRUSTED mid-conversation. Under the owner-only policy a non-owner gets NO
+# spoken reply, so without hysteresis a real owner whose voice dipped would be
+# silently dropped mid-conversation — JARVIS would just go quiet on Hampton.
+#
+# Fix: once an owner is CONFIDENTLY established (top match is the owner template
+# AND score >= OWNER_THRESHOLD), a subsequent borderline owner match
+# (score in [_THRESHOLD_MATCH, OWNER_THRESHOLD)) within OWNER_STICKY_S keeps
+# role=OWNER instead of downgrading. This NEVER lowers the COLD bar: a first /
+# stale match still needs the full 0.75, so a stranger gains nothing.
+OWNER_STICKY_S = float(os.environ.get("VOICE_OWNER_STICKY_S", "90.0"))
+
+# Timestamp (time.time()) of the last CONFIDENT owner turn, or 0.0 if none yet
+# this process. Module-level so it survives across turns within the daemon.
+_last_confident_owner_ts: float = 0.0
 
 
 class Role(str, Enum):
@@ -72,6 +95,13 @@ class Principal:
     profile_path: Optional[str] = None
     embedding: Any = None        # carried for enroll-by-voice (Phase 2)
     raw: dict = field(default_factory=dict)
+    # FAIL-OPEN marker. True when the TOP voiceprint match is the OWNER template
+    # but the score fell below the OWNER grant bar AND no sticky owner session
+    # is active — the case that historically downgrades to TRUSTED and is
+    # silently dropped. The fail-open gate (VOICE_FAIL_OPEN) routes these to a
+    # passphrase / "it's me" confirmation instead of dropping the real owner.
+    # Off by default, so an un-set flag is behaviour-identical to today.
+    degraded_owner: bool = False
 
     @property
     def mem_scope(self) -> str:
@@ -94,15 +124,34 @@ def _profile_path(slug: str) -> str:
 def resolve_voice(embedding, *, source: str = "voice") -> Principal:
     """Map a Resemblyzer embedding to a Principal.
 
-    OWNER is granted ONLY on a strong match (score ≥ OWNER_THRESHOLD). A weaker
-    match to the owner's voiceprint is DOWNGRADED to TRUSTED — the dangerous
-    direction is a stranger scoring high enough to impersonate the owner, so we
-    bias against it. A genuine trusted match stays TRUSTED; anything
-    borderline / unknown / no-enrollments is UNKNOWN.
+    OWNER is granted on a strong match (score ≥ OWNER_THRESHOLD), OR — via
+    session hysteresis — on a BORDERLINE owner match
+    (score ∈ [_THRESHOLD_MATCH, OWNER_THRESHOLD)) when a CONFIDENT owner turn
+    happened within OWNER_STICKY_S. A weaker / cold match to the owner's
+    voiceprint is DOWNGRADED to TRUSTED — the dangerous direction is a stranger
+    scoring high enough to impersonate the owner, so we bias against it. A
+    genuine trusted match stays TRUSTED; anything borderline / unknown /
+    no-enrollments is UNKNOWN.
+
+    The hysteresis NEVER lowers the cold bar: a first or stale match (no recent
+    confident owner turn) still requires the full OWNER_THRESHOLD, so a stranger
+    can never reach OWNER.
     """
+    global _last_confident_owner_ts
+    import time as _time
     res = _vid.identify(embedding)
     status = res.get("status")
     if status != "match":  # borderline / unknown / no_enrollments
+        # FAIL-OPEN: even on a sub-MATCH score, if the TOP-ranked template is
+        # the owner's, this is very likely the real owner with a degraded
+        # signal (illness / distance / noise) — flag it so the gate can offer a
+        # passphrase rather than dropping Hampton. This NEVER grants OWNER; it
+        # only routes to a challenge. A stranger who happens to rank nearest the
+        # owner still must pass the passphrase to gain anything.
+        ranking = res.get("ranking") or []
+        top = ranking[0] if ranking else {}
+        degraded = (top.get("role") == "owner"
+                    and float(res.get("score", 0.0)) >= 0.0)
         return Principal(
             role=Role.UNKNOWN,
             user_id="voice:unknown",
@@ -110,6 +159,7 @@ def resolve_voice(embedding, *, source: str = "voice") -> Principal:
             confidence=float(res.get("score", 0.0)),
             embedding=embedding,
             raw=res,
+            degraded_owner=bool(degraded and top.get("role") == "owner"),
         )
 
     slug = res["slug"]
@@ -117,12 +167,37 @@ def resolve_voice(embedding, *, source: str = "voice") -> Principal:
     score = float(res["score"])
     matched_role = res["role"]  # "owner" | "trusted"
 
+    sticky = False
+    degraded_owner = False
     if matched_role == "owner" and score >= OWNER_THRESHOLD:
+        # CONFIDENT owner turn: grant OWNER and (re)arm the sticky window.
         role = Role.OWNER
+        _last_confident_owner_ts = _time.time()
+    elif (matched_role == "owner"
+          and _THRESHOLD_MATCH <= score < OWNER_THRESHOLD
+          and _last_confident_owner_ts > 0.0
+          and (_time.time() - _last_confident_owner_ts) <= OWNER_STICKY_S):
+        # BORDERLINE owner match inside an established owner session: keep OWNER
+        # so a normal voice dip doesn't get Hampton silently dropped as a
+        # non-owner. Refresh the window — an active conversation of borderline
+        # turns stays sticky as long as turns keep coming < STICKY_S.
+        role = Role.OWNER
+        sticky = True
+        _last_confident_owner_ts = _time.time()
     else:
-        # Owner match below OWNER_THRESHOLD downgrades here; a trusted match
-        # stays trusted. Never UNKNOWN→OWNER.
+        # Cold/stale owner match below OWNER_THRESHOLD downgrades here; a trusted
+        # match stays trusted. Never UNKNOWN→OWNER, never sticky for a stranger.
         role = Role.TRUSTED
+        # FAIL-OPEN marker: a weak OWNER-template match with no active sticky
+        # session. Today this TRUSTED principal is silently dropped by the gate
+        # (the lockout). Flag it so VOICE_FAIL_OPEN can offer a passphrase. We
+        # only mark when the matched template is the OWNER's — a genuine TRUSTED
+        # user match is left untouched.
+        degraded_owner = (matched_role == "owner")
+
+    if role is Role.OWNER:
+        tag = "owner [sticky]" if sticky else "owner"
+        print(f"  [vid] speaker: {name} (role={tag}, conf={score:.2f})")
 
     return Principal(
         role=role,
@@ -132,7 +207,8 @@ def resolve_voice(embedding, *, source: str = "voice") -> Principal:
         confidence=score,
         profile_path=_profile_path(slug),
         embedding=embedding,
-        raw=res,
+        raw={**res, "sticky_owner": sticky},
+        degraded_owner=degraded_owner,
     )
 
 
@@ -227,9 +303,12 @@ def _owner_patterns():
 
 
 def is_owner_referential(text: str) -> bool:
-    """True if ``text`` (from a NON-owner) is asking about the owner. The gate
-    calls this for TRUSTED turns and deflects deterministically on a hit — no
-    brain is ever spawned, so the model can't be talked into answering."""
+    """True if ``text`` (from a NON-owner) is asking about the owner.
+
+    NOTE: no longer wired to the gate. Under the owner-only policy non-owner
+    turns get no spoken reply at all, so there's nothing to deflect — the gate
+    drops them before any brain runs. Kept as a reusable classifier for any
+    future non-voice front end that wants Layer-B deflection."""
     if not text:
         return False
     name_re, pii_re = _owner_patterns()
@@ -243,9 +322,12 @@ def is_owner_referential(text: str) -> bool:
 # ── capability tiers ─────────────────────────────────────────────────────────
 
 def capability_for(role: Role) -> str:
-    """Base capability for a role: 'full' (owner brain + all MCP tools),
-    'locked' (no MCP tools at all), or 'none' (no brain). The gate layers the
-    owner-referential deflection on top of 'locked' for TRUSTED turns."""
+    """Base capability tier for a role: 'full' (owner brain + all MCP tools),
+    'locked' (no MCP tools at all), or 'none' (no brain).
+
+    NOTE: the voice gate no longer consults this — it grants the full brain to
+    OWNER and silently drops everyone else. Retained as a reference tier map
+    for non-voice front ends."""
     if role is Role.OWNER:
         return "full"
     if role is Role.TRUSTED:

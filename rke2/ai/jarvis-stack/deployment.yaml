@@ -105,8 +105,8 @@ spec:
               # speaker-id embeddings, persona tuning, etc.
               chown 1000:100 /state
               chmod 0775 /state
-              mkdir -p /state/voices /state/users /state/reels /state/ig_reel_descriptions
-              chown 1000:100 /state/voices /state/users /state/reels /state/ig_reel_descriptions
+              mkdir -p /state/voices /state/users
+              chown 1000:100 /state/voices /state/users
               if [ ! -f /state/persona.json ]; then
                 cat > /state/persona.json <<'EOF'
               {
@@ -253,6 +253,17 @@ spec:
         - name: jarvis-edge
           image: zot.hwcopeland.net/ai/jarvis-edge:latest
           imagePullPolicy: Always
+          # HOME=/tmp is ephemeral, so claude's config (~/.claude.json) is lost
+          # on every restart and the brain errors "config not found" → "I lost
+          # my connection" until restored. The .claude DIR (incl. backups) IS
+          # PVC-backed, so restore the newest backup SYNCHRONOUSLY here, before
+          # edge.py serves a single turn (a postStart hook races the first turn).
+          command: ["sh", "-c"]
+          args:
+            - |
+              BK=$(ls -t /tmp/.claude/backups/.claude.json.backup.* 2>/dev/null | head -1)
+              [ -n "$BK" ] && [ ! -s /tmp/.claude.json ] && cp "$BK" /tmp/.claude.json
+              exec python -u edge.py
           ports:
             - name: audio-http
               containerPort: 8088
@@ -275,6 +286,35 @@ spec:
             runAsUser: 1000
             runAsGroup: 100
           env:
+            # Claude Max headless token (1yr). Value lives ONLY in the
+            # jarvis-claude-token cluster Secret (ESO/Vaultwarden) — never here.
+            # Without this the brain 401s on every turn.
+            - name: CLAUDE_CODE_OAUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: jarvis-claude-token
+                  key: token
+            # iCloud CalDAV (Calendar + Reminders). Values ONLY in the
+            # jarvis-icloud-credentials cluster Secret. Names must match
+            # jarvis_personal.py _caldav() (ICLOUD_APPLE_ID / ICLOUD_APP_PASSWORD).
+            - name: ICLOUD_CALDAV_URL
+              value: "https://caldav.icloud.com"
+            - name: ICLOUD_APPLE_ID
+              valueFrom:
+                secretKeyRef:
+                  name: jarvis-icloud-credentials
+                  key: username
+            - name: ICLOUD_APP_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: jarvis-icloud-credentials
+                  key: password
+            # Local timezone so the SONOS day/night volume schedule resolves
+            # against local hours (else the container is UTC).
+            - name: TZ
+              value: "America/Chicago"
+            - name: TTS_CFG
+              value: "0.4"
             # STT hits the sibling container over the shared pod localhost.
             - name: STT_URL
               value: "http://localhost:8766"
@@ -332,153 +372,9 @@ spec:
             # Secret. The Mac daemon's _claude_brain explicitly pops this
             # env var; we just don't set it.
 
-            # ── Instagram webhook (Meta callbacks → /ig/webhook) ─────
-            # IG_ENABLED gates the daemon's startup log + handler arming;
-            # set to "0" (or remove) to keep the routes disabled while
-            # still able to roll the rest of the stack.
-            - name: IG_ENABLED
-              value: "1"
-            - name: IG_VERIFY_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: jarvis-ig-credentials
-                  key: IG_VERIFY_TOKEN
-            - name: IG_APP_SECRET
-              valueFrom:
-                secretKeyRef:
-                  name: jarvis-ig-credentials
-                  key: IG_APP_SECRET
-            - name: IG_PAGE_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: jarvis-ig-credentials
-                  key: IG_PAGE_TOKEN
-            - name: META_APP_ID
-              valueFrom:
-                secretKeyRef:
-                  name: jarvis-ig-credentials
-                  key: META_APP_ID
-            - name: IG_APP_ID
-              valueFrom:
-                secretKeyRef:
-                  name: jarvis-ig-credentials
-                  key: IG_APP_ID
-
-            # ── IG DM polling fallback (instagrapi private mobile API) ─
-            # Webhook ingress requires Meta Business Verification which
-            # we're not doing. This polls the @hmlbjarvis inbox every
-            # IG_POLL_INTERVAL_S seconds and enqueues new DMs onto the
-            # SAME _ig_event_queue the webhook feeds — downstream
-            # consumers see them identically (source: "polling" vs the
-            # webhook's "webhook" tag). Set IG_POLLING_ENABLED=0 to
-            # disable without touching code.
-            # DISABLED: @hmlbjarvis tripped Meta's automation detection
-            # 2026-05-27 — session invalidated, account warned about
-            # automated behavior. Stays off until Meta Business
-            # Verification completes and we move to the webhook path.
-            # See memory: project_meta_ig_business_verification_wall.
-            - name: IG_POLLING_ENABLED
-              value: "0"
-            - name: IG_USERNAME
-              valueFrom:
-                secretKeyRef:
-                  name: jarvis-ig-credentials
-                  key: IG_USERNAME
-            - name: IG_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: jarvis-ig-credentials
-                  key: IG_PASSWORD
-
-            # ── IG DM consumer (drains _ig_event_queue, replies to DMs) ─
-            # Borrows the poller's logged-in Client to avoid a second
-            # login from this IP (would trip a challenge). Authenticates
-            # senders against the followed-back set — silent drop for
-            # unauthenticated DMs so we don't leak that we're a bot.
-            # DISABLED — see IG_POLLING_ENABLED comment above.
-            - name: IG_CONSUMER_ENABLED
-              value: "0"
-
-            # ── IG comment-tag responder ─────────────────────────────
-            # When someone (we follow back) @-mentions @hmlbjarvis in a
-            # comment on any post, this poller picks it up off the
-            # news/inbox activity feed every 60s and the consumer drops
-            # a brainrot one-liner in that comment thread. For videos
-            # it runs a download → ffmpeg → Whisper → Claude-vision
-            # pipeline; for photos it does a single image vision call.
-            # Same auth gate as the DM consumer.
-            # DISABLED — see IG_POLLING_ENABLED comment above.
-            - name: IG_COMMENT_ENABLED
-              value: "0"
-
-            # ── IG DM-shared media downloader ────────────────────────
-            # When Hampton (or anyone we follow back) DMs a reel/post/
-            # story to @hmlbjarvis, the poller enqueues a media_share
-            # event and this downloader saves the underlying media to
-            # the Synology-backed /media/reels volume plus a JSON
-            # sidecar with caption, source, and vision description.
-            # IG_REEL_CONFIRM_REPLY=1 makes JARVIS DM back a one-liner
-            # reaction; OFF by default to avoid spamming ourselves
-            # during testing.
-            - name: IG_MEDIA_DL_ENABLED
-              value: "1"
-            - name: IG_MEDIA_DL_DESCRIBE
-              value: "1"
-            - name: IG_REEL_CONFIRM_REPLY
-              value: "0"
-
-            # ── Discord selfbot (text v1: mentions, DMs, replies) ────
-            # Runs an asyncio event loop in a daemon thread inside the
-            # jarvis-edge process. Reacts only to:
-            #   - DMs from DISCORD_OWNER_USER_ID
-            #   - @mentions of DISCORD_USER_ID inside guilds in
-            #     DISCORD_WHITELIST_SERVER_IDS (comma-separated)
-            #   - replies to messages WE sent in those same guilds
-            # Same persona/brain/Q&A/song-id stack as the IG comment
-            # responder — Discord is just a different transport.
-            # Voice channel support deferred to v2.
-            # Selfbot risk mitigations live in-module: invisible status,
-            # no scraping, no programmatic guild join/leave, exponential-
-            # ish backoff on LoginFailure / RateLimited. Set
-            # DISCORD_ENABLED=0 to disable without removing creds.
-            # DISABLED 2026-05-27: Discord invalidated @hmlbjarvis's user
-            # token (LoginFailure 'Improper token has been passed' ~20min
-            # after each new connection — selfbot detection). Stays off
-            # until we migrate to a real Bot Application — see the
-            # conversation logs around the discord.py-vs-bot-api Q. The
-            # webhook + voice paths are unaffected.
-            - name: DISCORD_ENABLED
-              value: "0"
-            - name: DISCORD_USER_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: jarvis-discord-credentials
-                  key: DISCORD_USER_TOKEN
-            - name: DISCORD_USER_ID
-              valueFrom:
-                secretKeyRef:
-                  name: jarvis-discord-credentials
-                  key: DISCORD_USER_ID
-            - name: DISCORD_OWNER_USER_ID
-              valueFrom:
-                secretKeyRef:
-                  name: jarvis-discord-credentials
-                  key: DISCORD_OWNER_USER_ID
-            - name: DISCORD_WHITELIST_SERVER_IDS
-              valueFrom:
-                secretKeyRef:
-                  name: jarvis-discord-credentials
-                  key: DISCORD_WHITELIST_SERVER_IDS
-            # Comma-separated extra Discord user IDs allowed to query
-            # JARVIS (beyond the owner). Persona refers to the owner as
-            # "sir"; non-owner triggerers are addressed by @username.
-            - name: DISCORD_ALLOWED_USER_IDS
-              value: "354076668517679107"
-
-            # ── Local brain (Ollama sidecar) fallback ────────────────
-            # When Claude refuses on edgy IG content, _claude_brain_raw
-            # falls back to this. Sidecar runs in this pod on
-            # Standalone ollama Deployment in this namespace (same
+            # ── Local brain (Ollama) fallback ────────────────────────
+            # When Claude refuses or fails, _local_brain_fallback falls
+            # back to this. Standalone ollama Deployment in this namespace (same
             # instance Open WebUI uses). Model picked from what's
             # locally pulled and supported by the installed ollama
             # binary — gemma-4 was unsupported (unknown arch 'gemma4')
@@ -500,7 +396,8 @@ spec:
             - name: nix-store
               mountPath: /nix/store
               readOnly: true
-            # config.toml from the Secret — jarvis_tv.py reads ~/.openjarvis/
+            # config.toml from the Secret — jarvis_personal et al. read
+            # ~/.openjarvis/config.toml for their settings.
             - name: jarvis-config
               mountPath: /tmp/.openjarvis
               readOnly: true
@@ -546,9 +443,6 @@ spec:
             items:
               - key: config.toml
                 path: config.toml
-                mode: 0444   # readable by uid 1000 (Secret default owner is root)
-              - key: spotify_tokens.json
-                path: spotify_tokens.json
                 mode: 0444   # readable by uid 1000 (Secret default owner is root)
         # Read-only source for the init container; main container never
         # mounts this directly (uses claude-home / emptyDir instead).

@@ -47,9 +47,11 @@ _MUTE = {
 
 def _osa(script: str, timeout: float = 25.0) -> tuple[bool, str]:
     """AppleScript stub for the cluster pod (Linux — no macOS Calendar/
-    Reminders access). Calendar / reminders functions all funnel through
-    this, so returning failure makes them degrade gracefully into
-    'unauthorized'. Future: replace with CalDAV bridge to iCloud."""
+    Reminders access). Always reports failure. Calendar/Reminders on the edge
+    use the iCloud CalDAV bridge below (_caldav / calendar_today /
+    reminders_due_today), NOT AppleScript. This stub currently has no callers;
+    it stays only as a safe no-op for any future code ported from the macOS
+    daemon that still expects _osa()."""
     return False, "AppleScript unavailable in cluster pod"
 
 
@@ -546,9 +548,9 @@ def compose_briefing() -> str:
     now = _dt.datetime.now()
     parts: List[str] = [f"Good morning, sir. It's {now:%A, %B %-d}."]
 
-    # Calendar + Reminders are AppleScript-only on this fork; the cluster
-    # pod stub returns "unauthorized" for both. Stay quiet about them in
-    # the briefing — adding them back is a follow-up via CalDAV/iCloud.
+    # Calendar + Reminders come from iCloud over CalDAV (calendar_today /
+    # reminders_due_today). When the iCloud creds aren't wired, _caldav()
+    # returns None → status "unauthorized" and we simply omit the line.
     cal = calendar_today()
     if cal.get("status") == "ok":
         ev = cal["events"]
@@ -624,18 +626,39 @@ def _load_owner_interests() -> List[str]:
     return keywords
 
 
+def _interest_matchers(interests: List[str]) -> List["re.Pattern"]:
+    """Compile each interest to a WORD-BOUNDARY regex. Substring matching was
+    wrong: a 2-char interest like "ai" matched inside "claims"/"gains". With \b
+    anchors "ai" only matches the standalone token "ai". Multi-word interests
+    ("drum and bass") match as a phrase, allowing any run of whitespace between
+    the words. Case-insensitive."""
+    import re
+    pats: List[re.Pattern] = []
+    for kw in interests:
+        kw = kw.strip()
+        if not kw:
+            continue
+        # Escape each token, join multi-word phrases on flexible whitespace.
+        tokens = [re.escape(t) for t in kw.split()]
+        body = r"\s+".join(tokens)
+        pats.append(re.compile(r"\b" + body + r"\b", re.I))
+    return pats
+
+
 def _interest_filtered_news(hours: int = 12, max_items: int = 2) -> List[str]:
-    """Pull overnight headlines, filter by keyword match against the
-    owner's profile.md Interests line. Return up to `max_items`. If no
+    """Pull overnight headlines, filter by WORD-BOUNDARY interest match against
+    the owner's profile.md Interests line. Return up to `max_items`. If no
     interests configured → empty list (briefing skips news entirely)."""
     interests = _load_owner_interests()
     if not interests:
         return []
+    matchers = _interest_matchers(interests)
+    if not matchers:
+        return []
     candidates = news_overnight(hours=hours, limit=30)
     matched: List[str] = []
     for headline in candidates:
-        low = headline.lower()
-        if any(kw in low for kw in interests):
+        if any(pat.search(headline) for pat in matchers):
             matched.append(headline)
             if len(matched) >= max_items:
                 break
