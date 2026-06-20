@@ -41,14 +41,17 @@ from jarvis_voice_id import (  # noqa: F401
     OWNER_THRESHOLD,
     _THRESHOLD_MATCH,
     authenticate_pending,
+    check_owner_passphrase,
     clear_pending,
     embed_from_audio,
     get_owner,
     get_owner_slug,
     get_pending,
     has_owner,
+    has_owner_passphrase,
     load_profile,
     remove,
+    set_owner_passphrase,
     stash_pending,
 )
 
@@ -92,6 +95,13 @@ class Principal:
     profile_path: Optional[str] = None
     embedding: Any = None        # carried for enroll-by-voice (Phase 2)
     raw: dict = field(default_factory=dict)
+    # FAIL-OPEN marker. True when the TOP voiceprint match is the OWNER template
+    # but the score fell below the OWNER grant bar AND no sticky owner session
+    # is active — the case that historically downgrades to TRUSTED and is
+    # silently dropped. The fail-open gate (VOICE_FAIL_OPEN) routes these to a
+    # passphrase / "it's me" confirmation instead of dropping the real owner.
+    # Off by default, so an un-set flag is behaviour-identical to today.
+    degraded_owner: bool = False
 
     @property
     def mem_scope(self) -> str:
@@ -132,6 +142,16 @@ def resolve_voice(embedding, *, source: str = "voice") -> Principal:
     res = _vid.identify(embedding)
     status = res.get("status")
     if status != "match":  # borderline / unknown / no_enrollments
+        # FAIL-OPEN: even on a sub-MATCH score, if the TOP-ranked template is
+        # the owner's, this is very likely the real owner with a degraded
+        # signal (illness / distance / noise) — flag it so the gate can offer a
+        # passphrase rather than dropping Hampton. This NEVER grants OWNER; it
+        # only routes to a challenge. A stranger who happens to rank nearest the
+        # owner still must pass the passphrase to gain anything.
+        ranking = res.get("ranking") or []
+        top = ranking[0] if ranking else {}
+        degraded = (top.get("role") == "owner"
+                    and float(res.get("score", 0.0)) >= 0.0)
         return Principal(
             role=Role.UNKNOWN,
             user_id="voice:unknown",
@@ -139,6 +159,7 @@ def resolve_voice(embedding, *, source: str = "voice") -> Principal:
             confidence=float(res.get("score", 0.0)),
             embedding=embedding,
             raw=res,
+            degraded_owner=bool(degraded and top.get("role") == "owner"),
         )
 
     slug = res["slug"]
@@ -147,6 +168,7 @@ def resolve_voice(embedding, *, source: str = "voice") -> Principal:
     matched_role = res["role"]  # "owner" | "trusted"
 
     sticky = False
+    degraded_owner = False
     if matched_role == "owner" and score >= OWNER_THRESHOLD:
         # CONFIDENT owner turn: grant OWNER and (re)arm the sticky window.
         role = Role.OWNER
@@ -166,6 +188,12 @@ def resolve_voice(embedding, *, source: str = "voice") -> Principal:
         # Cold/stale owner match below OWNER_THRESHOLD downgrades here; a trusted
         # match stays trusted. Never UNKNOWN→OWNER, never sticky for a stranger.
         role = Role.TRUSTED
+        # FAIL-OPEN marker: a weak OWNER-template match with no active sticky
+        # session. Today this TRUSTED principal is silently dropped by the gate
+        # (the lockout). Flag it so VOICE_FAIL_OPEN can offer a passphrase. We
+        # only mark when the matched template is the OWNER's — a genuine TRUSTED
+        # user match is left untouched.
+        degraded_owner = (matched_role == "owner")
 
     if role is Role.OWNER:
         tag = "owner [sticky]" if sticky else "owner"
@@ -180,6 +208,7 @@ def resolve_voice(embedding, *, source: str = "voice") -> Principal:
         profile_path=_profile_path(slug),
         embedding=embedding,
         raw={**res, "sticky_owner": sticky},
+        degraded_owner=degraded_owner,
     )
 
 

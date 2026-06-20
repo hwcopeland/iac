@@ -46,14 +46,47 @@ import numpy as np
 _VOICES_DIR = Path("/state/voices")
 _USERS_DIR = Path("/state/users")
 _PENDING_PATH = _VOICES_DIR / "_pending.json"
-_MODEL_NAME = "resemblyzer-1.0"
-_EMBED_DIM = 256
+
+# ── Embedding model selection ─────────────────────────────────────────────────
+# VOICE_MODEL chooses the embedding backend. DEFAULT is resemblyzer so an
+# un-set flag is byte-for-byte behaviour-identical to the historical daemon.
+#   resemblyzer → Resemblyzer 2019 d-vectors, 256-d, ~5% EER (legacy fallback)
+#   campplus    → 3D-Speaker / wespeaker CAM++ ONNX, 192-d, ~0.65% EER (16k EN)
+# The stored .json carries a ``model`` field; identify() refuses to score an
+# embedding from a different model than the active one (incompatible spaces).
+_VOICE_MODEL = (os.environ.get("VOICE_MODEL", "resemblyzer") or "resemblyzer").strip().lower()
+if _VOICE_MODEL not in ("resemblyzer", "campplus"):
+    _VOICE_MODEL = "resemblyzer"
+
+if _VOICE_MODEL == "campplus":
+    _MODEL_NAME = "campplus-voxceleb-en-16k"
+    _EMBED_DIM = 192
+else:
+    _MODEL_NAME = "resemblyzer-1.0"
+    _EMBED_DIM = 256
+
+# CAM++ ONNX model location inside the image (vendored / build-time fetched).
+# See Dockerfile + RUNBOOK for provenance. Overridable for local testing.
+_CAMPPLUS_ONNX_PATH = os.environ.get(
+    "CAMPPLUS_ONNX_PATH", "/app/models/campplus_voxceleb.onnx")
+# CAM++ kaldi-fbank frontend spec (MUST match the model's training frontend:
+# 3D-Speaker / wespeaker CAM++ → 80-dim fbank, 16 kHz, 25 ms window / 10 ms
+# hop, with per-utterance mean normalisation (CMN). See RUNBOOK "I/O spec".
+_CAMPPLUS_SR = 16000
+_CAMPPLUS_NUM_MEL_BINS = 80
+_CAMPPLUS_FRAME_LENGTH_MS = 25.0
+_CAMPPLUS_FRAME_SHIFT_MS = 10.0
 
 # Cosine-similarity thresholds. Resemblyzer's typical "same speaker"
 # region is ≥0.70; we accept ≥0.70 as an identification, ≥0.60 as a
 # borderline match worth retrying. Below that = unknown.
-_THRESHOLD_MATCH = 0.70
-_THRESHOLD_BORDER = 0.60
+#
+# NOTE: these defaults are RESEMBLYZER-tuned. CAM++ cosine score
+# distributions differ — run calibrate_voiceid.py and override
+# _THRESHOLD_MATCH / _THRESHOLD_BORDER / OWNER_THRESHOLD via env when
+# VOICE_MODEL=campplus. All three are env-overridable below.
+_THRESHOLD_MATCH = float(os.environ.get("VOICE_THRESHOLD_MATCH", "0.70"))
+_THRESHOLD_BORDER = float(os.environ.get("VOICE_THRESHOLD_BORDER", "0.60"))
 
 # Granting OWNER (full access) requires a STRICTER match than mere
 # same-speaker identification. An owner false-positive hands a stranger full
@@ -61,7 +94,9 @@ _THRESHOLD_BORDER = 0.60
 # Hampton. So the identity resolver (jarvis_identity.resolve_voice) downgrades
 # an owner match scoring below this to TRUSTED rather than granting OWNER.
 # identify() itself is unchanged — this only governs the OWNER *grant*.
-OWNER_THRESHOLD = 0.75
+# Env-overridable: CAM++ calibration (calibrate_voiceid.py) recommends a
+# model-appropriate value; the 0.75 default is Resemblyzer-tuned.
+OWNER_THRESHOLD = float(os.environ.get("VOICE_OWNER_THRESHOLD", "0.75"))
 
 # ── Continuous voice adaptation (learn the owner's voice over time) ───────────
 # Enrollment is a one-shot averaged reference; voices drift (time of day,
@@ -80,19 +115,88 @@ OWNER_THRESHOLD = 0.75
 #   * Cheap: one dot product + normalize, no re-embedding, no disk scan beyond
 #     the single owner .npy. Safe to call every owner turn.
 ADAPT_ENABLED = os.environ.get("VOICE_ADAPT_ENABLED", "1") == "1"
+# NOTE: 0.82 default is Resemblyzer-tuned; calibrate per-model and override.
 ADAPT_MIN_SCORE = float(os.environ.get("VOICE_ADAPT_MIN_SCORE", "0.82"))
 ADAPT_ALPHA = float(os.environ.get("VOICE_ADAPT_ALPHA", "0.05"))
 
-# Singleton encoder — loaded lazily so importing this module is cheap.
-_encoder = None
+# Singleton encoders — loaded lazily so importing this module is cheap.
+# Resemblyzer's VoiceEncoder and the CAM++ onnxruntime session each get their
+# own singleton; only the one selected by VOICE_MODEL is ever instantiated.
+_encoder = None          # resemblyzer VoiceEncoder
+_onnx_session = None      # onnxruntime InferenceSession for CAM++
 
 
 def _enc():
+    """Lazy-load the Resemblyzer encoder (legacy/fallback path)."""
     global _encoder
     if _encoder is None:
         from resemblyzer import VoiceEncoder
         _encoder = VoiceEncoder(verbose=False)
     return _encoder
+
+
+# ── CAM++ (3D-Speaker / wespeaker) ONNX backend ──────────────────────────────
+
+def _campplus_session():
+    """Lazy-load the CAM++ onnxruntime InferenceSession (CPU)."""
+    global _onnx_session
+    if _onnx_session is None:
+        import onnxruntime as ort
+        if not Path(_CAMPPLUS_ONNX_PATH).exists():
+            raise FileNotFoundError(
+                f"CAM++ ONNX model not found at {_CAMPPLUS_ONNX_PATH}. "
+                "It must be vendored into the image (see Dockerfile/RUNBOOK) "
+                "or CAMPPLUS_ONNX_PATH must point at the .onnx file.")
+        so = ort.SessionOptions()
+        so.intra_op_num_threads = int(os.environ.get("CAMPPLUS_THREADS", "2"))
+        _onnx_session = ort.InferenceSession(
+            _CAMPPLUS_ONNX_PATH, sess_options=so,
+            providers=["CPUExecutionProvider"])
+    return _onnx_session
+
+
+def _campplus_fbank(audio: np.ndarray, sample_rate: int) -> "np.ndarray":
+    """float32 mono ndarray → (T, 80) CMN-normalised kaldi fbank at 16 kHz.
+
+    Mirrors the CAM++/wespeaker training frontend exactly: resample→16k mono,
+    80-dim kaldi fbank (25 ms / 10 ms), then per-utterance cepstral mean
+    normalisation (subtract the per-bin mean over time)."""
+    import torch
+    import torchaudio
+    import torchaudio.compliance.kaldi as kaldi
+
+    wav = np.asarray(audio, dtype=np.float32)
+    if wav.ndim > 1:  # collapse to mono
+        wav = wav.mean(axis=1)
+    t = torch.from_numpy(wav).unsqueeze(0)  # (1, N)
+    if sample_rate != _CAMPPLUS_SR:
+        t = torchaudio.functional.resample(t, sample_rate, _CAMPPLUS_SR)
+    # kaldi.fbank expects int16-scaled floats by default; wespeaker trains on
+    # the standard kaldi pipeline. Use raw_energy/default opts matching CAM++.
+    feat = kaldi.fbank(
+        t,
+        num_mel_bins=_CAMPPLUS_NUM_MEL_BINS,
+        frame_length=_CAMPPLUS_FRAME_LENGTH_MS,
+        frame_shift=_CAMPPLUS_FRAME_SHIFT_MS,
+        dither=0.0,
+        sample_frequency=float(_CAMPPLUS_SR),
+    )  # (T, 80)
+    # Per-utterance CMN (subtract the mean fbank over time).
+    feat = feat - feat.mean(dim=0, keepdim=True)
+    return feat.numpy().astype(np.float32)
+
+
+def _campplus_embed(audio: np.ndarray, sample_rate: int) -> np.ndarray:
+    """float32 mono ndarray + source SR → L2-normalised 192-d CAM++ embedding."""
+    feat = _campplus_fbank(audio, sample_rate)            # (T, 80)
+    sess = _campplus_session()
+    inp = sess.get_inputs()[0]
+    # CAM++ ONNX expects a batched feature tensor (1, T, 80) float32.
+    x = feat[np.newaxis, :, :].astype(np.float32)
+    out = sess.run(None, {inp.name: x})[0]
+    emb = np.asarray(out, dtype=np.float32).reshape(-1)   # (192,)
+    emb /= (np.linalg.norm(emb) + 1e-9)
+    return emb.astype(np.float32)
 
 
 def _slugify(name: str) -> str:
@@ -108,14 +212,28 @@ def _ensure_dirs() -> None:
 # ── enrollment ───────────────────────────────────────────────────────────────
 
 def embed_from_wav(path: str | Path) -> np.ndarray:
-    """Compute a Resemblyzer mean utterance embedding from a WAV/audio file."""
+    """Compute an L2-normalisable speaker embedding from a WAV/audio file.
+
+    Dispatches on VOICE_MODEL. The resemblyzer path is unchanged; the campplus
+    path loads the WAV via soundfile and routes through the CAM++ frontend."""
+    if _VOICE_MODEL == "campplus":
+        import soundfile as sf
+        wav, sr = sf.read(str(path), dtype="float32", always_2d=False)
+        return _campplus_embed(np.asarray(wav, dtype=np.float32), int(sr))
     from resemblyzer import preprocess_wav
     wav = preprocess_wav(Path(path))
     return _enc().embed_utterance(wav).astype(np.float32)
 
 
 def embed_from_audio(audio: np.ndarray, sample_rate: int) -> np.ndarray:
-    """Compute embedding directly from a float32 mono numpy array."""
+    """Compute an embedding directly from a float32 mono numpy array.
+
+    Dispatches on VOICE_MODEL. The resemblyzer path is unchanged; the campplus
+    path runs the kaldi-fbank → ONNX frontend. Both return an L2-normalisable
+    float32 embedding with the same call interface."""
+    if _VOICE_MODEL == "campplus":
+        return _campplus_embed(np.asarray(audio, dtype=np.float32),
+                               int(sample_rate))
     from resemblyzer import preprocess_wav
     # preprocess_wav accepts (np.ndarray, source_sr) by passing the array
     # AND the source sample rate (Resemblyzer downsamples to 16k internally).
@@ -258,8 +376,17 @@ def remove(name: str) -> bool:
 
 # ── identification ───────────────────────────────────────────────────────────
 
-def _load_enrolled() -> list[dict]:
-    """Return list of {slug, name, role, embedding, profile_path}."""
+def _load_enrolled(*, include_incompatible: bool = False) -> list[dict]:
+    """Return list of {slug, name, role, embedding, profile_path}.
+
+    CROSS-MODEL GUARD: a voice whose stored ``model`` field differs from the
+    active ``_MODEL_NAME`` is SKIPPED (treated as not enrolled) — Resemblyzer
+    (256-d) and CAM++ (192-d) embeddings live in incompatible spaces and a
+    cosine across them is meaningless garbage. This makes a flag flip BEFORE
+    re-enrollment fail safe (the owner reads as no_enrollments → re-enroll)
+    rather than silently mis-scoring. Voices missing a ``model`` field are
+    assumed legacy resemblyzer. Pass include_incompatible=True only for
+    diagnostics / migration tooling that wants the full inventory."""
     out = []
     if not _VOICES_DIR.exists():
         return out
@@ -270,6 +397,10 @@ def _load_enrolled() -> list[dict]:
             with open(meta_path) as f:
                 meta = json.load(f)
         except (OSError, ValueError):
+            continue
+        stored_model = meta.get("model", "resemblyzer-1.0")
+        if not include_incompatible and stored_model != _MODEL_NAME:
+            # Enrolled under a different embedding model — skip (force re-enroll).
             continue
         emb_path = _VOICES_DIR / f"{meta['slug']}.npy"
         if not emb_path.exists():
@@ -283,10 +414,21 @@ def _load_enrolled() -> list[dict]:
     return out
 
 
-def list_enrolled() -> list[dict]:
-    """Public-facing list without the embedding blob."""
-    return [{k: v for k, v in e.items() if k != "embedding"}
-            for e in _load_enrolled()]
+def list_enrolled(*, include_incompatible: bool = False) -> list[dict]:
+    """Public-facing list without the embedding blob. By default only voices
+    compatible with the active model. Pass include_incompatible=True to also
+    see voices enrolled under a different model (each tagged
+    ``compatible: False``) — useful for explaining why the owner 'vanished'
+    after a VOICE_MODEL flip before re-enrollment."""
+    if not include_incompatible:
+        return [{k: v for k, v in e.items() if k != "embedding"}
+                for e in _load_enrolled()]
+    out = []
+    for e in _load_enrolled(include_incompatible=True):
+        rec = {k: v for k, v in e.items() if k != "embedding"}
+        rec["compatible"] = (e.get("model", "resemblyzer-1.0") == _MODEL_NAME)
+        out.append(rec)
+    return out
 
 
 def identify(embedding: np.ndarray) -> dict:
@@ -389,6 +531,54 @@ def get_owner_slug() -> Optional[str]:
     pass an authorizer to authenticate_pending()."""
     o = get_owner()
     return o["slug"] if o else None
+
+
+# ── owner passphrase (fail-OPEN degraded-owner fallback) ─────────────────────
+# When the voiceprint recognises the owner WEAKLY (top match is the owner
+# template but the score is below the OWNER grant bar), the fail-open gate can
+# offer a spoken passphrase challenge instead of silently dropping the owner
+# (the historical fail-CLOSED lockout). The passphrase is owner-set, stored on
+# the PVC next to the voiceprints, and compared case/whitespace-insensitively.
+# A passphrase is OPTIONAL: with none set, the degraded-owner path falls back
+# to a simple "it's me, sir?" spoken confirmation (see edge.py gate).
+_PASSPHRASE_PATH = _VOICES_DIR / "_owner_passphrase.json"
+
+
+def _normalize_passphrase(s: str) -> str:
+    return re.sub(r"\s+", " ", (s or "").strip().lower())
+
+
+def set_owner_passphrase(passphrase: str) -> dict:
+    """Persist the owner's spoken passphrase for the degraded-owner fallback.
+    Stored normalised (lowercased, collapsed whitespace). Empty clears it."""
+    _ensure_dirs()
+    norm = _normalize_passphrase(passphrase)
+    if not norm:
+        if _PASSPHRASE_PATH.exists():
+            _PASSPHRASE_PATH.unlink()
+        return {"status": "cleared"}
+    with open(_PASSPHRASE_PATH, "w") as f:
+        json.dump({"passphrase": norm, "set_at": int(time.time())}, f)
+    return {"status": "set"}
+
+
+def has_owner_passphrase() -> bool:
+    return _PASSPHRASE_PATH.exists()
+
+
+def check_owner_passphrase(spoken: str) -> bool:
+    """True iff a passphrase is set AND the spoken text contains/equals it.
+    Substring match (normalised) so the owner can say it inside a sentence."""
+    if not _PASSPHRASE_PATH.exists():
+        return False
+    try:
+        with open(_PASSPHRASE_PATH) as f:
+            stored = _normalize_passphrase(json.load(f).get("passphrase", ""))
+    except (OSError, ValueError):
+        return False
+    if not stored:
+        return False
+    return stored in _normalize_passphrase(spoken)
 
 
 # ── per-user knowledge base accessor ─────────────────────────────────────────

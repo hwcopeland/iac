@@ -49,6 +49,8 @@ RUN pip install --no-cache-dir --no-deps openwakeword==0.6.0 \
     soco==0.30.4 \
     silero-vad onnxruntime \
     resemblyzer==0.1.4 \
+    soundfile==0.12.1 \
+    torchaudio==2.2.2 \
     instagrapi==2.7.11 \
     shazamio==0.8.1 \
     discord.py-self==2.1.0 \

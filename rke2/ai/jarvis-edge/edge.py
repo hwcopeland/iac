@@ -1348,6 +1348,31 @@ def brain_respond(text: str, mem_scope: str = "") -> str:
             METRIC_BRAIN_DURATION.observe(time.time() - t0)
 
 
+# ── Fail-OPEN degraded-owner gate (opt-in) ───────────────────────────────────
+# Historically a borderline/weak owner whose voiceprint dipped below the OWNER
+# grant bar was DOWNGRADED to TRUSTED and SILENTLY DROPPED — the owner locked
+# out of his own house (fail-CLOSED). VOICE_FAIL_OPEN flips this to a
+# fail-OPEN, AUTH-GATED path: a degraded-owner turn is met with a spoken
+# passphrase challenge ("Say your passphrase, sir." or, with no passphrase set,
+# "Is that you, sir? Say 'it's me' to confirm."). If the NEXT turn (from a
+# still-degraded-owner principal, within VOICE_FAILOPEN_WINDOW_S) supplies the
+# passphrase — or "it's me" when no passphrase is set — that turn is promoted to
+# the full OWNER brain. Anything else falls back to the historical silent drop.
+#
+# SAFETY: this NEVER makes the owner strictly worse off than before. Default
+# OFF (un-set flag = byte-for-byte the old silent-drop behaviour). It does NOT
+# grant OWNER on the voiceprint alone — the passphrase/confirmation is a second
+# factor. With no passphrase set, the "it's me" confirmation is weaker (anyone
+# who sounds enough like the owner to be the top match could say it) but it is
+# still strictly an IMPROVEMENT over locking the real owner out, and the
+# operator is nudged to set a passphrase. The challenge state is in-process and
+# single-slot, so it cannot be replayed across restarts.
+_FAIL_OPEN_ENABLED = os.environ.get("VOICE_FAIL_OPEN", "0") == "1"
+_FAILOPEN_WINDOW_S = float(os.environ.get("VOICE_FAILOPEN_WINDOW_S", "30.0"))
+# (challenge_armed_at_ts,) — module-level so it survives across turns.
+_degraded_challenge_ts: float = 0.0
+
+
 def gate_and_respond(principal, text: str) -> str:
     """THE deterministic authorization gate. Capability is chosen HERE in
     Python from the principal's role, BEFORE any model call — the model is
@@ -1366,13 +1391,55 @@ def gate_and_respond(principal, text: str) -> str:
       TRUSTED            → silent drop (no brain, no spoken reply).
       UNKNOWN            → silent drop (no brain, no name challenge).
 
+    FAIL-OPEN (opt-in, VOICE_FAIL_OPEN=1): a degraded-owner principal (weak
+    owner-template match, would otherwise be a silent drop) gets a spoken
+    passphrase / "it's me" challenge, and a correct follow-up is promoted to the
+    full OWNER brain. Off by default → identical to the historical gate.
+
     Used by BOTH the mic loop and the /voice/ingest endpoint so every front
     end inherits the identical guarantees."""
     import jarvis_identity as _ji
+    global _degraded_challenge_ts
+    import time as _time
+
     if principal is None:
         return brain_respond(text)  # open mode — back-compat pass-through
     if principal.role is _ji.Role.OWNER:
+        # A clean owner turn clears any pending degraded challenge.
+        _degraded_challenge_ts = 0.0
         return brain_respond(text, mem_scope=principal.mem_scope)
+
+    # ── Fail-OPEN degraded-owner path (opt-in) ──
+    if _FAIL_OPEN_ENABLED and getattr(principal, "degraded_owner", False):
+        now = _time.time()
+        challenge_live = (_degraded_challenge_ts > 0.0
+                          and (now - _degraded_challenge_ts) <= _FAILOPEN_WINDOW_S)
+        if challenge_live:
+            # Awaiting confirmation. Accept the passphrase, or "it's me" when no
+            # passphrase is configured. On success → promote to the OWNER brain.
+            has_pass = _ji.has_owner_passphrase()
+            passed = (_ji.check_owner_passphrase(text) if has_pass
+                      else bool(re.search(r"\b(?:it'?s me|it is me)\b", text, re.I)))
+            if passed:
+                _degraded_challenge_ts = 0.0
+                _via = "passphrase" if has_pass else "it-is-me"
+                print(f"  [gate] degraded-owner CONFIRMED via {_via} — granting OWNER")
+                # mem_scope 'owner' so the confirmed owner reaches the warm brain.
+                return brain_respond(text, mem_scope="owner")
+            # Wrong / unrelated reply while a challenge is live → drop, leave the
+            # window open for a retry within VOICE_FAILOPEN_WINDOW_S.
+            print("  [gate] degraded-owner challenge live, no passphrase match "
+                  "— silent drop (window stays open)")
+            return ""
+        # First degraded-owner turn → arm the challenge and SPEAK it.
+        _degraded_challenge_ts = now
+        if _ji.has_owner_passphrase():
+            print("  [gate] degraded-owner — issuing passphrase challenge")
+            return "I didn't quite recognise your voice, sir. Say your passphrase."
+        print("  [gate] degraded-owner — issuing 'it's me' confirmation "
+              "(no passphrase set)")
+        return "Is that you, sir? Say \"it's me\" to confirm."
+
     # Non-owner (TRUSTED or UNKNOWN) → silent drop. The empty reply makes the
     # caller skip TTS, so the room/strangers/echo never get a spoken response.
     print(f"  [gate] non-owner ({principal.role.value}) — silent drop")
