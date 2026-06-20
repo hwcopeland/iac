@@ -253,10 +253,14 @@ EDGE_ADVERTISED_PORT = int(os.environ.get("EDGE_ADVERTISED_PORT",
 EDGE_HOST_IP = os.environ.get("EDGE_HOST_IP", "")
 BRAIN_MODE = os.environ.get("BRAIN_MODE", "claude")
 
-WAKE_THRESHOLD = 0.65        # was 0.5 — bumped to cut kitchen false-fires
-SILENCE_SECS = 0.6
-MAX_UTTERANCE_SECS = 8.0
-MIN_UTTERANCE_SECS = 0.4
+WAKE_THRESHOLD = float(os.environ.get("VOICE_WAKE_THRESHOLD", "0.65"))
+# End-of-speech: how long a pause ends your turn. 0.6s cut people off mid-
+# sentence on natural pauses; 1.3s lets you breathe/think without being
+# truncated. MAX caps a single utterance (was 8s — too short for a full
+# request). All env-tunable so tuning never needs a rebuild.
+SILENCE_SECS = float(os.environ.get("VOICE_SILENCE_SECS", "1.3"))
+MAX_UTTERANCE_SECS = float(os.environ.get("VOICE_MAX_UTTERANCE_SECS", "22.0"))
+MIN_UTTERANCE_SECS = float(os.environ.get("VOICE_MIN_UTTERANCE_SECS", "0.4"))
 ADDRESSEE_WINDOW_S = 8.0     # follow-up window measured from when JARVIS
                               # FINISHES speaking to when the owner STARTS
                               # speaking — speech that starts in this window
