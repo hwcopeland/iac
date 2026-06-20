@@ -42,21 +42,13 @@ RUN printf 'pcm.!default { type pulse }\nctl.!default { type pulse }\n' \
 # has no Python 3.12 wheel. We only use the ONNX inference framework, so
 # install openwakeword with --no-deps and bring its real transitive deps
 # (minus tflite) in by hand.
-# CPU-only torch + torchaudio (NO CUDA libs — this is a CPU edge container; the
-# GPU belongs to the sibling whisper/chatterbox pods). Installing from the
-# pytorch CPU index keeps the image ~2GB smaller and avoids an OOM in kaniko's
-# layer snapshot. resemblyzer (below) reuses this torch instead of pulling the
-# default CUDA build.
-RUN pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu \
-    torch==2.2.2 torchaudio==2.2.2
 RUN pip install --no-cache-dir --no-deps openwakeword==0.6.0 \
  && pip install --no-cache-dir \
     sounddevice==0.4.7 \
-    scipy "numpy<2" requests tqdm scikit-learn \
+    scipy numpy requests tqdm scikit-learn \
     soco==0.30.4 \
     silero-vad onnxruntime \
     resemblyzer==0.1.4 \
-    soundfile==0.12.1 \
     instagrapi==2.7.11 \
     shazamio==0.8.1 \
     discord.py-self==2.1.0 \
