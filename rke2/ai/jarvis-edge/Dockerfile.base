@@ -42,6 +42,14 @@ RUN printf 'pcm.!default { type pulse }\nctl.!default { type pulse }\n' \
 # has no Python 3.12 wheel. We only use the ONNX inference framework, so
 # install openwakeword with --no-deps and bring its real transitive deps
 # (minus tflite) in by hand.
+# CPU-only torch + torchaudio. This edge container has NO GPU (the GPU belongs
+# to the sibling whisper/chatterbox pods), so the default CUDA torch (~3GB) is
+# dead weight — and its layer OOM-kills kaniko's snapshot. Pull the latest CPU
+# build from the pytorch index (numpy-2 compatible). silero-vad / resemblyzer
+# below then reuse this torch instead of pulling the CUDA build; torchaudio is
+# what the CAM++ speaker-verification frontend uses for fbank/resample.
+RUN pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu \
+    torch torchaudio
 RUN pip install --no-cache-dir --no-deps openwakeword==0.6.0 \
  && pip install --no-cache-dir \
     sounddevice==0.4.7 \
