@@ -52,7 +52,7 @@ RUN pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu 
 RUN pip install --no-cache-dir --no-deps openwakeword==0.6.0 \
  && pip install --no-cache-dir \
     sounddevice==0.4.7 \
-    scipy numpy requests tqdm scikit-learn \
+    scipy "numpy<2" requests tqdm scikit-learn \
     soco==0.30.4 \
     silero-vad onnxruntime \
     resemblyzer==0.1.4 \
