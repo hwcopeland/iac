@@ -50,7 +50,7 @@ spec:
             - "--context-sub-path=rke2/ai/jarvis-edge"
             - "--dockerfile=Dockerfile"
             - "--destination=zot.hwcopeland.net/ai/jarvis-edge:latest"
-            - "--destination=zot.hwcopeland.net/ai/jarvis-edge:sha-a48428af"
+            - "--destination=zot.hwcopeland.net/ai/jarvis-edge:sha-e22796f8"
             - "--cache=false"
             - "--snapshot-mode=redo"
             - "--verbosity=info"
