@@ -4,6 +4,7 @@ import {
   CATEGORY_COLORS,
   MISSING_COLOR,
   colorFor,
+  maxAnionicState,
   numericRange,
   numericValue,
   scaleColor,
@@ -34,6 +35,26 @@ describe("numericValue / numericRange", () => {
     expect(r.min).toBeLessThan(r.max);
     expect(r.min).toBeGreaterThan(0);
     expect(Number.isFinite(r.max)).toBe(true);
+  });
+});
+
+describe("maxAnionicState / anionicStability", () => {
+  it("returns the deepest negative oxidation state", () => {
+    expect(maxAnionicState(BY_SYMBOL.get("c")!)).toBe(-4); // carbide
+    expect(maxAnionicState(BY_SYMBOL.get("o")!)).toBe(-2); // oxide
+    expect(maxAnionicState(BY_SYMBOL.get("f")!)).toBe(-1); // fluoride
+  });
+  it("is 0 for elements that form no anion", () => {
+    expect(maxAnionicState(BY_SYMBOL.get("na")!)).toBe(0);
+    expect(maxAnionicState(BY_SYMBOL.get("fe")!)).toBe(0);
+  });
+  it("is null where the chemistry is unknown", () => {
+    expect(maxAnionicState(BY_SYMBOL.get("mt")!)).toBeNull();
+  });
+  it("colors the trend by anion depth (magnitude)", () => {
+    expect(numericValue(BY_SYMBOL.get("c")!, "anionicStability")).toBe(4);
+    expect(numericValue(BY_SYMBOL.get("na")!, "anionicStability")).toBe(0);
+    expect(numericValue(BY_SYMBOL.get("mt")!, "anionicStability")).toBeNull();
   });
 });
 

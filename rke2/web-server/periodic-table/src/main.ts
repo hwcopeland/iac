@@ -1,9 +1,9 @@
-// App entry: wires the grid, trend selector, legend, search, detail drawer and
+// App entry: wires the grid, trend selector, legend, detail drawer and
 // keyboard navigation together. State is intentionally tiny and re-rendered
 // imperatively — there is no framework.
 
 import "./style.css";
-import { ELEMENTS, searchElements } from "./data/elements";
+import { ELEMENTS } from "./data/elements";
 import type { Element, TrendKey } from "./types";
 import {
   CATEGORY_COLORS,
@@ -22,21 +22,12 @@ const root = document.getElementById("app")!;
 
 let activeTrend: TrendKey = "category";
 let selected: Element | null = null;
-let dimmed = new Set<number>(); // elements faded out by an active search
 
 const { grid, cells } = buildGrid(ELEMENTS, select);
 const posIndex = new Map<string, Element>();
 for (const e of ELEMENTS) posIndex.set(`${e.xpos},${e.ypos}`, e);
 
 // ---- header --------------------------------------------------------------
-
-const search = h("input", {
-  class: "search",
-  type: "search",
-  placeholder: "Search name, symbol, or number…  ( / )",
-  "aria-label": "Search elements",
-  oninput: onSearch,
-}) as HTMLInputElement;
 
 const trendButtons = h("div", { class: "trend-buttons", role: "tablist" });
 for (const t of TRENDS) {
@@ -60,13 +51,6 @@ const legend = h("div", { class: "legend", "aria-live": "polite" });
 const header = h(
   "header",
   { class: "app-header" },
-  h(
-    "div",
-    { class: "title-row" },
-    h("h1", {}, "Dynamic Periodic Table"),
-    h("p", { class: "subtitle" }, "graduate-level reference · 118 elements"),
-  ),
-  search,
   h("div", { class: "color-by" }, h("span", { class: "color-by-label" }, "Color by:"), trendButtons),
   legend,
 );
@@ -139,12 +123,6 @@ function renderSelection(): void {
   }
 }
 
-function renderDim(): void {
-  for (const [z, cell] of cells) {
-    cell.classList.toggle("dim", dimmed.size > 0 && !dimmed.has(z));
-  }
-}
-
 // ---- actions -------------------------------------------------------------
 
 function setTrend(key: TrendKey): void {
@@ -169,16 +147,6 @@ function closeDrawer(): void {
   renderSelection();
 }
 
-function onSearch(ev: Event): void {
-  const q = (ev.target as HTMLInputElement).value;
-  if (!q.trim()) {
-    dimmed = new Set();
-  } else {
-    dimmed = new Set(searchElements(q).map((e) => e.number));
-  }
-  renderDim();
-}
-
 // ---- keyboard navigation -------------------------------------------------
 
 function move(dx: number, dy: number): void {
@@ -197,20 +165,10 @@ function move(dx: number, dy: number): void {
 }
 
 window.addEventListener("keydown", (ev) => {
-  if (ev.key === "/" && document.activeElement !== search) {
-    ev.preventDefault();
-    search.focus();
-    return;
-  }
   if (ev.key === "Escape") {
-    if (document.activeElement === search) {
-      search.blur();
-    } else {
-      closeDrawer();
-    }
+    closeDrawer();
     return;
   }
-  if (document.activeElement === search) return;
   switch (ev.key) {
     case "ArrowLeft":
       ev.preventDefault();

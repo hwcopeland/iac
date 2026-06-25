@@ -45,41 +45,10 @@ body {
   top: 0;
   z-index: 20;
 }
-.title-row {
-  display: flex;
-  align-items: baseline;
-  gap: 12px;
-  flex-wrap: wrap;
-}
-.title-row h1 {
-  margin: 0;
-  font-size: 1.3rem;
-  letter-spacing: 0.3px;
-}
-.subtitle {
-  margin: 0;
-  color: var(--text-dim);
-  font-size: 0.85rem;
-}
-.search {
-  margin-top: 10px;
-  width: min(420px, 100%);
-  padding: 8px 12px;
-  border-radius: 8px;
-  border: 1px solid var(--border);
-  background: var(--bg-elev-2);
-  color: var(--text);
-  font-size: 0.9rem;
-}
-.search:focus {
-  outline: 2px solid var(--accent);
-  border-color: var(--accent);
-}
 .color-by {
   display: flex;
   align-items: center;
   gap: 10px;
-  margin-top: 10px;
   flex-wrap: wrap;
 }
 .color-by-label {
@@ -205,9 +174,6 @@ body {
 }
 .tile.missing {
   color: #c7d0da;
-}
-.tile.dim {
-  opacity: 0.15;
 }
 .tile .z {
   font-size: 0.6rem;
