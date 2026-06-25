@@ -11,16 +11,19 @@ namespace via the `build-periodic-table` GitHub Actions workflow.
 
 - **118 elements** (Z = 1–118) with a normalized, typed data layer.
 - **Color-by trends** — recolor the whole table by category, phase, block,
-  atomic mass, electronegativity, electron affinity, first ionization energy,
-  density, melting point, or boiling point. Numeric trends use a sequential
-  scale with a live min/max legend; missing data is greyed.
+  atomic mass, electronegativity, electron affinity, **anionic stability**
+  (depth of the deepest anion an element forms, i.e. its most-negative
+  oxidation state), first ionization energy, density, melting point, or boiling
+  point. Numeric trends use a sequential scale with a live min/max legend;
+  missing data is greyed.
 - **Element detail drawer** — full and noble-gas-core electron configurations
   (rendered with superscripts), a Bohr shell diagram, a **successive
   ionization-energy chart** (log scale, so shell closures are visible), curated
   oxidation states (common states highlighted), and the full property table
-  (electronegativity, electron affinity, density, melting/boiling points in
-  K and °C, molar heat capacity, discovery, appearance, summary).
-- **Search** by symbol, name, or atomic number (press `/` to focus).
+  with explicit units throughout (electronegativity in Pauling χ, electron
+  affinity in both kJ/mol and eV with a stable/no-stable-anion cue, the
+  max anionic oxidation state, density, melting/boiling points in K and °C,
+  molar heat capacity, discovery, appearance, summary).
 - **Keyboard navigation** — arrow keys walk the grid, `Enter`/click opens the
   drawer, `Esc` closes.
 

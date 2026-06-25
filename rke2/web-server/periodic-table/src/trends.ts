@@ -50,6 +50,7 @@ export const TRENDS: TrendMeta[] = [
   { key: "atomicMass", label: "Atomic mass", kind: "numeric", unit: "u" },
   { key: "electronegativity", label: "Electronegativity", kind: "numeric", unit: "Pauling" },
   { key: "electronAffinity", label: "Electron affinity", kind: "numeric", unit: "kJ/mol" },
+  { key: "anionicStability", label: "Anionic stability", kind: "numeric", unit: "max anionic state" },
   { key: "firstIonizationEnergy", label: "1st ionization energy", kind: "numeric", unit: "kJ/mol" },
   { key: "density", label: "Density", kind: "numeric", unit: "g/cm³" },
   { key: "meltK", label: "Melting point", kind: "numeric", unit: "K" },
@@ -62,6 +63,18 @@ export function trendMeta(key: TrendKey): TrendMeta {
   return m;
 }
 
+/**
+ * Most-negative ("deepest") oxidation state an element forms, e.g. -4 for C,
+ * -1 for F. Returns 0 for elements with known chemistry but no negative state
+ * (most metals form no anion), and null where the chemistry is unknown
+ * (superheavy elements with no curated states).
+ */
+export function maxAnionicState(e: Element): number | null {
+  if (e.oxidationStates.length === 0) return null;
+  const negatives = e.oxidationStates.filter((s) => s < 0);
+  return negatives.length ? Math.min(...negatives) : 0;
+}
+
 /** Extract the numeric value for a numeric trend, or null when unavailable. */
 export function numericValue(e: Element, key: TrendKey): number | null {
   switch (key) {
@@ -71,6 +84,11 @@ export function numericValue(e: Element, key: TrendKey): number | null {
       return e.electronegativity;
     case "electronAffinity":
       return e.electronAffinity;
+    case "anionicStability": {
+      // Color by depth of the anion (magnitude): metals (0) cold, C (4) hot.
+      const s = maxAnionicState(e);
+      return s == null ? null : Math.abs(s);
+    }
     case "firstIonizationEnergy":
       return e.ionizationEnergies.length ? e.ionizationEnergies[0] : null;
     case "density":

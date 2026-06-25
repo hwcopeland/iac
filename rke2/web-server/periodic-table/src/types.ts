@@ -101,6 +101,7 @@ export type TrendKey =
   | "atomicMass"
   | "electronegativity"
   | "electronAffinity"
+  | "anionicStability"
   | "firstIonizationEnergy"
   | "density"
   | "meltK"

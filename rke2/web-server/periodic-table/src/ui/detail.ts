@@ -3,8 +3,8 @@
 // magnitude and the jumps reveal shell closures), and the full property table.
 
 import type { Element } from "../types";
-import { fmtNum, kToC, parseConfig, signed } from "../format";
-import { CATEGORY_COLORS } from "../trends";
+import { fmtNum, kJmolToEv, kToC, parseConfig, signed } from "../format";
+import { CATEGORY_COLORS, maxAnionicState } from "../trends";
 import { h, svg } from "./dom";
 
 function row(label: string, value: Node | string): HTMLElement {
@@ -144,6 +144,37 @@ function ionizationChart(e: Element): HTMLElement {
   );
 }
 
+/**
+ * Electron affinity with both units and a plain-language sign cue: a positive
+ * EA releases energy (a stable anion forms); a negative EA is endothermic
+ * (no bound anion).
+ */
+function electronAffinityNode(e: Element): Node {
+  if (e.electronAffinity == null) return h("span", { class: "muted" }, "—");
+  const ev = kJmolToEv(e.electronAffinity);
+  const wrap = h(
+    "span",
+    {},
+    `${fmtNum(e.electronAffinity, 1)} kJ/mol (${fmtNum(ev, 2)} eV)`,
+  );
+  wrap.appendChild(
+    h(
+      "span",
+      { class: "muted small ea-note" },
+      e.electronAffinity > 0 ? " · stable anion" : " · no stable anion",
+    ),
+  );
+  return wrap;
+}
+
+/** Deepest anion the element forms (most-negative oxidation state). */
+function anionicNode(e: Element): Node {
+  const s = maxAnionicState(e);
+  if (s == null) return h("span", { class: "muted" }, e.number > 108 ? "predicted / unknown" : "—");
+  if (s === 0) return h("span", { class: "muted" }, "none (forms no anion)");
+  return h("span", { class: "ox common" }, signed(s));
+}
+
 function oxidationNode(e: Element): Node {
   if (e.oxidationStates.length === 0) {
     return h("span", { class: "muted" }, e.number > 108 ? "predicted / unknown" : "—");
@@ -175,8 +206,9 @@ export function buildDetail(e: Element): HTMLElement {
     row("Atomic mass", `${fmtNum(e.atomicMass, 4)} u`),
     row("Period / Group", `${e.period} / ${e.group ?? "f-block"}`),
     row("Phase (STP)", e.phase),
-    row("Electronegativity", e.electronegativity == null ? "—" : `${fmtNum(e.electronegativity, 2)} (Pauling)`),
-    row("Electron affinity", e.electronAffinity == null ? "—" : `${fmtNum(e.electronAffinity, 1)} kJ/mol`),
+    row("Electronegativity", e.electronegativity == null ? "—" : `${fmtNum(e.electronegativity, 2)} χ (Pauling)`),
+    row("Electron affinity", electronAffinityNode(e)),
+    row("Max anionic state", anionicNode(e)),
     row("Outer-shell e⁻", String(e.valenceElectrons)),
     row("Oxidation states", oxidationNode(e)),
     row("Density", e.density == null ? "—" : `${fmtNum(e.density, 3)} g/cm³`),

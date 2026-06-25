@@ -17,6 +17,11 @@ export function kToF(k: number | null): number | null {
   return k == null ? null : (k - 273.15) * (9 / 5) + 32;
 }
 
+/** 1 eV = 96.485 kJ/mol (Faraday constant). Used to dual-label energies. */
+export function kJmolToEv(v: number | null): number | null {
+  return v == null ? null : v / 96.485;
+}
+
 /** "+2", "-1", "0" with explicit sign for oxidation-state display. */
 export function signed(n: number): string {
   if (n === 0) return "0";
