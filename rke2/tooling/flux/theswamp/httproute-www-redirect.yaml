@@ -1,0 +1,26 @@
+---
+# Canonical-host redirect: www.flmanbiosci.net -> flmanbiosci.net (301).
+# www matches the gateway's wildcard listener (*.flmanbiosci.net), NOT the
+# exact-apex flmanbiosci-root-https listener the main u4u-engine route uses,
+# so this route attaches to flmanbiosci-https. Redirecting (rather than
+# mirroring the app on www) keeps a single canonical host for the
+# Authentik forward-auth cookies/headers.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: u4u-engine-www-redirect
+  namespace: theswamp
+spec:
+  parentRefs:
+    - name: hwcopeland-gateway
+      namespace: kube-system
+      sectionName: flmanbiosci-https
+  hostnames:
+    - "www.flmanbiosci.net"
+  rules:
+    - filters:
+        - type: RequestRedirect
+          requestRedirect:
+            scheme: https
+            hostname: flmanbiosci.net
+            statusCode: 301
