@@ -26,7 +26,7 @@ spec:
   data:
     - secretKey: password
       remoteRef:
-        key: REPLACE_WITH_BITWARDEN_ITEM_UUID
+        key: b3d85fe9-7862-4bbf-888c-dc22a9113019
         property: password
 
 ---
