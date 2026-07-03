@@ -26,3 +26,35 @@ spec:
   proxied: true
   ttl: 1
   interval: 5m
+---
+# app -> same edge IP as the apex; the gateway's *.flmanbiosci.net wildcard
+# listener serves it and the u4u-engine-app HTTPRoute routes it to the
+# frontend (with /api/v1 -> backend, mirroring the apex) so the app is
+# fully self-contained on this host.
+apiVersion: cloudflare-operator.io/v1
+kind: DNSRecord
+metadata:
+  name: flmanbiosci-app
+  namespace: kube-system
+spec:
+  name: app.flmanbiosci.net
+  type: A
+  content: 69.180.240.158
+  proxied: true
+  ttl: 1
+  interval: 5m
+---
+# api -> same edge IP as the apex; the u4u-engine-api HTTPRoute routes it
+# directly to the backend at the root path (no /api/v1 prefix).
+apiVersion: cloudflare-operator.io/v1
+kind: DNSRecord
+metadata:
+  name: flmanbiosci-api
+  namespace: kube-system
+spec:
+  name: api.flmanbiosci.net
+  type: A
+  content: 69.180.240.158
+  proxied: true
+  ttl: 1
+  interval: 5m

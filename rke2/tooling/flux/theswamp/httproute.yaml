@@ -32,3 +32,65 @@ spec:
       backendRefs:
         - name: u4u-engine-frontend
           port: 3000
+---
+# app.flmanbiosci.net -> mirrors the apex so the product is fully
+# self-contained on this host: the frontend calls /api/v1/* same-origin
+# (NEXT_PUBLIC_API_BASE is unset, so the default is the relative "/api/v1"),
+# so this host must also route /api/v1 to the backend. Attaches to the
+# *.flmanbiosci.net wildcard listener (covered by the wildcard cert).
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: u4u-engine-app
+  namespace: theswamp
+spec:
+  parentRefs:
+    - name: hwcopeland-gateway
+      namespace: kube-system
+      sectionName: flmanbiosci-https
+  hostnames:
+    - "app.flmanbiosci.net"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /api/v1
+      filters:
+        - type: URLRewrite
+          urlRewrite:
+            path:
+              type: ReplacePrefixMatch
+              replacePrefixMatch: /
+      backendRefs:
+        - name: u4u-engine
+          port: 8000
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: u4u-engine-frontend
+          port: 3000
+---
+# api.flmanbiosci.net -> backend at the root path (no /api/v1 prefix rewrite).
+# e.g. api.flmanbiosci.net/health hits the backend's /health directly.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: u4u-engine-api
+  namespace: theswamp
+spec:
+  parentRefs:
+    - name: hwcopeland-gateway
+      namespace: kube-system
+      sectionName: flmanbiosci-https
+  hostnames:
+    - "api.flmanbiosci.net"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: u4u-engine
+          port: 8000
