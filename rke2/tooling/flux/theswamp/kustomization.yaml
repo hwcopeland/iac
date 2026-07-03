@@ -3,6 +3,7 @@ kind: Kustomization
 resources:
   - namespace.yaml
   - zot-pull-secret.yaml
+  - postgres.yaml
   - deployment.yaml
   - service.yaml
   - deployment-frontend.yaml

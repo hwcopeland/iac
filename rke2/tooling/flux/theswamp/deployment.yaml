@@ -20,6 +20,12 @@ spec:
           image: zot.hwcopeland.net/florida-man-bioscience/u4u-engine:main@sha256:3168cfee13692504da2af4ecd5db5ae615685cc01bf4d0a1b8301dcbd4fdd7f6 # {"$imagepolicy": "tooling:u4u-engine"}
           ports:
             - containerPort: 8000
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: u4u-postgres-secret
+                  key: DATABASE_URL
           livenessProbe:
             httpGet:
               path: /health
