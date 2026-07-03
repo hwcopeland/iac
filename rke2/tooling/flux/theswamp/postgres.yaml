@@ -1,0 +1,108 @@
+---
+# ExternalSecret: pulls POSTGRES_PASSWORD from Bitwarden and creates the
+# k8s Secret that the StatefulSet and the u4u-engine deployment reference.
+#
+# ACTION REQUIRED: Create a Bitwarden "Login" item for the Postgres service
+# account (username: u4u, password: a strong random string), then paste its
+# UUID in the remoteRef.key fields below.
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: u4u-postgres-secret
+  namespace: theswamp
+spec:
+  refreshInterval: "1h"
+  secretStoreRef:
+    kind: ClusterSecretStore
+    name: bitwarden-login
+  target:
+    name: u4u-postgres-secret
+    creationPolicy: Owner
+    template:
+      engineVersion: v2
+      data:
+        POSTGRES_PASSWORD: "{{ .password }}"
+        DATABASE_URL: "postgresql://u4u:{{ .password }}@u4u-postgres.theswamp.svc.cluster.local:5432/u4u?sslmode=disable"
+  data:
+    - secretKey: password
+      remoteRef:
+        key: REPLACE_WITH_BITWARDEN_ITEM_UUID
+        property: password
+
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: u4u-postgres
+  namespace: theswamp
+spec:
+  serviceName: u4u-postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app: u4u-postgres
+  template:
+    metadata:
+      labels:
+        app: u4u-postgres
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          ports:
+            - containerPort: 5432
+          env:
+            - name: POSTGRES_DB
+              value: u4u
+            - name: POSTGRES_USER
+              value: u4u
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: u4u-postgres-secret
+                  key: POSTGRES_PASSWORD
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-U", "u4u", "-d", "u4u"]
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 5
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "u4u", "-d", "u4u"]
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "2Gi"
+              cpu: "500m"
+          volumeMounts:
+            - name: postgres-data
+              mountPath: /var/lib/postgresql/data
+  volumeClaimTemplates:
+    - metadata:
+        name: postgres-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 10Gi
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: u4u-postgres
+  namespace: theswamp
+spec:
+  selector:
+    app: u4u-postgres
+  ports:
+    - port: 5432
+      targetPort: 5432
+  clusterIP: None  # headless — StatefulSet DNS: u4u-postgres.theswamp.svc.cluster.local
