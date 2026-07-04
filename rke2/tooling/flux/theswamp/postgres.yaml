@@ -89,6 +89,13 @@ spec:
         name: postgres-data
       spec:
         accessModes: ["ReadWriteOnce"]
+        # Set explicitly to match the live PVC (the default SC filled in
+        # `longhorn` at create time). storageClassName is immutable on a
+        # StatefulSet volumeClaimTemplate, so omitting it here made every Flux
+        # reconcile dry-run fail ("updates to statefulset spec … are forbidden")
+        # and froze the whole theswamp Kustomization. Pinning it to the live
+        # value unblocks reconciliation.
+        storageClassName: longhorn
         resources:
           requests:
             storage: 10Gi
