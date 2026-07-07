@@ -1,0 +1,36 @@
+# gitleaks config for hwcopeland/iac — extends the built-in ruleset and adds an
+# allowlist for this repo's known-safe placeholders/templates. Enforced by the
+# secret-scan CI workflow and the pre-commit hook.
+title = "iac gitleaks"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "k8s-inline-secret-b64"
+description = "base64-ish value under a k8s Secret data: key (likely a real secret)"
+# high-entropy base64 blob (>= 40 chars) assigned to a lowercase/UPPER data key
+regex = '''(?i)^\s{2,}[a-z0-9._-]+:\s*[A-Za-z0-9+/]{40,}={0,2}\s*$'''
+path = '''.*secret.*\.ya?ml$'''
+[rules.allowlist]
+regexTarget = "line"
+regexes = [
+  '''\{\{.*\}\}''',   # ESO template expressions, not real values
+]
+
+[allowlist]
+description = "known-safe placeholders, templates, and vendored assets"
+paths = [
+  '''.*\.example$''',
+  '''.*\.sample$''',
+  '''(^|/)node_modules/''',
+  '''(^|/)vendor/''',
+  '''.*\.min\.js$''',
+  '''(^|/)docs/.*\.md$''',        # documentation snippets / rotation runbooks
+]
+regexes = [
+  '''REPLACE-WITH-BITWARDEN''',   # ExternalSecret placeholder UUIDs
+  '''TODO-bitwarden-item-uuid''',
+  '''xxxx-xxxx-xxxx-xxxx''',
+  '''your_.*_here''',
+]
