@@ -38,4 +38,7 @@ regexes = [
   '''[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}''',
   # GitHub App client IDs (Ov23li…) are PUBLIC identifiers, not the client secret.
   '''Ov23li[A-Za-z0-9]{8,}''',
+  # Garage S3 access-key IDs (GK + 24 hex) are public identifiers (like AWS AKIA);
+  # useless without the 64-hex secret-access-key, which is NOT stored in git.
+  '''GK[0-9a-fA-F]{24}''',
 ]
