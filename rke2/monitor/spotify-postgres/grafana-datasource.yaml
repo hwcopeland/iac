@@ -48,5 +48,5 @@ spec:
   data:
     - secretKey: grafana_ro_password
       remoteRef:
-        key: REPLACE-WITH-BITWARDEN-spotify-postgres-ITEM-UUID
+        key: 9be10e74-cbef-465c-baff-a11b2e27243a
         property: grafana-ro-password

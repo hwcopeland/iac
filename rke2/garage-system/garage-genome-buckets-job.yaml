@@ -60,7 +60,7 @@ spec:
               ADMIN="http://garage.garage-system.svc.cluster.local:3902"
               # Existing khemeia-app key the controller already authenticates with
               # (access-key-id in the garage-secret). Grant the new buckets to it.
-              KEY_ID="GK809a4e2c1f3843748b214db7"
+              KEY_ID="GK102f26ec8502f1f44273ec78"
 
               # Wait for the Garage admin API to answer before issuing commands.
               echo "Waiting for Garage admin API at $ADMIN ..."
