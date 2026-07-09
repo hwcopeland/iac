@@ -1,0 +1,18 @@
+---
+# Same digest-reflection pattern as u4u-engine: the "main" tag is stable,
+# so track the digest behind it.
+apiVersion: image.toolkit.fluxcd.io/v1beta2
+kind: ImagePolicy
+metadata:
+  name: demo-mcp
+  namespace: tooling
+spec:
+  imageRepositoryRef:
+    name: demo-mcp
+  filterTags:
+    pattern: '^main$'
+  policy:
+    alphabetical:
+      order: asc
+  digestReflectionPolicy: Always
+  interval: 1m0s

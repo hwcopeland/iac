@@ -58,3 +58,18 @@ spec:
   proxied: true
   ttl: 1
   interval: 5m
+---
+# mcp -> same edge IP as the apex; MCP endpoint for AI sales agents
+# (rke2/tooling/flux/theswamp/httproute-mcp.yaml).
+apiVersion: cloudflare-operator.io/v1
+kind: DNSRecord
+metadata:
+  name: flmanbiosci-mcp
+  namespace: kube-system
+spec:
+  name: mcp.flmanbiosci.net
+  type: A
+  content: 69.180.240.158
+  proxied: true
+  ttl: 1
+  interval: 5m

@@ -11,3 +11,8 @@ resources:
   - httproute.yaml
   - httproute-www-redirect.yaml
   - rbac.yaml
+  - pvc-mcp.yaml
+  - external-secret-mcp.yaml
+  - deployment-mcp.yaml
+  - service-mcp.yaml
+  - httproute-mcp.yaml
