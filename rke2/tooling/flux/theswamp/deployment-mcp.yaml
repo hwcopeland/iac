@@ -29,6 +29,11 @@ spec:
                 secretKeyRef:
                   name: demo-mcp-auth
                   key: MCP_AUTH_TOKEN
+            - name: OWNER_CALLBACK_NUMBER
+              valueFrom:
+                secretKeyRef:
+                  name: demo-mcp-auth
+                  key: OWNER_CALLBACK_NUMBER
             - name: CALL_LOG
               value: /data/call-log.csv
           volumeMounts:
