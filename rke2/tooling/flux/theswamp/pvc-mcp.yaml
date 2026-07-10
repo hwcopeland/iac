@@ -1,0 +1,14 @@
+---
+# Persists demo-mcp's call-log.csv across pod restarts.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: demo-mcp-data
+  namespace: theswamp
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: longhorn
+  resources:
+    requests:
+      storage: 1Gi
