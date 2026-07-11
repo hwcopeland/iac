@@ -73,3 +73,18 @@ spec:
   proxied: true
   ttl: 1
   interval: 5m
+---
+# voice -> same edge IP as the apex; Twilio webhooks for the voice sales
+# agent (rke2/tooling/flux/theswamp/httproute-voice.yaml).
+apiVersion: cloudflare-operator.io/v1
+kind: DNSRecord
+metadata:
+  name: flmanbiosci-voice
+  namespace: kube-system
+spec:
+  name: voice.flmanbiosci.net
+  type: A
+  content: 69.180.240.158
+  proxied: true
+  ttl: 1
+  interval: 5m
