@@ -1,4 +1,3 @@
----
 # Internal CRM for the floridamanweb.online demo sites (status + notes).
 # Auth is upstream via Authentik forward-auth on the HTTPRoute — the app just
 # reads the X-authentik-* identity headers. SQLite notes DB on an RWO volume.
@@ -10,7 +9,7 @@ metadata:
 spec:
   replicas: 1
   strategy:
-    type: Recreate  # RWO volume (SQLite) — old pod must release it first
+    type: Recreate # RWO volume (SQLite) — old pod must release it first
   selector:
     matchLabels:
       app: site-tracker
@@ -23,7 +22,7 @@ spec:
         - name: zot-pull-secret
       containers:
         - name: site-tracker
-          image: zot.hwcopeland.net/florida-man-bioscience/site-tracker:main # {"$imagepolicy": "tooling:site-tracker"}
+          image: zot.hwcopeland.net/florida-man-bioscience/site-tracker:main@sha256:a23207e2c6fa0d4065e3db3eeee1e25ed0dda60beafe4458b9bdcc587208c058 # {"$imagepolicy": "tooling:site-tracker"}
           ports:
             - containerPort: 8040
           env:
