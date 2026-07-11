@@ -43,3 +43,26 @@ rke2/chem/compute-infrastructure/k8s-jobs/result-writer/result-writer
 
 # Ansible secret — real rke2 cluster join token (public repo, never commit)
 ansible/inventory/group_vars/all/secret.yaml
+
+# ── Secret material — NEVER commit (see docs/SECURITY.md) ────────────────────
+# Policy: k8s secrets are kind: ExternalSecret (ESO/Bitwarden). Anything that
+# must hold a real value locally uses one of these gitignored patterns.
+# NOTE: do NOT add "*secret*.yaml" here — ExternalSecret manifests are tracked.
+.env
+.env.*
+*.env
+!*.env.example
+*.local.yaml
+*.local.yml
+secret.local.yaml
+*.pem
+*.key
+*.crt.key
+*.p12
+*.pfx
+id_rsa
+id_ed25519
+kubeconfig
+*.kubeconfig
+*.tfvars
+!*.tfvars.example

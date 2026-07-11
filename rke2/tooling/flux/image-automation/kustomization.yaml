@@ -12,3 +12,5 @@ resources:
   - image-policy-demo-mcp.yaml
   - image-repository-demo-sites.yaml
   - image-policy-demo-sites.yaml
+  - image-repository-voice-agent.yaml
+  - image-policy-voice-agent.yaml

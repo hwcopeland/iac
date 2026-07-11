@@ -1,28 +1,51 @@
+# MySQL datasource for Grafana (Source2Surf timer records on cs2-mysql) —
+# externalized via ESO.
+#
+# SECURITY: previously a ConfigMap with the k8s_user password in CLEARTEXT on a
+# public repo (worse than a Secret — ConfigMaps aren't even base64 and have no
+# RBAC protection). Now an ExternalSecret renders the datasource file through
+# target.template, injecting the password from Bitwarden. The rendered Secret
+# keeps label grafana_datasource=1 so the kube-prometheus-stack sidecar loads it.
+# Rotate the mysql user + update the Bitwarden item to rotate.
 ---
-# MySQL datasource for Grafana — reads Source2Surf timer records from
-# the source2surf database on cs2-mysql. Auto-provisioned by the
-# kube-prometheus-stack Grafana sidecar via the grafana_datasource=1 label.
-apiVersion: v1
-kind: ConfigMap
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
 metadata:
   name: cs2-surf-mysql-datasource
   namespace: monitor
-  labels:
-    grafana_datasource: "1"
-data:
-  cs2-surf-mysql.yaml: |-
-    apiVersion: 1
-    datasources:
-      - name: CS2 Surf MySQL
-        type: mysql
-        uid: cs2-surf-mysql
-        url: 10.43.43.43:3306
-        database: source2surf
-        user: k8s_user
-        secureJsonData:
-          password: "H09Xnr8neL2giu"
-        jsonData:
-          maxOpenConns: 5
-          maxIdleConns: 2
-          connMaxLifetime: 300
-        editable: false
+spec:
+  refreshInterval: "1h"
+  secretStoreRef:
+    kind: ClusterSecretStore
+    name: bitwarden-fields
+  target:
+    name: cs2-surf-mysql-datasource
+    creationPolicy: Owner
+    template:
+      engineVersion: v2
+      type: Opaque
+      metadata:
+        labels:
+          grafana_datasource: "1"
+      data:
+        cs2-surf-mysql.yaml: |
+          apiVersion: 1
+          datasources:
+            - name: CS2 Surf MySQL
+              type: mysql
+              uid: cs2-surf-mysql
+              url: 10.43.43.43:3306
+              database: source2surf
+              user: k8s_user
+              secureJsonData:
+                password: {{ .grafana_password | trim }}
+              jsonData:
+                maxOpenConns: 5
+                maxIdleConns: 2
+                connMaxLifetime: 300
+              editable: false
+  data:
+    - secretKey: grafana_password
+      remoteRef:
+        key: 0cf4d4eb-a3cf-4ca3-ad2e-bb09650d2356
+        property: grafana-password

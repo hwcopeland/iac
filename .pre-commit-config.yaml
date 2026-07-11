@@ -1,0 +1,18 @@
+# Local defense-in-depth: block secrets BEFORE they are committed.
+# Install once:  pipx install pre-commit && pre-commit install
+# Run manually:  pre-commit run --all-files
+repos:
+  - repo: local
+    hooks:
+      - id: no-inline-k8s-secrets
+        name: no inline kind:Secret manifests
+        entry: scripts/check-no-inline-secrets.sh
+        language: script
+        files: '\.ya?ml$'
+        pass_filenames: true
+
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.21.2
+    hooks:
+      - id: gitleaks
+        args: ["--config", ".gitleaks.toml"]

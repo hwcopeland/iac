@@ -1,45 +1,52 @@
-# Grafana Postgres datasource for the Spotify analytics DB, provisioned via the
-# kube-prometheus-stack grafana datasource sidecar (grafana-sc-datasources).
+# Grafana Postgres datasource for the Spotify analytics DB — externalized via ESO.
 #
-# The sidecar is configured with LABEL=grafana_datasource, LABEL_VALUE=1,
-# RESOURCE=both — so it loads BOTH labelled ConfigMaps (like Tempo's) AND
-# labelled Secrets, dropping their data into Grafana's provisioning dir and
-# triggering a hot reload. NO helm upgrade / values edit required — this is the
-# least-disruptive mechanism the cluster supports.
+# Previously a `kind: Secret` whose stringData inlined the grafana_ro password in
+# CLEARTEXT (public repo → compromised). Now an ExternalSecret renders the whole
+# datasource file through target.template, injecting the password from the SAME
+# Bitwarden item as spotify-postgres/secret.yaml (field: grafana-ro-password).
 #
-# We use a SECRET (not a ConfigMap like tempo-grafana-datasource.yaml) purely so
-# the grafana_ro PASSWORD isn't stored in a plaintext ConfigMap. The provisioned
-# datasource YAML format is otherwise identical to Tempo's.
-#
-# Connects as the read-only 'grafana_ro' role (SELECT-only) created by the
-# migration Job — Grafana can never write to or alter this DB.
-apiVersion: v1
-kind: Secret
+# The rendered Secret keeps label grafana_datasource=1 so the kube-prometheus-stack
+# datasource sidecar (grafana-sc-datasources) still hot-loads it. Rotate by
+# updating grafana-ro-password in Bitwarden — ESO re-renders on refreshInterval.
+---
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
 metadata:
   name: spotify-postgres-grafana-datasource
   namespace: monitor
-  labels:
-    grafana_datasource: "1"
-stringData:
-  spotify-postgres-datasource.yaml: |
-    apiVersion: 1
-    datasources:
-      - name: Spotify Postgres
-        type: postgres
-        uid: spotify-postgres
-        url: spotify-postgres.monitor.svc.cluster.local:5432
-        access: proxy
-        user: grafana_ro
-        jsonData:
-          database: spotify
-          sslmode: disable          # in-cluster traffic; no TLS on the pg svc
-          postgresVersion: 1600
-          timescaledb: false
-        secureJsonData:
-          # grafana_ro password (read-only role). Inlined here because the
-          # datasource sidecar drops this file verbatim into Grafana's
-          # provisioning dir — Grafana only expands ${VAR} if that env var is
-          # set on the Grafana container, which we are NOT editing. Kept in a
-          # Secret (not a ConfigMap) so it isn't plaintext-in-git as a CM.
-          # Rotate alongside spotify-postgres/secret.yaml GRAFANA_RO_PASSWORD.
-          password: Pc1twcwn26Co7ISlOUdZFbRSd4NfYw8v
+spec:
+  refreshInterval: "1h"
+  secretStoreRef:
+    kind: ClusterSecretStore
+    name: bitwarden-fields
+  target:
+    name: spotify-postgres-grafana-datasource
+    creationPolicy: Owner
+    template:
+      engineVersion: v2
+      type: Opaque
+      metadata:
+        labels:
+          grafana_datasource: "1"
+      data:
+        spotify-postgres-datasource.yaml: |
+          apiVersion: 1
+          datasources:
+            - name: Spotify Postgres
+              type: postgres
+              uid: spotify-postgres
+              url: spotify-postgres.monitor.svc.cluster.local:5432
+              access: proxy
+              user: grafana_ro
+              jsonData:
+                database: spotify
+                sslmode: disable
+                postgresVersion: 1600
+                timescaledb: false
+              secureJsonData:
+                password: {{ .grafana_ro_password | trim }}
+  data:
+    - secretKey: grafana_ro_password
+      remoteRef:
+        key: 9be10e74-cbef-465c-baff-a11b2e27243a
+        property: grafana-ro-password
