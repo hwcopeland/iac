@@ -88,3 +88,18 @@ spec:
   proxied: true
   ttl: 1
   interval: 5m
+---
+# sites -> internal site-tracker CRM (Authentik-guarded)
+# (rke2/tooling/flux/theswamp/httproute-tracker.yaml).
+apiVersion: cloudflare-operator.io/v1
+kind: DNSRecord
+metadata:
+  name: flmanbiosci-sites
+  namespace: kube-system
+spec:
+  name: sites.flmanbiosci.net
+  type: A
+  content: 69.180.240.158
+  proxied: true
+  ttl: 1
+  interval: 5m

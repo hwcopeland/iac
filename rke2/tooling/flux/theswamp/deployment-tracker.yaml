@@ -1,0 +1,59 @@
+---
+# Internal CRM for the floridamanweb.online demo sites (status + notes).
+# Auth is upstream via Authentik forward-auth on the HTTPRoute — the app just
+# reads the X-authentik-* identity headers. SQLite notes DB on an RWO volume.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: site-tracker
+  namespace: theswamp
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate  # RWO volume (SQLite) — old pod must release it first
+  selector:
+    matchLabels:
+      app: site-tracker
+  template:
+    metadata:
+      labels:
+        app: site-tracker
+    spec:
+      imagePullSecrets:
+        - name: zot-pull-secret
+      containers:
+        - name: site-tracker
+          image: zot.hwcopeland.net/florida-man-bioscience/site-tracker:main # {"$imagepolicy": "tooling:site-tracker"}
+          ports:
+            - containerPort: 8040
+          env:
+            - name: SITES_BASE_URL
+              value: https://floridamanweb.online
+            - name: TRACKER_DB
+              value: /data/tracker.db
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8040
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8040
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              memory: "64Mi"
+              cpu: "25m"
+            limits:
+              memory: "256Mi"
+              cpu: "250m"
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: site-tracker-data

@@ -1,0 +1,14 @@
+---
+# Persists the site-tracker SQLite DB (status + notes) across restarts.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: site-tracker-data
+  namespace: theswamp
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: longhorn
+  resources:
+    requests:
+      storage: 1Gi

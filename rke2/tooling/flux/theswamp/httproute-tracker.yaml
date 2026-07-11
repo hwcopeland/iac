@@ -1,0 +1,26 @@
+---
+# Internal site-tracker CRM at sites.flmanbiosci.net, GUARDED by Authentik
+# (full-proxy pattern, same as Longhorn/Hubble). The route backends the Authentik
+# embedded outpost (authentik-server); the outpost authenticates the request and
+# proxies to the app's internal_host (site-tracker.theswamp.svc:8040, set in the
+# providers-sitetracker blueprint). Access is restricted to the "Florida Man
+# Bioscience" group. Requires the theswamp->authentik ReferenceGrant.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: site-tracker
+  namespace: theswamp
+  annotations:
+    authentik.home.arpa/enabled: "true"
+spec:
+  parentRefs:
+    - name: hwcopeland-gateway
+      namespace: kube-system
+      sectionName: flmanbiosci-https
+  hostnames:
+    - "sites.flmanbiosci.net"
+  rules:
+    - backendRefs:
+        - name: authentik-server
+          namespace: authentik
+          port: 80
