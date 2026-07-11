@@ -16,6 +16,10 @@ resources:
   - deployment-mcp.yaml
   - service-mcp.yaml
   - httproute-mcp.yaml
+  - deployment-demosites.yaml
+  - service-demosites.yaml
+  - httproute-demosites.yaml
+  - httproute-demosites-www-redirect.yaml
   - pvc-voice.yaml
   - external-secret-voice.yaml
   - deployment-voice.yaml

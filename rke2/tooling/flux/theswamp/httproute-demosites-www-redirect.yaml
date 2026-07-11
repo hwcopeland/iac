@@ -1,0 +1,23 @@
+---
+# Canonical-host redirect: www.floridamanweb.online -> floridamanweb.online
+# (301). www matches the gateway's wildcard listener, not the exact-apex
+# floridamanweb-root-https listener the main demo-sites route uses.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: demo-sites-www-redirect
+  namespace: theswamp
+spec:
+  parentRefs:
+    - name: hwcopeland-gateway
+      namespace: kube-system
+      sectionName: floridamanweb-https
+  hostnames:
+    - "www.floridamanweb.online"
+  rules:
+    - filters:
+        - type: RequestRedirect
+          requestRedirect:
+            scheme: https
+            hostname: floridamanweb.online
+            statusCode: 301
