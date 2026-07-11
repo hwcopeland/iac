@@ -979,6 +979,20 @@ data:
       model: authentik_policies.policybinding
       permissions: []
       state: present
+    # Also allow the Infrastructure group (owner/admins) — policy_engine_mode 'any'
+    # means membership in EITHER group grants access.
+    - attrs:
+        enabled: true
+        group: !Find [authentik_core.group, [name, Infrastructure]]
+        order: 10
+        target: !Find [authentik_core.application, [slug, site-tracker]]
+        timeout: 30
+      conditions: []
+      identifiers:
+        pk: 7e7366c5-8f1b-47c3-866f-a7ab622bfa68
+      model: authentik_policies.policybinding
+      permissions: []
+      state: present
 kind: ConfigMap
 metadata:
   creationTimestamp: null
