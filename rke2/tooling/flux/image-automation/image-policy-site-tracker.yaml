@@ -1,0 +1,17 @@
+---
+# Same digest-reflection pattern as demo-mcp: track the digest behind :main.
+apiVersion: image.toolkit.fluxcd.io/v1beta2
+kind: ImagePolicy
+metadata:
+  name: site-tracker
+  namespace: tooling
+spec:
+  imageRepositoryRef:
+    name: site-tracker
+  filterTags:
+    pattern: '^main$'
+  policy:
+    alphabetical:
+      order: asc
+  digestReflectionPolicy: Always
+  interval: 1m0s

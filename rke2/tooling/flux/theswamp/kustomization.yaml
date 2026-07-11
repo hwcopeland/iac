@@ -25,3 +25,7 @@ resources:
   - deployment-voice.yaml
   - service-voice.yaml
   - httproute-voice.yaml
+  - pvc-tracker.yaml
+  - deployment-tracker.yaml
+  - service-tracker.yaml
+  - httproute-tracker.yaml

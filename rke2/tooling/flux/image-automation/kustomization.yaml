@@ -14,3 +14,5 @@ resources:
   - image-policy-demo-sites.yaml
   - image-repository-voice-agent.yaml
   - image-policy-voice-agent.yaml
+  - image-repository-site-tracker.yaml
+  - image-policy-site-tracker.yaml
