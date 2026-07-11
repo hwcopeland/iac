@@ -16,3 +16,8 @@ resources:
   - deployment-mcp.yaml
   - service-mcp.yaml
   - httproute-mcp.yaml
+  - pvc-voice.yaml
+  - external-secret-voice.yaml
+  - deployment-voice.yaml
+  - service-voice.yaml
+  - httproute-voice.yaml

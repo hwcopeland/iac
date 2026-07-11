@@ -1,0 +1,15 @@
+---
+# Persists the voice agent's call-log.csv (incl. the permanent do-not-call
+# list) and its synthesized-audio cache across pod restarts.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: voice-agent-data
+  namespace: theswamp
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: longhorn
+  resources:
+    requests:
+      storage: 2Gi

@@ -1,0 +1,70 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: voice-agent
+  namespace: theswamp
+spec:
+  replicas: 1 # call state is in-memory; scaling needs redis first
+  strategy:
+    type: Recreate # RWO volume — old pod must release it first
+  selector:
+    matchLabels:
+      app: voice-agent
+  template:
+    metadata:
+      labels:
+        app: voice-agent
+    spec:
+      imagePullSecrets:
+        - name: zot-pull-secret
+      containers:
+        - name: voice-agent
+          image: zot.hwcopeland.net/florida-man-bioscience/voice-agent:main # {"$imagepolicy": "tooling:voice-agent"}
+          ports:
+            - containerPort: 8035
+          envFrom:
+            - secretRef:
+                name: voice-agent-keys
+          env:
+            - name: PUBLIC_BASE_URL
+              value: https://voice.flmanbiosci.net
+            # pipeline (Twilio STT -> LLM -> Sesame TTS) or grok-realtime.
+            # grok-realtime: xAI handles voice; DeepInfra/Sesame not needed.
+            - name: VOICE_BACKEND
+              value: grok-realtime
+            - name: GROK_VOICE
+              value: eve
+            - name: OWNER_NAME
+              value: Noah
+            - name: LLM_PROVIDER
+              value: anthropic
+            - name: CALL_LOG
+              value: /data/call-log.csv
+            - name: AUDIO_CACHE_DIR
+              value: /data/audio_cache
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8035
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8035
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "1Gi"
+              cpu: "500m"
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: voice-agent-data
