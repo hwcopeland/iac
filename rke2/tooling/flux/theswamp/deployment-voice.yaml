@@ -28,9 +28,14 @@ spec:
           env:
             - name: PUBLIC_BASE_URL
               value: https://voice.flmanbiosci.net
-            # pipeline (Twilio STT -> LLM -> Sesame TTS) or grok-realtime
+            # pipeline (Twilio STT -> LLM -> Sesame TTS) or grok-realtime.
+            # grok-realtime: xAI handles voice; DeepInfra/Sesame not needed.
             - name: VOICE_BACKEND
-              value: pipeline
+              value: grok-realtime
+            - name: GROK_VOICE
+              value: eve
+            - name: OWNER_NAME
+              value: Noah
             - name: LLM_PROVIDER
               value: anthropic
             - name: CALL_LOG
