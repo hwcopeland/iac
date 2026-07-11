@@ -1,0 +1,16 @@
+---
+# floridamanweb.online: content-hashed demo sites for Gainesville businesses
+# (Florida-Man-Bioscience/demo-websites, served by the demo-sites deployment
+# in theswamp). The zone must exist in the Cloudflare account the operator's
+# token can edit, with the registrar's nameservers pointed at Cloudflare.
+apiVersion: cloudflare-operator.io/v1
+kind: Zone
+metadata:
+  name: floridamanweb
+spec:
+  name: floridamanweb.online
+  interval: 5m
+  prune: false
+  ignoredRecords:
+    TXT:
+      - _acme-challenge

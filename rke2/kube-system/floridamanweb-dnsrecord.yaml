@@ -1,0 +1,28 @@
+---
+apiVersion: cloudflare-operator.io/v1
+kind: DNSRecord
+metadata:
+  name: floridamanweb-root
+  namespace: kube-system
+spec:
+  name: floridamanweb.online
+  type: A
+  content: 69.180.240.158
+  proxied: true
+  ttl: 1
+  interval: 5m
+---
+# www -> same edge IP as the apex; the gateway redirects www to the apex
+# (see rke2/tooling/flux/theswamp/httproute-demosites-www-redirect.yaml).
+apiVersion: cloudflare-operator.io/v1
+kind: DNSRecord
+metadata:
+  name: floridamanweb-www
+  namespace: kube-system
+spec:
+  name: www.floridamanweb.online
+  type: A
+  content: 69.180.240.158
+  proxied: true
+  ttl: 1
+  interval: 5m

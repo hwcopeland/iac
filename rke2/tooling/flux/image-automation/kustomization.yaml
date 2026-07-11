@@ -10,3 +10,5 @@ resources:
   - image-update-automation-frontend.yaml
   - image-repository-demo-mcp.yaml
   - image-policy-demo-mcp.yaml
+  - image-repository-demo-sites.yaml
+  - image-policy-demo-sites.yaml
