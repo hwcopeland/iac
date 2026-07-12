@@ -1,0 +1,174 @@
+version: 1
+metadata:
+  name: Peptodyssey Provider and Application
+entries:
+# =============================================================================
+# OAuth2 / OIDC provider for the "peptodyssey" iOS app (Florida Man Bioscience).
+# Requested in Florida-Man-Bioscience/peptodyssey#1.
+#
+# PUBLIC client (native app) — NO client_secret. Auth is via the OAuth 2.0 Device
+# Authorization Grant (RFC 8628, urn:ietf:params:oauth:grant-type:device_code) plus
+# offline_access for a refresh token (background uploader). client_id is set
+# explicitly ("peptodyssey") so it is a STABLE, reportable value.
+#
+# App-native OIDC (pattern 1): the app talks to Authentik directly. No HTTPRoute,
+# no forward-auth outpost.
+#
+# Issuer URL (issuer_mode: per_provider, derived from the application slug):
+#   https://auth.hwcopeland.net/application/o/peptodyssey/
+#
+# ---- DEVICE-CODE GATING (addresses consensus finding #1) --------------------
+# RFC 8628 requires the Brand to have a "Device code flow" (flow_device_code) set,
+# and that switch is BRAND-GLOBAL: it enables the /application/o/device/ *entry*
+# endpoint for EVERY OAuth2 provider on the brand. Two other secretless public
+# clients exist (homeassistant, khemeia) that would otherwise become device-code
+# phishing targets. We cannot gate at the brand device flow because — verified
+# from the 2026.2.1 source (device_init.py) — that flow runs BEFORE any code is
+# entered, with NO application in context. The only per-application decision point
+# is Phase B: after the user enters the code, CodeValidatorView plans the matched
+# provider's OWN authorization_flow (with the device token + application in
+# context). So we gate there:
+#   * peptodyssey gets a DEDICATED authorization flow (below) -> device grant OK.
+#   * every other provider shares default-provider-authorization-implicit-consent,
+#     onto which we bind an expression policy that DENIES when a device token is
+#     present in the flow context (browser SSO has none -> always allowed).
+# Bypass-safety: the device path sets planner.use_cache=False (device_init.py), so
+# the deny policy is ALWAYS re-evaluated fresh for device grants — a stale cached
+# "allow" from a browser SSO can never leak into a device grant. See the report /
+# memory for the residual (minor, self-healing) availability note on cache writes.
+#
+# MIRROR of blueprints-configmap.yaml (providers-peptodyssey.yaml key) — keep both
+# in sync; the configmap is what is actually mounted at /blueprints/custom.
+# =============================================================================
+
+# --- 1) Dedicated authorization flow for peptodyssey device/PKCE grants -------
+# Empty flow (no stage bindings) with designation=authorization + require_
+# authenticated == implicit consent, exactly mirroring the shared
+# default-provider-authorization-implicit-consent, but ISOLATED to peptodyssey so
+# the shared-flow device-deny policy below never applies to it.
+- attrs:
+    authentication: require_authenticated
+    denied_action: message_continue
+    designation: authorization
+    layout: stacked
+    name: peptodyssey-device-authorization
+    policy_engine_mode: any
+    title: Authorize Peptodyssey
+  conditions: []
+  identifiers:
+    slug: peptodyssey-device-authorization
+  model: authentik_flows.flow
+  permissions: []
+  state: present
+
+# --- 2) Expression policy: deny device-code grants on the SHARED auth flow -----
+- attrs:
+    expression: |
+      # Deny OAuth2 RFC 8628 device-code grants that reach the SHARED provider
+      # authorization flow. Only peptodyssey may complete a device grant, and it
+      # uses its own dedicated flow (peptodyssey-device-authorization), so it never
+      # reaches this policy. Browser-based SSO/authorization carries no device
+      # token in context and is therefore always allowed (returns True). The check
+      # is a dict membership test that cannot raise.
+      return "goauthentik.io/providers/oauth2/device" not in request.context
+  conditions: []
+  identifiers:
+    name: deny-device-code-on-shared-authorization
+  model: authentik_policies_expression.expressionpolicy
+  permissions: []
+  state: present
+
+# --- 3) Bind the deny policy to the shared authorization flow ------------------
+# failure_result: true (fail OPEN) deliberately — this policy sits on the browser
+# SSO path of EVERY app using the shared flow (grafana, vg, jupyterhub,
+# homeassistant, khemeia, ...). The expression provably cannot raise, so fail-open
+# never actually allows a device bypass; it only guarantees a hypothetical policy
+# error can never take down interactive SSO for the whole homelab.
+- attrs:
+    enabled: true
+    failure_result: true
+    order: 0
+    policy: !Find [authentik_policies_expression.expressionpolicy, [name, deny-device-code-on-shared-authorization]]
+    target: !Find [authentik_flows.flow, [slug, default-provider-authorization-implicit-consent]]
+    timeout: 30
+  conditions: []
+  identifiers:
+    pk: f4984230-6924-4752-bd6e-85a3c5dce960
+  model: authentik_policies.policybinding
+  permissions: []
+  state: present
+
+# --- 4) The peptodyssey OAuth2 / OIDC provider (public client) -----------------
+- attrs:
+    access_code_validity: minutes=1
+    access_token_validity: hours=1
+    # Dedicated flow (entry 1), NOT the shared implicit-consent flow — this is what
+    # exempts peptodyssey from the device-deny policy above.
+    authorization_flow: !Find [authentik_flows.flow, [slug, peptodyssey-device-authorization]]
+    client_id: peptodyssey
+    client_type: public
+    include_claims_in_id_token: true
+    invalidation_flow: !Find [authentik_flows.flow, [slug, default-provider-invalidation-flow]]
+    issuer_mode: per_provider
+    name: Peptodyssey
+    property_mappings:
+    - !Find [authentik_providers_oauth2.scopemapping, [scope_name, openid]]
+    - !Find [authentik_providers_oauth2.scopemapping, [scope_name, profile]]
+    - !Find [authentik_providers_oauth2.scopemapping, [scope_name, email]]
+    - !Find [authentik_providers_oauth2.scopemapping, [scope_name, offline_access]]
+    # Device-code-only (RFC 8628): the app registers no URL scheme and has no PKCE
+    # auth-code path. redirect_uris must still be PRESENT — the OAuth2Provider
+    # serializer marks it required (allow_empty=True), so an EMPTY list is the
+    # correct value; omitting the key fails blueprint validation.
+    redirect_uris: []
+    refresh_token_validity: days=90
+    signing_key: !Find [authentik_crypto.certificatekeypair, [name, authentik Self-signed Certificate]]
+    sub_mode: hashed_user_id
+  conditions: []
+  identifiers:
+    client_id: peptodyssey
+  model: authentik_providers_oauth2.oauth2provider
+  permissions: []
+  state: present
+
+# --- 5) Application (slug "peptodyssey" -> drives the issuer URL) --------------
+- attrs:
+    meta_launch_url: https://auth.hwcopeland.net/application/o/peptodyssey/
+    name: Peptodyssey
+    policy_engine_mode: any
+    provider: !Find [authentik_providers_oauth2.oauth2provider, [client_id, peptodyssey]]
+    slug: peptodyssey
+  conditions: []
+  identifiers:
+    slug: peptodyssey
+  model: authentik_core.application
+  permissions: []
+  state: present
+
+# --- 6) TRUST-ANCHOR CHANGE: enable the Device Authorization *entry* brand-wide -
+# Sets the default brand's flow_device_code to its existing default-authentication-
+# flow. This ENABLES /application/o/device/ (user login + code entry) for the whole
+# brand; per-application completion is gated by entries 1-4 above (only peptodyssey
+# can finish a grant). NO policy is bound to default-authentication-flow, so
+# interactive SSO login is completely unaffected. It is a partial update — no other
+# brand field is touched.
+#
+# ROLLBACK (correcting consensus finding #2): Authentik blueprints do NOT revert
+# live fields when an entry is removed (see this repo's metabase-removal.yaml). To
+# turn device flow back off you must RE-APPLY an explicit entry that sets the field
+# to null — deleting this entry leaves flow_device_code populated in the DB:
+#     - attrs: {flow_device_code: null}
+#       identifiers: {domain: authentik-default}
+#       model: authentik_brands.brand
+#       state: present
+# Likewise, to disable the deny gate (entry 3) do NOT use state: absent on the
+# PolicyBinding (2026.2.x importer crashes on that — see the absent-policybinding
+# note); flip its `enabled: false` and re-apply instead.
+- attrs:
+    flow_device_code: !Find [authentik_flows.flow, [slug, default-authentication-flow]]
+  conditions: []
+  identifiers:
+    domain: authentik-default
+  model: authentik_brands.brand
+  permissions: []
+  state: present
