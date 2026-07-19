@@ -28,8 +28,11 @@ entries:
     provider: !Find [authentik_providers_proxy.proxyprovider, [name, Provider for Garage]]
     slug: garage
   conditions: []
+  # Identify by slug, not pk: authentik 2026.2 ignores a supplied pk when creating
+  # an Application, so a made-up pk never matches on re-apply and the importer
+  # fails with "Application with this slug already exists".
   identifiers:
-    pk: f34992b3-c49c-45c1-8fd3-72fc624423f5
+    slug: garage
   model: authentik_core.application
   permissions: []
   state: present

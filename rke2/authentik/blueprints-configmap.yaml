@@ -576,8 +576,11 @@ data:
         provider: !Find [authentik_providers_proxy.proxyprovider, [name, Provider for Longhorn]]
         slug: longhorn
       conditions: []
+      # Identify by slug, not pk: the live Application's pk (42fa15a2-...) does not match
+      # the pk formerly listed here — authentik 2026.2 ignores a supplied pk on
+      # Application create, so pk identifiers fail every re-apply with unique errors.
       identifiers:
-        pk: d7e8f9a0-b1c2-4d3e-8f5a-6b7c8d9e0f1a
+        slug: longhorn
       model: authentik_core.application
       permissions: []
       state: present
@@ -691,8 +694,11 @@ data:
         provider: !Find [authentik_providers_oauth2.oauth2provider, [name, Khemeia]]
         slug: khemeia
       conditions: []
+      # Identify by slug, not pk: the live Application's pk (36d36676-...) does not match
+      # the pk formerly listed here — authentik 2026.2 ignores a supplied pk on
+      # Application create, so pk identifiers fail every re-apply with unique errors.
       identifiers:
-        pk: b2c3d4e5-f6a7-8901-bcde-f12345678901
+        slug: khemeia
       model: authentik_core.application
       permissions: []
       state: present
@@ -1200,8 +1206,11 @@ data:
         provider: !Find [authentik_providers_proxy.proxyprovider, [name, Provider for Garage]]
         slug: garage
       conditions: []
+      # Identify by slug, not pk: authentik 2026.2 ignores a supplied pk when creating
+      # an Application, so a made-up pk never matches on re-apply and the importer
+      # fails with "Application with this slug already exists".
       identifiers:
-        pk: f34992b3-c49c-45c1-8fd3-72fc624423f5
+        slug: garage
       model: authentik_core.application
       permissions: []
       state: present
