@@ -1,0 +1,50 @@
+---
+# garage.hwcopeland.net → authentik proxy outpost → garage-webui:3909.
+# All traffic for this hostname is sent to authentik-server (proxy-mode
+# outpost pattern, mirroring web-server/homepage/httproute.yaml); authentik
+# authenticates the user and proxies to the garage-webui ClusterIP service.
+# Cross-namespace backendRef requires ReferenceGrant `garage-system-to-authentik`
+# in the authentik namespace (managed by Flux, tooling/authentik).
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: garage-webui
+  namespace: garage-system
+spec:
+  parentRefs:
+    - name: hwcopeland-gateway
+      namespace: kube-system
+      sectionName: https
+  hostnames:
+    - "garage.hwcopeland.net"
+  rules:
+    # Redirect Authentik's /if/* user portal back to the UI root — the embedded
+    # outpost's post-auth callback lands here but the path isn't served by the UI.
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /if/
+      filters:
+        - type: RequestRedirect
+          requestRedirect:
+            path:
+              type: ReplaceFullPath
+              replaceFullPath: /
+            statusCode: 302
+    - backendRefs:
+        - name: authentik-server
+          namespace: authentik
+          port: 80
+---
+apiVersion: cloudflare-operator.io/v1
+kind: DNSRecord
+metadata:
+  name: garage-webui
+  namespace: garage-system
+spec:
+  name: garage.hwcopeland.net
+  type: CNAME
+  content: hwcopeland.net
+  proxied: false
+  ttl: 1
+  interval: 5m

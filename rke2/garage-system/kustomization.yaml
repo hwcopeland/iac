@@ -12,3 +12,7 @@ resources:
   # khemeia-fingerprints buckets and grants them to the existing khemeia-app
   # key. Idempotent; safe to leave applied. See garage-genome-buckets-job.yaml.
   - garage-genome-buckets-job.yaml
+  # Garage Web UI (admin interface), fronted by the authentik proxy outpost at
+  # garage.hwcopeland.net. See garage-webui.yaml + garage-webui-route.yaml.
+  - garage-webui.yaml
+  - garage-webui-route.yaml

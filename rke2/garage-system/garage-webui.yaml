@@ -1,0 +1,94 @@
+---
+# Garage Web UI (khairul169/garage-webui) — admin web interface for Garage.
+# Talks to the Garage admin API (:3902) and S3 API (:3900) via the `garage`
+# ClusterIP service. No AUTH_USER_PASS: authentication is fronted by the
+# authentik proxy outpost at garage.hwcopeland.net (see garage-webui-route.yaml)
+# so the UI itself must NEVER be exposed directly outside the cluster.
+#
+# NOTE: the admin token duplicated here also lives in garage-config.yaml's
+# [admin] section (ConfigMap garage-config). Rotate both together.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: garage-webui-admin
+  namespace: garage-system
+  labels:
+    app.kubernetes.io/name: garage-webui
+type: Opaque
+stringData:
+  admin-token: "khemeia-dev"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: garage-webui
+  namespace: garage-system
+  labels:
+    app.kubernetes.io/name: garage-webui
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: garage-webui
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: garage-webui
+    spec:
+      containers:
+        - name: garage-webui
+          # Pinned release tag (Docker Hub) — do not use :latest.
+          # 1.0.9 is the last release that speaks the Garage v1 admin API;
+          # 1.1.0+ targets the v2 admin API (Garage >= v2.0). Our Garage is
+          # v1.0.1, so bump this only alongside a Garage v2 upgrade.
+          image: khairul169/garage-webui:1.0.9
+          ports:
+            - containerPort: 3909
+              name: http
+          env:
+            - name: API_BASE_URL
+              value: "http://garage.garage-system.svc.cluster.local:3902"
+            - name: API_ADMIN_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: garage-webui-admin
+                  key: admin-token
+            - name: S3_ENDPOINT_URL
+              value: "http://garage.garage-system.svc.cluster.local:3900"
+            - name: S3_REGION
+              value: "garage"
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 3909
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 3909
+            initialDelaySeconds: 15
+            periodSeconds: 30
+          resources:
+            requests:
+              cpu: 25m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: garage-webui
+  namespace: garage-system
+  labels:
+    app.kubernetes.io/name: garage-webui
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: garage-webui
+  ports:
+    - port: 3909
+      targetPort: 3909
+      protocol: TCP
+      name: http
