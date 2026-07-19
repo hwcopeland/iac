@@ -46,10 +46,21 @@ data:
             oid: 1.3.6.1.4.1.6574.1.4.2
             type: gauge
             help: CPU fan status (1=normal)
+          # SYNOLOGY-DISK-MIB diskEntry columns: .2=diskID ("Disk 1"),
+          # .3=diskModel (string!), .5=diskStatus, .6=diskTemperature.
+          # Temperature was previously pointed at .3 (diskModel), which the
+          # exporter coerced to gauge 0 for every disk.
           - name: syno_disk_temperature
-            oid: 1.3.6.1.4.1.6574.2.1.1.3
+            oid: 1.3.6.1.4.1.6574.2.1.1.6
             type: gauge
             help: Disk temperature in Celsius
+            indexes:
+              - labelname: disk_index
+                type: Integer
+          - name: syno_disk_model
+            oid: 1.3.6.1.4.1.6574.2.1.1.3
+            type: DisplayString
+            help: Disk model string
             indexes:
               - labelname: disk_index
                 type: Integer
@@ -63,7 +74,7 @@ data:
           - name: syno_disk_name
             oid: 1.3.6.1.4.1.6574.2.1.1.2
             type: DisplayString
-            help: Disk model name
+            help: Disk ID (e.g. "Disk 1")
             indexes:
               - labelname: disk_index
                 type: Integer

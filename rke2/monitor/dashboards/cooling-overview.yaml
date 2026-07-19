@@ -1,0 +1,207 @@
+# Cooling — fleet-wide fans & temperatures. One consolidated board:
+# per-node hottest sensor, temp history, every fan we can see (Dell laptops
+# via dell_smm/WMI, MikroTik CCR-2004 via mktxp, GPU via DCGM fan %,
+# Synology fan health via SNMP status OIDs), NVMe temps (nixos-gpu's nvme0
+# is chronically pinned ~80C — the NVMe panel and thresholds exist to make
+# exactly that kind of condition jump out), Synology system/disk temps.
+#
+# Fan coverage gaps (kernel exposes no fan sensors, no BMC/IPMI on any node):
+# ctlpln1-3 (Lenovo ThinkCentre minis), forum01/02 (Minisforum Venus minis),
+# nixos-gpu chassis fans (ASRock X670E — would need nct6775 modprobe on the
+# NixOS host). See dashboard description panel-less notes in git history.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cooling-overview-dashboard
+  namespace: monitor
+  labels:
+    grafana_dashboard: "1"
+  annotations:
+    grafana_folder: Platform
+data:
+  cooling-overview.json: |-
+    {
+      "uid": "cooling-overview",
+      "title": "Cooling — Fans & Temperatures",
+      "tags": ["platform", "cooling", "thermal", "fans"],
+      "timezone": "browser",
+      "refresh": "30s",
+      "schemaVersion": 39,
+      "time": {"from": "now-6h", "to": "now"},
+      "editable": true,
+      "templating": {
+        "list": [
+          {
+            "name": "node",
+            "type": "query",
+            "datasource": {"type": "prometheus", "uid": "prometheus"},
+            "query": "label_values(node_uname_info, nodename)",
+            "refresh": 2,
+            "includeAll": true,
+            "multi": true,
+            "current": {"text": "All", "value": "$__all"}
+          }
+        ]
+      },
+      "panels": [
+        {
+          "type": "stat",
+          "title": "Hottest sensor per node (°C)",
+          "gridPos": {"x": 0, "y": 0, "w": 24, "h": 5},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"expr": "max by (nodename) (node_hwmon_temp_celsius * on(instance) group_left(nodename) node_uname_info)", "legendFormat": "{{nodename}}", "refId": "A"}],
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "background"},
+          "fieldConfig": {"defaults": {"unit": "celsius", "decimals": 1, "thresholds": {"mode": "absolute", "steps": [{"color": "green"}, {"color": "orange", "value": 70}, {"color": "red", "value": 80}]}, "color": {"mode": "thresholds"}}}
+        },
+        {
+          "type": "stat",
+          "title": "GPU temp",
+          "gridPos": {"x": 0, "y": 5, "w": 3, "h": 4},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"expr": "DCGM_FI_DEV_GPU_TEMP", "legendFormat": "{{modelName}}", "refId": "A"}],
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
+          "fieldConfig": {"defaults": {"unit": "celsius", "thresholds": {"mode": "absolute", "steps": [{"color": "green"}, {"color": "orange", "value": 70}, {"color": "red", "value": 83}]}, "color": {"mode": "thresholds"}}}
+        },
+        {
+          "type": "stat",
+          "title": "GPU fan",
+          "gridPos": {"x": 3, "y": 5, "w": 3, "h": 4},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"expr": "DCGM_FI_DEV_FAN_SPEED", "legendFormat": "{{modelName}}", "refId": "A"}],
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
+          "fieldConfig": {"defaults": {"unit": "percent", "thresholds": {"mode": "absolute", "steps": [{"color": "green"}, {"color": "orange", "value": 80}, {"color": "red", "value": 95}]}, "color": {"mode": "thresholds"}, "noValue": "no data"}}
+        },
+        {
+          "type": "stat",
+          "title": "Synology system",
+          "gridPos": {"x": 6, "y": 5, "w": 3, "h": 4},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"expr": "syno_system_temperature", "refId": "A"}],
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
+          "fieldConfig": {"defaults": {"unit": "celsius", "thresholds": {"mode": "absolute", "steps": [{"color": "green"}, {"color": "orange", "value": 55}, {"color": "red", "value": 65}]}, "color": {"mode": "thresholds"}}}
+        },
+        {
+          "type": "stat",
+          "title": "Synology hottest disk",
+          "gridPos": {"x": 9, "y": 5, "w": 3, "h": 4},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"expr": "max(syno_disk_temperature)", "refId": "A"}],
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
+          "fieldConfig": {"defaults": {"unit": "celsius", "thresholds": {"mode": "absolute", "steps": [{"color": "green"}, {"color": "orange", "value": 50}, {"color": "red", "value": 55}]}, "color": {"mode": "thresholds"}}}
+        },
+        {
+          "type": "stat",
+          "title": "Synology system fan",
+          "gridPos": {"x": 12, "y": 5, "w": 3, "h": 4},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"expr": "syno_system_fan_status", "refId": "A"}],
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "background"},
+          "fieldConfig": {"defaults": {"mappings": [{"type": "value", "options": {"1": {"text": "OK", "color": "green"}}}, {"type": "special", "options": {"match": "null", "result": {"text": "no data", "color": "text"}}}], "thresholds": {"mode": "absolute", "steps": [{"color": "red"}, {"color": "green", "value": 1}, {"color": "red", "value": 2}]}, "color": {"mode": "thresholds"}}}
+        },
+        {
+          "type": "stat",
+          "title": "Synology CPU fan",
+          "gridPos": {"x": 15, "y": 5, "w": 3, "h": 4},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"expr": "syno_system_cpu_fan_status", "refId": "A"}],
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "background"},
+          "fieldConfig": {"defaults": {"mappings": [{"type": "value", "options": {"1": {"text": "OK", "color": "green"}}}, {"type": "special", "options": {"match": "null", "result": {"text": "no data", "color": "text"}}}], "thresholds": {"mode": "absolute", "steps": [{"color": "red"}, {"color": "green", "value": 1}, {"color": "red", "value": 2}]}, "color": {"mode": "thresholds"}}}
+        },
+        {
+          "type": "stat",
+          "title": "MikroTik CPU",
+          "gridPos": {"x": 18, "y": 5, "w": 3, "h": 4},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"expr": "mktxp_system_cpu_temperature", "legendFormat": "{{routerboard_name}}", "refId": "A"}],
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
+          "fieldConfig": {"defaults": {"unit": "celsius", "thresholds": {"mode": "absolute", "steps": [{"color": "green"}, {"color": "orange", "value": 65}, {"color": "red", "value": 75}]}, "color": {"mode": "thresholds"}}}
+        },
+        {
+          "type": "stat",
+          "title": "MikroTik fans",
+          "gridPos": {"x": 21, "y": 5, "w": 3, "h": 4},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [
+            {"expr": "mktxp_system_fan_one_speed", "legendFormat": "fan1", "refId": "A"},
+            {"expr": "mktxp_system_fan_two_speed", "legendFormat": "fan2", "refId": "B"}
+          ],
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
+          "fieldConfig": {"defaults": {"unit": "rotrpm", "color": {"mode": "fixed", "fixedColor": "blue"}}}
+        },
+        {
+          "type": "timeseries",
+          "title": "Node temperature history (hottest sensor per node)",
+          "gridPos": {"x": 0, "y": 9, "w": 12, "h": 9},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"expr": "max by (nodename) (node_hwmon_temp_celsius * on(instance) group_left(nodename) node_uname_info)", "legendFormat": "{{nodename}}", "refId": "A"}],
+          "fieldConfig": {"defaults": {"unit": "celsius", "custom": {"thresholdsStyle": {"mode": "line"}}, "thresholds": {"mode": "absolute", "steps": [{"color": "green"}, {"color": "orange", "value": 70}, {"color": "red", "value": 80}]}}}
+        },
+        {
+          "type": "timeseries",
+          "title": "All fan RPMs (nodes + MikroTik)",
+          "description": "Only microedge/microedge2 (Dell EC), the CCR-2004, and the GPU (as %, separate panel) expose fan telemetry. ctlpln1-3, forum01/02 and nixos-gpu chassis fans are invisible to the kernel — no BMC/IPMI on any of them.",
+          "gridPos": {"x": 12, "y": 9, "w": 12, "h": 9},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [
+            {"expr": "max by (nodename, sensor) (node_hwmon_fan_rpm * on(instance) group_left(nodename) node_uname_info)", "legendFormat": "{{nodename}} {{sensor}}", "refId": "A"},
+            {"expr": "mktxp_system_fan_one_speed", "legendFormat": "{{routerboard_name}} fan1", "refId": "B"},
+            {"expr": "mktxp_system_fan_two_speed", "legendFormat": "{{routerboard_name}} fan2", "refId": "C"}
+          ],
+          "fieldConfig": {"defaults": {"unit": "rotrpm", "custom": {"fillOpacity": 5}}}
+        },
+        {
+          "type": "timeseries",
+          "title": "NVMe temperatures (fleet)",
+          "description": "NVMe drives should live well under 70C. A flat line pinned near 80C (nixos nvme0 temp2) means either a chronically hot drive that needs a heatsink/airflow or a pegged sensor — either way it needs eyes.",
+          "gridPos": {"x": 0, "y": 18, "w": 12, "h": 9},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"expr": "node_hwmon_temp_celsius{chip=~\"nvme.*\"} * on(instance) group_left(nodename) node_uname_info", "legendFormat": "{{nodename}} {{chip}} {{sensor}}", "refId": "A"}],
+          "fieldConfig": {"defaults": {"unit": "celsius", "custom": {"thresholdsStyle": {"mode": "line"}}, "thresholds": {"mode": "absolute", "steps": [{"color": "green"}, {"color": "orange", "value": 70}, {"color": "red", "value": 80}]}}}
+        },
+        {
+          "type": "timeseries",
+          "title": "GPU — temperature & fan",
+          "gridPos": {"x": 12, "y": 18, "w": 12, "h": 9},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [
+            {"expr": "DCGM_FI_DEV_GPU_TEMP", "legendFormat": "GPU temp", "refId": "A"},
+            {"expr": "DCGM_FI_DEV_FAN_SPEED", "legendFormat": "GPU fan %", "refId": "B"}
+          ],
+          "fieldConfig": {
+            "defaults": {"unit": "celsius", "custom": {"thresholdsStyle": {"mode": "line"}}, "thresholds": {"mode": "absolute", "steps": [{"color": "green"}, {"color": "orange", "value": 70}, {"color": "red", "value": 83}]}},
+            "overrides": [{"matcher": {"id": "byName", "options": "GPU fan %"}, "properties": [{"id": "unit", "value": "percent"}, {"id": "custom.axisPlacement", "value": "right"}, {"id": "max", "value": 100}, {"id": "min", "value": 0}]}]
+          }
+        },
+        {
+          "type": "timeseries",
+          "title": "Synology — system & disk temperatures",
+          "gridPos": {"x": 0, "y": 27, "w": 12, "h": 9},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [
+            {"expr": "syno_system_temperature", "legendFormat": "System", "refId": "A"},
+            {"expr": "syno_disk_temperature", "legendFormat": "Disk {{disk_index}}", "refId": "B"}
+          ],
+          "fieldConfig": {"defaults": {"unit": "celsius", "custom": {"thresholdsStyle": {"mode": "line"}}, "thresholds": {"mode": "absolute", "steps": [{"color": "green"}, {"color": "orange", "value": 50}, {"color": "red", "value": 60}]}}}
+        },
+        {
+          "type": "timeseries",
+          "title": "MikroTik — board & CPU temperatures",
+          "gridPos": {"x": 12, "y": 27, "w": 12, "h": 9},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [
+            {"expr": "mktxp_system_cpu_temperature", "legendFormat": "{{routerboard_name}} CPU", "refId": "A"},
+            {"expr": "mktxp_system_board_temperature1", "legendFormat": "{{routerboard_name}} board1", "refId": "B"},
+            {"expr": "mktxp_system_board_temperature2", "legendFormat": "{{routerboard_name}} board2", "refId": "C"}
+          ],
+          "fieldConfig": {"defaults": {"unit": "celsius", "custom": {"thresholdsStyle": {"mode": "line"}}, "thresholds": {"mode": "absolute", "steps": [{"color": "green"}, {"color": "orange", "value": 65}, {"color": "red", "value": 75}]}}}
+        },
+        {
+          "type": "timeseries",
+          "title": "All sensors by chip ($node)",
+          "gridPos": {"x": 0, "y": 36, "w": 24, "h": 9},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"expr": "node_hwmon_temp_celsius * on(instance) group_left(nodename) (node_uname_info{nodename=~\"$node\"})", "legendFormat": "{{nodename}} {{chip}} {{sensor}}", "refId": "A"}],
+          "fieldConfig": {"defaults": {"unit": "celsius", "custom": {"thresholdsStyle": {"mode": "line"}}, "thresholds": {"mode": "absolute", "steps": [{"color": "green"}, {"color": "orange", "value": 70}, {"color": "red", "value": 80}]}}}
+        }
+      ]
+    }
