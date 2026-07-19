@@ -23,8 +23,11 @@ entries:
     provider: !Find [authentik_providers_proxy.proxyprovider, [name, Provider for Longhorn]]
     slug: longhorn
   conditions: []
+  # Identify by slug, not pk: the live Application's pk (42fa15a2-...) does not match
+  # the pk formerly listed here — authentik 2026.2 ignores a supplied pk on
+  # Application create, so pk identifiers fail every re-apply with unique errors.
   identifiers:
-    pk: d7e8f9a0-b1c2-4d3e-8f5a-6b7c8d9e0f1a
+    slug: longhorn
   model: authentik_core.application
   permissions: []
   state: present

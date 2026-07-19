@@ -28,7 +28,7 @@ entries:
     sub_mode: hashed_user_id
   conditions: []
   identifiers:
-    pk: 2
+    pk: 10
   model: authentik_providers_oauth2.oauth2provider
   permissions: []
   state: present
@@ -39,8 +39,11 @@ entries:
     provider: !Find [authentik_providers_oauth2.oauth2provider, [name, Khemeia]]
     slug: khemeia
   conditions: []
+  # Identify by slug, not pk: the live Application's pk (36d36676-...) does not match
+  # the pk formerly listed here — authentik 2026.2 ignores a supplied pk on
+  # Application create, so pk identifiers fail every re-apply with unique errors.
   identifiers:
-    pk: a1b2c3d4-e5f6-7890-abcd-ef1234567890
+    slug: khemeia
   model: authentik_core.application
   permissions: []
   state: present
