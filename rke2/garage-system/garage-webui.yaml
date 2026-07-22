@@ -5,18 +5,38 @@
 # authentik proxy outpost at garage.hwcopeland.net (see garage-webui-route.yaml)
 # so the UI itself must NEVER be exposed directly outside the cluster.
 #
-# NOTE: the admin token duplicated here also lives in garage-config.yaml's
-# [admin] section (ConfigMap garage-config). Rotate both together.
-apiVersion: v1
-kind: Secret
+# The admin token is NOT in git: both this UI and the Garage server read it
+# from the ESO-rendered `garage-admin-token` Secret (Bitwarden custody).
+# Garage admin-API token — externalized via ESO (Bitwarden), shared by this
+# UI (API_ADMIN_KEY) and the Garage server itself (GARAGE_ADMIN_TOKEN in
+# garage-statefulset.yaml). Rotate by updating the `admin-token` custom field
+# on the Bitwarden garage item; ESO re-renders within refreshInterval.
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
 metadata:
-  name: garage-webui-admin
+  name: garage-admin-token
   namespace: garage-system
   labels:
-    app.kubernetes.io/name: garage-webui
-type: Opaque
-stringData:
-  admin-token: "khemeia-dev"
+    app.kubernetes.io/name: garage
+    app.kubernetes.io/managed-by: external-secrets
+spec:
+  refreshInterval: "1h"
+  secretStoreRef:
+    kind: ClusterSecretStore
+    name: bitwarden-fields
+  target:
+    name: garage-admin-token
+    creationPolicy: Owner
+    template:
+      engineVersion: v2
+      type: Opaque
+      data:
+        admin-token: "{{ .admin_token | trim }}"
+  data:
+    - secretKey: admin_token
+      remoteRef:
+        key: 92d9ae0b-0af3-4420-9824-12a099c90531
+        property: admin-token
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -51,7 +71,7 @@ spec:
             - name: API_ADMIN_KEY
               valueFrom:
                 secretKeyRef:
-                  name: garage-webui-admin
+                  name: garage-admin-token
                   key: admin-token
             - name: S3_ENDPOINT_URL
               value: "http://garage.garage-system.svc.cluster.local:3900"

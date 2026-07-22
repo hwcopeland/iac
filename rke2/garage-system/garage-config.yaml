@@ -29,4 +29,5 @@ data:
 
     [admin]
     api_bind_addr = "[::]:3902"
-    admin_token = "khemeia-dev"
+    # admin_token intentionally absent: the server reads GARAGE_ADMIN_TOKEN
+    # from the ESO-rendered garage-admin-token Secret (see statefulset env).

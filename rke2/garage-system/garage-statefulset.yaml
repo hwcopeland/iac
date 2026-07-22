@@ -46,6 +46,11 @@ spec:
                 secretKeyRef:
                   name: garage-secret
                   key: rpc-secret
+            - name: GARAGE_ADMIN_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: garage-admin-token
+                  key: admin-token
           volumeMounts:
             - name: data
               mountPath: /var/lib/garage/data
