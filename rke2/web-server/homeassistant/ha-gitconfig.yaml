@@ -54,9 +54,154 @@ data:
     # (hostNetwork + the node's wlp0s20f3 joined to kuber-my-netes). This stanza
     # imports the integration so there's no UI click. If the speakers don't get
     # HA's event callbacks, set advertise_addr to HA's WiFi IP.
+    # NOTE: media_player must be an explicit {} — a bare "media_player:" parses as
+    # None and fails the whole Sonos setup on HA >= 2026.7.
     sonos:
-      media_player:
-        # advertise_addr: "10.0.0.x"   # uncomment + set to HA's WiFi IP if needed
+      media_player: {}
+      # If speakers miss HA's event callbacks, set:
+      #   media_player:
+      #     advertise_addr: "10.0.0.x"   # HA's WiFi IP
+
+    # Room light groups (Hue LCA017 via ZHA): bulbs 1-3 bathroom, 4-5 bedroom.
+    light:
+      - platform: group
+        name: Bathroom
+        unique_id: bathroom_lights
+        entities:
+          - light.signify_netherlands_b_v_lca017
+          - light.signify_netherlands_b_v_lca017_2
+          - light.signify_netherlands_b_v_lca017_3
+      - platform: group
+        name: Bedroom
+        unique_id: bedroom_lights
+        entities:
+          - light.signify_netherlands_b_v_lca017_4
+          - light.signify_netherlands_b_v_lca017_5
+
+    # At-a-glance sensors from the cluster Prometheus (ClusterIP, reachable from
+    # the pod). Every query below was verified live against Prometheus before
+    # being committed. wan1 is the CCR-2004's WAN interface (mktxp).
+    rest:
+      - resource: "http://prometheus-operated.monitor.svc:9090/api/v1/query?query=rate%28mktxp_interface_rx_byte_total%7Bname%3D%22wan1%22%7D%5B2m%5D%29%2A8"
+        scan_interval: 30
+        sensor:
+          - name: "WAN Download"
+            unique_id: prom_wan_download
+            unit_of_measurement: "Mbit/s"
+            icon: mdi:download
+            value_template: "{{ (value_json.data.result[0].value[1] | float(0) / 1000000) | round(1) }}"
+      - resource: "http://prometheus-operated.monitor.svc:9090/api/v1/query?query=rate%28mktxp_interface_tx_byte_total%7Bname%3D%22wan1%22%7D%5B2m%5D%29%2A8"
+        scan_interval: 30
+        sensor:
+          - name: "WAN Upload"
+            unique_id: prom_wan_upload
+            unit_of_measurement: "Mbit/s"
+            icon: mdi:upload
+            value_template: "{{ (value_json.data.result[0].value[1] | float(0) / 1000000) | round(1) }}"
+      - resource: "http://prometheus-operated.monitor.svc:9090/api/v1/query?query=sum%28mktxp_dhcp_lease_active_count%29"
+        scan_interval: 60
+        sensor:
+          - name: "Network Devices"
+            unique_id: prom_dhcp_leases
+            icon: mdi:devices
+            value_template: "{{ value_json.data.result[0].value[1] | int(0) }}"
+      - resource: "http://prometheus-operated.monitor.svc:9090/api/v1/query?query=sum%28kube_node_status_condition%7Bcondition%3D%22Ready%22%2Cstatus%3D%22true%22%7D%29"
+        scan_interval: 60
+        sensor:
+          - name: "Cluster Nodes Ready"
+            unique_id: prom_nodes_ready
+            icon: mdi:server
+            value_template: "{{ value_json.data.result[0].value[1] | int(0) }}"
+      - resource: "http://prometheus-operated.monitor.svc:9090/api/v1/query?query=count%28ALERTS%7Balertstate%3D%22firing%22%2Calertname%21%3D%22Watchdog%22%7D%29"
+        scan_interval: 60
+        sensor:
+          - name: "Cluster Alerts Firing"
+            unique_id: prom_alerts_firing
+            icon: mdi:alert
+            value_template: "{{ value_json.data.result[0].value[1] | int(0) }}"
+      - resource: "http://prometheus-operated.monitor.svc:9090/api/v1/query?query=sum%28kube_pod_status_phase%7Bphase%3D%22Running%22%7D%29"
+        scan_interval: 60
+        sensor:
+          - name: "Cluster Pods Running"
+            unique_id: prom_pods_running
+            icon: mdi:kubernetes
+            value_template: "{{ value_json.data.result[0].value[1] | int(0) }}"
+      - resource: "http://prometheus-operated.monitor.svc:9090/api/v1/query?query=100%2A%281-avg%28rate%28node_cpu_seconds_total%7Bmode%3D%22idle%22%7D%5B5m%5D%29%29%29"
+        scan_interval: 60
+        sensor:
+          - name: "Cluster CPU"
+            unique_id: prom_cluster_cpu
+            unit_of_measurement: "%"
+            icon: mdi:cpu-64-bit
+            value_template: "{{ value_json.data.result[0].value[1] | float(0) | round(0) }}"
+      - resource: "http://prometheus-operated.monitor.svc:9090/api/v1/query?query=100%2A%281-sum%28node_memory_MemAvailable_bytes%29%2Fsum%28node_memory_MemTotal_bytes%29%29"
+        scan_interval: 60
+        sensor:
+          - name: "Cluster Memory"
+            unique_id: prom_cluster_memory
+            unit_of_measurement: "%"
+            icon: mdi:memory
+            value_template: "{{ value_json.data.result[0].value[1] | float(0) | round(0) }}"
+      - resource: "http://prometheus-operated.monitor.svc:9090/api/v1/query?query=max%28DCGM_FI_DEV_GPU_TEMP%29"
+        scan_interval: 30
+        sensor:
+          - name: "GPU Temperature"
+            unique_id: prom_gpu_temp
+            unit_of_measurement: "°C"
+            icon: mdi:thermometer
+            value_template: "{{ value_json.data.result[0].value[1] | int(0) }}"
+      - resource: "http://prometheus-operated.monitor.svc:9090/api/v1/query?query=max%28DCGM_FI_DEV_GPU_UTIL%29"
+        scan_interval: 30
+        sensor:
+          - name: "GPU Utilization"
+            unique_id: prom_gpu_util
+            unit_of_measurement: "%"
+            icon: mdi:expansion-card
+            value_template: "{{ value_json.data.result[0].value[1] | int(0) }}"
+      # CPU package power (RAPL, all 8 nodes) + GPU board power (DCGM). Excludes
+      # drives/fans/PSU overhead, so real wall draw is somewhat higher.
+      - resource: "http://prometheus-operated.monitor.svc:9090/api/v1/query?query=sum%28rate%28node_rapl_package_joules_total%5B5m%5D%29%29%2Bsum%28DCGM_FI_DEV_POWER_USAGE%29"
+        scan_interval: 60
+        sensor:
+          - name: "Cluster Power"
+            unique_id: prom_cluster_power
+            unit_of_measurement: "W"
+            device_class: power
+            icon: mdi:flash
+            value_template: "{{ value_json.data.result[0].value[1] | float(0) | round(0) }}"
+      - resource: "http://prometheus-operated.monitor.svc:9090/api/v1/query?query=count%28longhorn_volume_robustness%3D%3D1%29"
+        scan_interval: 60
+        sensor:
+          - name: "Longhorn Volumes Healthy"
+            unique_id: prom_longhorn_healthy
+            icon: mdi:harddisk
+            value_template: "{{ value_json.data.result[0].value[1] | int(0) }}"
+      - resource: "http://prometheus-operated.monitor.svc:9090/api/v1/query?query=count%28longhorn_volume_robustness%3D%3D2%29%20or%20vector%280%29"
+        scan_interval: 60
+        sensor:
+          - name: "Longhorn Volumes Degraded"
+            unique_id: prom_longhorn_degraded
+            icon: mdi:harddisk-remove
+            value_template: "{{ value_json.data.result[0].value[1] | int(0) }}"
+      - resource: "http://prometheus-operated.monitor.svc:9090/api/v1/query?query=100%2Asum%28longhorn_disk_usage_bytes%29%2Fsum%28longhorn_disk_capacity_bytes%29"
+        scan_interval: 300
+        sensor:
+          - name: "Longhorn Disk Used"
+            unique_id: prom_longhorn_disk_used
+            unit_of_measurement: "%"
+            icon: mdi:database
+            value_template: "{{ value_json.data.result[0].value[1] | float(0) | round(1) }}"
+      # Firing alerts grouped by name/severity/namespace; the full list rides in
+      # the "data" attribute for the markdown card, state is just the count.
+      - resource: "http://prometheus-operated.monitor.svc:9090/api/v1/query?query=sum%20by%20%28alertname%2Cseverity%2Cnamespace%29%20%28ALERTS%7Balertstate%3D%22firing%22%2Calertname%21%3D%22Watchdog%22%7D%29"
+        scan_interval: 60
+        sensor:
+          - name: "Alerts List"
+            unique_id: prom_alerts_list
+            icon: mdi:alert-circle
+            value_template: "{{ value_json.data.result | length }}"
+            json_attributes:
+              - data
 
     # Git-managed YAML dashboard, added ALONGSIDE the default storage-mode UI
     # dashboard (so the UI one keeps working too). Sourced from the ConfigMap
@@ -73,31 +218,163 @@ data:
 
   main.yaml: |
     # "Home" dashboard — GIT-MANAGED. Edit in rke2/web-server/homeassistant/ha-gitconfig.yaml.
+    # Entity ids verified against the live entity registry (2026-07-22).
+    # Sections layout: Lights / Media / Cluster / House.
     title: Home
     views:
       - title: Home
         path: home
         icon: mdi:home
-        cards:
-          # ===== MikroTik stats — embeds your EXISTING Grafana dashboard =====
-          # Uses mktxp -> Prometheus -> Grafana (no HACS, no new exporter).
-          # Requires Grafana allow_embedding=true (see kube-prometheus-stack-values.yaml)
-          # and a session/anon access so the iframe renders without a login wall.
-          - type: iframe
-            title: MikroTik — Network Overview
-            url: https://grafana.hwcopeland.net/d/mikrotik-network/mikrotik-network-overview?kiosk&theme=dark&refresh=30s
-            aspect_ratio: 100%
+        type: sections
+        max_columns: 3
+        sections:
+          # ===== Lights — 5x Hue LCA017 via ZHA (Sonoff dongle on microedge2) =====
+          # Room groups defined in configuration.yaml (light: platform: group).
+          - type: grid
+            cards:
+              - type: heading
+                heading: Lights
+                icon: mdi:lightbulb-group
+              - type: tile
+                entity: light.bathroom
+                name: Bathroom
+                features:
+                  - type: light-brightness
+              - type: tile
+                entity: light.bedroom
+                name: Bedroom
+                features:
+                  - type: light-brightness
+              - type: tile
+                entity: light.signify_netherlands_b_v_lca017
+                name: Bathroom 1
+                grid_options: {columns: 4}
+              - type: tile
+                entity: light.signify_netherlands_b_v_lca017_2
+                name: Bathroom 2
+                grid_options: {columns: 4}
+              - type: tile
+                entity: light.signify_netherlands_b_v_lca017_3
+                name: Bathroom 3
+                grid_options: {columns: 4}
+              - type: tile
+                entity: light.signify_netherlands_b_v_lca017_4
+                name: Bedroom 1
+                grid_options: {columns: 4}
+              - type: tile
+                entity: light.signify_netherlands_b_v_lca017_5
+                name: Bedroom 2
+                grid_options: {columns: 4}
 
-          # ===== Sonos — NATIVE HA integration (no HACS) =====
-          # Add via Settings > Devices & Services > Add Integration > Sonos (auto-discovers;
-          # Service already exposes port 1400). Then replace the entity_id with your room player.
-          - type: media-control
-            entity: media_player.sonos
+          # ===== Media — Sonos, per-room players =====
+          # NOTE: the Living Room Playbar was discovered before it was named, so
+          # its entity id is stuck as unnamed_room_unnamed_room (display name is
+          # correct). If the entity id is ever renamed in the UI, update it here.
+          - type: grid
+            cards:
+              - type: heading
+                heading: Media
+                icon: mdi:speaker-multiple
+              - type: media-control
+                entity: media_player.unnamed_room_unnamed_room
+              - type: media-control
+                entity: media_player.bedroom_bedroom
+              - type: media-control
+                entity: media_player.dining_room_dining_room
+              - type: media-control
+                entity: media_player.roam_2
 
-          # ===== Flightradar24 — HACS integration (AlexandrErohin/flightradar24) =====
-          # Install HACS, then this integration, then configure lat/long + radius.
-          # Entity names below are the integration defaults; adjust after setup.
-          - type: entities
-            title: Flights in area
-            entities:
-              - sensor.flightradar24_current_in_area
+          # ===== Cluster — Prometheus REST sensors (kube-state-metrics/DCGM/Longhorn) =====
+          - type: grid
+            cards:
+              - type: heading
+                heading: Cluster
+                icon: mdi:kubernetes
+              - type: glance
+                title: Kubernetes
+                columns: 4
+                grid_options: {columns: full}
+                entities:
+                  - entity: sensor.cluster_nodes_ready
+                    name: Nodes
+                  - entity: sensor.cluster_pods_running
+                    name: Pods
+                  - entity: sensor.cluster_alerts_firing
+                    name: Alerts
+                  - entity: sensor.cluster_power
+                    name: Power
+                  - entity: sensor.cluster_cpu
+                    name: CPU
+                  - entity: sensor.cluster_memory
+                    name: Memory
+                  - entity: sensor.gpu_temperature
+                    name: GPU temp
+                  - entity: sensor.gpu_utilization
+                    name: GPU util
+              - type: glance
+                title: Longhorn Storage
+                grid_options: {columns: full}
+                entities:
+                  - entity: sensor.longhorn_volumes_healthy
+                    name: Healthy
+                  - entity: sensor.longhorn_volumes_degraded
+                    name: Degraded
+                  - entity: sensor.longhorn_disk_used
+                    name: Disk used
+              - type: entities
+                title: Synology NAS
+                grid_options: {columns: full}
+                entities:
+                  - entity: binary_sensor.synology_security_status
+                    name: Security status
+                  - entity: sensor.synology_volume_1_status
+                    name: Volume 1 status
+                  - entity: sensor.synology_volume_1_volume_used
+                    name: Volume 1 used
+                  - entity: sensor.synology_cpu_utilization_total
+                    name: CPU
+                  - entity: sensor.synology_memory_usage_real
+                    name: Memory
+                  - entity: sensor.synology_temperature
+                    name: NAS temperature
+              - type: markdown
+                title: Firing Alerts
+                grid_options: {columns: full}
+                content: >-
+                  {% set r = state_attr('sensor.alerts_list', 'data') %}
+                  {% if r and r.result %}
+                  {% for a in r.result | sort(attribute='metric.namespace') -%}
+                  - **{{ a.metric.alertname }}** — {{ a.metric.namespace | default('cluster') }} ({{ a.metric.severity | default('?') }})
+                  {% endfor %}
+                  {% else %}
+                  ✅ Nothing firing
+                  {% endif %}
+
+          # ===== House — network, printer =====
+          - type: grid
+            cards:
+              - type: heading
+                heading: House
+                icon: mdi:home-analytics
+              - type: glance
+                title: Network
+                grid_options: {columns: full}
+                entities:
+                  - entity: sensor.wan_download
+                    name: WAN ↓
+                  - entity: sensor.wan_upload
+                    name: WAN ↑
+                  - entity: sensor.network_devices
+                    name: Devices
+              - type: glance
+                title: Epson ET-3830 ink
+                grid_options: {columns: full}
+                entities:
+                  - entity: sensor.epson_et_3830_series_black_ink
+                    name: Black
+                  - entity: sensor.epson_et_3830_series_cyan_ink
+                    name: Cyan
+                  - entity: sensor.epson_et_3830_series_magenta_ink
+                    name: Magenta
+                  - entity: sensor.epson_et_3830_series_yellow_ink
+                    name: Yellow

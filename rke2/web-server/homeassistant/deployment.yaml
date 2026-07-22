@@ -30,8 +30,7 @@ spec:
       # Replaces HACS/manual UI installs entirely and SELF-HEALS after a /config
       # wipe (the failure that started all this). Add a component = one line here.
       #   auth_oidc      -> Authentik OIDC SSO login (public client + PKCE)
-      #   flightradar24  -> flights-in-area sensors for the dashboard
-      # (Sonos is native; MikroTik stats come from Grafana, so no components.)
+      # (Sonos is native; MikroTik/k8s stats come via Prometheus REST sensors.)
       initContainers:
         - name: install-custom-components
           image: alpine:3.20
@@ -50,19 +49,26 @@ spec:
                 rm -rf "$t"
               }
               install christiaangoossens/hass-oidc-auth          v1.1.0   auth_oidc
-              install AlexandrErohin/home-assistant-flightradar24 v1.34.1  flightradar24
+              # flightradar24 removed 2026-07-22; clean up any leftover install
+              rm -rf /config/custom_components/flightradar24
               echo "installed:"; ls -1 /config/custom_components
           volumeMounts:
             - name: ha-config-volume
               mountPath: /config
       containers:
         - name: home-assistant-container
-          image: homeassistant/home-assistant # Using the official image
+          image: homeassistant/home-assistant:2026.7.3 # pinned — bump deliberately, not on pod restart
           ports:
             - name: https
               containerPort: 8123
             - name: sonos
               containerPort: 1400
+          # Zigbee dongle passthrough (Sonoff ZBDongle-P / CC2652P on microedge2).
+          # privileged is required for char-device I/O through the device cgroup;
+          # /dev/ttyUSB0 is stable while this is the only USB-serial device — the
+          # canonical name is /dev/serial/by-id/usb-ITead_Sonoff_Zigbee_3.0_USB_Dongle_Plus_*
+          securityContext:
+            privileged: true
           volumeMounts:
             - name: ha-config-volume
               mountPath: /config
@@ -74,6 +80,8 @@ spec:
             - name: ha-gitconfig
               mountPath: /config/dashboards/main.yaml
               subPath: main.yaml
+            - name: zigbee-dongle
+              mountPath: /dev/ttyUSB0
       volumes:
         - name: ha-config-volume
           persistentVolumeClaim:
@@ -81,6 +89,10 @@ spec:
         - name: ha-gitconfig
           configMap:
             name: ha-gitconfig
+        - name: zigbee-dongle
+          hostPath:
+            path: /dev/ttyUSB0
+            type: CharDevice
 ---
 apiVersion: v1
 kind: Service
