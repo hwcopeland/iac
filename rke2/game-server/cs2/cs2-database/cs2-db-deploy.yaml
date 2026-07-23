@@ -91,7 +91,11 @@ spec:
             ALTER USER IF EXISTS '$UN'@'%' IDENTIFIED BY '$UP';
             FLUSH PRIVILEGES;
             EOF
-            chmod 600 /mysql-init/init.sql
+            # mysqld reads the init-file as the `mysql` user (uid 999), not root
+            # — the entrypoint drops privileges. 400 mysql:mysql, or it aborts
+            # with "File not found (OS errno 13 - Permission denied)".
+            chown 999:999 /mysql-init/init.sql
+            chmod 400 /mysql-init/init.sql
             echo "rendered /mysql-init/init.sql (passwords for root + $MYSQL_USER will be re-asserted from mysql-secret at mysqld start)"
         env:
         - name: MYSQL_ROOT_PASSWORD
