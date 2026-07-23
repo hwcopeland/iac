@@ -12,8 +12,8 @@
 # ---------------------------------------------------------------------------
 # ARGs — pin every dependency version
 # ---------------------------------------------------------------------------
-ARG MODSHARP_VERSION="git-121"
-ARG MODSHARP_BUILD="121"
+ARG MODSHARP_VERSION="git-137"
+ARG MODSHARP_BUILD="137"
 
 # Plugins with GitHub releases (pinned versions)
 ARG RAMPFIX_VERSION="v1.0.6"
@@ -38,20 +38,21 @@ WORKDIR /build
 # --- Source2Surf/Timer (hwcopeland fork with surf patches) ---
 # TIMER_COMMIT is bumped whenever the fork is updated to bust Docker's
 # layer cache (git clone is cached by instruction text, not remote state).
-ARG TIMER_COMMIT="981b3ed-modsharp-pin-2.1.132"
+ARG TIMER_COMMIT="981b3ed-modsharp-pin-2.1.137"
 RUN echo "timer:${TIMER_COMMIT}" && git clone --branch "${SOURCE2SURF_TIMER_REF}" \
         https://github.com/hwcopeland/Timer.git /build/timer
 WORKDIR /build/timer
 # Patch the fork's csprojs at build time (same precedent as the PostBuild strip below):
-#   1. Pin the floating "ModSharp.Sharp.Shared Version=*" to 2.1.132 in all three
-#      projects. The floating ref is a time-bomb: a new ModSharp release silently
-#      raises its transitive Microsoft.Extensions.* floor and breaks the build.
+#   1. Pin the floating "ModSharp.Sharp.Shared Version=*" to 2.1.137 in all three
+#      projects (matches MODSHARP_VERSION git-137). The floating ref is a
+#      time-bomb: a new ModSharp release silently raises its transitive
+#      Microsoft.Extensions.* floor and breaks the build.
 #   2. Bump Timer.csproj's directly-pinned Microsoft.Extensions.* from 10.0.7 to
-#      10.0.9 so they match ModSharp 2.1.132's floor (>= 10.0.9). Without this,
-#      NuGet reports a package downgrade and TreatWarningsAsErrors turns NU1605
-#      into a hard restore failure.
+#      10.0.9 so they match ModSharp 2.1.137's floor (>= 10.0.9, unchanged from
+#      2.1.132). Without this, NuGet reports a package downgrade and
+#      TreatWarningsAsErrors turns NU1605 into a hard restore failure.
 RUN for f in Timer/Timer.csproj Timer.RequestManager/Timer.RequestManager.csproj Timer.Shared/Timer.Shared.csproj; do \
-        sed -i -E 's|(Include="ModSharp\.Sharp\.Shared" Version=")\*(")|\12.1.132\2|g' "$f"; \
+        sed -i -E 's|(Include="ModSharp\.Sharp\.Shared" Version=")\*(")|\12.1.137\2|g' "$f"; \
     done && \
     sed -i -E 's|(Include="Microsoft\.Extensions\.[^"]*" Version=")10\.0\.7(")|\110.0.9\2|g' Timer/Timer.csproj
 RUN sed -i '/<Target Name="PostBuild"/,/<\/Target>/d' Timer/Timer.csproj && \
