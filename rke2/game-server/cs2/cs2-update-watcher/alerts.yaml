@@ -1,0 +1,79 @@
+---
+# CS2 skew alerting — how a human actually HEARS about the next Valve breakage.
+#
+# Context (2026-07 outage, 6 days / 1438 restarts, silent): CS2 auto-updates on
+# the PVC via steamcmd on every pod boot, while ModSharp is baked into the image
+# at a pinned version (cs2-surf/Dockerfile MODSHARP_VERSION). A signature-breaking
+# Valve update therefore SIGSEGVs the server ("Address resolve failed" in logs)
+# until a human bumps the ModSharp pin. Upstream gamedata fixes LAG Valve updates,
+# so the correct automation is DETECT + NOTIFY — never auto-bump.
+#
+# Delivery path: kube-prometheus-stack (namespace `monitor`) has
+# ruleNamespaceSelector {} + ruleSelector release=kube-prometheus-stack, so this
+# rule is picked up from the game-server namespace via the `release` label.
+# Alertmanager routes ONLY severity=critical to email (hampton888@gmail.com);
+# anything softer would be routed to the null receiver — that's why both alerts
+# below are critical.
+#
+# Both alerts ride on kube-state-metrics — no pushgateway, no sidecar, no
+# custom exporter.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: cs2-surf-alerts
+  namespace: game-server
+  labels:
+    release: kube-prometheus-stack   # REQUIRED or Prometheus ignores this rule
+    app.kubernetes.io/name: cs2-update-watcher
+    app.kubernetes.io/part-of: cs2-surf
+spec:
+  groups:
+    - name: cs2-surf
+      rules:
+        # The skew symptom itself: the server crashlooping. During the 2026-07
+        # breakage CrashLoopBackOff produced a restart every ~5m once backed
+        # off, so >=3 restarts in 30m fires within the first hour instead of
+        # being found 6 days later. A normal ARC deploy creates a NEW pod
+        # (restart counter starts at 0) and does not trip this.
+        - alert: CS2ServerCrashLooping
+          expr: >-
+            increase(kube_pod_container_status_restarts_total{namespace="game-server",
+            pod=~"cs2-(surf|modded)-server-.*"}[30m]) >= 3
+          for: 10m
+          labels:
+            severity: critical
+          annotations:
+            summary: 'CS2 server crashlooping — if this follows a Valve update: bump ModSharp'
+            description: >-
+              Pod {{ $labels.pod }} restarted {{ $value }} times in 30m. If a CS2/Valve
+              update just shipped, the pinned ModSharp gamedata is stale — confirm via
+              "Address resolve failed" + exit 139 in the pod logs. RUNBOOK: check
+              https://github.com/Kxnrl/modsharp-public/releases for a release NEWER than
+              the Valve update ("GameUpdate: YY/MM/DD" in the notes); bump MODSHARP_VERSION
+              / MODSHARP_BUILD and the ModSharp.Sharp.Shared NuGet pin (2.1.NNN == git-NNN)
+              in rke2/game-server/cs2/cs2-surf/Dockerfile, bump TIMER_COMMIT to cache-bust,
+              push to main (ARC builds and rolls out). If upstream has NOT released yet,
+              wait — do NOT bump blindly; the server stays down until gamedata catches up.
+        # The quieter failure mode: server stuck BEHIND the current Valve build
+        # (clients refused with "server is running an older version") because
+        # steamcmd/CDN keeps coming up short. watch.sh exits 2 after
+        # MAX_ATTEMPTS restarts, and keeps exiting 2 every 10m pass until
+        # current — so failed watcher Jobs accumulate and this stays lit.
+        # Threshold >=2 so a single transient job failure (e.g. a Longhorn RWX
+        # attach hang hitting activeDeadlineSeconds) never pages.
+        - alert: CS2UpdateWatcherFailing
+          expr: >-
+            sum(kube_job_status_failed{namespace="game-server",
+            job_name=~"cs2-update-watcher-.*"}) >= 2
+          for: 15m
+          labels:
+            severity: critical
+          annotations:
+            summary: CS2 update watcher failing repeatedly — server likely stuck behind Valve build
+            description: >-
+              Two or more cs2-update-watcher Jobs have failed. Most likely watch.sh gave up
+              after MAX_ATTEMPTS rollout restarts with the server still behind the required
+              Valve build (players cannot join a stale server). Check
+              `kubectl -n game-server logs -l app.kubernetes.io/name=cs2-update-watcher --tail=100`
+              and the steamcmd output on the cs2-surf-server pod; inspect cross-run state via
+              `kubectl -n game-server get cm cs2-update-watcher-state -o jsonpath='{.data}'`.

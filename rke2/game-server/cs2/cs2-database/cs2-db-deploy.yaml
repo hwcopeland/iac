@@ -22,7 +22,12 @@ metadata:
 data:
   custom.cnf: |
     [mysqld]
-    plugin-load-add = mysql_native_password.so
+    # mysql_native_password via authentication_policy (mysql 8.4+ syntax) —
+    # adopted from a hand-applied live fix 2026-07-23; the old
+    # `plugin-load-add = mysql_native_password.so` line no longer matches live.
+    # The Source2Surf/Timer MySQL connector needs native-password auth.
+    mysql_native_password=ON
+    authentication_policy=mysql_native_password
     port = 3306
     bind-address = 0.0.0.0
     skip-networking = OFF
@@ -43,9 +48,80 @@ spec:
       labels:
         app: cs2-mysql
     spec:
+      # ── Secret-rotation drift fix (2026-07-23) ─────────────────────────────
+      # mysql:8 applies MYSQL_ROOT_PASSWORD / MYSQL_PASSWORD ONLY on first
+      # datadir initialization. After that, Bitwarden -> ESO -> mysql-secret
+      # rotations never reach the running database, and the live passwords
+      # silently drift from the secret (this broke k8s_user for 6 days in
+      # 2026-07). Worse, after a rotation even root's LIVE password is the OLD
+      # value, so a plain "ALTER USER using the mounted secret" hook cannot
+      # authenticate. Fix: mysqld's --init-file, which executes as an internal
+      # privileged user WITHOUT authentication on every server start. The init
+      # container renders the SQL from the current secret; the main container
+      # starts mysqld with --init-file pointing at it. Idempotent — every pod
+      # (re)start re-asserts the secret's passwords.
+      #
+      # NOTE: no reloader operator exists in this cluster, so a rotation takes
+      # effect on the NEXT mysql pod restart (kubectl -n game-server rollout
+      # restart deploy/cs2-mysql), not automatically. surfweb_ro is managed by
+      # the separate surf-web-mysql secret and is deliberately NOT touched here.
+      initContainers:
+      - name: render-init-sql
+        image: mysql:8
+        command:
+          - bash
+          - -ec
+          - |
+            # Fresh-datadir guard: on FIRST init the docker-entrypoint's temp
+            # server must connect as root with an empty password to create the
+            # users; an ALTER in init-file would break that bootstrap. Only
+            # render the ALTERs when the datadir is already initialized.
+            if [ ! -d /var/lib/mysql/mysql ]; then
+              echo "SELECT 1;" > /mysql-init/init.sql
+              echo "fresh datadir: first-init will set passwords from the secret; init.sql is a no-op"
+              exit 0
+            fi
+            esc() { printf '%s' "$1" | sed "s/'/''/g"; }
+            RP="$(esc "$MYSQL_ROOT_PASSWORD")"
+            UP="$(esc "$MYSQL_PASSWORD")"
+            UN="$(esc "$MYSQL_USER")"
+            cat > /mysql-init/init.sql <<EOF
+            ALTER USER IF EXISTS 'root'@'localhost' IDENTIFIED BY '$RP';
+            ALTER USER IF EXISTS 'root'@'%' IDENTIFIED BY '$RP';
+            ALTER USER IF EXISTS '$UN'@'%' IDENTIFIED BY '$UP';
+            FLUSH PRIVILEGES;
+            EOF
+            chmod 600 /mysql-init/init.sql
+            echo "rendered /mysql-init/init.sql (passwords for root + $MYSQL_USER will be re-asserted from mysql-secret at mysqld start)"
+        env:
+        - name: MYSQL_ROOT_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: mysql-secret
+              key: password
+        - name: MYSQL_USER
+          valueFrom:
+            secretKeyRef:
+              name: mysql-secret
+              key: username
+        - name: MYSQL_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: mysql-secret
+              key: password
+        volumeMounts:
+        - name: mysql-init
+          mountPath: /mysql-init
+        - name: mysql-persistent-storage
+          mountPath: /var/lib/mysql
+          readOnly: true
       containers:
       - image: mysql:8
         name: mysql
+        # docker-entrypoint.sh prepends `mysqld` when the first arg starts with
+        # a dash, so this passes --init-file straight to mysqld.
+        args:
+          - --init-file=/mysql-init/init.sql
         env:
         - name: MYSQL_ROOT_PASSWORD
           valueFrom:
@@ -72,6 +148,9 @@ spec:
         - name: mysql-config-volume
           mountPath: /etc/mysql/conf.d/custom.cnf
           subPath: custom.cnf
+        - name: mysql-init
+          mountPath: /mysql-init
+          readOnly: true
 
         readinessProbe:
           exec:
@@ -101,3 +180,7 @@ spec:
       - name: mysql-config-volume
         configMap:
           name: cs2-mysql-config
+      # tmpfs: the rendered init.sql contains live passwords — never on disk.
+      - name: mysql-init
+        emptyDir:
+          medium: Memory

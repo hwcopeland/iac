@@ -33,8 +33,14 @@ https://api.steampowered.com/ISteamApps/UpToDateCheck/v1/?appid=730&version=<ins
 
 The installed build is the `PatchVersion=` field read from `steam.inf` on the
 shared PVC (`/home/steam/cs2/game/csgo/steam.inf`, mounted read-only at
-`/cs2/...` in the watcher). This answers the exact question we care about — *is
-MY installed build current?* — rather than just "did something change."
+`/cs2/...` in the watcher), **with the dots stripped**: `PatchVersion=1.41.7.2`
+becomes `14172`, which is exactly the space `required_version` is expressed in
+(verified against the live API 2026-07-23 — `version=100` returns
+`required_version: 14172, message: "Server version required: 1.41.7.2"`).
+`ClientVersion` must NOT be used: it is always numerically far above
+`required_version`, so a stale server would read as up-to-date. This answers
+the exact question we care about — *is MY installed build current?* — rather
+than just "did something change."
 
 RSS feeds (SteamDB / the CS blog) are a viable *fallback* signal but are noisier
 and don't know your installed version, so they're not used here. UpToDateCheck
@@ -97,10 +103,28 @@ Dedicated ServiceAccount `cs2-update-watcher` with a namespaced Role:
 
 No `create`/`delete`, no `exec`, no secrets, no cluster-wide scope.
 
+## Alerting — how a human hears about it (`alerts.yaml`)
+
+Restarting only fixes *available* updates. The dangerous case is the
+**ModSharp coupling**: CS2 updates on the PVC at every boot, ModSharp gamedata
+is pinned in the image (`../cs2-surf/Dockerfile`), and a signature-breaking
+Valve update SIGSEGVs the server (`Address resolve failed`) until a human bumps
+the pin. Upstream gamedata fixes lag Valve, so the automation is strictly
+**detect + notify — never auto-bump**. Two `severity: critical` PrometheusRules
+(critical is the only severity Alertmanager emails) ride on kube-state-metrics:
+
+- `CS2ServerCrashLooping` — ≥3 container restarts in 30m on the server pod.
+  The email carries the full runbook ("check Kxnrl/modsharp-public releases,
+  bump `MODSHARP_VERSION` in the Dockerfile, push to main").
+- `CS2UpdateWatcherFailing` — ≥2 failed watcher Jobs. `watch.sh` exits `2` when
+  it gives up at `MAX_ATTEMPTS` (and on every later pass while still behind),
+  so a stuck-behind-build server keeps failed Jobs — and this alert — lit.
+
 ## Files
 
 - `rbac.yaml` — ServiceAccount + Role + RoleBinding
 - `controller.yaml` — state ConfigMap, script ConfigMap (`watch.sh` inline), CronJob
+- `alerts.yaml` — PrometheusRule (crashloop + watcher-gave-up, both critical/email)
 
 No custom image: uses stock `alpine/k8s:1.30.4` (bash + kubectl + python3 + curl),
 the same image the ads CronJob uses.
@@ -113,6 +137,7 @@ Flux-managed). From the repo root:
 ```bash
 kubectl apply -f game-server/cs2/cs2-update-watcher/rbac.yaml
 kubectl apply -f game-server/cs2/cs2-update-watcher/controller.yaml
+kubectl apply -f game-server/cs2/cs2-update-watcher/alerts.yaml
 ```
 
 ### Verify / operate

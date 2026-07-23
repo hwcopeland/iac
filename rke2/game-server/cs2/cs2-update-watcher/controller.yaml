@@ -103,14 +103,19 @@ data:
     log "active deployment: $DEPLOY (replicas=$REPLICAS)"
 
     # ── 2. Read installed build from steam.inf ───────────────────────────────
-    # steam.inf on the PVC has PatchVersion=NNNN / ClientVersion=NNNN. Valve's
-    # UpToDateCheck compares against PatchVersion. If the file is missing the
-    # server hasn't finished its first install — bail rather than guess.
+    # steam.inf has PatchVersion=1.41.7.2 (dotted) and ClientVersion=2000877.
+    # Valve's UpToDateCheck compares in "PatchVersion with dots stripped" space:
+    # version=100 returns required_version=14172 / "Server version required:
+    # 1.41.7.2" (verified 2026-07-23). So strip the dots before comparing.
+    # ClientVersion would be WRONG here — it's always numerically far above
+    # required_version, so UpToDateCheck would report a stale server as current.
+    # If the file is missing the server hasn't finished its first install —
+    # bail rather than guess.
     if [ ! -f "$STEAM_INF" ]; then
       warn "$STEAM_INF not found (server mid-install?); skipping this pass"
       exit 0
     fi
-    CURRENT_VERSION=$(grep -E '^PatchVersion=' "$STEAM_INF" | head -1 | cut -d= -f2 | tr -d '\r' || true)
+    CURRENT_VERSION=$(grep -E '^PatchVersion=' "$STEAM_INF" | head -1 | cut -d= -f2 | tr -d '.\r' || true)
     if ! printf '%s' "$CURRENT_VERSION" | grep -qE '^[0-9]+$'; then
       warn "could not parse a numeric PatchVersion from $STEAM_INF (got '$CURRENT_VERSION'); skipping"
       exit 0
@@ -191,7 +196,11 @@ data:
     if [ "$ATTEMPTS" -ge "$MAX_ATTEMPTS" ]; then
       warn "reached MAX_ATTEMPTS=$MAX_ATTEMPTS for build $REQUIRED_VERSION and still behind"
       warn "giving up automatic restarts — MANUAL INTERVENTION likely needed (check steamcmd logs on the pod)"
-      exit 0
+      # Exit non-zero ON PURPOSE: the failed Job trips the CS2UpdateWatcherFailing
+      # PrometheusRule (alerts.yaml) -> severity=critical -> Alertmanager email.
+      # Exiting 0 here would leave a stuck-behind server silent. Every subsequent
+      # pass keeps exiting 2 until the server catches up, so the alert stays lit.
+      exit 2
     fi
 
     # Cooldown guard: leave time for steamcmd + reboot + CDN to settle before the
